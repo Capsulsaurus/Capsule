@@ -2,6 +2,7 @@ import FeatureAlbums
 import FeatureSearch
 import FeatureTimeline
 import SwiftUI
+import UIKit
 
 /// The app's root tab shell: Library, Albums, and Search.
 ///
@@ -37,6 +38,12 @@ struct RootView: View {
                     mediaLoader: environment.mediaLoader
                 )
             }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        .onReceive(
+            NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
+        ) { _ in
+            Task { await environment.thumbnails.flushCaches() }
         }
     }
 }

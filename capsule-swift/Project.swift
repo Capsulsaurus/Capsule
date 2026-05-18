@@ -6,12 +6,30 @@ private let bundlePrefix = "com.justin13888.capsule"
 private let appDestinations: Destinations = [.iPhone, .iPad]
 private let appDeploymentTargets: DeploymentTargets = .iOS("18.0")
 
-/// Build settings shared by every Capsule target: Swift 6 language mode with
-/// complete strict-concurrency checking.
-private let capsuleSettings: Settings = .settings(base: [
+/// The Swift-6 language settings shared by every Capsule target.
+private let baseSettings: SettingsDictionary = [
     "SWIFT_VERSION": "6.0",
     "SWIFT_STRICT_CONCURRENCY": "complete",
-])
+]
+
+/// Framework settings: a Release build marks the framework mergeable so the
+/// app can fold it into its binary, cutting dylib loads at launch.
+private let frameworkSettings: Settings = .settings(
+    base: baseSettings,
+    configurations: [
+        .debug(name: "Debug"),
+        .release(name: "Release", settings: ["MERGEABLE_LIBRARY": "YES"]),
+    ]
+)
+
+/// App settings: a Release build merges its mergeable framework dependencies.
+private let appSettings: Settings = .settings(
+    base: baseSettings,
+    configurations: [
+        .debug(name: "Debug"),
+        .release(name: "Release", settings: ["MERGED_BINARY_TYPE": "automatic"]),
+    ]
+)
 
 // MARK: - Module factory
 
@@ -35,7 +53,7 @@ private func module(
         deploymentTargets: appDeploymentTargets,
         sources: sources.globs.isEmpty ? ["Modules/\(name)/Sources/**"] : sources,
         dependencies: dependencies,
-        settings: capsuleSettings
+        settings: frameworkSettings
     )
     guard let testDependencies else { return [framework] }
     let tests: Target = .target(
@@ -46,7 +64,7 @@ private func module(
         deploymentTargets: appDeploymentTargets,
         sources: ["Modules/\(name)/Tests/**"],
         dependencies: [.target(name: name)] + testDependencies,
-        settings: capsuleSettings
+        settings: frameworkSettings
     )
     return [framework, tests]
 }
@@ -182,7 +200,7 @@ private let appTarget: Target = .target(
         .target(name: "AssetKit"),
         .target(name: "CapsuleFoundation"),
     ],
-    settings: capsuleSettings
+    settings: appSettings
 )
 
 /// Every unit-test target — gathered for the `Capsule` scheme's test action.

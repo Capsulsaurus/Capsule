@@ -67,6 +67,9 @@ public actor CapsuleCatalog: AssetCatalog {
     }
 
     public func timeline(filter: TimelineFilter, offset: Int, limit: Int) throws -> [CatalogAsset] {
+        let signposter = CapsuleSignpost.catalog
+        let interval = signposter.beginInterval("timeline")
+        defer { signposter.endInterval("timeline", interval) }
         CapsuleLog.catalog.trace("timeline offset=\(offset) limit=\(limit) filtered=\(!filter.isUnfiltered)")
         let records = try catalog.queryTimelineFiltered(
             assetType: filter.assetType,

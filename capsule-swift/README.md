@@ -25,6 +25,29 @@ The SQLite catalog and CBOR sidecar are owned by Rust (`../capsule-core`) and
 exposed to Swift via UniFFI, packaged as `CapsuleCoreFFI.xcframework`. Everything
 platform-specific — filesystem, PhotoKit, UI, hashing — is Swift.
 
+## Features
+
+A native, local-only photo experience over a hybrid asset model — the system
+Photos library and a Capsule-managed on-disk store merged into one timeline.
+
+- **Timeline** — a `UICollectionView`-backed grid with day sections, pinned
+  headers, prefetching, and adjustable density.
+- **Viewer** — a paged, zoomable full-screen viewer for photos, Live Photos,
+  and video, with an EXIF/location info panel and share / favourite / delete.
+- **Import** — bring photos into the Capsule-managed library: SHA-256 hashing,
+  content dedup, CBOR sidecars, and a rebuildable SQLite catalog, behind an
+  atomic per-item commit.
+- **Albums** — system smart albums plus editable Capsule user albums.
+- **Search** — filter the unified library by media type and capture date.
+
+### Known limitations (prototype scope)
+
+- Import is photo-only; video import and Live Photo stacking are not yet wired.
+- The grid materialises the timeline; the fully-lazy large-library path,
+  GPS→timezone resolution, and the iOS 18 cell→viewer zoom transition are
+  future work.
+- Capsule's networked features (API, sync, E2E encryption) are out of scope.
+
 ## Development
 
 Prerequisites: macOS, Xcode 16+, a Rust toolchain (pinned by

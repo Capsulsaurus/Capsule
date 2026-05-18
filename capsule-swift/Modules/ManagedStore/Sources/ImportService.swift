@@ -33,6 +33,10 @@ public actor ImportService {
 
     /// Import every source, returning a per-file account of the outcome.
     public func importAssets(from sources: [ImportSource]) async -> ImportResult {
+        let signposter = CapsuleSignpost.importPipeline
+        let interval = signposter.beginInterval("import")
+        defer { signposter.endInterval("import", interval) }
+
         let catalog: any AssetCatalog
         do {
             catalog = try await library.catalog()

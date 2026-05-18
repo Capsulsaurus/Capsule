@@ -17,6 +17,9 @@ public protocol ThumbnailProvider: Sendable {
 
     /// Drop cache warming for assets that scrolled away unseen.
     func cancelPrefetching(for assets: [Asset], pixelSize: CGSize) async
+
+    /// Drop every cached thumbnail — called by the app under memory pressure.
+    func flushCaches() async
 }
 
 /// The production ``ThumbnailProvider``.
@@ -25,6 +28,9 @@ public protocol ThumbnailProvider: Sendable {
 /// caches thumbnails off the main thread and serves prefetch requests. The
 /// actor confines the (non-`Sendable`) image manager and the local-identifier→
 /// `PHAsset` resolution cache.
+///
+/// ``flushCaches()`` lets the app drop both caches on a memory-pressure event,
+/// so a long scrolling session cannot grow the cache without bound.
 ///
 /// - Note: managed-store (file-backed) thumbnails via ImageIO downsampling are
 ///   added in Phase 4; until then ``thumbnail(for:pixelSize:)`` returns `nil`
@@ -38,6 +44,10 @@ public actor ImagePipeline: ThumbnailProvider {
     }
 
     public func thumbnail(for asset: Asset, pixelSize: CGSize) async -> UIImage? {
+        let signposter = CapsuleSignpost.imagePipeline
+        let interval = signposter.beginInterval("thumbnail")
+        defer { signposter.endInterval("thumbnail", interval) }
+
         guard case let .photoKit(localIdentifier) = asset.id,
               let phAsset = phAsset(for: localIdentifier)
         else {
@@ -66,6 +76,13 @@ public actor ImagePipeline: ThumbnailProvider {
             contentMode: .aspectFill,
             options: Self.makeRequestOptions()
         )
+    }
+
+    /// Drop all cached thumbnails — invoked by the app under memory pressure.
+    public func flushCaches() {
+        CapsuleLog.imagePipeline.notice("memory pressure — flushing thumbnail caches")
+        cachingManager.stopCachingImagesForAllAssets()
+        resolvedAssets.removeAll(keepingCapacity: true)
     }
 
     // MARK: Private
