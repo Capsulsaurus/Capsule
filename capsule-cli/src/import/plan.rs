@@ -2,9 +2,9 @@
 
 use std::path::PathBuf;
 
-use eyre::{Result, eyre};
 use capsule_core::import::ImportActionPlan;
 use capsule_core::import::scanner::scan;
+use eyre::{Result, eyre};
 
 /// Scan a file or directory and build an import action plan.
 ///

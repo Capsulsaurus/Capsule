@@ -1,7 +1,7 @@
+use capsule_api::{create_openapi_spec, create_router};
 use clap::Parser;
 use environment::Environment;
 use eyre::Result;
-use capsule_api::{create_openapi_spec, create_router};
 use sea_orm::Database;
 use std::fs::File;
 use std::io::Write;
