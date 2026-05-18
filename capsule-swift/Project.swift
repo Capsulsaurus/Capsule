@@ -125,14 +125,19 @@ private let moduleTargets: [Target] =
                 .target(name: "CapsuleUI"),
                 .target(name: "AssetKit"),
                 .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
             ],
             testDependencies: [supportDependency]
         )
-        + module("FeatureViewer", dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-        ])
+        + module(
+            "FeatureViewer",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+            ],
+            testDependencies: [supportDependency]
+        )
         + module("FeatureAlbums", dependencies: [
             .target(name: "CapsuleUI"),
             .target(name: "AssetKit"),
@@ -175,6 +180,7 @@ private let testTargetNames: [TestableTarget] = [
     "ManagedStoreTests",
     "AssetKitTests",
     "FeatureTimelineTests",
+    "FeatureViewerTests",
 ]
 
 // MARK: - Project

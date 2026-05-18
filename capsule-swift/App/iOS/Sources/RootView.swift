@@ -15,7 +15,8 @@ struct RootView: View {
             Tab("Library", systemImage: "photo.on.rectangle.angled") {
                 TimelineRootView(
                     assetProvider: environment.assetProvider,
-                    thumbnails: environment.thumbnails
+                    thumbnails: environment.thumbnails,
+                    mediaLoader: environment.mediaLoader
                 )
             }
             Tab("Albums", systemImage: "rectangle.stack") {

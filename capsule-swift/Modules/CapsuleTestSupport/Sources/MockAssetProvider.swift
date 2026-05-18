@@ -52,6 +52,18 @@ public actor MockAssetProvider: AssetProvider {
         }
     }
 
+    public func setFavorite(_ isFavorite: Bool, for id: AssetID) {
+        guard let index = assets.firstIndex(where: { $0.id == id }) else { return }
+        assets[index].isFavorite = isFavorite
+        continuation?.yield(.reload(InMemoryAssetSnapshot(assets)))
+    }
+
+    public func delete(_ ids: [AssetID]) {
+        let removed = Set(ids)
+        assets.removeAll { removed.contains($0.id) }
+        continuation?.yield(.reload(InMemoryAssetSnapshot(assets)))
+    }
+
     // MARK: Test configuration
 
     /// Replace the authorization status returned by the mock.

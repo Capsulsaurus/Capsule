@@ -23,4 +23,13 @@ public enum MediaType: String, Sendable, Codable, CaseIterable, Hashable {
     public var isMotion: Bool {
         self != .photo
     }
+
+    /// A human-readable name for display in the UI.
+    public var displayName: String {
+        switch self {
+        case .photo: "Photo"
+        case .video: "Video"
+        case .livePhoto: "Live Photo"
+        }
+    }
 }

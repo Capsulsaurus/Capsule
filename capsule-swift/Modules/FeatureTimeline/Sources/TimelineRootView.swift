@@ -1,5 +1,6 @@
 import AssetKit
 import CapsuleUI
+import FeatureViewer
 import ImagePipeline
 import SwiftUI
 import UIKit
@@ -7,20 +8,24 @@ import UIKit
 /// The photo timeline grid — the app's primary screen.
 ///
 /// Owns a ``TimelineViewModel`` and renders, by load state, a spinner, a
-/// permission prompt, an empty state, or the ``PhotoGridView``.
+/// permission prompt, an empty state, or the ``PhotoGridView``. Tapping a tile
+/// opens the full-screen ``AssetViewerView`` paged across the whole timeline.
 public struct TimelineRootView: View {
     @State private var model: TimelineViewModel
+    @State private var viewerSelection: ViewerSelection?
+    private let assetProvider: any AssetProvider
     private let thumbnails: any ThumbnailProvider
-    private let onOpenViewer: (Asset) -> Void
+    private let mediaLoader: ViewerMediaLoader
 
     public init(
         assetProvider: any AssetProvider,
         thumbnails: any ThumbnailProvider,
-        onOpenViewer: @escaping (Asset) -> Void = { _ in }
+        mediaLoader: ViewerMediaLoader
     ) {
         _model = State(wrappedValue: TimelineViewModel(provider: assetProvider))
+        self.assetProvider = assetProvider
         self.thumbnails = thumbnails
-        self.onOpenViewer = onOpenViewer
+        self.mediaLoader = mediaLoader
     }
 
     public var body: some View {
@@ -35,6 +40,14 @@ public struct TimelineRootView: View {
                 }
         }
         .task { await model.load() }
+        .fullScreenCover(item: $viewerSelection) { selection in
+            AssetViewerView(
+                assets: selection.assets,
+                startIndex: selection.startIndex,
+                provider: assetProvider,
+                mediaLoader: mediaLoader
+            )
+        }
     }
 
     @ViewBuilder
@@ -63,7 +76,7 @@ public struct TimelineRootView: View {
                     sections: model.sections,
                     columnCount: model.columnCount,
                     thumbnails: thumbnails,
-                    onSelect: onOpenViewer
+                    onSelect: openViewer
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -95,4 +108,18 @@ public struct TimelineRootView: View {
             }
         }
     }
+
+    /// Open the viewer at the tapped asset, paged across the whole timeline.
+    private func openViewer(_ asset: Asset) {
+        let assets = model.sections.flatMap(\.assets)
+        guard let index = assets.firstIndex(of: asset) else { return }
+        viewerSelection = ViewerSelection(assets: assets, startIndex: index)
+    }
+}
+
+/// The asset list and entry index handed to a presented viewer.
+private struct ViewerSelection: Identifiable {
+    let id = UUID()
+    let assets: [Asset]
+    let startIndex: Int
 }

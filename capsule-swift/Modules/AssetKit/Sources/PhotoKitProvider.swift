@@ -92,6 +92,30 @@ public final class PhotoKitProvider: NSObject, AssetProvider, PHPhotoLibraryChan
         }
     }
 
+    public func setFavorite(_ isFavorite: Bool, for id: AssetID) async throws {
+        guard case let .photoKit(localIdentifier) = id else { return }
+        // The asset is re-fetched inside the change block so only the
+        // (`Sendable`) identifier is captured across the boundary.
+        try await library.performChanges {
+            guard let phAsset = PHAsset.fetchAssets(
+                withLocalIdentifiers: [localIdentifier], options: nil
+            ).firstObject else { return }
+            PHAssetChangeRequest(for: phAsset).isFavorite = isFavorite
+        }
+    }
+
+    public func delete(_ ids: [AssetID]) async throws {
+        let localIdentifiers = ids.compactMap { id -> String? in
+            guard case let .photoKit(localIdentifier) = id else { return nil }
+            return localIdentifier
+        }
+        guard !localIdentifiers.isEmpty else { return }
+        try await library.performChanges {
+            let phAssets = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+            PHAssetChangeRequest.deleteAssets(phAssets)
+        }
+    }
+
     // MARK: PHPhotoLibraryChangeObserver
 
     public func photoLibraryDidChange(_ changeInstance: PHChange) {

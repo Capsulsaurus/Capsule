@@ -100,4 +100,13 @@ public protocol AssetProvider: Sendable {
 
     /// A stream of timeline updates for as long as the returned stream is held.
     func changes() -> AsyncStream<AssetChange>
+
+    /// Set an asset's favourite flag in its backing source.
+    func setFavorite(_ isFavorite: Bool, for id: AssetID) async throws
+
+    /// Delete assets from their backing source.
+    ///
+    /// For the system Photos library this presents the standard deletion
+    /// confirmation; the deletion completes only if the user confirms.
+    func delete(_ ids: [AssetID]) async throws
 }
