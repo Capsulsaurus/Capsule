@@ -29,27 +29,31 @@ public struct PhotoGridSection: Identifiable, Sendable {
 /// A `UICollectionView` is used over `LazyVGrid` for true cell reuse, first-class
 /// prefetch/cancel, and pinned section headers — the properties a fast,
 /// large-library timeline needs. The grid is source-agnostic: it renders
-/// ``PhotoGridSection`` values and is reused by the timeline and album screens.
+/// ``PhotoGridSection`` values, with optional pinned headers, and is reused by
+/// the timeline and album screens.
 public struct PhotoGridView: UIViewControllerRepresentable {
     private let sections: [PhotoGridSection]
     private let columnCount: Int
     private let thumbnails: any ThumbnailProvider
+    private let showsSectionHeaders: Bool
     private let onSelect: (Asset) -> Void
 
     public init(
         sections: [PhotoGridSection],
         columnCount: Int,
         thumbnails: any ThumbnailProvider,
+        showsSectionHeaders: Bool = true,
         onSelect: @escaping (Asset) -> Void
     ) {
         self.sections = sections
         self.columnCount = columnCount
         self.thumbnails = thumbnails
+        self.showsSectionHeaders = showsSectionHeaders
         self.onSelect = onSelect
     }
 
     public func makeUIViewController(context _: Context) -> PhotoGridViewController {
-        PhotoGridViewController(thumbnails: thumbnails)
+        PhotoGridViewController(thumbnails: thumbnails, showsSectionHeaders: showsSectionHeaders)
     }
 
     public func updateUIViewController(_ controller: PhotoGridViewController, context _: Context) {
@@ -67,6 +71,7 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     public var onSelect: ((Asset) -> Void)?
 
     private let thumbnails: any ThumbnailProvider
+    private let showsSectionHeaders: Bool
     private var sections: [PhotoGridSection] = []
     private var columnCount = 3
     private var hasAppliedSnapshot = false
@@ -74,7 +79,7 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(
             frame: .zero,
-            collectionViewLayout: Self.makeLayout(columnCount: columnCount)
+            collectionViewLayout: Self.makeLayout(columnCount: columnCount, showsHeaders: showsSectionHeaders)
         )
         collectionView.backgroundColor = .systemBackground
         collectionView.alwaysBounceVertical = true
@@ -85,8 +90,9 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
 
     private lazy var dataSource = makeDataSource()
 
-    init(thumbnails: any ThumbnailProvider) {
+    init(thumbnails: any ThumbnailProvider, showsSectionHeaders: Bool) {
         self.thumbnails = thumbnails
+        self.showsSectionHeaders = showsSectionHeaders
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -110,7 +116,7 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
         columnCount = newColumnCount
         if densityChanged {
             collectionView.setCollectionViewLayout(
-                Self.makeLayout(columnCount: newColumnCount),
+                Self.makeLayout(columnCount: newColumnCount, showsHeaders: showsSectionHeaders),
                 animated: hasAppliedSnapshot
             )
         }
@@ -193,8 +199,8 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     // MARK: Layout
 
     /// A compositional layout of `columnCount` square tiles per row, with
-    /// pinned section headers.
-    private static func makeLayout(columnCount: Int) -> UICollectionViewLayout {
+    /// pinned section headers when `showsHeaders` is set.
+    private static func makeLayout(columnCount: Int, showsHeaders: Bool) -> UICollectionViewLayout {
         let spacing: CGFloat = 0.75
         let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1),
@@ -213,16 +219,18 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
             count: columnCount
         )
         let section = NSCollectionLayoutSection(group: group)
-        let header = NSCollectionLayoutBoundarySupplementaryItem(
-            layoutSize: NSCollectionLayoutSize(
-                widthDimension: .fractionalWidth(1),
-                heightDimension: .estimated(44)
-            ),
-            elementKind: UICollectionView.elementKindSectionHeader,
-            alignment: .top
-        )
-        header.pinToVisibleBounds = true
-        section.boundarySupplementaryItems = [header]
+        if showsHeaders {
+            let header = NSCollectionLayoutBoundarySupplementaryItem(
+                layoutSize: NSCollectionLayoutSize(
+                    widthDimension: .fractionalWidth(1),
+                    heightDimension: .estimated(44)
+                ),
+                elementKind: UICollectionView.elementKindSectionHeader,
+                alignment: .top
+            )
+            header.pinToVisibleBounds = true
+            section.boundarySupplementaryItems = [header]
+        }
         return UICollectionViewCompositionalLayout(section: section)
     }
 }

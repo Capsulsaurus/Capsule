@@ -16,11 +16,13 @@ public struct TimelineRootView: View {
     @State private var importer: LibraryImporter
     @State private var viewerSelection: ViewerSelection?
     private let assetProvider: any AssetProvider
+    private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
 
     public init(
         assetProvider: any AssetProvider,
+        albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader,
         importer: LibraryImporter
@@ -28,6 +30,7 @@ public struct TimelineRootView: View {
         _model = State(wrappedValue: TimelineViewModel(provider: assetProvider))
         _importer = State(wrappedValue: importer)
         self.assetProvider = assetProvider
+        self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
     }
@@ -50,7 +53,8 @@ public struct TimelineRootView: View {
                 assets: selection.assets,
                 startIndex: selection.startIndex,
                 provider: assetProvider,
-                mediaLoader: mediaLoader
+                mediaLoader: mediaLoader,
+                albumProvider: albumProvider
             )
         }
         .sheet(isPresented: $importer.isPickerPresented) {

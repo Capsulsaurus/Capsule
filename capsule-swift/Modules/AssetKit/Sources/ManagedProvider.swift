@@ -33,13 +33,13 @@ public actor ManagedProvider: AssetProvider {
     public func loadTimeline() async throws -> any AssetSnapshot {
         let catalog = try await library.catalog()
         let rows = try await catalog.timeline(offset: 0, limit: Self.timelineLimit)
-        return InMemoryAssetSnapshot(rows.map(Self.asset(from:)))
+        return InMemoryAssetSnapshot(rows.map(Asset.init(catalogAsset:)))
     }
 
     public func asset(for id: AssetID) async throws -> Asset? {
         guard case let .managed(uuid) = id else { return nil }
         let catalog = try await library.catalog()
-        return try await catalog.asset(id: uuid).map(Self.asset(from:))
+        return try await catalog.asset(id: uuid).map(Asset.init(catalogAsset:))
     }
 
     public nonisolated func changes() -> AsyncStream<AssetChange> {
@@ -91,17 +91,5 @@ public actor ManagedProvider: AssetProvider {
         for continuation in observers.values {
             continuation.yield(.reload(snapshot))
         }
-    }
-
-    private static func asset(from row: CatalogAsset) -> Asset {
-        Asset(
-            id: .managed(uuid: row.id),
-            mediaType: row.assetType == "video" ? .video : .photo,
-            captureDate: Date(timeIntervalSince1970: TimeInterval(row.effectiveCaptureTimestamp)),
-            pixelWidth: Int(row.width ?? 0),
-            pixelHeight: Int(row.height ?? 0),
-            duration: TimeInterval(row.durationMillis ?? 0) / 1000,
-            isFavorite: row.rating > 0
-        )
     }
 }

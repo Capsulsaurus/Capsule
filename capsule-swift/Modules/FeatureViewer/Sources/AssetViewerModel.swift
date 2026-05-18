@@ -4,8 +4,8 @@ import Foundation
 import Observation
 
 /// Drives the full-screen viewer: which asset is shown, the info-panel sheet,
-/// and the favourite / delete actions, which it routes through the
-/// ``AssetProvider`` so they are testable against a mock.
+/// favourite / delete, and adding the asset to a Capsule album — all routed
+/// through providers so they are testable against mocks.
 @MainActor
 @Observable
 public final class AssetViewerModel {
@@ -15,13 +15,22 @@ public final class AssetViewerModel {
     public var currentIndex: Int
     /// Whether the swipe-up info panel is presented.
     public var isInfoPanelPresented = false
+    /// The Capsule user albums available as add-to-album targets.
+    public private(set) var userAlbums: [AlbumSummary] = []
 
     private let provider: any AssetProvider
+    private let albumProvider: any AlbumProvider
 
-    public init(assets: [Asset], startIndex: Int, provider: any AssetProvider) {
+    public init(
+        assets: [Asset],
+        startIndex: Int,
+        provider: any AssetProvider,
+        albumProvider: any AlbumProvider
+    ) {
         self.assets = assets
         currentIndex = assets.isEmpty ? 0 : min(max(startIndex, 0), assets.count - 1)
         self.provider = provider
+        self.albumProvider = albumProvider
     }
 
     /// The asset currently on screen, if any.
@@ -58,6 +67,21 @@ public final class AssetViewerModel {
         } catch {
             CapsuleLog.interface.error("delete failed: \(String(describing: error), privacy: .public)")
             return false
+        }
+    }
+
+    /// Refresh the list of user albums for the add-to-album action.
+    public func loadUserAlbums() async {
+        userAlbums = await albumProvider.loadAlbums().filter(\.isUserAlbum)
+    }
+
+    /// Add the current asset to a Capsule user album.
+    public func addCurrentAsset(to albumID: AlbumID) async {
+        guard let asset = currentAsset else { return }
+        do {
+            try await albumProvider.addAsset(asset.id, to: albumID)
+        } catch {
+            CapsuleLog.interface.error("add to album failed: \(String(describing: error), privacy: .public)")
         }
     }
 }

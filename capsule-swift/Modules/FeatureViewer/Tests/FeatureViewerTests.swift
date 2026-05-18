@@ -13,7 +13,8 @@ struct AssetViewerModelTests {
         let model = AssetViewerModel(
             assets: Fixtures.assets(count: 3),
             startIndex: 99,
-            provider: MockAssetProvider()
+            provider: MockAssetProvider(),
+            albumProvider: MockAlbumProvider()
         )
         #expect(model.currentIndex == 2)
     }
@@ -22,7 +23,9 @@ struct AssetViewerModelTests {
     func togglesFavorite() async {
         let assets = Fixtures.assets(count: 2)
         let provider = MockAssetProvider(assets: assets)
-        let model = AssetViewerModel(assets: assets, startIndex: 0, provider: provider)
+        let model = AssetViewerModel(
+            assets: assets, startIndex: 0, provider: provider, albumProvider: MockAlbumProvider()
+        )
         #expect(model.currentAsset?.isFavorite == false)
 
         await model.toggleFavorite()
@@ -36,7 +39,9 @@ struct AssetViewerModelTests {
     func deletesMiddleAsset() async {
         let assets = Fixtures.assets(count: 3)
         let provider = MockAssetProvider(assets: assets)
-        let model = AssetViewerModel(assets: assets, startIndex: 1, provider: provider)
+        let model = AssetViewerModel(
+            assets: assets, startIndex: 1, provider: provider, albumProvider: MockAlbumProvider()
+        )
 
         let shouldDismiss = await model.deleteCurrentAsset()
 
@@ -49,7 +54,9 @@ struct AssetViewerModelTests {
     func deletesLastAsset() async {
         let assets = Fixtures.assets(count: 1)
         let provider = MockAssetProvider(assets: assets)
-        let model = AssetViewerModel(assets: assets, startIndex: 0, provider: provider)
+        let model = AssetViewerModel(
+            assets: assets, startIndex: 0, provider: provider, albumProvider: MockAlbumProvider()
+        )
 
         let shouldDismiss = await model.deleteCurrentAsset()
 

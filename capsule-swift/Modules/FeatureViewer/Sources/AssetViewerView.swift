@@ -6,26 +6,28 @@ import UIKit
 /// The full-screen, horizontally-paged asset viewer.
 ///
 /// Pages the supplied assets in a `TabView`; each page is a zoomable photo, a
-/// Live Photo, or a video. A bottom bar offers share, info, favourite, and
-/// delete, all routed through ``AssetViewerModel``.
+/// Live Photo, or a video. A bottom bar offers share, info, add-to-album,
+/// favourite, and delete, all routed through ``AssetViewerModel``.
 public struct AssetViewerView: View {
     @State private var model: AssetViewerModel
     private let mediaLoader: ViewerMediaLoader
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.displayScale) private var displayScale
     @State private var shareImage: UIImage?
     @State private var isSharePresented = false
+    @State private var isAddToAlbumPresented = false
 
     public init(
         assets: [Asset],
         startIndex: Int,
         provider: any AssetProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        albumProvider: any AlbumProvider
     ) {
         _model = State(wrappedValue: AssetViewerModel(
             assets: assets,
             startIndex: startIndex,
-            provider: provider
+            provider: provider,
+            albumProvider: albumProvider
         ))
         self.mediaLoader = mediaLoader
     }
@@ -47,6 +49,21 @@ public struct AssetViewerView: View {
             if let shareImage {
                 ActivityView(items: [shareImage])
             }
+        }
+        .confirmationDialog(
+            "Add to Album",
+            isPresented: $isAddToAlbumPresented,
+            titleVisibility: .visible
+        ) {
+            ForEach(model.userAlbums) { album in
+                Button(album.title) {
+                    Task { await model.addCurrentAsset(to: album.id) }
+                }
+            }
+        } message: {
+            Text(model.userAlbums.isEmpty
+                ? "Create an album in the Albums tab first."
+                : "Choose a Capsule album.")
         }
     }
 
@@ -84,6 +101,14 @@ public struct AssetViewerView: View {
         HStack(spacing: 0) {
             barButton("square.and.arrow.up", action: share)
             barButton("info.circle") { model.isInfoPanelPresented = true }
+            if model.currentAsset?.isManaged == true {
+                barButton("rectangle.stack.badge.plus") {
+                    Task {
+                        await model.loadUserAlbums()
+                        isAddToAlbumPresented = true
+                    }
+                }
+            }
             barButton(favoriteSymbol, tint: favoriteTint) {
                 Task { await model.toggleFavorite() }
             }

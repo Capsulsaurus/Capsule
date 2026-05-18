@@ -8,11 +8,12 @@ import ManagedStore
 /// feature screens depend on, injected by constructor from a single place.
 ///
 /// The timeline is served by a ``CompositeAssetProvider`` that merges the
-/// system Photos library and the Capsule-managed store into one chronological
-/// feed; the importer brings picked photos into the managed store.
+/// system Photos library and the Capsule-managed store; albums by a
+/// ``CompositeAlbumProvider`` over system smart albums and Capsule user albums.
 @MainActor
 struct AppEnvironment {
     let assetProvider: any AssetProvider
+    let albumProvider: any AlbumProvider
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
     let importer: LibraryImporter
@@ -30,6 +31,10 @@ struct AppEnvironment {
         )
 
         assetProvider = CompositeAssetProvider(providers: [photoKitProvider, managedProvider])
+        albumProvider = CompositeAlbumProvider(providers: [
+            PhotoKitAlbumProvider(),
+            ManagedAlbumProvider(library: library),
+        ])
         thumbnails = ImagePipeline()
         mediaLoader = ViewerMediaLoader()
         importer = LibraryImporter(importService: importService, managedProvider: managedProvider)

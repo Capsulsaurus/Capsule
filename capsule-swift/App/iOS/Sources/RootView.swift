@@ -15,13 +15,19 @@ struct RootView: View {
             Tab("Library", systemImage: "photo.on.rectangle.angled") {
                 TimelineRootView(
                     assetProvider: environment.assetProvider,
+                    albumProvider: environment.albumProvider,
                     thumbnails: environment.thumbnails,
                     mediaLoader: environment.mediaLoader,
                     importer: environment.importer
                 )
             }
             Tab("Albums", systemImage: "rectangle.stack") {
-                AlbumsRootView()
+                AlbumsRootView(
+                    albumProvider: environment.albumProvider,
+                    assetProvider: environment.assetProvider,
+                    thumbnails: environment.thumbnails,
+                    mediaLoader: environment.mediaLoader
+                )
             }
             Tab("Search", systemImage: "magnifyingglass", role: .search) {
                 SearchRootView()
