@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Capsule.app
+    name: Build & test Capsule.app
     runs-on: macos-15
     steps:
       - name: Check out code
@@ -42,13 +42,12 @@ jobs:
         working-directory: capsule-swift
         run: mise exec -- tuist generate --no-open
 
-      - name: Build
+      - name: Build & test
         run: |
           set -o pipefail
-          xcodebuild \
+          xcodebuild test \
             -workspace capsule-swift/Capsule.xcworkspace \
             -scheme Capsule \
             -configuration Debug \
-            -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO \
-            build | mise -C capsule-swift exec -- xcbeautify
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify

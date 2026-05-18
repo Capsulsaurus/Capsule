@@ -48,3 +48,8 @@ disabled_rules:
   # swiftformat owns line wrapping (--maxwidth none); avoid a turf war.
   - line_length
   - todo
+
+# swiftformat's `--commas always` adds trailing commas to multiline
+# collection literals; require the same here so the two tools agree.
+trailing_comma:
+  mandatory_comma: true
