@@ -25,7 +25,7 @@ pre-commit:
     format-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && swift run -c release --package-path BuildTools swiftformat .
+      run: cd capsule-swift && mise exec -- swiftformat .
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 
@@ -102,13 +102,13 @@ pre-push:
     format-check-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && swift run -c release --package-path BuildTools swiftformat --lint .
+      run: cd capsule-swift && mise exec -- swiftformat --lint .
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
     lint-check-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && swiftlint
+      run: cd capsule-swift && mise exec -- swiftlint --strict
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 

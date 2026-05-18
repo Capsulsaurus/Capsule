@@ -123,7 +123,10 @@ mod tests {
         assert_eq!(ver.version, CURRENT_LIBRARY_VERSION);
 
         // SQLite has the correct schema version
-        assert_eq!(lib.db.schema_version().unwrap(), 1);
+        assert_eq!(
+            lib.db.schema_version().unwrap(),
+            crate::db::schema::SCHEMA_VERSION
+        );
 
         // Config has the correct library name
         assert_eq!(lib.config().library_name, "My Library");

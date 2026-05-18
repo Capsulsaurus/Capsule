@@ -170,7 +170,7 @@ fn execute_candidate(
             capture_utc: commit.capture_utc,
             capture_tz_source: commit.capture_tz_source.clone(),
             import_timestamp: now,
-            hash_blake3: commit.hash.clone(),
+            hash_sha256: commit.hash.clone(),
             width: commit.width.map(|w| w as i64),
             height: commit.height.map(|h| h as i64),
             duration_ms: None,
@@ -265,11 +265,11 @@ fn commit_member(
         }
     })?;
 
-    // Step 5: BLAKE3 verify
+    // Step 5: SHA-256 verify
     let source_bytes = fs::read(source).map_err(|e| format!("read failed: {e}"))?;
-    let source_hash = blake3::hash(&source_bytes).to_hex().to_string();
+    let source_hash = crate::utils::hash::hash_bytes(&source_bytes);
     let tmp_bytes = fs::read(&tmp_media).map_err(|e| format!("read tmp failed: {e}"))?;
-    let tmp_hash = blake3::hash(&tmp_bytes).to_hex().to_string();
+    let tmp_hash = crate::utils::hash::hash_bytes(&tmp_bytes);
     if source_hash != tmp_hash {
         let _ = fs::remove_file(&tmp_media);
         return Err("corrupt_transfer".to_string());
@@ -301,7 +301,7 @@ fn commit_member(
         original_filename,
         import_timestamp: now,
         modified_timestamp: now,
-        hash_blake3: source_hash.clone(),
+        hash_sha256: source_hash.clone(),
         file_size: source_bytes.len() as u64,
         is_deleted: false,
         rating: 0,
@@ -472,8 +472,8 @@ mod tests {
         // This is hard to simulate with real fs::copy, so we test the hash comparison logic.
         let src_bytes = b"source content";
         let tmp_bytes = b"different content"; // simulates corruption
-        let src_hash = blake3::hash(src_bytes).to_hex().to_string();
-        let tmp_hash = blake3::hash(tmp_bytes).to_hex().to_string();
+        let src_hash = crate::utils::hash::hash_bytes(src_bytes);
+        let tmp_hash = crate::utils::hash::hash_bytes(tmp_bytes);
         assert_ne!(
             src_hash, tmp_hash,
             "hashes should differ for corrupt transfer test"

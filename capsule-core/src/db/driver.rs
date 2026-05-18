@@ -1,4 +1,4 @@
-use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
+use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, StackMemberRow};
 use crate::db::schema;
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -41,12 +41,12 @@ impl DatabaseDriver {
     pub fn insert_asset(&self, row: &AssetRow) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
-                row.capture_tz_source, row.import_timestamp, row.hash_blake3,
+                row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
@@ -58,12 +58,12 @@ impl DatabaseDriver {
     pub fn upsert_asset(&self, row: &AssetRow) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT OR REPLACE INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
-                row.capture_tz_source, row.import_timestamp, row.hash_blake3,
+                row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
@@ -75,7 +75,7 @@ impl DatabaseDriver {
     pub fn find_by_uuid(&self, uuid: &str) -> Result<Option<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets WHERE uuid = ?1 LIMIT 1",
         )?;
@@ -89,9 +89,9 @@ impl DatabaseDriver {
     pub fn find_by_hash(&self, hash: &str) -> Result<Option<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
-             FROM assets WHERE hash_blake3 = ?1 LIMIT 1",
+             FROM assets WHERE hash_sha256 = ?1 LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![hash], map_asset_row)?;
         match rows.next() {
@@ -107,7 +107,7 @@ impl DatabaseDriver {
     ) -> Result<Vec<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets
              WHERE is_deleted = 0 AND is_stack_hidden = 0
@@ -115,6 +115,37 @@ impl DatabaseDriver {
              LIMIT ?1 OFFSET ?2",
         )?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], map_asset_row)?;
+        rows.collect()
+    }
+
+    /// Query the timeline filtered by asset type and/or capture-time window.
+    ///
+    /// `after`/`before` bound `COALESCE(capture_utc, capture_timestamp)`
+    /// (inclusive). Any filter argument left as `None` is not applied.
+    pub fn query_timeline_filtered(
+        &self,
+        asset_type: Option<&str>,
+        after: Option<i64>,
+        before: Option<i64>,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             FROM assets
+             WHERE is_deleted = 0 AND is_stack_hidden = 0
+               AND (?1 IS NULL OR asset_type = ?1)
+               AND (?2 IS NULL OR COALESCE(capture_utc, capture_timestamp) >= ?2)
+               AND (?3 IS NULL OR COALESCE(capture_utc, capture_timestamp) <= ?3)
+             ORDER BY COALESCE(capture_utc, capture_timestamp) DESC
+             LIMIT ?4 OFFSET ?5",
+        )?;
+        let rows = stmt.query_map(
+            params![asset_type, after, before, limit as i64, offset as i64],
+            map_asset_row,
+        )?;
         rows.collect()
     }
 
@@ -229,11 +260,104 @@ impl DatabaseDriver {
         let threshold = now_secs() - older_than_secs;
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
         )?;
         let rows = stmt.query_map(params![threshold], map_asset_row)?;
+        rows.collect()
+    }
+
+    // ── Albums ───────────────────────────────────────────────────────────────
+
+    pub fn insert_album(&self, row: &AlbumRow) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT INTO albums (id, name, created_at, modified_at, cover_asset_id)
+             VALUES (?1,?2,?3,?4,?5)",
+            params![
+                row.id,
+                row.name,
+                row.created_at,
+                row.modified_at,
+                row.cover_asset_id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_album(&self, row: &AlbumRow) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE albums SET name = ?2, modified_at = ?3, cover_asset_id = ?4 WHERE id = ?1",
+            params![row.id, row.name, row.modified_at, row.cover_asset_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_album(&self, id: &str) -> Result<(), rusqlite::Error> {
+        // Detach member assets first — deleting an album never deletes assets.
+        self.conn.execute(
+            "UPDATE assets SET album_id = NULL WHERE album_id = ?1",
+            params![id],
+        )?;
+        self.conn
+            .execute("DELETE FROM albums WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn find_album(&self, id: &str) -> Result<Option<AlbumRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, created_at, modified_at, cover_asset_id
+             FROM albums WHERE id = ?1 LIMIT 1",
+        )?;
+        let mut rows = stmt.query_map(params![id], map_album_row)?;
+        match rows.next() {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    pub fn list_albums(&self) -> Result<Vec<AlbumRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, created_at, modified_at, cover_asset_id
+             FROM albums ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], map_album_row)?;
+        rows.collect()
+    }
+
+    /// Set (or clear, with `None`) the album an asset belongs to.
+    pub fn set_asset_album(
+        &self,
+        uuid: &str,
+        album_id: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE assets SET album_id = ?1 WHERE uuid = ?2",
+            params![album_id, uuid],
+        )?;
+        Ok(())
+    }
+
+    /// Query the non-deleted, non-hidden assets in an album, newest first.
+    pub fn query_album_assets(
+        &self,
+        album_id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             FROM assets
+             WHERE is_deleted = 0 AND is_stack_hidden = 0 AND album_id = ?1
+             ORDER BY COALESCE(capture_utc, capture_timestamp) DESC
+             LIMIT ?2 OFFSET ?3",
+        )?;
+        let rows = stmt.query_map(
+            params![album_id, limit as i64, offset as i64],
+            map_asset_row,
+        )?;
         rows.collect()
     }
 }
@@ -253,7 +377,7 @@ fn map_asset_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         capture_utc: row.get(3)?,
         capture_tz_source: row.get(4)?,
         import_timestamp: row.get(5)?,
-        hash_blake3: row.get(6)?,
+        hash_sha256: row.get(6)?,
         width: row.get(7)?,
         height: row.get(8)?,
         duration_ms: row.get(9)?,
@@ -268,10 +392,20 @@ fn map_asset_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
     })
 }
 
+fn map_album_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AlbumRow> {
+    Ok(AlbumRow {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        created_at: row.get(2)?,
+        modified_at: row.get(3)?,
+        cover_asset_id: row.get(4)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
+    use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, StackMemberRow};
 
     fn make_asset(uuid: &str, hash: &str) -> AssetRow {
         AssetRow {
@@ -281,7 +415,7 @@ mod tests {
             capture_utc: Some(1719997200),
             capture_tz_source: Some("offset_exif".to_string()),
             import_timestamp: 1720000000,
-            hash_blake3: hash.to_string(),
+            hash_sha256: hash.to_string(),
             width: Some(4032),
             height: Some(3024),
             duration_ms: None,
@@ -300,7 +434,7 @@ mod tests {
     fn test_init_schema_idempotent() {
         let db = DatabaseDriver::open_in_memory().unwrap();
         db.init_schema().unwrap(); // second call — should not fail
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), 2);
     }
 
     #[test]
@@ -421,5 +555,94 @@ mod tests {
         db.upsert_asset(&asset).unwrap();
         let found = db.find_by_hash(&"a".repeat(64)).unwrap().unwrap();
         assert_eq!(found.rating, 5);
+    }
+
+    #[test]
+    fn test_query_timeline_filtered_by_type() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let photo = make_asset("p-1", &"a".repeat(64));
+        let mut video = make_asset("v-1", &"b".repeat(64));
+        video.asset_type = "video".to_string();
+        db.insert_asset(&photo).unwrap();
+        db.insert_asset(&video).unwrap();
+
+        let photos = db
+            .query_timeline_filtered(Some("photo"), None, None, 0, 100)
+            .unwrap();
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].uuid, "p-1");
+
+        let all = db
+            .query_timeline_filtered(None, None, None, 0, 100)
+            .unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_query_timeline_filtered_by_time_window() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let mut early = make_asset("e-1", &"a".repeat(64));
+        let mut late = make_asset("l-1", &"b".repeat(64));
+        early.capture_utc = Some(1_000);
+        late.capture_utc = Some(2_000_000_000);
+        db.insert_asset(&early).unwrap();
+        db.insert_asset(&late).unwrap();
+
+        let recent = db
+            .query_timeline_filtered(None, Some(1_000_000), None, 0, 100)
+            .unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0].uuid, "l-1");
+    }
+
+    #[test]
+    fn test_album_crud() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let album = AlbumRow {
+            id: "album-1".to_string(),
+            name: "Summer".to_string(),
+            created_at: 1720000000,
+            modified_at: 1720000000,
+            cover_asset_id: None,
+        };
+        db.insert_album(&album).unwrap();
+        assert_eq!(db.list_albums().unwrap().len(), 1);
+
+        let mut updated = album.clone();
+        updated.name = "Summer 2024".to_string();
+        updated.modified_at = 1720000100;
+        db.update_album(&updated).unwrap();
+        assert_eq!(
+            db.find_album("album-1").unwrap().unwrap().name,
+            "Summer 2024"
+        );
+
+        db.delete_album("album-1").unwrap();
+        assert!(db.find_album("album-1").unwrap().is_none());
+    }
+
+    #[test]
+    fn test_query_album_assets_and_detach_on_delete() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let album = AlbumRow {
+            id: "album-1".to_string(),
+            name: "Trip".to_string(),
+            created_at: 1720000000,
+            modified_at: 1720000000,
+            cover_asset_id: None,
+        };
+        db.insert_album(&album).unwrap();
+
+        let asset = make_asset("a-1", &"a".repeat(64));
+        db.insert_asset(&asset).unwrap();
+        db.set_asset_album("a-1", Some("album-1")).unwrap();
+
+        let in_album = db.query_album_assets("album-1", 0, 100).unwrap();
+        assert_eq!(in_album.len(), 1);
+
+        // Deleting the album detaches its assets but does not delete them.
+        db.delete_album("album-1").unwrap();
+        assert!(db.query_album_assets("album-1", 0, 100).unwrap().is_empty());
+        assert!(db.find_by_uuid("a-1").unwrap().is_some());
     }
 }

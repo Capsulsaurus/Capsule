@@ -1,4 +1,9 @@
-pub const SCHEMA_VERSION: u32 = 1;
+/// SQLite catalog schema version.
+///
+/// v2: `assets.hash_blake3` renamed to `hash_sha256` — the project moved from
+///     BLAKE3 to SHA-256 (hardware-accelerated on Apple and modern CPUs).
+///     Added the client-side `albums` table for user-defined album metadata.
+pub const SCHEMA_VERSION: u32 = 2;
 
 pub const DDL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -10,7 +15,7 @@ CREATE TABLE IF NOT EXISTS assets (
     capture_utc       INTEGER,
     capture_tz_source TEXT,
     import_timestamp  INTEGER NOT NULL,
-    hash_blake3       TEXT    NOT NULL,
+    hash_sha256       TEXT    NOT NULL,
     width             INTEGER,
     height            INTEGER,
     duration_ms       INTEGER,
@@ -51,15 +56,25 @@ CREATE TABLE IF NOT EXISTS asset_tags (
     PRIMARY KEY (uuid, tag)
 );
 
-CREATE INDEX IF NOT EXISTS idx_assets_hash       ON assets(hash_blake3);
+CREATE TABLE IF NOT EXISTS albums (
+    id              TEXT    PRIMARY KEY,
+    name            TEXT    NOT NULL,
+    created_at      INTEGER NOT NULL,
+    modified_at     INTEGER NOT NULL,
+    cover_asset_id  TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_assets_hash       ON assets(hash_sha256);
 CREATE INDEX IF NOT EXISTS idx_assets_utc        ON assets(capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_assets_deleted    ON assets(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_assets_album      ON assets(album_id);
 CREATE INDEX IF NOT EXISTS idx_assets_stack      ON assets(stack_id);
+CREATE INDEX IF NOT EXISTS idx_assets_type       ON assets(asset_type);
 CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_stacks_type       ON asset_stacks(stack_type);
 CREATE INDEX IF NOT EXISTS idx_stacks_primary    ON asset_stacks(primary_asset_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_stack  ON stack_members(stack_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_asset  ON stack_members(asset_id);
 CREATE INDEX IF NOT EXISTS idx_tags_tag          ON asset_tags(tag);
+CREATE INDEX IF NOT EXISTS idx_albums_created    ON albums(created_at);
 "#;

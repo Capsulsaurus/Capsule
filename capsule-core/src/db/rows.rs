@@ -6,7 +6,7 @@ pub struct AssetRow {
     pub capture_utc: Option<i64>,
     pub capture_tz_source: Option<String>,
     pub import_timestamp: i64,
-    pub hash_blake3: String,
+    pub hash_sha256: String,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub duration_ms: Option<i64>,
@@ -46,4 +46,15 @@ pub struct StackMemberRow {
 pub struct AssetTagRow {
     pub uuid: String,
     pub tag: String,
+}
+
+/// A user-defined album. Membership is tracked via `assets.album_id`
+/// (one album per asset, per the filesystem design doc).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlbumRow {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub modified_at: i64,
+    pub cover_asset_id: Option<String>,
 }

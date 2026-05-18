@@ -22,3 +22,4 @@
 --trimwhitespace always
 --wraparguments preserve
 --wrapcollections preserve
+--exclude .ffi,Derived,.build

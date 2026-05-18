@@ -14,6 +14,7 @@ members = [
     "capsule-cli",
     "capsule-cli/migration",
     "capsule-core",
+    "capsule-core-ffi",
     "capsule-media",
     "capsule-sdk",
 ]
@@ -33,6 +34,7 @@ default-members = [
     "capsule-cli",
     "capsule-cli/migration",
     "capsule-core",
+    "capsule-core-ffi",
     "capsule-media",
 ]
 resolver = "3"
@@ -98,7 +100,6 @@ uuid = { version = "1.19.0", features = ["v4"] }
 tower-http = { version = "0.6.8", features = ["cors"] }
 tracing = "0.1.43"
 tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
-blake3 = "1"
 
 [profile.release]
 lto = "thin"

@@ -16,7 +16,7 @@ pub struct AssetSidecar {
     pub original_filename: String,
     pub import_timestamp: i64,
     pub modified_timestamp: i64,
-    pub hash_blake3: String,
+    pub hash_sha256: String,
     pub file_size: u64,
     pub is_deleted: bool,
     pub rating: u8,
@@ -87,7 +87,7 @@ impl Serialize for AssetSidecar {
         insert!("original_filename", self.original_filename);
         insert!("import_timestamp", self.import_timestamp);
         insert!("modified_timestamp", self.modified_timestamp);
-        insert!("hash_blake3", self.hash_blake3);
+        insert!("hash_sha256", self.hash_sha256);
         insert!("file_size", self.file_size);
         insert!("is_deleted", self.is_deleted);
         insert!("rating", self.rating);
@@ -162,7 +162,7 @@ impl<'de> Deserialize<'de> for AssetSidecar {
         let original_filename = req!("original_filename", String);
         let import_timestamp = req!("import_timestamp", i64);
         let modified_timestamp = req!("modified_timestamp", i64);
-        let hash_blake3 = req!("hash_blake3", String);
+        let hash_sha256 = req!("hash_sha256", String);
         let file_size = req!("file_size", u64);
         let is_deleted = req!("is_deleted", bool);
         let rating = req!("rating", u8);
@@ -197,7 +197,7 @@ impl<'de> Deserialize<'de> for AssetSidecar {
             original_filename,
             import_timestamp,
             modified_timestamp,
-            hash_blake3,
+            hash_sha256,
             file_size,
             is_deleted,
             rating,
@@ -241,7 +241,7 @@ mod tests {
             original_filename: "IMG_1234.jpg".to_string(),
             import_timestamp: 1720000000,
             modified_timestamp: 1720000000,
-            hash_blake3: "a".repeat(64),
+            hash_sha256: "a".repeat(64),
             file_size: 1024 * 1024,
             is_deleted: false,
             rating: 0,
