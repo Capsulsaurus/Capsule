@@ -102,8 +102,7 @@ public struct ManagedLibraryLayout: Sendable, Equatable {
     /// `YYYY` / `YYYY-MM` strings from a date's UTC calendar components.
     static func datePartition(for date: Date) -> (year: String, month: String) {
         var calendar = Calendar(identifier: .gregorian)
-        // swiftlint:disable:next force_unwrapping
-        calendar.timeZone = TimeZone(identifier: "UTC")!
+        calendar.timeZone = .gmt
         let parts = calendar.dateComponents([.year, .month], from: date)
         let year = parts.year ?? 0
         let month = parts.month ?? 0

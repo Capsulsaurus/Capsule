@@ -8,10 +8,15 @@ import SwiftUI
 /// A compact `TabView` today; Phase 7 adds the `NavigationSplitView` layout for
 /// regular-width (iPad) size classes.
 struct RootView: View {
+    let environment: AppEnvironment
+
     var body: some View {
         TabView {
             Tab("Library", systemImage: "photo.on.rectangle.angled") {
-                TimelineRootView()
+                TimelineRootView(
+                    assetProvider: environment.assetProvider,
+                    thumbnails: environment.thumbnails
+                )
             }
             Tab("Albums", systemImage: "rectangle.stack") {
                 AlbumsRootView()
@@ -21,8 +26,4 @@ struct RootView: View {
             }
         }
     }
-}
-
-#Preview {
-    RootView()
 }

@@ -119,11 +119,15 @@ private let moduleTargets: [Target] =
         ])
 
         // Feature modules.
-        + module("FeatureTimeline", dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-            .target(name: "ImagePipeline"),
-        ])
+        + module(
+            "FeatureTimeline",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+            ],
+            testDependencies: [supportDependency]
+        )
         + module("FeatureViewer", dependencies: [
             .target(name: "CapsuleUI"),
             .target(name: "AssetKit"),
@@ -147,6 +151,8 @@ private let appTarget: Target = .target(
     deploymentTargets: appDeploymentTargets,
     infoPlist: .extendingDefault(with: [
         "UILaunchScreen": ["UIColorName": ""],
+        "NSPhotoLibraryUsageDescription":
+            "Capsule shows and organizes the photos and videos in your library.",
     ]),
     sources: ["App/iOS/Sources/**"],
     dependencies: [
@@ -155,6 +161,8 @@ private let appTarget: Target = .target(
         .target(name: "FeatureAlbums"),
         .target(name: "FeatureSearch"),
         .target(name: "CapsuleUI"),
+        .target(name: "ImagePipeline"),
+        .target(name: "AssetKit"),
         .target(name: "CapsuleFoundation"),
     ],
     settings: capsuleSettings
@@ -166,6 +174,7 @@ private let testTargetNames: [TestableTarget] = [
     "CapsuleCatalogTests",
     "ManagedStoreTests",
     "AssetKitTests",
+    "FeatureTimelineTests",
 ]
 
 // MARK: - Project
