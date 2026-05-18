@@ -148,10 +148,16 @@ private let moduleTargets: [Target] =
             ],
             testDependencies: [supportDependency]
         )
-        + module("FeatureSearch", dependencies: [
-            .target(name: "CapsuleUI"),
-            .target(name: "AssetKit"),
-        ])
+        + module(
+            "FeatureSearch",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+            ],
+            testDependencies: [supportDependency]
+        )
 
 /// The thin iOS / iPadOS app target — composition root only.
 private let appTarget: Target = .target(
@@ -188,6 +194,7 @@ private let testTargetNames: [TestableTarget] = [
     "FeatureTimelineTests",
     "FeatureViewerTests",
     "FeatureAlbumsTests",
+    "FeatureSearchTests",
 ]
 
 // MARK: - Project

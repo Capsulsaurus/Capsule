@@ -30,7 +30,12 @@ struct RootView: View {
                 )
             }
             Tab("Search", systemImage: "magnifyingglass", role: .search) {
-                SearchRootView()
+                SearchRootView(
+                    assetProvider: environment.assetProvider,
+                    albumProvider: environment.albumProvider,
+                    thumbnails: environment.thumbnails,
+                    mediaLoader: environment.mediaLoader
+                )
             }
         }
     }
