@@ -50,4 +50,16 @@ struct CapsuleFoundationTests {
         #expect(photoKit != managed)
         #expect(Set([photoKit, managed, photoKit]).count == 2)
     }
+
+    @Test("UUIDv7 is well-formed, version 7, and time-ordered")
+    func uuidVersion7() {
+        let early = UUIDv7.string(date: Date(timeIntervalSince1970: 1_000_000))
+        let late = UUIDv7.string(date: Date(timeIntervalSince1970: 2_000_000))
+        #expect(early.count == 36)
+        #expect(early == early.lowercased())
+        // The version nibble — the first character of the third group.
+        #expect(Array(early)[14] == "7")
+        // The 48-bit timestamp prefix keeps identifiers chronologically sorted.
+        #expect(early < late)
+    }
 }

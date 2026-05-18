@@ -18,6 +18,9 @@ public actor MockCatalog: AssetCatalog {
     /// The current wall-clock, overridable so trash-expiry tests are deterministic.
     public var now = Int64(Date().timeIntervalSince1970)
 
+    /// When `true`, ``insertAsset(_:)`` throws — to exercise import rollback.
+    public var failInserts = false
+
     public init(schemaVersion: UInt32 = 2) {
         schemaVersionValue = schemaVersion
     }
@@ -27,6 +30,11 @@ public actor MockCatalog: AssetCatalog {
         now = value
     }
 
+    /// Make ``insertAsset(_:)`` throw, to exercise import rollback.
+    public func setFailInserts(_ value: Bool) {
+        failInserts = value
+    }
+
     public func schemaVersion() -> UInt32 {
         schemaVersionValue
     }
@@ -34,6 +42,9 @@ public actor MockCatalog: AssetCatalog {
     // MARK: Assets
 
     public func insertAsset(_ asset: CatalogAsset) throws {
+        if failInserts {
+            throw CatalogError.Database(message: "mock: insert failure injected")
+        }
         guard assets[asset.id] == nil else {
             throw CatalogError.Database(message: "asset already exists: \(asset.id)")
         }

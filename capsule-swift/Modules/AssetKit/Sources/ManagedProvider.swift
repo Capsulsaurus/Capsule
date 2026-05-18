@@ -1,0 +1,107 @@
+import CapsuleCatalog
+import CapsuleFoundation
+import Foundation
+import ManagedStore
+
+/// The ``AssetProvider`` over the Capsule-managed library.
+///
+/// Reads its timeline from the catalog and maps each ``CatalogAsset`` to the
+/// source-agnostic ``Asset``. Mutations (favourite, delete) write straight to
+/// the catalog; deletion is a soft delete, leaving the file in place. The
+/// import flow calls ``refresh()`` once an import completes so the timeline
+/// picks up the new assets.
+public actor ManagedProvider: AssetProvider {
+    /// Upper bound on the managed timeline window for the prototype.
+    private static let timelineLimit = 10_000
+
+    private let library: ManagedLibrary
+    private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
+
+    public init(library: ManagedLibrary) {
+        self.library = library
+    }
+
+    public func authorizationStatus() -> AssetAuthorizationStatus {
+        .authorized // The managed store needs no system permission.
+    }
+
+    @discardableResult
+    public func requestAuthorization() -> AssetAuthorizationStatus {
+        .authorized
+    }
+
+    public func loadTimeline() async throws -> any AssetSnapshot {
+        let catalog = try await library.catalog()
+        let rows = try await catalog.timeline(offset: 0, limit: Self.timelineLimit)
+        return InMemoryAssetSnapshot(rows.map(Self.asset(from:)))
+    }
+
+    public func asset(for id: AssetID) async throws -> Asset? {
+        guard case let .managed(uuid) = id else { return nil }
+        let catalog = try await library.catalog()
+        return try await catalog.asset(id: uuid).map(Self.asset(from:))
+    }
+
+    public nonisolated func changes() -> AsyncStream<AssetChange> {
+        AsyncStream { continuation in
+            let token = UUID()
+            Task { await self.register(continuation, token: token) }
+            continuation.onTermination = { _ in
+                Task { await self.unregister(token) }
+            }
+        }
+    }
+
+    public func setFavorite(_ isFavorite: Bool, for id: AssetID) async throws {
+        guard case let .managed(uuid) = id else { return }
+        let catalog = try await library.catalog()
+        guard var asset = try await catalog.asset(id: uuid) else { return }
+        asset.rating = isFavorite ? 1 : 0
+        try await catalog.upsertAsset(asset)
+        await emitReload()
+    }
+
+    public func delete(_ ids: [AssetID]) async throws {
+        let catalog = try await library.catalog()
+        let deletedAt = Int64(Date().timeIntervalSince1970)
+        for id in ids {
+            guard case let .managed(uuid) = id else { continue }
+            try await catalog.softDeleteAsset(id: uuid, deletedAt: deletedAt)
+        }
+        await emitReload()
+    }
+
+    /// Re-publish the timeline — called once an import has added assets.
+    public func refresh() async {
+        await emitReload()
+    }
+
+    // MARK: Private
+
+    private func register(_ continuation: AsyncStream<AssetChange>.Continuation, token: UUID) {
+        observers[token] = continuation
+    }
+
+    private func unregister(_ token: UUID) {
+        observers[token] = nil
+    }
+
+    private func emitReload() async {
+        guard !observers.isEmpty, let snapshot = try? await loadTimeline() else { return }
+        for continuation in observers.values {
+            continuation.yield(.reload(snapshot))
+        }
+    }
+
+    private static func asset(from row: CatalogAsset) -> Asset {
+        Asset(
+            id: .managed(uuid: row.id),
+            mediaType: row.assetType == "video" ? .video : .photo,
+            captureDate: Date(timeIntervalSince1970: TimeInterval(row.effectiveCaptureTimestamp)),
+            pixelWidth: Int(row.width ?? 0),
+            pixelHeight: Int(row.height ?? 0),
+            duration: TimeInterval(row.durationMillis ?? 0) / 1000,
+            isFavorite: row.rating > 0
+        )
+    }
+}

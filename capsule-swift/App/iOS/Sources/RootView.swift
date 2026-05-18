@@ -16,7 +16,8 @@ struct RootView: View {
                 TimelineRootView(
                     assetProvider: environment.assetProvider,
                     thumbnails: environment.thumbnails,
-                    mediaLoader: environment.mediaLoader
+                    mediaLoader: environment.mediaLoader,
+                    importer: environment.importer
                 )
             }
             Tab("Albums", systemImage: "rectangle.stack") {
