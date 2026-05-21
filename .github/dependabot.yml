@@ -4,23 +4,23 @@
 version: 2
 updates:
   - package-ecosystem: "bun"
-    directory: "/pixles-docs"
+    directory: "/capsule-docs"
     schedule:
       interval: "weekly"
   - package-ecosystem: "bun"
-    directory: "/pixles-web"
+    directory: "/capsule-web"
     schedule:
       interval: "weekly"
   - package-ecosystem: "cargo"
-    directory: "/pixles-api"
+    directory: "/capsule-api"
     schedule:
       interval: "weekly"
   - package-ecosystem: "docker"
-    directory: "/pixles-api"
+    directory: "/capsule-api"
     schedule:
       interval: "weekly"
   - package-ecosystem: "docker-compose"
-    directory: "/pixles-api"
+    directory: "/capsule-api"
     schedule:
       interval: "weekly"
   - package-ecosystem: "github-actions"
@@ -32,6 +32,6 @@ updates:
     schedule:
       interval: "weekly"
   - package-ecosystem: "swift"
-    directory: "/pixles-swift"
+    directory: "/capsule-swift"
     schedule:
       interval: "weekly"

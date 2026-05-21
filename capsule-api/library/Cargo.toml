@@ -1,0 +1,49 @@
+[package]
+name = "capsule-api-library"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "library"
+path = "src/lib.rs"
+
+[dependencies]
+capsule-api-auth = { path = "../auth" }
+capsule-api-entity = { path = "../entity" }
+capsule-api-environment = { path = "../environment", features = ["graphql"] }
+capsule-api-model = { path = "../model" }
+capsule-api-service = { path = "../service" }
+async-graphql = { version = "7.0.17", features = [
+    "apollo_persisted_queries",
+    "chrono",
+    # "dataloader", // Disabled due to bug: <https://github.com/async-graphql/async-graphql/issues/1726>
+    "log",
+    "opentelemetry",
+    "secrecy",
+    "tracing",
+    "unblock",
+    "uuid",
+    "url",
+] }
+salvo = { workspace = true }
+eyre = { workspace = true }
+futures-util = { workspace = true }
+jsonwebtoken = { workspace = true }
+sea-orm = { workspace = true, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+    "debug-print",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ring = { workspace = true }
+base64 = { workspace = true }
+secrecy = { workspace = true }
+nanoid = { workspace = true }
+argon2 = { workspace = true }

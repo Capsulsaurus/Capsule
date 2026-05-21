@@ -1,0 +1,40 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    ports:
+      - "5432:5432"
+    environment:
+      # These variables default to the specified values if not set externally.
+      POSTGRES_USER: capsule
+      POSTGRES_PASSWORD: capsule
+      POSTGRES_DB: capsule
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:Z,U
+
+  minio:
+    image: docker.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000" # Minio API port
+      - "9001:9001" # Minio Console port
+    environment:
+      # Default credentials; override via environment or .env file.
+      MINIO_ROOT_USER: capsule
+      MINIO_ROOT_PASSWORD: password
+    volumes:
+      - minio_data:/data:Z,U
+
+  valkey:
+    image: docker.io/valkey/valkey:8.1.1
+    ports:
+      - "6379:6379"
+    environment:
+      # Default credentials; override via environment or .env file.
+      VALKEY_EXTRA_FLAGS: "--maxmemory 4G --maxmemory-policy volatile-lru --save 900 1 300 10 --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes --auto-aof-rewrite-percentage 100 --auto-aof-rewrite-min-size 64mb --lazyfree-lazy-eviction yes --lazyfree-lazy-expire yes --lazyfree-lazy-server-del yes --replica-lazy-flush yes --protected-mode no --tcp-keepalive 60 --loglevel notice --slowlog-log-slower-than 10000 --slowlog-max-len 128 --io-threads 4"
+    volumes:
+      - valkey_data:/data:Z,U
+
+volumes:
+  postgres_data:
+  minio_data:
+  valkey_data:

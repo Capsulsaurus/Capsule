@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Community Discussions
-    url: https://github.com/justin13888/Pixles/discussions
+    url: https://github.com/justin13888/Capsule/discussions
     about: Please ask general questions here.
   - name: Security Policy
-    url: https://github.com/justin13888/Pixles/security/policy
+    url: https://github.com/justin13888/Capsule/security/policy
     about: Please review our security policy before submitting security issues.

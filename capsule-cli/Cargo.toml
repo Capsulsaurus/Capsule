@@ -1,0 +1,42 @@
+[package]
+name = "capsule-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "capsule"
+path = "src/main.rs"
+
+[dependencies]
+capsule-cli-entity = { path = "./entity" }
+capsule-cli-migration = { path = "./migration" }
+capsule-core = { path = "../capsule-core" }
+base64 = { workspace = true }
+capitalize = "0.3.4"
+chrono = { workspace = true }
+clap = { version = "4.5.40", features = ["derive"] }
+color-eyre = "0.6.3"
+colored = "3.0.0"
+dialoguer = "0.11.0"
+directories = "6.0"
+eyre = { workspace = true }
+futures = "0.3.31"
+humansize = "2.1"
+indexmap = { workspace = true }
+nanoid = "0.4.0"
+sea-orm = { workspace = true, features = [
+    "sqlx-sqlite",
+    "runtime-tokio-rustls",
+    "debug-print",
+] }
+serde = { workspace = true }
+sysinfo = "0.36.0"
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true, features = ["release_max_level_debug"] }
+tracing-subscriber = { version = "0.3.10", features = [
+    "env-filter",
+    "json",
+    "fmt",
+] }
+walkdir = "2.5.0"

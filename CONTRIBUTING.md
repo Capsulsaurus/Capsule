@@ -1,4 +1,4 @@
-# Contributing to Pixles
+# Contributing to Capsule
 
 First off, thank you for considering contributing! It’s people like you who make this project a great tool for everyone.
 
@@ -19,4 +19,10 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 
 * Linting: If you have LSPs configured in your editor for the various languages in your repo, it should lint using the appropriate tool with correct versions by default.
 * Commit messaging: Please use **Semantic Commits** (e.g., `feat:`, `fix:`, `docs:`, `test:`) to help us automate our changelog.
-* AI usage: Refer to [AI.md](./AI.md) :)
+* Development Patterns: Refer to [Development](/capsule-docs/src/content/docs/development/).
+* AI usage: Refer to [AI.md](./AI.md).
+
+### Contributor Checklist
+
+- [ ] I have signed the [Contributor License Agreement](CLA.md).
+- [ ] My code follows the project's style guidelines.

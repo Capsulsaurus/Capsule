@@ -5,12 +5,13 @@ on:
       - master
   pull_request:
 
-# TODO: Add all the lint jobs
+    # TODO: Add all the lint jobs
 jobs:
   lint-web:
     name: Lint Web
     runs-on: ubuntu-latest
-    steps: # TODO: Fix
+    steps:
+      # TODO: Fix
       - name: Check out code
         uses: actions/checkout@v4
       - name: Setup Bun
@@ -18,8 +19,8 @@ jobs:
         with:
           bun-version: latest
       - name: Install dependencies
-        working-directory: pixles-web
+        working-directory: capsule-web
         run: bun install
       - name: Lint
-        working-directory: pixles-web
+        working-directory: capsule-web
         run: bun lint

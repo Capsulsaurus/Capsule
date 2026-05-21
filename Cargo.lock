@@ -3508,20 +3508,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api"
+name = "capsule-api"
 version = "0.1.0"
 dependencies = [
  "clap",
  "color-eyre",
  "eyre",
  "listenfd",
- "pixles-api-auth",
- "pixles-api-environment",
- "pixles-api-library",
- "pixles-api-media",
- "pixles-api-migration",
- "pixles-api-sync",
- "pixles-api-upload",
+ "capsule-api-auth",
+ "capsule-api-environment",
+ "capsule-api-library",
+ "capsule-api-media",
+ "capsule-api-migration",
+ "capsule-api-sync",
+ "capsule-api-upload",
  "salvo",
  "sea-orm",
  "serde",
@@ -3532,7 +3532,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-auth"
+name = "capsule-api-auth"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -3546,10 +3546,10 @@ dependencies = [
  "jsonwebtoken",
  "mime",
  "nanoid",
- "pixles-api-environment",
- "pixles-api-migration",
- "pixles-api-model",
- "pixles-api-service",
+ "capsule-api-environment",
+ "capsule-api-migration",
+ "capsule-api-model",
+ "capsule-api-service",
  "redis",
  "reqwest",
  "ring",
@@ -3574,7 +3574,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-entity"
+name = "capsule-api-entity"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -3584,7 +3584,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-environment"
+name = "capsule-api-environment"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -3598,7 +3598,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-library"
+name = "capsule-api-library"
 version = "0.1.0"
 dependencies = [
  "argon2",
@@ -3609,11 +3609,11 @@ dependencies = [
  "futures-util",
  "jsonwebtoken",
  "nanoid",
- "pixles-api-auth",
- "pixles-api-entity",
- "pixles-api-environment",
- "pixles-api-model",
- "pixles-api-service",
+ "capsule-api-auth",
+ "capsule-api-entity",
+ "capsule-api-environment",
+ "capsule-api-model",
+ "capsule-api-service",
  "ring",
  "salvo",
  "sea-orm",
@@ -3627,17 +3627,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-media"
+name = "capsule-api-media"
 version = "0.1.0"
 dependencies = [
  "derive_more",
  "eyre",
  "jsonwebtoken",
- "pixles-api-auth",
- "pixles-api-entity",
- "pixles-api-environment",
- "pixles-api-model",
- "pixles-api-service",
+ "capsule-api-auth",
+ "capsule-api-entity",
+ "capsule-api-environment",
+ "capsule-api-model",
+ "capsule-api-service",
  "salvo",
  "sea-orm",
  "serde",
@@ -3648,7 +3648,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-migration"
+name = "capsule-api-migration"
 version = "0.1.0"
 dependencies = [
  "sea-orm-migration",
@@ -3656,14 +3656,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-model"
+name = "capsule-api-model"
 version = "0.1.0"
 dependencies = [
  "argon2",
  "chrono",
  "eyre",
  "jsonwebtoken",
- "pixles-api-entity",
+ "capsule-api-entity",
  "redis",
  "salvo",
  "sea-orm",
@@ -3675,15 +3675,15 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-service"
+name = "capsule-api-service"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "data-encoding",
  "nanoid",
- "pixles-api-entity",
- "pixles-api-model",
- "pixles-core",
+ "capsule-api-entity",
+ "capsule-api-model",
+ "capsule-core",
  "sea-orm",
  "serde",
  "serde_json",
@@ -3693,17 +3693,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-sync"
+name = "capsule-api-sync"
 version = "0.1.0"
 dependencies = [
  "eyre",
  "futures-util",
  "http-body-util",
  "jsonwebtoken",
- "pixles-api-auth",
- "pixles-api-entity",
- "pixles-api-environment",
- "pixles-core",
+ "capsule-api-auth",
+ "capsule-api-entity",
+ "capsule-api-environment",
+ "capsule-core",
  "prost 0.14.3",
  "prost-types 0.14.3",
  "salvo",
@@ -3724,12 +3724,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-testing"
+name = "capsule-api-testing"
 version = "0.1.0"
 dependencies = [
  "dotenvy",
- "pixles-api-entity",
- "pixles-api-migration",
+ "capsule-api-entity",
+ "capsule-api-migration",
  "sea-orm",
  "sea-orm-migration",
  "thiserror 2.0.17",
@@ -3738,7 +3738,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-api-upload"
+name = "capsule-api-upload"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -3751,13 +3751,13 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "nanoid",
- "pixles-api-auth",
- "pixles-api-entity",
- "pixles-api-environment",
- "pixles-api-model",
- "pixles-api-service",
- "pixles-core",
- "pixles-media",
+ "capsule-api-auth",
+ "capsule-api-entity",
+ "capsule-api-environment",
+ "capsule-api-model",
+ "capsule-api-service",
+ "capsule-core",
+ "capsule-media",
  "ring",
  "salvo",
  "sea-orm",
@@ -3771,7 +3771,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-cli"
+name = "capsule-cli"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -3787,9 +3787,9 @@ dependencies = [
  "humansize",
  "indexmap 2.12.1",
  "nanoid",
- "pixles-cli-entity",
- "pixles-cli-migration",
- "pixles-core",
+ "capsule-cli-entity",
+ "capsule-cli-migration",
+ "capsule-core",
  "sea-orm",
  "serde",
  "sysinfo",
@@ -3801,7 +3801,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-cli-entity"
+name = "capsule-cli-entity"
 version = "0.1.0"
 dependencies = [
  "chrono",
@@ -3811,7 +3811,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-cli-migration"
+name = "capsule-cli-migration"
 version = "0.1.0"
 dependencies = [
  "sea-orm-migration",
@@ -3819,7 +3819,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-core"
+name = "capsule-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
@@ -3840,7 +3840,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-media"
+name = "capsule-media"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
@@ -3860,7 +3860,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "pixles-sdk"
+name = "capsule-sdk"
 version = "0.1.0"
 dependencies = [
  "chrono",

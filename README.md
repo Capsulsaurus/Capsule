@@ -1,4 +1,4 @@
-# Pixles
+# Capsule
 
 Open Asset Management Scaled to Millions.
 
@@ -10,11 +10,11 @@ Open Asset Management Scaled to Millions.
 
 ## Features
 
-- **Cross-platform**: Pixles is available on all common desktop and mobile platforms. They're fast on all.
-- **Broadest format support**: Pixles supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!
+- **Cross-platform**: Capsule is available on all common desktop and mobile platforms. They're fast on all.
+- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!
 - **Privacy**: Your data is yours and end-to-end encrypted.
-- **Asset-first**: Pixles implements several powerful features like real-time viewing, semantic search, AI organization, and more.
-- **Open-source**: Pixles is open-source forever and you can host your own server.
+- **Asset-first**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.
+- **Open-source**: Capsule is open-source forever and you can host your own server.
 
 <!-- TODO: Update this -->
 
@@ -22,25 +22,25 @@ Open Asset Management Scaled to Millions.
 
 <!-- TODO: Add screenshots -->
 
-## Who is Pixles for?
+## Who is Capsule for?
 
-- **Photographers**: Pixles is designed for photographers who want to store and share their photos with clients and peers.
-- **Families and friends**: Pixles is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.
-- **Organizations**: Organizations can use Pixles to share full-quality photos and videos with their members and clients.
-- **People who care about privacy**: Pixles implements the best of privacy and security practices and leaves the data in your hands.
+- **Photographers**: Capsule is designed for photographers who want to store and share their photos with clients and peers.
+- **Families and friends**: Capsule is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.
+- **Organizations**: Organizations can use Capsule to share full-quality photos and videos with their members and clients.
+- **People who care about privacy**: Capsule implements the best of privacy and security practices and leaves the data in your hands.
 
-### Who is Pixles not for?
+### Who is Capsule not for?
 
-This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Pixles might not be for you.
+This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Capsule might not be for you.
 
 ## Some similar alternatives
 
 - **Google Photos or similar**: Google Photos is a great service for storing and sharing photos and videos. However, it compresses and strips metadata from your photos and videos by default, and does not support many more professional or non-smartphone formats.
-- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Pixles should offer a much more comfortable experience.
+- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Capsule should offer a much more comfortable experience.
 
 ## Getting Started
 
-Pixles is available on all common platforms. We expect the smoothest possible experience whether you are uploading straight from your phone or uploading from your dedicated cameras (e.g. mirrorless, GoPro, drone, cinema cameras).
+Capsule is available on all common platforms. We expect the smoothest possible experience whether you are uploading straight from your phone or uploading from your dedicated cameras (e.g. mirrorless, GoPro, drone, cinema cameras).
 
 <!-- Install any of the following clients for your use case:
 
@@ -50,7 +50,7 @@ Pixles is available on all common platforms. We expect the smoothest possible ex
 
 ### Self-hosting
 
-Pixles is open-source and designed to be friendly to self-host. See this [guide](#) for more information. -->
+Capsule is open-source and designed to be friendly to self-host. See this [guide](#) for more information. -->
 
 <!-- TODO -->
 
@@ -58,9 +58,9 @@ Pixles is open-source and designed to be friendly to self-host. See this [guide]
 
 *Note: This section is being updated on the development branch.*
 
-- Official tools for bulk imports: Pixles was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)
+- Official tools for bulk imports: Capsule was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)
 - Native clients with native features: Sometimes you want to backup your content on particular platforms that require platform-specific APIs (e.g. iOS). If we have a native client for you, it will be using the latest APIs available in that ecosystem.
-- Performance-oriented architecture: Pixles is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.
+- Performance-oriented architecture: Capsule is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.
 
 ## Development
 
@@ -68,14 +68,14 @@ Pixles is open-source and designed to be friendly to self-host. See this [guide]
 
 Components:
 
-- [Pixles API](pixles-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)
-- [Pixles Web](pixles-web/README.md) (WIP): Web client in React
-- [Pixles Core Kotlin](pixles-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
-- [Pixles Desktop](pixles-desktop/README.md) (Planned): Windows/Linux desktop client
-- [Pixles Android](pixles-android/README.md) (WIP): Jetpack Compose App
-- [Pixles Swift](pixles-swift/README.md): SwiftUI client for iOS/macOS
-- [Pixles Media](pixles-media/README.md) (Beta): C++ library for certain offloading
-- [Pixles Docs](pixles-docs/README.md): Documentation website in Starlight (Astro)
+- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)
+- [Capsule Web](capsule-web/README.md) (WIP): Web client in React
+- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
+- [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client
+- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
+- [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS
+- [Capsule Media](capsule-media/README.md) (Beta): C++ library for certain offloading
+- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)
 
 <!-- TODO: ensure readme links work ^^ -->
 <!-- TODO: TO be updated ^^ -->
@@ -94,14 +94,14 @@ External dependencies:
 
 Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:
 
-- `pixles-android`: Android Studio or IntelliJ IDEA with plugins
-- `pixles-api`: VS Code or similar
-- `pixles-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
-- `pixles-desktop`: VS Code or similar
-- `pixles-docs`: VS Code or similar
-- `pixles-media`: VS Code or similar
-- `pixles-swift`: Xcode
-- `pixles-web`: VS Code or similar
+- `capsule-android`: Android Studio or IntelliJ IDEA with plugins
+- `capsule-api`: VS Code or similar
+- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
+- `capsule-desktop`: VS Code or similar
+- `capsule-docs`: VS Code or similar
+- `capsule-media`: VS Code or similar
+- `capsule-swift`: Xcode
+- `capsule-web`: VS Code or similar
 
 <!-- TODO: Update list of components ^^ -->
 
@@ -129,9 +129,9 @@ GitHub Issues is the only accepted method of technical issue reporting. For assi
 
 ## FAQ
 
-**Q: Why may Pixles be more suitable than other open-source solutions?**
+**Q: Why may Capsule be more suitable than other open-source solutions?**
 
-A: Pixles is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.
+A: Capsule is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.
 
 **Q: Why not extend off existing open-source solutions?**
 
@@ -148,8 +148,12 @@ A: Even if the best development practices, rigorous testing, and conservative de
 
 ## How to contribute
 
-Pixles primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+Capsule primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
+
+### Contributor License Agreement (CLA)
+
+We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.
 
 ## License
 
-Pixles is licensed under the [AGPL-3.0 License](LICENSE).
+Capsule is licensed under the [AGPL-3.0 License](LICENSE).

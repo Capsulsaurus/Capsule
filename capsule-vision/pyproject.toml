@@ -1,0 +1,23 @@
+[project]
+name = "capsule-vision"
+version = "0.1.0"
+description = "Cutting-edge computer vision features for Capsule"
+authors = [
+    { name = "Justin Chung", email = "20733699+justin13888@users.noreply.github.com" },
+]
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "accelerate>=1.13.0",
+    "pillow>=12.0.0",
+    "torch",
+    "torchvision",
+    "transformers>=5.3.0",
+    "ultralytics>=8.4.21",
+]
+
+[dependency-groups]
+dev = ["ipykernel>=7.2.0", "jupyter>=1.1.1", "ruff>=0.15.5", "ty>=0.0.21"]
+
+[[tool.uv.index]]
+url = "https://download.pytorch.org/whl/rocm7.1"

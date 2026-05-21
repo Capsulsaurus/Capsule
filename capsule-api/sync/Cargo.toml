@@ -1,0 +1,41 @@
+[package]
+name = "capsule-api-sync"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sync"
+path = "src/lib.rs"
+
+[dependencies]
+capsule-api-auth = { path = "../auth" }
+capsule-api-entity = { path = "../entity" }
+capsule-api-environment = { path = "../environment", features = ["sync"] }
+capsule-core = { path = "../../capsule-core" }
+eyre = { workspace = true }
+futures-util = { workspace = true }
+http-body-util = "0.1"
+prost = { workspace = true }
+prost-types = { workspace = true }
+salvo = { workspace = true }
+sea-orm = { workspace = true, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tonic = { workspace = true, features = ["transport", "gzip"] }
+tonic-web = "0.14.2"
+tonic-prost = { workspace = true }
+tonic-health = { workspace = true }
+tonic-types = { workspace = true }
+sync_wrapper = "1.0"
+tokio-stream = "0.1"
+jsonwebtoken = { workspace = true }
+tower = "0.5.2"
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }

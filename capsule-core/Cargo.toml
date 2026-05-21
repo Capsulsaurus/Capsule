@@ -1,0 +1,24 @@
+[package]
+name = "capsule-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+ciborium = "0.2"
+globset = "0.4.16"
+indexmap = { workspace = true }
+kamadak-exif = "0.5"
+log = { workspace = true }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tzf-rs = "0.4"
+uuid = { workspace = true, features = ["v7", "serde"] }
+walkdir = "2"
+blake3 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

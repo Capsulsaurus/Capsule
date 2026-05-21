@@ -1,4 +1,4 @@
-rootProject.name = "Pixles"
+rootProject.name = "Capsule"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 pluginManagement {
@@ -33,11 +33,11 @@ dependencyResolutionManagement {
 //}
 
 include(":android")
-project(":android").projectDir = file("pixles-android")
-//include(":pixles-core-kotlin")
+project(":android").projectDir = file("capsule-android")
+//include(":capsule-core-kotlin")
 include(":core")
-project(":core").projectDir = file("pixles-core-kotlin")
+project(":core").projectDir = file("capsule-core-kotlin")
 include(":cli")
-project(":cli").projectDir = file("pixles-cli")
+project(":cli").projectDir = file("capsule-cli")
 include(":desktop")
-project(":desktop").projectDir = file("pixles-desktop")
+project(":desktop").projectDir = file("capsule-desktop")

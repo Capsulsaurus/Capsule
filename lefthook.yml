@@ -8,40 +8,40 @@ pre-commit:
       run: cargo fmt
     format-web:
       priority: 1
-      glob: "pixles-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd pixles-web && bunx biome format --write .
+      glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: cd capsule-web && bunx biome format --write .
     format-docs:
       priority: 1
-      glob: "pixles-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd pixles-docs && bunx biome format --write .
+      glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
+      run: cd capsule-docs && bunx biome format --write .
     format-kotlin:
       priority: 1
       glob: "**/*.{kt,kts}"
       run: ./gradlew ktlintFormat
     format-vision:
       priority: 1
-      glob: "pixles-vision/**/*.py"
-      run: cd pixles-vision && uv run ruff format
+      glob: "capsule-vision/**/*.py"
+      run: cd capsule-vision && uv run ruff format
     format-swift:
       priority: 1
-      glob: "pixles-swift/**/*.swift"
-      run: cd pixles-swift && swift run -c release --package-path BuildTools swiftformat .
+      glob: "capsule-swift/**/*.swift"
+      run: cd capsule-swift && swift run -c release --package-path BuildTools swiftformat .
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 
     # Priority 2: auto-fix linting
     lint-web:
       priority: 2
-      glob: "pixles-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd pixles-web && bunx biome check --write .
+      glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: cd capsule-web && bunx biome check --write .
     lint-docs:
       priority: 2
-      glob: "pixles-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd pixles-docs && bunx biome check --write .
+      glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
+      run: cd capsule-docs && bunx biome check --write .
     lint-vision:
       priority: 2
-      glob: "pixles-vision/**/*.py"
-      run: cd pixles-vision && uv run ruff check --fix
+      glob: "capsule-vision/**/*.py"
+      run: cd capsule-vision && uv run ruff check --fix
 
     # Priority 3: fail if any files changed (formatters/linters mutated staged files)
     diff-check:
@@ -62,23 +62,23 @@ pre-push:
     lint-check-rust:
       priority: 1
       glob: "**/*.rs"
-      run: cargo clippy --workspace --exclude pixles-sdk -- -D warnings
+      run: cargo clippy --workspace --exclude capsule-sdk -- -D warnings
     format-check-web:
       priority: 1
-      glob: "pixles-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd pixles-web && bunx biome format .
+      glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: cd capsule-web && bunx biome format .
     lint-check-web:
       priority: 1
-      glob: "pixles-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd pixles-web && bunx biome check .
+      glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
+      run: cd capsule-web && bunx biome check .
     format-check-docs:
       priority: 1
-      glob: "pixles-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd pixles-docs && bunx biome format .
+      glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
+      run: cd capsule-docs && bunx biome format .
     lint-check-docs:
       priority: 1
-      glob: "pixles-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd pixles-docs && bunx biome check .
+      glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
+      run: cd capsule-docs && bunx biome check .
     format-check-kotlin:
       priority: 1
       glob: "**/*.{kt,kts}"
@@ -89,26 +89,26 @@ pre-push:
       run: ./gradlew detekt
     format-check-vision:
       priority: 1
-      glob: "pixles-vision/**/*.py"
-      run: cd pixles-vision && uv run ruff format --check
+      glob: "capsule-vision/**/*.py"
+      run: cd capsule-vision && uv run ruff format --check
     lint-check-vision-ruff:
       priority: 1
-      glob: "pixles-vision/**/*.py"
-      run: cd pixles-vision && uv run ruff check
+      glob: "capsule-vision/**/*.py"
+      run: cd capsule-vision && uv run ruff check
     lint-check-vision-ty:
       priority: 1
-      glob: "pixles-vision/**/*.py"
-      run: cd pixles-vision && uv run ty check
+      glob: "capsule-vision/**/*.py"
+      run: cd capsule-vision && uv run ty check
     format-check-swift:
       priority: 1
-      glob: "pixles-swift/**/*.swift"
-      run: cd pixles-swift && swift run -c release --package-path BuildTools swiftformat --lint .
+      glob: "capsule-swift/**/*.swift"
+      run: cd capsule-swift && swift run -c release --package-path BuildTools swiftformat --lint .
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
     lint-check-swift:
       priority: 1
-      glob: "pixles-swift/**/*.swift"
-      run: cd pixles-swift && swiftlint
+      glob: "capsule-swift/**/*.swift"
+      run: cd capsule-swift && swiftlint
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 
@@ -116,8 +116,8 @@ pre-push:
     test-rust:
       priority: 2
       glob: "**/*.rs"
-      run: cargo test --workspace --exclude pixles-sdk
+      run: cargo test --workspace --exclude capsule-sdk
     test-web:
       priority: 2
-      glob: "pixles-web/**/*.{ts,tsx,js,jsx}"
-      run: cd pixles-web && bun test
+      glob: "capsule-web/**/*.{ts,tsx,js,jsx}"
+      run: cd capsule-web && bun test

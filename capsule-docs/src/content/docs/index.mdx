@@ -1,0 +1,68 @@
+---
+title: Capsule
+description: Photo sharing for all
+template: splash
+hero:
+  tagline: A self-hosted photo and video library built for professionals and creatives with terabytes of visual assets.
+  image:
+    file: ../../assets/houston.webp # TODO: Replace with a proper logo once available
+  actions:
+    - text: Get Started
+      link: /guides/getting-started/
+      icon: right-arrow
+    - text: Try Demo
+      link: https://demo.capsule.app
+      icon: external
+      variant: minimal
+---
+
+{/* TODO: Finish this */}
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import GradientBackground from '../../components/GradientBackground.astro';
+import GitHubStars from '../../components/GitHubStars.astro';
+import AppScreenshot from '../../components/AppScreenshot.astro';
+import TryNowSection from '../../components/TryNowSection.astro';
+import SimpleFooter from '../../components/SimpleFooter.astro';
+
+<GradientBackground />
+
+<div style="display: flex; justify-content: center; margin-top: 1rem;">
+  <GitHubStars />
+</div>
+
+<AppScreenshot />
+
+## Features
+
+<CardGrid stagger>
+	<Card title="Lightning Fast" icon="rocket">
+		Optimized for speed with intelligent caching and lazy loading of your photos.
+	</Card>
+	<Card title="Self-Hosted" icon="laptop">
+		Own your data and keep full control of your privacy with an easy self-hosting setup.
+	</Card>
+	<Card title="Advanced Organization" icon="open-book">
+		Powerful tagging, albums, and AI-powered object recognition to organize your media.
+	</Card>
+	<Card title="Multi-Device Sync" icon="setting">
+		Access your photos from any device with automatic synchronization.
+	</Card>
+</CardGrid>
+
+## Why Capsule?
+
+Capsule is designed for photographers, videographers, and visual artists who need more than just cloud storage. With powerful organization tools, blazing-fast performance, and complete privacy control, Capsule is the photo management solution you've been searching for.
+
+### Key benefits:
+
+- **No data limits**: Store unlimited photos and videos
+- **Full privacy**: Your data stays on your servers
+- **AI-powered**: Intelligent tagging and face recognition
+- **RAW support**: Full management of professional file formats
+- **Modern UI**: Beautiful, responsive interface
+- **Open source**: Community-driven development
+
+<TryNowSection />
+
+<SimpleFooter />

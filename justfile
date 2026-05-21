@@ -1,4 +1,4 @@
-# Pixles monorepo task runner
+# Capsule monorepo task runner
 # Plain name = auto-fix, -check suffix = verify-only
 
 # ── Aggregate: format ────────────────────────────────────────────────────────
@@ -47,71 +47,71 @@ format-check-rust:
 
 [group('rust')]
 lint-rust:
-    cargo clippy --workspace --exclude pixles-sdk --fix --allow-dirty
+    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty
 
 [group('rust')]
 lint-check-rust:
-    cargo clippy --workspace --exclude pixles-sdk -- -D warnings
+    cargo clippy --workspace --exclude capsule-sdk -- -D warnings
 
 [group('rust')]
 test-rust:
-    cargo test --workspace --exclude pixles-sdk
+    cargo test --workspace --exclude capsule-sdk
 
 [group('rust')]
 test-coverage-rust:
-    cargo llvm-cov --workspace --exclude pixles-sdk --fail-under-lines 0
+    cargo llvm-cov --workspace --exclude capsule-sdk --fail-under-lines 0
 
 [group('rust')]
 build-rust:
-    cargo build --workspace --exclude pixles-sdk
+    cargo build --workspace --exclude capsule-sdk
 
 # ── Web ──────────────────────────────────────────────────────────────────────
 
 [group('web')]
 format-web:
-    cd pixles-web && bunx biome format --write .
+    cd capsule-web && bunx biome format --write .
 
 [group('web')]
 format-check-web:
-    cd pixles-web && bunx biome format .
+    cd capsule-web && bunx biome format .
 
 [group('web')]
 lint-web:
-    cd pixles-web && bunx biome check --write .
+    cd capsule-web && bunx biome check --write .
 
 [group('web')]
 lint-check-web:
-    cd pixles-web && bunx biome check .
+    cd capsule-web && bunx biome check .
 
 [group('web')]
 test-web:
-    cd pixles-web && bun test
+    cd capsule-web && bun test
 
 [group('web')]
 build-web:
-    cd pixles-web && bun run build
+    cd capsule-web && bun run build
 
 # ── Docs ─────────────────────────────────────────────────────────────────────
 
 [group('docs')]
 format-docs:
-    cd pixles-docs && bunx biome format --write .
+    cd capsule-docs && bunx biome format --write .
 
 [group('docs')]
 format-check-docs:
-    cd pixles-docs && bunx biome format .
+    cd capsule-docs && bunx biome format .
 
 [group('docs')]
 lint-docs:
-    cd pixles-docs && bunx biome check --write .
+    cd capsule-docs && bunx biome check --write .
 
 [group('docs')]
 lint-check-docs:
-    cd pixles-docs && bunx biome check .
+    cd capsule-docs && bunx biome check .
 
 [group('docs')]
 build-docs:
-    cd pixles-docs && bun run build
+    cd capsule-docs && bun run build
 
 # ── Kotlin ───────────────────────────────────────────────────────────────────
 
@@ -148,7 +148,7 @@ format-swift:
         echo "Skipping swift format (not macOS)"
         exit 0
     fi
-    cd pixles-swift && swift run -c release --package-path BuildTools swiftformat .
+    cd capsule-swift && swift run -c release --package-path BuildTools swiftformat .
 
 [group('swift')]
 format-check-swift:
@@ -157,7 +157,7 @@ format-check-swift:
         echo "Skipping swift format check (not macOS)"
         exit 0
     fi
-    cd pixles-swift && swift run -c release --package-path BuildTools swiftformat --lint .
+    cd capsule-swift && swift run -c release --package-path BuildTools swiftformat --lint .
 
 [group('swift')]
 lint-swift:
@@ -166,7 +166,7 @@ lint-swift:
         echo "Skipping swiftlint (not macOS)"
         exit 0
     fi
-    cd pixles-swift && swiftlint
+    cd capsule-swift && swiftlint
 
 [group('swift')]
 lint-check-swift:
@@ -175,25 +175,25 @@ lint-check-swift:
         echo "Skipping swiftlint check (not macOS)"
         exit 0
     fi
-    cd pixles-swift && swiftlint
+    cd capsule-swift && swiftlint
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 
 [group('vision')]
 format-vision:
-    cd pixles-vision && uv run ruff format
+    cd capsule-vision && uv run ruff format
 
 [group('vision')]
 format-check-vision:
-    cd pixles-vision && uv run ruff format --check
+    cd capsule-vision && uv run ruff format --check
 
 [group('vision')]
 lint-vision:
-    cd pixles-vision && uv run ruff check --fix
+    cd capsule-vision && uv run ruff check --fix
 
 [group('vision')]
 lint-check-vision:
-    cd pixles-vision && uv run ruff check && uv run ty check
+    cd capsule-vision && uv run ruff check && uv run ty check
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
@@ -207,6 +207,6 @@ hooks-uninstall:
 
 [group('setup')]
 install:
-    cd pixles-web && bun install
-    cd pixles-docs && bun install
-    cd pixles-vision && uv sync
+    cd capsule-web && bun install
+    cd capsule-docs && bun install
+    cd capsule-vision && uv sync

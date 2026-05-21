@@ -1,0 +1,24 @@
+[package]
+name = "capsule-media"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+base64 = { workspace = true }
+chrono = { workspace = true }
+file-format = { workspace = true, optional = true }
+indexmap = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+thumbhash = "0.1.0"
+tokio = { workspace = true }
+zune-core = "0.5.0"
+zune-jpeg = "0.5.8"
+jpeg-encoder = "0.6"
+tracing = { workspace = true }
+memmap2 = "0.9.9"
+num-rational = { workspace = true }
+
+[features]
+default = ["fs"]
+fs = ["file-format"]
