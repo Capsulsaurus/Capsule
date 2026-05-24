@@ -30,12 +30,13 @@ Since Capsule extensively uses container technologies for both development and p
 
 The Capsule API is written almost entirely in Rust with several binary components serving distinct purposes:
 
-- [GraphQL](/capsule-api/graphql/): GraphQL API for majority of user-facing functionality. Flexible and cross-platform.
-- [Upload](/capsule-api/upload/): A performant TUS-based upload service. Enables high-throughput, resumable uploads.
-- [Metadata](/capsule-api/metadata/): Used for efficient metadata fetching and updating. Consists of two parts:
+- **GraphQL**: GraphQL API for majority of user-facing functionality. Flexible and cross-platform.
+- **Upload**: A performant TUS-based upload service. Enables high-throughput, resumable uploads.
+- **Metadata**: Used for efficient metadata fetching and updating. Consists of two parts:
   - A gRPC (web) service for efficient fetching and updating metadata. We strictly prefer binary-based protocols (i.e. no JSON) for lower-serialization costs with mobile clients.
   - WebSocket + ProtoBuf service for efficient real-time updates
 <!-- TODO: this section is outdated ^^ -->
+<!-- For instance, we are likely dumping GraphQL outright -->
 
 *Note: These components may be combined into a single web server for low-resource environments. It is used in the one-click Docker installer as well.*
 

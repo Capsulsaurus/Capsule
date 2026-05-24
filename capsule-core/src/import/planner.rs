@@ -9,7 +9,7 @@ use crate::import::scan::{ImportCandidate, ScanResult};
 pub struct ImportConfig {
     pub import_mode: ImportMode,
     pub target_album_id: Option<String>,
-    /// If true, import even if a file with the same BLAKE3 hash already exists.
+    /// If true, import even if a file with the same SHA-256 hash already exists.
     pub force_reimport_duplicates: bool,
 }
 
@@ -49,7 +49,7 @@ pub struct ImportActionPlan {
 
 /// Phase 2 — decide what to do with each candidate from the scan.
 ///
-/// BLAKE3-hashes the primary member of each candidate and checks the DB for
+/// SHA-256-hashes the primary member of each candidate and checks the DB for
 /// duplicates. Returns an `ImportActionPlan` with per-candidate decisions.
 pub fn plan(
     scan: &ScanResult,
@@ -110,8 +110,7 @@ fn decide(
 
 fn hash_file(path: &Path) -> Result<String, std::io::Error> {
     let bytes = std::fs::read(path)?;
-    let hash = blake3::hash(&bytes);
-    Ok(hash.to_hex().to_string())
+    Ok(crate::utils::hash::hash_bytes(&bytes))
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -155,7 +154,7 @@ mod tests {
         // Write a file and pre-insert its hash
         let content = b"unique_photo_content";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = blake3::hash(content).to_hex().to_string();
+        let hash = crate::utils::hash::hash_bytes(content);
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid".to_string(),
@@ -164,7 +163,7 @@ mod tests {
             capture_utc: None,
             capture_tz_source: None,
             import_timestamp: 1,
-            hash_blake3: hash,
+            hash_sha256: hash,
             width: None,
             height: None,
             duration_ms: None,
@@ -197,7 +196,7 @@ mod tests {
 
         let content = b"reimport_me";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = blake3::hash(content).to_hex().to_string();
+        let hash = crate::utils::hash::hash_bytes(content);
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid2".to_string(),
@@ -206,7 +205,7 @@ mod tests {
             capture_utc: None,
             capture_tz_source: None,
             import_timestamp: 1,
-            hash_blake3: hash,
+            hash_sha256: hash,
             width: None,
             height: None,
             duration_ms: None,

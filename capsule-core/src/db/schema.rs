@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS assets (
     capture_utc       INTEGER,
     capture_tz_source TEXT,
     import_timestamp  INTEGER NOT NULL,
-    hash_blake3       TEXT    NOT NULL,
+    hash_sha256       TEXT    NOT NULL,
     width             INTEGER,
     height            INTEGER,
     duration_ms       INTEGER,
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS asset_tags (
     PRIMARY KEY (uuid, tag)
 );
 
-CREATE INDEX IF NOT EXISTS idx_assets_hash       ON assets(hash_blake3);
+CREATE INDEX IF NOT EXISTS idx_assets_hash       ON assets(hash_sha256);
 CREATE INDEX IF NOT EXISTS idx_assets_utc        ON assets(capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_assets_deleted    ON assets(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_assets_album      ON assets(album_id);

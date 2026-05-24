@@ -31,8 +31,8 @@ impl Deref for HashData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileMetadata {
-    /// BLAKE3 hash (64-char lowercase hex)
-    pub hash_blake3: HashData,
+    /// SHA-256 hash (64-char lowercase hex)
+    pub hash_sha256: HashData,
     /// File size in bytes
     pub size: u64,
     // /// Media type if available
@@ -85,7 +85,7 @@ impl FileMetadata {
         // let media_type = ...;
 
         Ok(FileMetadata {
-            hash_blake3: hash.into(),
+            hash_sha256: hash.into(),
             size,
             // media_type,
             original_filename,

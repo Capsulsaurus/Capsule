@@ -1,119 +1,67 @@
 ---
 title: AI/ML Integrations in Capsule
-description: How do AI features fit into Capsule' architecture and design principles?
+description: How do AI features fit into Capsule's architecture and design principles?
 ---
 
-<!-- TODO: Finalize the designs described in this article -->
+> **Status:** Details below are **provisional** pending experimentation. The structure of categories, the namespace separation in [AI Output Containment](#ai-output-containment), and the canonical-model invariant from [ML Models — Embedding Provenance](/design/ml-models/#embedding-provenance) are stable; the specific feature list and per-feature behavior may evolve.
 
-## System Architecture Overview
+Capsule runs a hierarchy of ML models for various tasks. The E2E nature of Capsule's architecture requires careful consideration of device capabilities and latency requirements for different features. We broadly categorize the AI/ML processing into three functions:
 
-The platform utilizes an asynchronous, event-driven microservice architecture designed to handle high-throughput ingestion of RAW photos and 4K+ video.
+- **[Semantic Indexing](#semantic-indexing):** Generate a *global* embedding for each asset to enable natural language search and similarity search.
+- **[Dense Tagging](#dense-tagging):** Generate *local* embeddings for objects, faces, and background elements to enable granular search and auto-album generation.
+- **[Quality Assessment](#quality-assessment):** Generate quality scores for each asset to enable quality-based filtering and sorting.
 
-* **API Gateway & Core Logic:** Rust (Axum/Actix-web) for maximum throughput and memory safety.
-* **Source of Truth:** PostgreSQL.
-* **Vector Database:** PostgreSQL with the `pgvector` extension for storing and querying ML embeddings.
-* **Message Broker & Caching:** Valkey (Stream data structures for event queuing).
-* **Object Storage:** S3-compatible store (MinIO/AWS S3) for original files and generated proxies.
-* **AI Inference Workers:** Python/C++ microservices running models optimized with TensorRT, ONNX Runtime, or vLLM.
+Additional AI/ML categories may be added; the canonical inventory is [ML Models](/design/ml-models/).
 
-## The Complete ML Pipeline
+## AI Output Containment
 
-The pipeline is split into a synchronous "Fast Path" for immediate user feedback and an asynchronous "AI Path" for deep indexing.
+AI inference can be wrong, biased, or hallucinatory. A core design rule prevents AI output from corrupting user intent: **AI outputs land in a separate namespace from user-authored metadata, structurally, not by policy.**
 
-### Phase 1: Ingestion & Fast Path
+- AI-suggested tags live in `tags_ai` (a separate OR-set from `tags_user`) — see [Metadata — Tag Provenance and Namespacing](/design/metadata/#tag-provenance-and-namespacing). An AI tag can never overwrite a user tag because they are different fields.
+- AI-derived face identities, scene labels, and quality scores live in distinct sidecar fields (e.g. `ai_face_labels`, `ai_scene`, `ai_quality_score`) that the user does not directly edit; user corrections write to *user* fields and AI re-runs leave the user fields alone.
+- Every AI output entry carries `model_id` and `model_version` (see [ML Models — Embedding Provenance](/design/ml-models/#embedding-provenance)). When the canonical model for that slot changes, old AI outputs are flagged as stale and excluded from queries until regenerated.
+- Promoting an AI tag to a user tag is an explicit, signed lifecycle operation — never automatic, never silent. See [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set).
 
-1. **Upload:** Client pushes the media file to the Object Store and notifies the Rust API.
-2. **Metadata Extraction:** Rust extracts EXIF/IPTC data (f-stop, shutter speed, camera model, GPS).
-3. **Deterministic Deduplication:** Rust calculates a file hash (XXH3) and a Perceptual Hash (pHash) for photos.
-4. **Proxy Generation:** Rust generates web-optimized proxies and thumbnails.
-5. **Event Dispatch:** A message (e.g., `media_ready_for_ai: {media_id: uuid}`) is pushed to a Valkey Stream.
+A hallucinating model can pollute its own namespace; it cannot pollute user intent. This is the structural defense against the "AI mistake silently overwrites user-authored data" damage class — see [Threat Model — Forbidden Client Behaviors](/design/threat-model/#forbidden-client-behaviors).
 
-### Phase 2: AI Processing (Asynchronous)
+## Semantic Indexing
 
-Worker nodes consume the Valkey stream and process the media in parallel:
+To do semantic search, you convert an image and a text query into arrays of numbers (vectors) and measure the distance between them. Every embedding model maps the universe differently, and Capsule is end-to-end encrypted, so every device must run the *same* embedding model — vectors are otherwise incomparable across devices. The canonical model for this slot is declared in [ML Models](/design/ml-models/) (see the **Semantic Search** row).
 
-1. **Embedding Generation:** The image is passed through a vision encoder to create a global semantic vector.
-2. **Dense Tagging & OCR:** The image is analyzed for granular objects, background elements, and text.
-3. **Biometric Pipeline:** Faces are detected, aligned, cropped, and embedded. Bodies are detected and embedded for Person Re-Identification (Re-ID).
-4. **Quality Assessment:** The image is scored for technical flaws (blur, noise, exposure).
+### Image Categorization & Tagging
 
-### Phase 3: Storage & Indexing
+We reuse the semantic embeddings for zero-shot classification to generate tags. This enables faceted search and auto-album generation without a separate classifier model.
 
-1. **Vector Storage:** Embeddings are written to `pgvector` columns.
-2. **Graph Linking:** Re-ID embeddings are linked to specific face profiles via database relations.
+## Dense Tagging
 
-## Specific ML Tasks & Models
+We have the following ordering of operations:
 
-<!-- TODO: Combine models here where possible (to minimize VRAM overhead) (need to consider size-accuracy tradeoff) -->
-<!-- TODO: Revise this section based on experimentation/results -->
+- Face Detection & Matching (Clustering): see the **Face Detection** and **Face Recognition** rows in [ML Models](/design/ml-models/). The chosen detector and embedder are SOTA-small models that run near-instantly on mobile devices.
 
-| Task                              | Category         | Model(s)                                | Dataset(s)                  | Function                                                                                | Implementation Status |
-| --------------------------------- | ---------------- | --------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------- | --------------------- |
-| **Semantic Search**               | Natural Language | SigLIP (`siglip-so400m`)                |                             | Generates global image embeddings for natural language search.                          | WIP (high priority)   |
-| **Dense Tagging & OCR**           | Dense Tagging    | Florence-2                              |                             | Unified vision-language model for bounding boxes, dense captions, and reading text.     |
-| **VLM / Image Chat**              | Natural Language | Qwen2.5-VL or LLaVA-1.6                 |                             | Quantized models for on-demand conversational queries about an image.                   |
-| **Image Captioning**              | Natural Language | BLIP-2                                  |                             | Generates a natural language description of the image content.                          |
-| **Face Detection**                | People           | SCRFD                                   |                             | Highly efficient face bounding box and landmark detection.                              | WIP (high priority)   |
-| **Face Recognition**              | People           | InsightFace (AdaFace)                   |                             | Generates face embeddings. AdaFace excels at handling low-quality/dark images.          | WIP (high priority)   |
-| **Person Detection**              | People           | YOLOv10                                 |                             | Object detection for identifying "person" bounding boxes.                               |
-| **Person Re-ID**                  | People           | OSNet or TorReID                        |                             | Generates embeddings based on clothing and body shape when faces are hidden.            |
-| **Expression Analysis**           | People           | EmotioNet                               |                             | Detects facial action units to infer emotions.                                          |
-| **Quality Scoring**               | People           | LIQE / TOPIQ                            |                             | Blind image quality assessment for noise, blur, and lighting without a reference image. |
-| **Object Detection**              | Scene            | YOLOv10, Grounding DINO, RT-DETR        |                             | Detects objects and background elements for dense tagging.                              | WIP (high priority)   |
-| **Scene Classification**          | Scene            | VIT-L, ConvNeXt-L                       | Places365, SUN397           | Classifies the overall scene (e.g., "beach", "wedding", "cityscape").                   |
-| **Landmark Detection**            | Scene            | DINOv2 + GeM pooling                    | Google Landmarks v2         | Detects key landmarks (e.g., Eiffel Tower, Golden Gate Bridge) for geotagging.          |
-| **Bird/plant Detection**          | Scene            | BioCLIP                                 | iNaturalist 2021            | Identifies and classifies birds and plants within images.                               |
-| **General Animal Detection**      | Scene            | YOLOv8 finetuned on Open Images Animals | Open Images Animals         | Detects common animals (dogs, cats, horses) for tagging and search.                     |
-| **OCR**                           | Text             | TrOCR                                   | SynthText, IIIT-5K          | Extracts text from images, including handwriting and signage.                           |
-| **Screenshot Detection**          | Scene            | Custom CNN classifier                   |                             | Identifies screenshots to help culling.                                                 |
-| **Voice Transcription**           | Audio            | Whisper-large-v3                        |                             | State-of-the-art speech recognition for generating transcripts from video audio tracks. |
-| **Aesthetic Scoring**             | Quality          | NIMA (Efficientnet head)                | AVA Dataset                 | Rates the aesthetic quality of images to help users find their best shots.              |
-| **Blur detection**                | Quality          | Laplacian variance + CNN regressor      | DefocusNet, CUHK            | Detect blurry images.                                                                   |
-| **Exposure Assessment**           | Quality          | Custom CNN regressor                    | Custom                      | Evaluates the exposure level of images to ensure optimal lighting conditions.           |
-| **Noise Estimation**              | Quality          | Custom CNN regressor                    | Custom                      | Estimates the noise level in images to help users identify and filter out noisy shots.  |
-| **Near-duplicate / burst**        | Similarity       | pHash/dHash + CNN                       | Custom                      | Same moment, slightly different                                                         |
-| **Semantic new-duplicate**        | Similarity       | SigLIP, CLIP embeddings + ANN           | Custom                      | Same subject, different angle/day                                                       |
-| **Best-shot selection**           | Similarity       | Quality models combined?                | Custom                      | Select sharpest/best-exposed from burst                                                 |
-| **Shot/scene boundary detection** | Video            | TransNet v2, PyScene Detect             | BBC Planet Earth, ClipShots | Segment video for thumbnail/highlights                                                  |
-| **Highlight extraction**          | Video            | Temporal attention + quality scroe      | SumMe, TVSum                | Extract best moments from videos for highlights and thumbnails.                         |
-| **Action/activity recognition**   | Video            | VideoMAE, TimeSformer                   | Kinetics-700, ActivityNet   | Sports, cooking, playing, travel                                                        |
-| **NSFW Detection**                | Categorization   | OpenCLIP or custom CNN                  | NSFW datasets               | Detects explicit content to help users filter and manage sensitive media.               |
-| **Violence / Graphic Content**    | Categorization   | ViT classifier                          | Custom                      | Detects and flags sensitive content (e.g. in shared albums)                             |
+<!-- Segmentation (SAM): The output is Coordinates (bounding boxes, polygons, or binary masks). MobileSAM and SAM-Huge just output different levels of accuracy for pixel coordinates. The database parses the coordinates identically. -->
 
-## Extended Detail: Key Algorithmic Implementations
+## Quality Assessment
 
-<!-- TODO: There are details for several other algorithms that could be expanded here -->
+TODO
 
-### Video-as-Sparse-Photos Algorithm
+## Model Batching
 
-Processing every frame of a video through heavy ML models is computationally prohibitive. This algorithm treats video as a sparse collection of keyframes.
+Memory is at a premium in mobile devices. We want to be as power-efficient as possible while fulfilling the computational needs of the models. As such, we batch the execution of models in the following ways:
 
-1. **Cut Detection:** Use PySceneDetect (Content-Aware routing) to chunk the video into visually distinct scenes.
-2. **Temporal Sampling:** Extract frames at the 10%, 50%, and 90% timestamps of each scene.
-3. **Blur Rejection:** Calculate the variance of the Laplacian for each extracted frame: 
+- Horizontal Batching (model-by-model): Run each model sequentially across all assets. This minimizes the number of models that need to be loaded in memory at once but it incurs lots of IO (since you are reading assets multiple times).
+- Vertical Batching (end-to-end): Run all models at once for each asset. This minimizes IO but it is memory intensive since you need to load all models at once, and may result in OOM killing the application process (on mobile OSes).
 
-    $$V = \text{var}(\nabla^2 I)$$
+We pick the execution model with the following process:
 
-. If $V$ is below a defined threshold, the frame is too blurry and is discarded.
-4. **Audio Processing:** Run Whisper-large-v3 concurrently to generate a timestamped transcript.
-5. **Integration:** The surviving keyframes are pushed into the standard image Valkey stream. Database records map the keyframe embeddings to the parent `video_id` and specific timestamp.
+- Calculate RAM capacity upfront: Upon starting the task, check the device's available memory. Decide dynamically whether to use Horizontal or Vertical batching based on the device's resources.
+- Enforce Micro-Batching: Never pass a massive batch to the inference engine. Break your "huge batch" down into micro-batches of 1, 4, or 8 images. This keeps the NPU cache hot and prevents battery-draining DRAM fetches.
+- Quantize everything: Ensure your models are quantized to INT8 or FP16. This halves the memory bandwidth required, which directly translates to less battery consumed and less heat generated.
+- Throttle based on thermals: Modern mobile APIs allow you to monitor device temperature. If the device hits 40°C, artificially pause the pipeline for a few seconds. A slightly slower job is better than the OS terminating your app or the hardware thermal-throttling your speeds to a crawl.
 
-### The Re-ID & Pseudo-Labeling Loop
+## Database Indexing and View Generation
 
-This algorithm identifies individuals even when they turn away from the camera during an event.
+Since each model (except for a few) generate embeddings in a common vector space, we store them locally in a database. We use SQLite + `sqlite-vec`.
 
-1. **The Anchor Pass:** When an image contains a high-confidence frontal face, run InsightFace. If the embedding matches a known profile (e.g., "Bride"), record the bounding box.
-2. **The Body Pass:** Run a standard object detector (YOLOv10) to find all "person" bounding boxes. Pass these crops through OSNet to get a 512-dimensional body embedding.
-3. **The Linking Phase:** Calculate the Intersection over Union (IoU) of the Face bounding box and the Body bounding box. If $\text{IoU} > 0.7$, link the OSNet body embedding to the "Bride" profile for the duration of this specific album/event.
-4. **Pseudo-Labeling:** When an image features a person facing away (no face detected), compare the OSNet body embedding against the temporary event-specific body embeddings using cosine similarity: 
+## Models and Algorithms
 
-    $$\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$$
-
-. If the similarity exceeds the threshold, tag the individual as the "Bride."
-
-### High-Dimensional Vector Search in Postgres
-
-To maintain high throughput in Postgres, exact K-Nearest Neighbors (KNN) is too slow for millions of rows.
-
-1. Implement **HNSW (Hierarchical Navigable Small World)** indexes on the `pgvector` columns.
-2. Use the inner product operator (`<#>`) for normalized embeddings, as it is computationally cheaper than calculating $L_2$ distance (`<->`) or cosine distance (`<=>`) at scale.
+The concrete model chosen for each task, and the key algorithms that combine them, are catalogued in [ML Models and Algorithms](/design/ml-models/).

@@ -6,7 +6,7 @@ pub struct AssetRow {
     pub capture_utc: Option<i64>,
     pub capture_tz_source: Option<String>,
     pub import_timestamp: i64,
-    pub hash_blake3: String,
+    pub hash_sha256: String,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub duration_ms: Option<i64>,
