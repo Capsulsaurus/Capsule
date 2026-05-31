@@ -38,7 +38,12 @@ pub struct WrappedSecret {
     pub ciphertext: Vec<u8>,
 }
 
-fn derive_wrap_key(
+/// Derive a 32-byte wrapping key from a passphrase and salt via Argon2id. Exposed so the
+/// backup artifact can use one passphrase-derived key for both its MANIFEST HMAC and its
+/// AMK-ledger seal (SSoT: [Backup — Master-Key Escrow]).
+///
+/// [Backup — Master-Key Escrow]: https://docs/design/backup-recovery/#master-key-escrow
+pub fn derive_wrap_key(
     passphrase: &[u8],
     salt: &[u8],
     p: Argon2Params,

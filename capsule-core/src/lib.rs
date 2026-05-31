@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod cbor;
 pub mod constants;
 pub mod crypto;
