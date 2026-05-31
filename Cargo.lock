@@ -1168,6 +1168,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
  "globset",
+ "half",
  "hex",
  "hkdf",
  "hmac",
