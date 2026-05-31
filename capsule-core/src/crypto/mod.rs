@@ -17,8 +17,13 @@
 //! against RFC / FIPS known-answer vectors and exhaustive negative cases.
 
 pub mod hash;
+pub mod kdf;
+pub mod primitives;
+pub mod pwkdf;
+pub mod rng;
 
 pub use hash::{Hash32, Sha256Hasher};
+pub use primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION, SuiteId};
 
 use thiserror::Error;
 
