@@ -16,10 +16,22 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tzf-rs = "0.4"
-uuid = { workspace = true, features = ["v7", "serde"] }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 walkdir = "2"
 sha2 = { workspace = true }
 hex = { workspace = true }
+
+# ── Cryptography (data plane) ──────────────────────────────────────────────
+# Pin the STABLE RustCrypto line: aes-gcm 0.11 / aead 0.6 deleted the STREAM module.
+aes-gcm = { version = "0.10", features = ["aes"] }
+aead = { version = "0.5", features = ["stream", "alloc"] }
+hkdf = "0.12"
+hmac = "0.12"
+argon2 = { workspace = true }
+ed25519-dalek = "2"
+ml-dsa = "0.1"            # RustCrypto FIPS-204 (ML-DSA-65) — the PQ signature half
+ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — KEM for the device encryption key
+getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 
 [dev-dependencies]
 tempfile = "3"

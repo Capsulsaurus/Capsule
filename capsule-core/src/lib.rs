@@ -1,4 +1,5 @@
 pub mod constants;
+pub mod crypto;
 pub mod db;
 pub mod domain;
 pub mod exif;

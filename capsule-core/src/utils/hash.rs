@@ -1,15 +1,17 @@
-use std::{fs, io, path::Path};
+use std::{fs::File, io, path::Path};
 
-use sha2::{Digest, Sha256};
+use crate::crypto::hash::{hash_bytes as hash32_bytes, hash_reader};
 
 /// SHA-256 hash of a byte slice as a 64-char lowercase hex string.
 pub fn hash_bytes(bytes: &[u8]) -> String {
-    hex::encode(Sha256::digest(bytes))
+    hash32_bytes(bytes).to_hex()
 }
 
-/// Get SHA-256 hash of a file as a 64-char lowercase hex string.
-// TODO: switch to streaming version for large files
+/// SHA-256 hash of a file as a 64-char lowercase hex string.
+///
+/// Streams the file in fixed blocks via [`crate::crypto::hash`] rather than reading the
+/// whole file into memory, so arbitrarily large originals hash with bounded memory.
 pub fn get_file_hash(path: &Path) -> io::Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(hash_bytes(&bytes))
+    let file = File::open(path)?;
+    Ok(hash_reader(io::BufReader::new(file))?.to_hex())
 }
