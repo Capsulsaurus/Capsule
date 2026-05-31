@@ -1,119 +1,131 @@
 ---
-title: AI/ML Integrations in Capsule
-description: How do AI features fit into Capsule' architecture and design principles?
+title: AI/ML Integrations
+description: AI feature architecture, the canonical model inventory, embedding provenance, and AI/user metadata separation
 ---
 
-<!-- TODO: Finalize the designs described in this article -->
+Capsule runs a hierarchy of ML models, all **client-side** (the server never holds plaintext). The stable contract is the *structure*: three functional categories, the AI/user namespace separation in [AI Output Containment](#ai-output-containment), the canonical model inventory in [Models and Algorithms](#models-and-algorithms), and the [embedding-provenance](#embedding-provenance) invariant. The specific feature list and per-model choices are current defaults that will evolve with field testing.
 
-## System Architecture Overview
+The three categories:
 
-The platform utilizes an asynchronous, event-driven microservice architecture designed to handle high-throughput ingestion of RAW photos and 4K+ video.
+- **[Semantic Indexing](#semantic-indexing):** a *global* embedding per asset for natural-language and similarity search.
+- **[Dense Tagging](#dense-tagging):** *local* embeddings for objects, faces, and scene elements for granular search and auto-albums.
+- **[Quality Assessment](#quality-assessment):** per-asset quality scores for filtering and sorting.
 
-* **API Gateway & Core Logic:** Rust (Axum/Actix-web) for maximum throughput and memory safety.
-* **Source of Truth:** PostgreSQL.
-* **Vector Database:** PostgreSQL with the `pgvector` extension for storing and querying ML embeddings.
-* **Message Broker & Caching:** Valkey (Stream data structures for event queuing).
-* **Object Storage:** S3-compatible store (MinIO/AWS S3) for original files and generated proxies.
-* **AI Inference Workers:** Python/C++ microservices running models optimized with TensorRT, ONNX Runtime, or vLLM.
+Inference orchestration lives in `capsule-core::ml`; per-platform model runners (CoreML, NNAPI, ONNX Runtime) live in `capsule-sdk`; the local vector index lives in `capsule-core::db` (SQLite + `sqlite-vec`).
 
-## The Complete ML Pipeline
+## AI Output Containment
 
-The pipeline is split into a synchronous "Fast Path" for immediate user feedback and an asynchronous "AI Path" for deep indexing.
+AI inference can be wrong, biased, or hallucinatory. A core rule prevents it from corrupting user intent: **AI outputs land in a separate namespace from user-authored metadata, structurally, not by policy.** The shape of the separation — `tags_ai` vs `tags_user` OR-sets, plus distinct sidecar fields for AI-derived facets — is owned by [Metadata — Tag Provenance and Namespacing](/design/metadata/#tag-provenance-and-namespacing); the consequences for AI features:
 
-### Phase 1: Ingestion & Fast Path
+- An AI tag can never overwrite a user tag — they live in different fields, so the question does not arise.
+- As each AI facet ships, it lands in its own AI-namespaced sidecar field the user does not directly edit (illustratively `ai_face_labels`, `ai_scene`, `ai_quality_score`) — reserved alongside `tags_ai` in the [sidecar schema](/design/metadata/#sidecar-schema-v1) and added when the feature is committed, never overlapping a user field. User corrections write to *user* fields; AI re-runs leave them alone.
+- Every AI output carries `(model_id, model_version)` ([Embedding Provenance](#embedding-provenance)). When the canonical model for a slot changes, old outputs are flagged stale and excluded from queries until regenerated.
+- Promoting an AI tag to a user tag is an explicit, signed [lifecycle operation](/design/authorization/#the-closed-action-set) — never automatic.
 
-1. **Upload:** Client pushes the media file to the Object Store and notifies the Rust API.
-2. **Metadata Extraction:** Rust extracts EXIF/IPTC data (f-stop, shutter speed, camera model, GPS).
-3. **Deterministic Deduplication:** Rust calculates a file hash (XXH3) and a Perceptual Hash (pHash) for photos.
-4. **Proxy Generation:** Rust generates web-optimized proxies and thumbnails.
-5. **Event Dispatch:** A message (e.g., `media_ready_for_ai: {media_id: uuid}`) is pushed to a Valkey Stream.
+A hallucinating model can pollute its own namespace, never user intent. This is the structural defense against the "AI mistake silently overwrites user data" damage class — see [Threat Model — Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors).
 
-### Phase 2: AI Processing (Asynchronous)
+## Semantic Indexing
 
-Worker nodes consume the Valkey stream and process the media in parallel:
+Semantic search converts an image and a text query into vectors and measures their distance. Because embeddings are generated client-side, every device must run the same canonical model along a deterministic path so vectors are comparable — the constraint and its platform-partition fallback are specified in [Embedding Provenance](#embedding-provenance).
 
-1. **Embedding Generation:** The image is passed through a vision encoder to create a global semantic vector.
-2. **Dense Tagging & OCR:** The image is analyzed for granular objects, background elements, and text.
-3. **Biometric Pipeline:** Faces are detected, aligned, cropped, and embedded. Bodies are detected and embedded for Person Re-Identification (Re-ID).
-4. **Quality Assessment:** The image is scored for technical flaws (blur, noise, exposure).
+### Image Categorization & Tagging
 
-### Phase 3: Storage & Indexing
+The semantic embeddings are reused for zero-shot classification to generate tags, enabling faceted search and auto-album generation without a separate classifier.
 
-1. **Vector Storage:** Embeddings are written to `pgvector` columns.
-2. **Graph Linking:** Re-ID embeddings are linked to specific face profiles via database relations.
+## Dense Tagging
 
-## Specific ML Tasks & Models
+Face Detection & Matching (clustering) runs the **Face Detection** and **Face Recognition** rows of the [model inventory](#models-and-algorithms) — SOTA-small models that run near-instantly on mobile.
 
-<!-- TODO: Combine models here where possible (to minimize VRAM overhead) (need to consider size-accuracy tradeoff) -->
-<!-- TODO: Revise this section based on experimentation/results -->
+## Quality Assessment
 
-| Task                              | Category         | Model(s)                                | Dataset(s)                  | Function                                                                                | Implementation Status |
-| --------------------------------- | ---------------- | --------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------- | --------------------- |
-| **Semantic Search**               | Natural Language | SigLIP (`siglip-so400m`)                |                             | Generates global image embeddings for natural language search.                          | WIP (high priority)   |
-| **Dense Tagging & OCR**           | Dense Tagging    | Florence-2                              |                             | Unified vision-language model for bounding boxes, dense captions, and reading text.     |
-| **VLM / Image Chat**              | Natural Language | Qwen2.5-VL or LLaVA-1.6                 |                             | Quantized models for on-demand conversational queries about an image.                   |
-| **Image Captioning**              | Natural Language | BLIP-2                                  |                             | Generates a natural language description of the image content.                          |
-| **Face Detection**                | People           | SCRFD                                   |                             | Highly efficient face bounding box and landmark detection.                              | WIP (high priority)   |
-| **Face Recognition**              | People           | InsightFace (AdaFace)                   |                             | Generates face embeddings. AdaFace excels at handling low-quality/dark images.          | WIP (high priority)   |
-| **Person Detection**              | People           | YOLOv10                                 |                             | Object detection for identifying "person" bounding boxes.                               |
-| **Person Re-ID**                  | People           | OSNet or TorReID                        |                             | Generates embeddings based on clothing and body shape when faces are hidden.            |
-| **Expression Analysis**           | People           | EmotioNet                               |                             | Detects facial action units to infer emotions.                                          |
-| **Quality Scoring**               | People           | LIQE / TOPIQ                            |                             | Blind image quality assessment for noise, blur, and lighting without a reference image. |
-| **Object Detection**              | Scene            | YOLOv10, Grounding DINO, RT-DETR        |                             | Detects objects and background elements for dense tagging.                              | WIP (high priority)   |
-| **Scene Classification**          | Scene            | VIT-L, ConvNeXt-L                       | Places365, SUN397           | Classifies the overall scene (e.g., "beach", "wedding", "cityscape").                   |
-| **Landmark Detection**            | Scene            | DINOv2 + GeM pooling                    | Google Landmarks v2         | Detects key landmarks (e.g., Eiffel Tower, Golden Gate Bridge) for geotagging.          |
-| **Bird/plant Detection**          | Scene            | BioCLIP                                 | iNaturalist 2021            | Identifies and classifies birds and plants within images.                               |
-| **General Animal Detection**      | Scene            | YOLOv8 finetuned on Open Images Animals | Open Images Animals         | Detects common animals (dogs, cats, horses) for tagging and search.                     |
-| **OCR**                           | Text             | TrOCR                                   | SynthText, IIIT-5K          | Extracts text from images, including handwriting and signage.                           |
-| **Screenshot Detection**          | Scene            | Custom CNN classifier                   |                             | Identifies screenshots to help culling.                                                 |
-| **Voice Transcription**           | Audio            | Whisper-large-v3                        |                             | State-of-the-art speech recognition for generating transcripts from video audio tracks. |
-| **Aesthetic Scoring**             | Quality          | NIMA (Efficientnet head)                | AVA Dataset                 | Rates the aesthetic quality of images to help users find their best shots.              |
-| **Blur detection**                | Quality          | Laplacian variance + CNN regressor      | DefocusNet, CUHK            | Detect blurry images.                                                                   |
-| **Exposure Assessment**           | Quality          | Custom CNN regressor                    | Custom                      | Evaluates the exposure level of images to ensure optimal lighting conditions.           |
-| **Noise Estimation**              | Quality          | Custom CNN regressor                    | Custom                      | Estimates the noise level in images to help users identify and filter out noisy shots.  |
-| **Near-duplicate / burst**        | Similarity       | pHash/dHash + CNN                       | Custom                      | Same moment, slightly different                                                         |
-| **Semantic new-duplicate**        | Similarity       | SigLIP, CLIP embeddings + ANN           | Custom                      | Same subject, different angle/day                                                       |
-| **Best-shot selection**           | Similarity       | Quality models combined?                | Custom                      | Select sharpest/best-exposed from burst                                                 |
-| **Shot/scene boundary detection** | Video            | TransNet v2, PyScene Detect             | BBC Planet Earth, ClipShots | Segment video for thumbnail/highlights                                                  |
-| **Highlight extraction**          | Video            | Temporal attention + quality scroe      | SumMe, TVSum                | Extract best moments from videos for highlights and thumbnails.                         |
-| **Action/activity recognition**   | Video            | VideoMAE, TimeSformer                   | Kinetics-700, ActivityNet   | Sports, cooking, playing, travel                                                        |
-| **NSFW Detection**                | Categorization   | OpenCLIP or custom CNN                  | NSFW datasets               | Detects explicit content to help users filter and manage sensitive media.               |
-| **Violence / Graphic Content**    | Categorization   | ViT classifier                          | Custom                      | Detects and flags sensitive content (e.g. in shared albums)                             |
+Deferred to post-v1. The category and its sidecar fields are reserved in the [containment model](#ai-output-containment) so it can land later without a schema change; the Quality candidate models in the [inventory](#models-and-algorithms) are not part of the v1 pipeline.
 
-## Extended Detail: Key Algorithmic Implementations
+## Model Batching
 
-<!-- TODO: There are details for several other algorithms that could be expanded here -->
+On-device inference is memory- and power-bound, so execution mode is chosen per device:
 
-### Video-as-Sparse-Photos Algorithm
+- **Horizontal (model-by-model)** vs. **vertical (all models per asset)**: horizontal minimizes resident models at the cost of re-reading assets; vertical minimizes I/O but risks OOM on mobile. The mode is picked from available RAM at task start.
+- **Micro-batching** (1/4/8 images) keeps the NPU cache hot; **INT8/FP16 quantization** halves memory bandwidth; **thermal throttling** pauses the pipeline past a temperature threshold (e.g. 40 °C) so the OS does not kill the app.
 
-Processing every frame of a video through heavy ML models is computationally prohibitive. This algorithm treats video as a sparse collection of keyframes.
+## Database Indexing and View Generation
 
-1. **Cut Detection:** Use PySceneDetect (Content-Aware routing) to chunk the video into visually distinct scenes.
-2. **Temporal Sampling:** Extract frames at the 10%, 50%, and 90% timestamps of each scene.
-3. **Blur Rejection:** Calculate the variance of the Laplacian for each extracted frame: 
+Embeddings share a common vector space and are stored locally in **SQLite + `sqlite-vec`**. The vector index is **derived state, not a source of truth** ([recovery-first](/design/principles/)): if lost or corrupted it is rebuilt by re-running inference over the originals — the same path a model-version bump takes ([Embedding Provenance](#embedding-provenance)).
 
-    $$V = \text{var}(\nabla^2 I)$$
+## Embedding Provenance
 
-. If $V$ is below a defined threshold, the frame is too blurry and is discarded.
-4. **Audio Processing:** Run Whisper-large-v3 concurrently to generate a timestamped transcript.
-5. **Integration:** The surviving keyframes are pushed into the standard image Valkey stream. Database records map the keyframe embeddings to the parent `video_id` and specific timestamp.
+Every embedding Capsule stores — in the local SQLite vector index, in an encrypted backup, or inside a [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) for an embedding-class derivative — carries the tuple `(model_id, model_version)` identifying which [inventory](#models-and-algorithms) row produced it. Vector spaces differ across pairs, so embeddings are not comparable across `(model_id, model_version)`. Every `model_id` is declared in exactly one inventory row ([SSoT](/design/principles/#single-source-of-truth)); a swap is a one-row edit that propagates by `model_id` to every consumer. The invariant:
 
-### The Re-ID & Pseudo-Labeling Loop
+- The vector index **refuses inserts** whose `model_id` is not the current canonical row for its task. A buggy or new client uploading embeddings from an unrecognized model is rejected at the insert API, never silently mixed in.
+- A model swap increments `model_version` for that task. Old embeddings are **flagged stale** and excluded from queries until regenerated from the originals. Cross-version comparison is forbidden — see [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants).
+- Regeneration is a background task that walks the library producing fresh embeddings at the new version; old entries are removed only after new ones persist (per-asset replace, not a global truncate-and-rebuild).
 
-This algorithm identifies individuals even when they turn away from the camera during an event.
+**E2EE constraint and its fallback.** Comparable embeddings need byte-identical inference output across heterogeneous NPUs/CPUs, and floating-point inference is not inherently reproducible across execution providers. So every device pins a **deterministic execution path** for the canonical model (fixed operator set, nondeterministic kernels disabled, quantized weights) and passes a byte-identical known-answer check; the model size floor is the lowest-end device Capsule supports, not the desktop. If a device cannot reach bit-exactness in field testing, the **fallback is explicit, never silent**: its embeddings are tagged with a `platform` discriminator and are **not merged** into another platform's index — they are regenerated locally and compared only within their own partition via tolerance-based ANN. The worst case is duplicated per-platform regeneration, never wrong search results. This defeats the "silent invalidation of the vector index" damage class ([Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) row #14).
 
-1. **The Anchor Pass:** When an image contains a high-confidence frontal face, run InsightFace. If the embedding matches a known profile (e.g., "Bride"), record the bounding box.
-2. **The Body Pass:** Run a standard object detector (YOLOv10) to find all "person" bounding boxes. Pass these crops through OSNet to get a 512-dimensional body embedding.
-3. **The Linking Phase:** Calculate the Intersection over Union (IoU) of the Face bounding box and the Body bounding box. If $\text{IoU} > 0.7$, link the OSNet body embedding to the "Bride" profile for the duration of this specific album/event.
-4. **Pseudo-Labeling:** When an image features a person facing away (no face detected), compare the OSNet body embedding against the temporary event-specific body embeddings using cosine similarity: 
+## Models and Algorithms
 
-    $$\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$$
+One row per task. Where the size/accuracy trade allows, a single backbone is **reused across tasks** rather than loading one model per task — e.g. the canonical Semantic Search embedder also feeds zero-shot tagging and semantic-duplicate detection, and YOLOv10 serves both person and object detection. Reuse is the default whenever it does not measurably hurt quality; it is the main lever bounding peak VRAM on mobile.
 
-. If the similarity exceeds the threshold, tag the individual as the "Bride."
+### v1-Committed Slots
 
-### High-Dimensional Vector Search in Postgres
+These four are the launch pipeline:
 
-To maintain high throughput in Postgres, exact K-Nearest Neighbors (KNN) is too slow for millions of rows.
+| Task                 | Model(s)                                                          | Function                                                                                                                |
+| -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| **Semantic Search**  | MobileCLIP-B (ONNX, INT8); quantized SigLIP-tiny fallback[^semantic-alt] | Global image embedding for natural-language + similarity search; sized for the lowest-end device (see the E2EE constraint above). |
+| **Object Detection** | YOLOv10[^objdet-alt]                                             | Object/background detection feeding dense tagging; the backbone is reused for person detection.                        |
+| **Face Detection**   | SCRFD                                                            | Efficient face bounding-box + landmark detection.                                                                      |
+| **Face Recognition** | InsightFace (AdaFace)                                            | Face embeddings; AdaFace handles low-quality/dark images well.                                                         |
 
-1. Implement **HNSW (Hierarchical Navigable Small World)** indexes on the `pgvector` columns.
-2. Use the inner product operator (`<#>`) for normalized embeddings, as it is computationally cheaper than calculating $L_2$ distance (`<->`) or cosine distance (`<=>`) at scale.
+### Candidate Tasks (post-v1)
+
+Planned tasks whose model choice is still subject to 2026 field testing. Each commits to a full inventory row (with datasets and the embedding-provenance tuple) when it ships:
+
+- **Natural language & VLM** — Dense Tagging & OCR (Florence-2); Image Chat (Qwen2.5-VL or LLaVA-1.6); Captioning (BLIP-2).
+- **People** — Person Detection (YOLOv10); Person Re-ID (OSNet or TransReID); Expression Analysis (EmotioNet); Quality Scoring (LIQE / TOPIQ).
+- **Scene** — Scene Classification (ViT-L, ConvNeXt-L); Landmark Detection (DINOv2 + GeM); Bird/plant (BioCLIP); General animal (YOLOv8 fine-tuned); Screenshot detection (custom CNN).
+- **Text & audio** — OCR (TrOCR); Voice Transcription (Distil-Whisper-large[^asr-alt]).
+- **Quality** — Aesthetic (NIMA); Blur (Laplacian variance + CNN); Exposure (CNN regressor); Noise (CNN regressor).
+- **Similarity** — Near-duplicate / burst (pHash/dHash + CNN); Semantic near-duplicate (canonical Semantic Search embeddings + ANN); Best-shot selection (quality models combined).
+- **Video** — Shot/scene boundary (TransNet v2, PySceneDetect); Highlight extraction (temporal attention + quality score); Action recognition (VideoMAE, TimeSformer).
+- **Categorization** — NSFW (OpenCLIP or custom CNN); Violence / graphic content (ViT classifier), e.g. for shared-album flagging.
+
+[^semantic-alt]: Considered and rejected: SigLIP-so400m (~400M params, impractical on the lowest-end mobile we support — the E2EE constraint forces every device to run the same model), full CLIP ViT-L/14 (similar size class), OpenCLIP ViT-G (much larger). MobileCLIP-B is the size sweet spot; quantized SigLIP-tiny stays as a fallback if MobileCLIP semantic quality is insufficient in field tests.
+[^objdet-alt]: Considered and rejected for the *committed* slot: Grounding DINO (open-vocabulary; heavier; revisit if dense-tagging breadth becomes the bottleneck), RT-DETR (transformer-based; comparable accuracy, slower on mobile). YOLOv10 is the committed choice; alternatives may run as additional specialized passes later.
+[^asr-alt]: Considered and rejected: Whisper-large-v3 (best accuracy but too slow on mobile for opportunistic background transcription), Whisper-medium (similar speed to Distil-Whisper-large but worse accuracy), faster-whisper CT2 ports (a runtime optimization layer; can be applied on top of Distil-Whisper).
+
+### Key Algorithmic Implementations
+
+#### Video-as-Sparse-Photos
+
+Processing every frame through heavy models is prohibitive, so video is treated as a sparse collection of keyframes:
+
+1. **Cut Detection:** PySceneDetect (content-aware) chunks the video into visually distinct scenes.
+2. **Temporal Sampling:** extract frames at the 10%, 50%, and 90% timestamps of each scene.
+3. **Blur Rejection:** compute the variance of the Laplacian $V = \text{var}(\nabla^2 I)$; frames below a threshold are discarded as too blurry.
+4. **Audio Processing:** run the canonical ASR model (the **Voice Transcription** row) concurrently for a timestamped transcript.
+5. **Integration:** surviving keyframes enter the standard image queue; records map keyframe embeddings to the parent `video_id` and timestamp.
+
+#### Re-ID & Pseudo-Labeling
+
+Identifies individuals even when they turn away from the camera during an event:
+
+1. **Anchor Pass:** on a high-confidence frontal face, run InsightFace; if it matches a known profile (e.g. "Bride"), record the bounding box.
+2. **Body Pass:** run YOLOv10 to find "person" boxes; pass crops through OSNet for a 512-dim body embedding.
+3. **Linking:** if the face/body box IoU $> 0.7$, link the body embedding to the profile for this event.
+4. **Pseudo-Labeling:** for a person facing away, compare the body embedding against event-specific embeddings via cosine similarity $\text{sim}(\mathbf{u}, \mathbf{v}) = \frac{\mathbf{u} \cdot \mathbf{v}}{\|\mathbf{u}\| \|\mathbf{v}\|}$; above threshold, apply the label.
+
+#### High-Dimensional Vector Search
+
+Exact KNN is too slow at millions of rows: use **HNSW** indexes on the vector columns, and the inner-product operator (`<#>`) for normalized embeddings (cheaper than $L_2$ or cosine at scale).
+
+## Validation
+
+- **Registry lookup (unit).** Each canonical `model_id` matches exactly one inventory row; non-canonical IDs are rejected at the insert API.
+- **Stale-model rejection / version bump (unit).** Swap a `model_id`/bump `model_version`; assert pre-swap entries are flagged stale and excluded from queries, and background regen replaces them per-asset (not via global truncate).
+- **Embedding-provenance round-trip (unit).** Insert an embedding tagged `(model_id, model_version)`; query; assert the tuple is preserved.
+- **Namespace separation (unit).** Promote an AI tag to a user tag; assert the user-tag entry has a fresh user-scoped `add_id` and the AI entry remains separately editable.
+- **Inference parity across devices (smoke per platform).** Run the canonical Semantic Search model on two devices over the same fixture; assert vectors are byte-identical (quantization-permitting). On a platform that cannot reach bit-exactness, assert the platform-partition fallback engages rather than silently merging incomparable vectors.
+- **Algorithm correctness (smoke).** Video-as-sparse-photos selects keyframes at expected timestamps; the Re-ID loop produces expected per-event pseudo-labels.
+- **Thermal throttle / batching bound (smoke).** Past the temperature threshold the pipeline pauses and resumes after cooldown; on a low-memory testbed micro-batch sizes stay within the ceiling and OOM never occurs.
+
+Two bounded E2E cases live in [Module Map](/design/module-map/#e2e-test-surface): index an asset → query semantically → match, and model regen after a version bump rebuilding the index.

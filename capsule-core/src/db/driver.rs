@@ -41,12 +41,12 @@ impl DatabaseDriver {
     pub fn insert_asset(&self, row: &AssetRow) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
-                row.capture_tz_source, row.import_timestamp, row.hash_blake3,
+                row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
@@ -58,12 +58,12 @@ impl DatabaseDriver {
     pub fn upsert_asset(&self, row: &AssetRow) -> Result<(), rusqlite::Error> {
         self.conn.execute(
             "INSERT OR REPLACE INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
-                row.capture_tz_source, row.import_timestamp, row.hash_blake3,
+                row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
@@ -75,7 +75,7 @@ impl DatabaseDriver {
     pub fn find_by_uuid(&self, uuid: &str) -> Result<Option<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets WHERE uuid = ?1 LIMIT 1",
         )?;
@@ -89,9 +89,9 @@ impl DatabaseDriver {
     pub fn find_by_hash(&self, hash: &str) -> Result<Option<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
-             FROM assets WHERE hash_blake3 = ?1 LIMIT 1",
+             FROM assets WHERE hash_sha256 = ?1 LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![hash], map_asset_row)?;
         match rows.next() {
@@ -107,7 +107,7 @@ impl DatabaseDriver {
     ) -> Result<Vec<AssetRow>, rusqlite::Error> {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets
              WHERE is_deleted = 0 AND is_stack_hidden = 0
@@ -229,7 +229,7 @@ impl DatabaseDriver {
         let threshold = now_secs() - older_than_secs;
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
-             import_timestamp, hash_blake3, width, height, duration_ms, stack_id, is_stack_hidden,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
              chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
              FROM assets WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
         )?;
@@ -253,7 +253,7 @@ fn map_asset_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         capture_utc: row.get(3)?,
         capture_tz_source: row.get(4)?,
         import_timestamp: row.get(5)?,
-        hash_blake3: row.get(6)?,
+        hash_sha256: row.get(6)?,
         width: row.get(7)?,
         height: row.get(8)?,
         duration_ms: row.get(9)?,
@@ -281,7 +281,7 @@ mod tests {
             capture_utc: Some(1719997200),
             capture_tz_source: Some("offset_exif".to_string()),
             import_timestamp: 1720000000,
-            hash_blake3: hash.to_string(),
+            hash_sha256: hash.to_string(),
             width: Some(4032),
             height: Some(3024),
             duration_ms: None,

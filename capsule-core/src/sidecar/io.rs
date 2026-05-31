@@ -95,7 +95,7 @@ mod tests {
             original_filename: "IMG_1234.jpg".to_string(),
             import_timestamp: 1720000000,
             modified_timestamp: 1720000000,
-            hash_blake3: "a".repeat(64),
+            hash_sha256: "a".repeat(64),
             file_size: 1024,
             is_deleted: false,
             rating: 0,

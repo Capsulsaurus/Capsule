@@ -13,15 +13,15 @@ assignees: ''
 <!-- Why is this necessary? -->
 
 ## Component
-- [ ] pixles-android
-- [ ] pixles-api
-- [ ] pixles-cli
-- [ ] pixles-core-rust
-- [ ] pixles-desktop
-- [ ] pixles-docs
-- [ ] pixles-media
-- [ ] pixles-swift
-- [ ] pixles-web
+- [ ] capsule-android
+- [ ] capsule-api
+- [ ] capsule-cli
+- [ ] capsule-core-rust
+- [ ] capsule-desktop
+- [ ] capsule-docs
+- [ ] capsule-media
+- [ ] capsule-swift
+- [ ] capsule-web
 - [ ] Other: _____________________
 
 ## Proposed Changes

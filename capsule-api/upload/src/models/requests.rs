@@ -9,7 +9,7 @@ pub struct CreateUploadRequest {
     pub filename: String,
     /// File size in bytes
     pub size: u64,
-    /// BLAKE3 hash of the complete file (64-char lowercase hex)
+    /// SHA-256 hash of the complete file (64-char lowercase hex)
     pub hash: String,
     /// MIME type (e.g., "image/jpeg")
     pub content_type: String,

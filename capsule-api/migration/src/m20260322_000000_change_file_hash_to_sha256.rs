@@ -7,7 +7,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop the old BigInt column and add a VARCHAR(64) column for BLAKE3 hex hashes.
+        // Drop the old BigInt column and add a VARCHAR(64) column for SHA-256 hex hashes.
         // Existing hash values are incompatible (different algorithm), so data loss is expected.
         manager
             .alter_table(
