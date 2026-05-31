@@ -11,4 +11,7 @@ pub mod blob;
 pub mod stream;
 
 pub use blob::{blob_ciphertext_hash, open_blob, seal_blob};
-pub use stream::{AssetEncryption, StreamError, decrypt_asset, decrypt_chunk, encrypt_asset};
+pub use stream::{
+    AssetEncryption, StreamError, decrypt_asset, decrypt_chunk, encrypt_asset,
+    encrypt_asset_with_prefix,
+};

@@ -7,6 +7,7 @@ pub mod domain;
 pub mod exif;
 pub mod import;
 pub mod library;
+pub mod lifecycle;
 pub mod metadata;
 pub mod models;
 pub mod sidecar;

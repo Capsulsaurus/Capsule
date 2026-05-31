@@ -74,12 +74,29 @@ fn read_chunk<R: Read>(reader: &mut R, n: usize) -> io::Result<Vec<u8>> {
 
 /// Encrypt `reader` to `writer` under `file_key`, returning the content metadata.
 /// Computes the ciphertext hash incrementally — the whole file is never buffered.
+/// Draws a fresh random nonce prefix.
 pub fn encrypt_asset<R: Read, W: Write>(
     file_key: &[u8; 32],
+    reader: R,
+    writer: W,
+) -> Result<AssetEncryption, StreamError> {
+    encrypt_asset_with_prefix(
+        file_key,
+        rng::random_array::<NONCE_PREFIX_LEN>(),
+        reader,
+        writer,
+    )
+}
+
+/// As [`encrypt_asset`] but with an explicit nonce prefix, so a client can **regenerate the
+/// exact ciphertext** from the plaintext + file key + the prefix recorded in the manifest
+/// (the client stores plaintext locally; ciphertext is derived for upload/backup).
+pub fn encrypt_asset_with_prefix<R: Read, W: Write>(
+    file_key: &[u8; 32],
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
     mut reader: R,
     mut writer: W,
 ) -> Result<AssetEncryption, StreamError> {
-    let nonce_prefix = rng::random_array::<NONCE_PREFIX_LEN>();
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(file_key));
     let mut enc =
         EncryptorBE32::<Aes256Gcm>::from_aead(cipher, GenericArray::from_slice(&nonce_prefix));
@@ -182,6 +199,18 @@ pub fn encrypt_asset_vec(file_key: &[u8; 32], plaintext: &[u8]) -> AssetEncrypti
 pub fn encrypt_asset_vec_full(file_key: &[u8; 32], plaintext: &[u8]) -> (AssetEncryption, Vec<u8>) {
     let mut out = Vec::new();
     let meta = encrypt_asset(file_key, plaintext, &mut out).expect("in-memory encryption");
+    (meta, out)
+}
+
+/// Convenience: encrypt a whole slice in memory with an explicit prefix (deterministic).
+pub fn encrypt_asset_vec_with_prefix(
+    file_key: &[u8; 32],
+    nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    plaintext: &[u8],
+) -> (AssetEncryption, Vec<u8>) {
+    let mut out = Vec::new();
+    let meta = encrypt_asset_with_prefix(file_key, nonce_prefix, plaintext, &mut out)
+        .expect("in-memory encryption");
     (meta, out)
 }
 
@@ -295,5 +324,19 @@ mod tests {
         let a = encrypt_asset_vec(&KEY, b"x");
         let b = encrypt_asset_vec(&KEY, b"x");
         assert_ne!(a.nonce_prefix, b.nonce_prefix);
+    }
+
+    #[test]
+    fn fixed_prefix_regenerates_identical_ciphertext() {
+        // The client stores plaintext; re-encrypting with the manifest's recorded prefix
+        // reproduces the exact ciphertext (and hash) for backup/upload.
+        let prefix = [9u8; NONCE_PREFIX_LEN];
+        let plaintext = b"regenerable bytes";
+        let (m1, c1) = encrypt_asset_vec_with_prefix(&KEY, prefix, plaintext);
+        let (m2, c2) = encrypt_asset_vec_with_prefix(&KEY, prefix, plaintext);
+        assert_eq!(c1, c2);
+        assert_eq!(m1.ciphertext_hash, m2.ciphertext_hash);
+        assert_eq!(m1.nonce_prefix, prefix);
+        assert_eq!(decrypt_asset_vec(&KEY, &prefix, &c1).unwrap(), plaintext);
     }
 }
