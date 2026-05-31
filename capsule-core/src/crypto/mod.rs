@@ -18,6 +18,7 @@
 
 pub mod hash;
 pub mod kdf;
+pub mod keys;
 pub mod primitives;
 pub mod pwkdf;
 pub mod rng;
