@@ -16,6 +16,7 @@
 //! (no network, no global state), so the whole data plane is unit-testable offline
 //! against RFC / FIPS known-answer vectors and exhaustive negative cases.
 
+pub mod authority;
 pub mod encryption;
 pub mod hash;
 pub mod kdf;
