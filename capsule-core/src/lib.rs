@@ -10,3 +10,4 @@ pub mod metadata;
 pub mod models;
 pub mod sidecar;
 pub mod utils;
+pub mod validation;
