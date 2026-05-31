@@ -1,21 +1,38 @@
 ---
 title: Versioning
-description: Handling versioning gracefully
+description: How Capsule pins each album to a protocol version, upgrades safely, and bounds client deprecation
 ---
 
-Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state, it is rejected at the handshake.
+Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.
 
-Versioning happens on multiple layers:
+The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning is implemented in the album metadata model (`capsule-api` + `capsule-core`); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI. The min-supported-client window is enforced server-side in `capsule-api`.
+
+## Versioned Surfaces
+
+Versioning happens on multiple layers, each owned by the doc that defines it:
 
 - **Metadata CBOR schema** — `sidecar_schema` field 0 of every sidecar (see [Metadata — Schema Versioning Rules](/design/metadata/#schema-versioning-rules)).
-- **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/#versioning-identifiers)).
-- **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol and Capability Negotiation](/design/threat-model/#protocol-and-capability-negotiation) for the universal handshake.
+- **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/primitives/#versioning-identifiers)).
+- **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) for the universal handshake.
 - **Client cache** — internal and rebuildable; cache schema changes drop and rebuild rather than migrate.
-- **Server data structures** — PostgreSQL schema migrations forward-only. The session-state store is a deployment choice, not a versioned API surface: by default `upload_sessions` lives in PostgreSQL, and high-concurrency deployments may relocate it to Valkey for hot-path performance only. The wire protocol is identical in both cases (see [Filesystem — Stores by Deployment Profile](/design/filesystem/#stores-by-deployment-profile)).
+- **Server data structures** — PostgreSQL schema migrations forward-only. The session-state store is a deployment choice, not a versioned API surface (see [Filesystem — Server: Deployment Profiles](/design/filesystem/server/#deployment-profiles)).
+
+## Negotiation Headers
+
+The contract for version compatibility — every API request and response carries these. The full fail-closed rule set is owned by [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation).
+
+| Header                       | Sent by                   | Meaning                                                                                               |
+| ---------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `X-Capsule-Protocol`         | client / peer             | `YYYY-MM-DD` protocol version the request is written against                                          |
+| `X-Capsule-Crypto-Suite`     | client / peer on writes   | `u16` suite id from the [Primitives Inventory](/design/cryptography/primitives/#primitives-inventory) |
+| `X-Capsule-Sidecar-Schema`   | client on metadata-update | `u16` schema version declared at `sidecar_schema` field 0                                             |
+| `X-Capsule-Protocol-Min`     | server on every response  | the lowest protocol version this server accepts                                                       |
+| `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
+| `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
 
 ## Compatibility Verification
 
-Initial startups of a client and server always strictly check for version compatibility and **crash early** rather than soft-degrade. The single handshake in [Threat Model — Protocol and Capability Negotiation](/design/threat-model/#protocol-and-capability-negotiation) is the only point at which compatibility is determined; once an operation is past the handshake, both sides know they agree on `protocol_version`, `crypto_suite_id`, and `sidecar_schema`.
+Initial startups of a client and server always strictly check for version compatibility and **crash early** rather than soft-degrade. The single handshake in [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) is the only point at which compatibility is determined; once an operation is past the handshake, both sides know they agree on `protocol_version`, `crypto_suite_id`, and `sidecar_schema`.
 
 Capsule does **not** support backwards migrations or version downgrades. Server-side schema migrations are forward-only; if a migration fails, the server refuses to start and the operator restores from backup. There is no "rollback then continue" — that path is what corrupts data.
 
@@ -42,7 +59,7 @@ A version-pinned album is upgraded by a **tombstone-plus-fork** ceremony: the ol
 
 ### Steps
 
-1. **Freeze proposal.** An album admin issues an MLS application message `UpgradeIntent { from_version, to_version, intent_id, proposer_device, deadline }`, hybrid-signed by the admin's [DSK](/design/cryptography/#device-keys). The proposal carries a deadline (default 7 days). Any member's client receiving an `UpgradeIntent` for an album that is already in upgrade quiescence under a *different* `intent_id` rejects the new proposal — only one upgrade can be in flight per album.
+1. **Freeze proposal.** An album admin issues an MLS application message `UpgradeIntent { from_version, to_version, intent_id, proposer_device, deadline }`, hybrid-signed by the admin's [DSK](/design/cryptography/keys/#device-keys). The proposal carries a deadline (default 7 days). Any member's client receiving an `UpgradeIntent` for an album that is already in upgrade quiescence under a *different* `intent_id` rejects the new proposal — only one upgrade can be in flight per album.
 2. **Quiesce writes.** Members enter upgrade quiescence on receipt of `UpgradeIntent`:
    - In-flight uploads against the album are allowed to reach a terminal state.
    - New writes are queued **locally** with a `pending_until_upgrade` flag and the `intent_id`; they are not sent to the server.
@@ -56,18 +73,28 @@ A version-pinned album is upgraded by a **tombstone-plus-fork** ceremony: the ol
 
 ### What This Defends Against
 
-- **Version-mismatched-client damage.** A v_old client cannot write into a v_new album because every write carries `protocol_version`, which is rejected by the [protocol handshake](/design/threat-model/#protocol-and-capability-negotiation) and the [server-side validation invariants](/design/threat-model/#server-side-validation-invariants).
+- **Version-mismatched-client damage.** A v_old client cannot write into a v_new album because every write carries `protocol_version`, which is rejected by the [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation) and the [server-side validation invariants](/design/threat-model/validation/#server-side-validation-invariants).
 - **Partial-upgrade corruption.** Quiescence + drain ensures no v_old write is mid-flight at the moment of cutover. The `intent_id` keys every step so a retried, duplicated, or contradictory proposal cannot produce two divergent v_new albums.
 - **Hostile member sabotage.** A member whose computed `frozen_state_hash` differs from the proposer's rejects the tombstone, aborting the upgrade. A malicious member cannot trick the rest into a forged "post-upgrade" state.
 
-The full atomicity rule lives in [Threat Model — Atomicity Invariants](/design/threat-model/#atomicity-invariants); stranded `pending_until_upgrade` writes are a [quarantine surface](/design/threat-model/#quarantine-surfaces).
+The full atomicity rule lives in [Threat Model — Atomicity Invariants](/design/threat-model/validation/#atomicity-invariants); stranded `pending_until_upgrade` writes are a [quarantine surface](/design/threat-model/scenarios/#quarantine-surfaces).
 
 ## Min-Supported-Client Window
 
-The server accepts a *window* of past `protocol_version` values, not only the newest, so a staggered client rollout keeps working. A version leaves the window only after a deprecation period; the policy is owned by [Threat Model — Min-Supported-Client Deprecation Policy](/design/threat-model/#min-supported-client-deprecation-policy).
+The server accepts a *window* of past `protocol_version` values, not only the newest, so a staggered client rollout keeps working. A version leaves the window only after a deprecation period; the policy is owned by [Threat Model — Min-Supported-Client Deprecation Policy](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy).
 
 The interaction with album pinning:
 
 - A client whose `protocol_version` falls below the server's `Min` is rejected at the handshake for *any* write — it cannot upload into any album, including ones pinned to the version it can still parse.
 - A client whose `protocol_version` falls below an album's pin is rejected for writes to *that album* — the album's pin is a per-album minimum, often higher than the server's minimum (e.g., a v_2024-09-01 album rejects v_2024-06-01 clients even on a server that still accepts v_2024-06-01 for other albums).
 - **Reads are unaffected.** A v_old client can always *read* an album it cannot write to. The deprecation policy never makes historical state unreadable.
+
+## Validation
+
+- **Handshake fail-closed (unit, both sides).** Client-side: send a request with `X-Capsule-Protocol` outside the server-advertised range; assert refusal and structured error surfacing in the UI. Server-side: receive such a request; assert `426` response with the supported range in headers.
+- **Album pin immutability (unit).** Attempt to write into an album with a `protocol_version` other than the pin; assert rejection at the server envelope.
+- **Upgrade ceremony idempotency (smoke).** Run the 8-step ceremony against a multi-member testcontainer setup. Inject a crash after step 4 (the tombstone commit); resume; assert the same `intent_id` produces no second fork. Inject a divergent member state before step 4; assert the abort path triggers cleanly.
+- **Stranded write queue (smoke).** During quiescence, a member writes; the write is queued locally; the upgrade completes; the queued write is re-encoded against v_new and replayed. Assert no write is lost.
+- **Deprecation cutoff (unit).** Mock the cutoff date past; assert a request from a now-deprecated client returns `426` and the well-known announcement is served.
+
+The cross-module case — full upgrade ceremony exercised through a real client UI + server + MLS group — is one bounded E2E test in [Module Map](/design/module-map/#e2e-test-surface).
