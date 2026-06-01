@@ -28,6 +28,15 @@ pub enum Commands {
         #[command(subcommand)]
         command: LibraryCommands,
     },
+    /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
+    Demo {
+        /// Working directory for the demo libraries (a temp dir is used if omitted)
+        #[arg(long, value_name = "PATH")]
+        workdir: Option<PathBuf>,
+        /// A real image/file to import (a small synthetic file is used if omitted)
+        #[arg(long, value_name = "PATH")]
+        image: Option<PathBuf>,
+    },
     /// Sync local and remote data
     Sync {
         /// Force sync even if there are conflicts

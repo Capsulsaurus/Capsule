@@ -1,11 +1,6 @@
 use std::path::Path;
 
 use capitalize::Capitalize;
-use clap::Parser;
-use cli::{AuthCommands, Cli, Commands, LibraryCommands};
-use colored::*;
-use dialoguer::Confirm;
-use eyre::{Result, eyre};
 use capsule_core::domain::ImportMode;
 use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::{
@@ -13,6 +8,11 @@ use capsule_core::import::{
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::metadata::FileMetadata;
+use clap::Parser;
+use cli::{AuthCommands, Cli, Commands, LibraryCommands};
+use colored::*;
+use dialoguer::Confirm;
+use eyre::{Result, eyre};
 use tracing::trace;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -22,6 +22,7 @@ use crate::utils::directories::{get_cache_dir, get_config_dir, get_data_dir};
 mod cli;
 mod config;
 mod db;
+mod demo;
 mod import;
 mod status;
 mod utils;
@@ -235,6 +236,11 @@ async fn main() -> Result<()> {
 
             lib.close()
                 .map_err(|e| eyre!("Failed to close library: {e}"))?;
+        }
+
+        // ── Demo ──────────────────────────────────────────────────────────
+        Commands::Demo { workdir, image } => {
+            demo::run(workdir, image)?;
         }
 
         // ── Sync ──────────────────────────────────────────────────────────

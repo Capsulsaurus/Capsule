@@ -3,6 +3,8 @@ use std::path::Path;
 
 use crate::constants::SIDECAR_EXTENSIONS;
 
+pub mod crdt;
+pub mod export_policy;
 mod file;
 mod filter;
 mod types;
