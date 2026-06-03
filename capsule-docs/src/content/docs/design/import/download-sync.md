@@ -55,7 +55,7 @@ Because every blob is content-addressed, a fetch is skipped entirely when the bl
 
 - Prefetch is bounded and predictive — thumbnails for assets just beyond the viewport, the preview for the likely-next asset in a sequence — and is cancelled as soon as the user's focus moves.
 - Prefetch and any above-tier fetch obey the same connection rules as [Auto Syncing](#auto-syncing): on a metered connection the client fetches only what the user explicitly opens, and defers the rest.
-- Fetched-but-unpinned blobs are ordinary cache citizens, subject to [Space Recovery](/design/filesystem/client/#space-recovery); the client transparently re-fetches them on demand if they are evicted.
+- Fetched-but-unpinned blobs are ordinary cache citizens, subject to [Space Recovery](/design/filesystem/client/#space-recovery); the client transparently re-fetches them on demand if they are evicted. Recently-viewed content is retained preferentially — so scrolling back through an already-browsed album is served from cache rather than re-fetched — while the bounded, last-access-ordered eviction policy that decides what stays is owned by [Filesystem — Client](/design/filesystem/client/#automatic-cache-management).
 
 ## Auto Syncing
 

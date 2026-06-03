@@ -52,7 +52,24 @@ SQLite may lag the filesystem after external edits or interrupted operations. Th
 
 ## Space Recovery
 
-Rebuildable data is deliberately **not** stored in OS-managed cache locations: the OS evicts indiscriminately, and a thumbnail that is expensive to regenerate is not genuinely disposable. Capsule manages reclamation itself — it surfaces the biggest storage consumers and lets the user selectively delete, and an original that is server-only after eviction is transparently re-fetched on demand.
+Rebuildable data is deliberately **not** stored in OS-managed cache locations: the OS evicts indiscriminately, and a thumbnail that is expensive to regenerate is not genuinely disposable. Capsule manages reclamation itself, on two paths — an automatic, bounded cache it keeps within budget on its own, and an explicit user-driven path for deeper reclamation. Either way, an original that is server-only after eviction is transparently re-fetched on demand (see [Import — Tiered, On-Demand Fetch](/design/import/download-sync/#tiered-on-demand-fetch)).
+
+What is eligible for reclamation is exactly the rebuildable-or-refetchable set: the `cache/` tree (thumbnails, previews, parsed-metadata caches, transcodes) and fetched-but-unpinned originals. The canonical files under `media/` — originals the device itself holds as source of truth, their `.cbor` sidecars, and their `.provenance.cbor` chains — are **never** eviction targets; neither is the rebuildable `index/library.sqlite`, which is dropped and rebuilt only on a schema change.
+
+### Automatic cache management
+
+The reclaimable set is held within a **user-configurable cache budget**. When it grows past budget — typically while browsing a large library on a device that cannot hold everything — Capsule reclaims space itself rather than waiting for the user or letting the OS decide:
+
+- **Recency promotion.** Viewing or opening an asset stamps a last-access time on its fetched representations in `library.sqlite`. Recently-viewed content is therefore the *last* to go, so scrolling back through an album already browsed on a high-latency or metered connection hits local cache instead of the network.
+- **LRU eviction.** When over budget, representations are evicted **least-recently-accessed first**, by that last-access stamp — the same bounded-cache discipline the federation layer applies to its rejected-hash table (see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)).
+- **Tier order within a sweep.** Where recency does not decide it, eviction proceeds in descending size and ascending value: **original → preview → thumbnail**. The metadata tier — the sidecar and its embedded LQIP (see [Thumbnails](/design/thumbnails/)) — is tiny and canonical and is effectively never reclaimed, so an asset always remains listable and previewable at LQIP fidelity even after every heavier representation is gone.
+- **Pin exemption.** Representations the user has explicitly pinned for offline use, and originals the device itself uploaded and still owns as source of truth, are exempt from automatic eviction regardless of recency or budget pressure.
+
+An evicted representation is not lost: the next access transparently re-fetches it through the [tiered fetch](/design/import/download-sync/#tiered-on-demand-fetch) path, under the prevailing connection rules. This keeps the cache faithful to the recovery-first and ephemeral-derived-data [principles](/design/principles/#principles) — nothing here is a source of truth, so reclaiming it is always safe.
+
+### User-driven reclamation
+
+Beyond the automatic budget, Capsule surfaces the biggest storage consumers and lets the user selectively delete — for reclaiming below the configured budget, or for dropping pinned content the user no longer wants offline. This path can release pinned representations the automatic sweep would not, but it still never touches the canonical `media/` files.
 
 ## Validation
 
@@ -61,5 +78,9 @@ Rebuildable data is deliberately **not** stored in OS-managed cache locations: t
 - **Process lock contention (smoke).** Open the library in process A; attempt to open in process B; assert clean refusal with a structured error.
 - **Mobile sandbox placement (smoke per platform).** Per-platform test asserts the library is placed in the OS-blessed location for app private storage and survives an app cold-start.
 - **Local index rebuild from sidecars (smoke).** Populate a library; drop `library.sqlite`; re-open; assert the index is rebuilt and queries return the same results as before.
+- **LRU eviction order (unit).** Fill the reclaimable set past the cache budget; assert the least-recently-accessed representations are evicted first and the budget is restored; assert no canonical `media/` file is touched.
+- **Tier-order eviction (unit).** With representations of equal recency over budget, assert eviction proceeds original → preview → thumbnail, and that the metadata tier (sidecar + LQIP) is never reclaimed.
+- **Recency promotion (unit).** View an asset to stamp its last-access, then trigger an over-budget sweep; assert its representations survive while older ones are evicted.
+- **Pin exemption (unit).** Pin a representation for offline use; push the cache over budget; assert the pinned representation survives the automatic sweep and is reclaimable only via the user-driven path.
 
 Cross-module case (full library lifecycle: import → upload → restore on a fresh client) is bounded E2E surface in [Module Map](/design/module-map/#e2e-test-surface).
