@@ -15,7 +15,7 @@
         "@astrojs/starlight": "^0.34.1",
         "@astrojs/starlight-tailwind": "^3.0.1",
         "@tailwindcss/vite": "^4.1.4",
-        "astro": "^5.7.8",
+        "astro": "^6.4.3",
         "sharp": "^0.33.5",
         "starlight-links-validator": "^0.14.3",
         "starlight-versions": "^0.5.3",
@@ -24,7 +24,7 @@
     "devDependencies": {
         "@biomejs/biome": "^1.9.4",
         "rehype": "^13.0.2",
-        "vitest": "^3.2.4",
+        "vitest": "^4.1.8",
         "wrangler": "^4.13.2"
     }
 }
