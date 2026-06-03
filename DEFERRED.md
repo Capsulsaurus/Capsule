@@ -57,6 +57,12 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   `/sync` feed, federation, peering, and the `capsule-sdk` network client. The **pure**
   refuse-by-default validation invariants those paths need are implemented in
   `capsule_core::validation` and ready to wire into `capsule-api`.
+- The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
+  recently-viewed blobs, tier-ordered eviction original → preview → thumbnail) is specified in
+  `capsule-docs` [Filesystem — Client → Space Recovery] but **not yet implemented** (issue #23,
+  scoped to documentation). Seam: last-access tracking lives in `capsule-core::db`
+  (`library.sqlite`) and the sweep in `capsule-core::library`, driven by `capsule-sdk`
+  connection-class detection — no core data-plane rework needed to land it.
 
 ### ML / AI
 - Embeddings, `sqlite-vec` vector search, the model registry, semantic/face features, and
