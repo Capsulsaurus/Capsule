@@ -1,7 +1,6 @@
 ---
 name: Chore
 about: Routine maintenance tasks, refactoring, or cleanup
-title: "[CHORE] "
 labels: chore, needs-triage
 assignees: ''
 ---
