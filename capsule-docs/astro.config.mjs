@@ -4,10 +4,15 @@ import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
 import starlightVersions from 'starlight-versions';
+import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 
 // https://astro.build/config
 export default defineConfig({
     site: 'https://capsule.justinchung.net', // TODO: Get domain later
+    // Opt technical terms out of browser/machine auto-translation. See the plugin.
+    markdown: {
+        rehypePlugins: [rehypeNoTranslate],
+    },
     integrations: [
         starlight({
             title: 'Capsule',
