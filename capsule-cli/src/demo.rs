@@ -15,6 +15,7 @@ use capsule_core::backup::{recover_seed, split_seed_2of3};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::Workspace;
+use capsule_core::ml::{self, FixtureRunner, Registry, TaskKind};
 
 /// Fast Argon2id parameters — this is a demo; the wrap-key strength is not the point.
 const DEMO_KDF: Argon2Params = Argon2Params {
@@ -208,6 +209,50 @@ pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
     } else {
         return Err(eyre!("shamir reconstruction failed"));
     }
+
+    // ── 10. On-device ML (deterministic fixture runner; no model weights) ─────
+    step(
+        10,
+        "On-device ML: embed, semantic search, and model-version regen (fixture runner)",
+    );
+    let registry = Registry::canonical();
+    let runner = FixtureRunner::new("cpu-reference");
+    ml::embed_and_store(
+        &mut ws,
+        &runner,
+        &registry,
+        &asset,
+        TaskKind::SemanticSearch,
+    )
+    .map_err(|e| eyre!("embed: {e}"))?;
+    ok("embedded the asset (signed embedding derivative + sqlite-vec index entry)");
+    info("embedding model", "mobileclip-b v1 (provenance-tagged)");
+
+    let hits = ml::semantic_search(&ws, &runner, &registry, "a photo from the trip", 3)
+        .map_err(|e| eyre!("search: {e}"))?;
+    if let Some(top) = hits.first() {
+        ok(format!(
+            "semantic search returned {} hit(s); nearest distance {:.4}",
+            hits.len(),
+            top.distance
+        ));
+    }
+
+    // Simulate a model swap: bump the canonical version, then regenerate per-asset.
+    let mut registry_v2 = Registry::canonical();
+    registry_v2.set_canonical_version(TaskKind::SemanticSearch, "2".into());
+    let runner_v2 = FixtureRunner::with_registry("cpu-reference", registry_v2.clone());
+    let stale_before = ws
+        .db()
+        .stale_embedding_assets(&registry_v2, TaskKind::SemanticSearch, "cpu-reference")
+        .map_err(|e| eyre!("stale: {e}"))?
+        .len();
+    let regenerated =
+        ml::regenerate_embeddings(&mut ws, &runner_v2, &registry_v2, TaskKind::SemanticSearch)
+            .map_err(|e| eyre!("regen: {e}"))?;
+    ok(format!(
+        "model swap → v2: {stale_before} stale embedding(s) excluded from queries, then {regenerated} regenerated"
+    ));
 
     println!(
         "\n{}  Every layer of the design exercised offline with real cryptography.",

@@ -158,6 +158,34 @@ pub fn semantic_search<R: ModelRunner>(
     )?)
 }
 
+/// Regenerate stale embeddings for `task` at the current canonical version. Walks the assets whose
+/// stored `model_version` trails the registry (a model swap left them stale and excluded from
+/// queries) and re-embeds each with `runner`, replacing the old vector and appending a chained
+/// `derivative-replace`. **Per-asset replace** — the fresh embedding persists before the old one
+/// is dropped, never a global truncate, so already-regenerated assets stay queryable throughout.
+/// Returns the number regenerated.
+pub fn regenerate_embeddings<R: ModelRunner>(
+    ws: &mut Workspace,
+    runner: &R,
+    registry: &Registry,
+    task: TaskKind,
+) -> Result<usize, OrchestratorError> {
+    require_canonical_runner(runner, registry, task)?;
+    let platform = runner.platform().to_string();
+    let stale = ws
+        .db()
+        .stale_embedding_assets(registry, task, &platform)
+        .map_err(|e| OrchestratorError::Vector(e.into()))?;
+    let mut regenerated = 0;
+    for asset_str in stale {
+        let asset_id = Uuid::parse_str(&asset_str)
+            .map_err(|e| RunnerError::Inference(format!("bad asset id {asset_str}: {e}")))?;
+        embed_and_store(ws, runner, registry, &asset_id, task)?;
+        regenerated += 1;
+    }
+    Ok(regenerated)
+}
+
 // ── Device-bound execution policy (ai.md § Model Batching) ───────────────────────────────────
 
 /// Per-asset execution mode, chosen from available memory at task start.
@@ -308,5 +336,80 @@ mod tests {
         assert_eq!(ai[0].1.tag, "beach");
         assert_eq!(ai[0].1.model_id, "mobileclip-b");
         assert!(ws.db().tags_for(&id.to_string()).unwrap().is_empty());
+    }
+
+    /// Bounded E2E (Module Map #10): bump the canonical model version; stale embeddings are
+    /// excluded from queries; background regen produces fresh embeddings per-asset; queries return
+    /// correct results post-regen. Covers `ml` × `db` vector index × lifecycle.
+    #[test]
+    fn e2e_model_regen_after_version_bump_rebuilds_the_index() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let imga = src.path().join("a.bin");
+        let imgb = src.path().join("b.bin");
+        std::fs::write(&imga, b"alpha concept").unwrap();
+        std::fs::write(&imgb, b"beta concept").unwrap();
+        let mut ws = Workspace::create_with_params(
+            lib.path(),
+            b"p",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let album = ws.create_album("A");
+        let a = ws.import_asset(album, &imga).unwrap();
+        let b = ws.import_asset(album, &imgb).unwrap();
+
+        // v1: embed both; a semantic query matches the right asset.
+        let reg1 = Registry::canonical();
+        let runner1 = FixtureRunner::new(PLATFORM);
+        embed_and_store(&mut ws, &runner1, &reg1, &a, TaskKind::SemanticSearch).unwrap();
+        embed_and_store(&mut ws, &runner1, &reg1, &b, TaskKind::SemanticSearch).unwrap();
+        let hits = semantic_search(&ws, &runner1, &reg1, "alpha concept", 5).unwrap();
+        assert_eq!(hits[0].asset_id, a.to_string());
+        assert!(hits[0].distance < 1e-4);
+
+        // Model swap → version 2 (a new runner produces the new canonical version).
+        let mut reg2 = Registry::canonical();
+        reg2.set_canonical_version(TaskKind::SemanticSearch, ModelVersion::from("2"));
+        let runner2 = FixtureRunner::with_registry(PLATFORM, reg2.clone());
+
+        // Pre-regen: the v1 embeddings are stale and excluded from v2 queries.
+        assert_eq!(
+            ws.db()
+                .stale_embedding_assets(&reg2, TaskKind::SemanticSearch, PLATFORM)
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(
+            semantic_search(&ws, &runner2, &reg2, "alpha concept", 5)
+                .unwrap()
+                .is_empty(),
+            "stale embeddings are excluded until regenerated"
+        );
+
+        // Regenerate: fresh v2 embeddings, per-asset replace (not accumulate).
+        let n = regenerate_embeddings(&mut ws, &runner2, &reg2, TaskKind::SemanticSearch).unwrap();
+        assert_eq!(n, 2);
+        assert!(
+            ws.db()
+                .stale_embedding_assets(&reg2, TaskKind::SemanticSearch, PLATFORM)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            ws.db().embedding_count(TaskKind::SemanticSearch).unwrap(),
+            2
+        );
+
+        // Post-regen: queries return correct results again, and each asset's embedding chain shows
+        // a v1 → v2 derivative-replace.
+        let hits = semantic_search(&ws, &runner2, &reg2, "alpha concept", 5).unwrap();
+        assert_eq!(hits[0].asset_id, a.to_string());
+        assert!(hits[0].distance < 1e-4);
+        assert_eq!(ws.embedding_derivatives(&a).unwrap().len(), 2);
     }
 }
