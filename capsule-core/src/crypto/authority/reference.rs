@@ -12,9 +12,9 @@
 //! - Minting an epoch sets the write-tier key and (optionally) the AMK presence **together**
 //!   — the design's "AMK epoch bump + write-tier rotation are one commit" atomicity.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::AlbumAuthority;
@@ -34,6 +34,32 @@ struct Entry {
     write_tier_pub: HybridVerifyingKey,
     admin_sig: HybridSignature,
     amk_present: bool,
+}
+
+/// The portable, admin-signed epoch ledger: every attested `(epoch, write_tier_pub)` with its
+/// admin signature. `amk_present` is **local-only** state and deliberately is *not* part of this
+/// signed artifact — on reload it is restored from the epochs a device actually holds AMKs for.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SignedEpochLedger {
+    /// Album this ledger speaks for.
+    pub album_id: Uuid,
+    /// The admin-tier public key every entry is signed under.
+    pub admin_pub: HybridVerifyingKey,
+    /// The attested epoch ceiling (must equal the max attested epoch).
+    pub ceiling: u32,
+    /// One entry per attested epoch.
+    pub entries: Vec<LedgerEntry>,
+}
+
+/// One epoch's signed attestation within a [`SignedEpochLedger`].
+#[derive(Clone, Serialize, Deserialize)]
+pub struct LedgerEntry {
+    /// Epoch number (`amk_version`).
+    pub epoch: u32,
+    /// The write-tier public key attested for this epoch.
+    pub write_tier_pub: HybridVerifyingKey,
+    /// The admin signature over `(album_id, epoch, write_tier_pub)`.
+    pub admin_sig: HybridSignature,
 }
 
 /// A reference album authority backed by an admin-signed epoch ledger.
@@ -115,6 +141,53 @@ impl ReferenceAuthority {
         if let Some(e) = self.entries.get_mut(&epoch.0) {
             e.amk_present = true;
         }
+    }
+
+    /// Export the admin-signed epoch ledger for persistence or transport. The local-only
+    /// AMK-presence flags are excluded — they are not part of the signed history.
+    pub fn to_ledger(&self) -> SignedEpochLedger {
+        SignedEpochLedger {
+            album_id: self.album_id,
+            admin_pub: self.admin_pub.clone(),
+            ceiling: self.ceiling.0,
+            entries: self
+                .entries
+                .iter()
+                .map(|(epoch, e)| LedgerEntry {
+                    epoch: *epoch,
+                    write_tier_pub: e.write_tier_pub.clone(),
+                    admin_sig: e.admin_sig.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    /// Rebuild an authority from a serialized ledger, **re-verifying the entire admin chain**.
+    /// `held_epochs` are the epochs whose AMK content key this device actually holds, restoring
+    /// the local-only `amk_present` state. Returns `None` if the admin chain does not verify (a
+    /// tampered, forged, or rewound ledger).
+    pub fn from_ledger(ledger: &SignedEpochLedger, held_epochs: &BTreeSet<u32>) -> Option<Self> {
+        let entries = ledger
+            .entries
+            .iter()
+            .map(|le| {
+                (
+                    le.epoch,
+                    Entry {
+                        write_tier_pub: le.write_tier_pub.clone(),
+                        admin_sig: le.admin_sig.clone(),
+                        amk_present: held_epochs.contains(&le.epoch),
+                    },
+                )
+            })
+            .collect();
+        let authority = Self {
+            album_id: ledger.album_id,
+            admin_pub: ledger.admin_pub.clone(),
+            ceiling: AmkVersion(ledger.ceiling),
+            entries,
+        };
+        authority.admin_chain_verifies().then_some(authority)
     }
 }
 
@@ -251,5 +324,43 @@ mod tests {
         // Fabricate a higher ceiling than any attested epoch.
         auth.ceiling = AmkVersion(5);
         assert!(!auth.admin_chain_verifies());
+    }
+
+    #[test]
+    fn ledger_round_trip_reverifies_and_restores_amk_presence() {
+        let (album, admin, w1, w2) = setup();
+        let auth = ReferenceAuthority::new(album, admin.verifying_key())
+            .with_epoch(&admin, AmkVersion(1), &w1.verifying_key(), true)
+            .with_epoch(&admin, AmkVersion(2), &w2.verifying_key(), false);
+
+        // Serialize → canonical CBOR → deserialize preserves the ledger.
+        let bytes = cbor::to_canonical_vec(&auth.to_ledger()).unwrap();
+        let decoded: SignedEpochLedger = cbor::from_slice(&bytes).unwrap();
+
+        // Rebuild holding only epoch 1's AMK locally (presence is restored out-of-band).
+        let restored = ReferenceAuthority::from_ledger(&decoded, &BTreeSet::from([1])).unwrap();
+        assert!(restored.admin_chain_verifies());
+        assert_eq!(restored.epoch_ceiling(), AmkVersion(2));
+        assert_eq!(
+            restored.write_tier_pubkey(AmkVersion(2)),
+            Some(w2.verifying_key())
+        );
+        assert!(restored.has_amk(AmkVersion(1)));
+        assert!(!restored.has_amk(AmkVersion(2)));
+    }
+
+    #[test]
+    fn tampered_ledger_is_rejected_on_reload() {
+        let (album, admin, w1, w2) = setup();
+        let auth = ReferenceAuthority::new(album, admin.verifying_key()).with_epoch(
+            &admin,
+            AmkVersion(1),
+            &w1.verifying_key(),
+            true,
+        );
+        // Swap in a different write-tier key with no matching admin re-signature.
+        let mut ledger = auth.to_ledger();
+        ledger.entries[0].write_tier_pub = w2.verifying_key();
+        assert!(ReferenceAuthority::from_ledger(&ledger, &BTreeSet::from([1])).is_none());
     }
 }

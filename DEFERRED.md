@@ -14,8 +14,9 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   standalone metadata-blob), **hybrid Ed25519 + ML-DSA-65** signatures (both halves required),
   **X-Wing (X25519 + ML-KEM-768)** hybrid DEK (known-answer-validated against
   `draft-connolly-cfrg-xwing-kem`).
-- **Key hierarchy** — master key, default-album-id derivation, AMKs + per-file/blob keys,
-  software keystore (account ↔ encrypted `AccountFile`), signed device directory.
+- **Key hierarchy** — master key, default-album-id derivation, multi-epoch AMKs (offline
+  rotation) + per-file/blob keys, software keystore (account ↔ encrypted `AccountFile`), signed
+  device directory.
 - **Encryption** — STREAM asset encryption with independent ranged-chunk decryption;
   exact metadata-blob wire format.
 - **Provenance** — signed `AssetManifest`/`DerivativeManifest`, append-only hash-chained
@@ -27,7 +28,8 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   monotonic add-id counter; signed `SidecarV1` (schema as CBOR field 0); privacy-on-export.
 - **Backup** — deterministic signed tar artifact, AMK ledger, master-key escrow, Shamir
   2-of-3, and dry-run/commit restore with chain reconciliation.
-- **Lifecycle `Workspace`** — ties it together and is showcased end-to-end by `capsule demo`.
+- **Lifecycle `Workspace`** — ties it together and writes through to the queryable
+  `library.sqlite` index; showcased end-to-end by `capsule demo`.
 
 ## Deferred — with the seam in place
 
@@ -39,9 +41,13 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   consumes (epoch ceiling, per-epoch write-tier pubkey, AMK presence, admin-chain validity).
   `ReferenceAuthority` (an admin-signed epoch ledger) stands in for live MLS and is honored
   only via `&dyn AlbumAuthority`, so an `OpenMlsAuthority` drops in unchanged.
-- **Consequence:** albums are **single-epoch** in the offline core. Epoch rotation,
-  membership add/remove, the `Welcome`/history-delivery flow, and the album upgrade ceremony
-  are deferred with OpenMLS.
+- **Now implemented offline:** **multi-epoch rotation** via `ReferenceAuthority` —
+  `Workspace::rotate_epoch` mints AMK_v{n+1} + a fresh write-tier key and admin-attests the new
+  epoch (assets imported before a rotation stay verifiable under their original epoch), plus a
+  serializable, admin-signed `SignedEpochLedger` (`to_ledger`/`from_ledger`, whose admin chain is
+  re-verified on reload; the local-only AMK-presence flag is restored out-of-band).
+- **Still deferred with OpenMLS:** membership add/remove, the `Welcome`/history-delivery flow,
+  and the album upgrade ceremony — these need live MLS group state, not just the epoch ledger.
 
 ### Hardware-bound key storage
 - Device keys are kept in a **software keystore** (private keys sealed under the
@@ -54,11 +60,13 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   refuse-by-default validation invariants those paths need are implemented in
   `capsule_core::validation` and ready to wire into `capsule-api`.
 - The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
-  recently-viewed blobs, tier-ordered eviction original → preview → thumbnail) is specified in
-  `capsule-docs` [Filesystem — Client → Space Recovery] but **not yet implemented** (issue #23,
-  scoped to documentation). Seam: last-access tracking lives in `capsule-core::db`
-  (`library.sqlite`) and the sweep in `capsule-core::library`, driven by `capsule-sdk`
-  connection-class detection — no core data-plane rework needed to land it.
+  recently-viewed blobs, tier-ordered eviction original → preview → thumbnail, pinned and
+  device-owned originals exempt) is **now implemented** (issue #23): the
+  `cached_representations` table + last-access tracking live in `capsule-core::db` and the sweep
+  `capsule_core::library::cache_sweep` deletes evicted cache files (never the canonical `media/`
+  files or the index). The byte budget is a plain parameter, so `capsule-sdk` connection-class
+  detection drives it unchanged. Still deferred upstream: that connection-class budget detection
+  and the wider networked server/client (HTTP/TUS, GraphQL, `/sync`, federation, peering).
 
 ### ML / AI
 - Embeddings, `sqlite-vec` vector search, the model registry, semantic/face features, and
@@ -68,9 +76,14 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 ### Other
 - Thumbnail/LQIP generation beyond `capsule-media`'s existing utilities.
 - Fusing the crypto data plane into the **existing plaintext import executor**
-  (`capsule_core::import::executor`): that pipeline still writes the legacy `AssetSidecar`.
-  The crypto-integrated lifecycle lives in `capsule_core::lifecycle::Workspace` (used by
-  `capsule demo`); unifying the two import paths is a follow-up.
+  (`capsule_core::import::executor`) — **partially done.** `capsule_core::lifecycle::Workspace`
+  now writes through to the shared `library.sqlite` index: every import / metadata edit /
+  soft-delete upserts the queryable `assets` row (+ user tags) and records a device-owned
+  `original` cache representation, so crypto-imported assets are timeline-queryable and feed the
+  Phase-3 cache sweep. Dedup against `assets` is consequently **global** across both import
+  paths. **Still deferred:** the legacy `import::executor` keeps writing the unsigned
+  `AssetSidecar`; replacing it with the signed `SidecarV1` + manifest + provenance path needs
+  the deferred thumbnail/LQIP (media) generation, so the full executor rewrite is a follow-up.
 
 ## How to see it working
 

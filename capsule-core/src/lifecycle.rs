@@ -17,8 +17,9 @@
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
 //!
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
-//! encryption produces the artifacts that cross a boundary. Album epoch rotation (the MLS
-//! ceremony) is deferred — albums here are single-epoch (see `DEFERRED.md`).
+//! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
+//! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
+//! add/remove) remains deferred (see `DEFERRED.md`).
 //!
 //! [`verify_asset`]: crate::crypto::verify_asset
 
@@ -42,6 +43,8 @@ use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::crypto::{CryptoError, authority::ReferenceAuthority};
+use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
+use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter};
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -69,11 +72,14 @@ pub enum LifecycleError {
     /// CBOR (de)serialization error.
     #[error("cbor: {0}")]
     Cbor(String),
+    /// Library index (SQLite) error.
+    #[error("db: {0}")]
+    Db(String),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;
 
-/// One album's key material (single-epoch in this offline core).
+/// One album's key material across one or more epochs.
 pub struct AlbumKeys {
     /// Album id.
     pub album_id: Uuid,
@@ -85,7 +91,7 @@ pub struct AlbumKeys {
     pub write_tier: HybridSigningKey,
     /// Per-album admin signing key.
     pub admin: HybridSigningKey,
-    /// The current (and only) epoch.
+    /// The current (highest) epoch — the one new imports are written under.
     pub current_epoch: u32,
 }
 
@@ -114,6 +120,9 @@ pub struct Workspace {
     albums: HashMap<Uuid, AlbumKeys>,
     authorities: HashMap<Uuid, ReferenceAuthority>,
     assets: HashMap<Uuid, AssetState>,
+    /// The open, locked library — its `library.sqlite` is the queryable index the crypto
+    /// lifecycle writes through to. Held for the workspace's lifetime so the lock is retained.
+    library: Library,
 }
 
 fn now_rfc3339() -> String {
@@ -139,6 +148,62 @@ fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
         .join(format!("{:04}-{:02}", dt.year(), dt.month()))
 }
 
+fn asset_type_for(content_type: &str) -> String {
+    if content_type.starts_with("video/") {
+        "video"
+    } else {
+        "photo"
+    }
+    .to_string()
+}
+
+fn rfc3339_to_secs(s: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|d| d.timestamp())
+        .unwrap_or(0)
+}
+
+/// Map a managed asset's in-memory state to its queryable `assets` index row. Deletion state is
+/// derived from the provenance chain's lifecycle actions; media-derived fields (dimensions,
+/// duration, chromahash) stay NULL — they are out of scope in this offline core.
+fn asset_row_from_state(asset: &AssetState) -> AssetRow {
+    let mut is_deleted = false;
+    let mut deleted_at = None;
+    for rec in asset.chain.records() {
+        match rec.manifest.core.action {
+            Action::Delete => {
+                is_deleted = true;
+                deleted_at = Some(rfc3339_to_secs(&rec.manifest.core.timestamp));
+            }
+            Action::TrashRestore => {
+                is_deleted = false;
+                deleted_at = None;
+            }
+            _ => {}
+        }
+    }
+    AssetRow {
+        uuid: asset.asset_id.to_string(),
+        asset_type: asset_type_for(&asset.sidecar.content_type),
+        capture_timestamp: asset.capture_utc,
+        capture_utc: Some(asset.capture_utc),
+        capture_tz_source: None,
+        import_timestamp: rfc3339_to_secs(&asset.sidecar.import_timestamp),
+        hash_sha256: asset.sidecar.hash.to_hex(),
+        width: asset.sidecar.dimensions.as_ref().map(|d| d.width as i64),
+        height: asset.sidecar.dimensions.as_ref().map(|d| d.height as i64),
+        duration_ms: None,
+        stack_id: None,
+        is_stack_hidden: false,
+        chromahash: None,
+        dominant_color: None,
+        album_id: Some(asset.album_id.to_string()),
+        rating: asset.sidecar.rating.get().copied().unwrap_or(0) as i64,
+        is_deleted,
+        deleted_at,
+    }
+}
+
 impl Workspace {
     /// Create a fresh workspace: initialise the library directory and a new account, and
     /// publish a device directory. `passphrase` guards the on-disk account; `tier` sets the
@@ -157,7 +222,7 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
-        crate::library::init::init_library(root, "Capsule")
+        let library = crate::library::init::init_library(root, "Capsule")
             .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
         let account = Account::create();
         let file = account.to_file_with(passphrase, params)?;
@@ -176,6 +241,7 @@ impl Workspace {
             albums: HashMap::new(),
             authorities: HashMap::new(),
             assets: HashMap::new(),
+            library,
         })
     }
 
@@ -239,6 +305,39 @@ impl Workspace {
         album_id
     }
 
+    /// Rotate `album_id` to a fresh epoch: mint AMK_v{n+1} and a new write-tier key, have the
+    /// album admin attest the new epoch, and advance the current epoch — the design's
+    /// "AMK bump + write-tier rotation are one commit" atomicity. The admin key (the ledger
+    /// root) is stable across epochs, and existing assets stay verifiable under their original
+    /// epoch. Returns the new epoch. Membership changes / the MLS `Welcome` flow remain deferred
+    /// (see `DEFERRED.md`).
+    pub fn rotate_epoch(&mut self, album_id: Uuid) -> Result<u32> {
+        let next = {
+            let album = self
+                .albums
+                .get_mut(&album_id)
+                .ok_or_else(|| LifecycleError::NotFound(format!("album {album_id}")))?;
+            let next = album.current_epoch + 1;
+            album.amks.insert(next, *Amk::generate().as_bytes());
+            album.write_tier = HybridSigningKey::generate();
+            album.current_epoch = next;
+            next
+        };
+        // Disjoint fields: read the album's keys while mutably attesting in its authority.
+        let album = self.albums.get(&album_id).expect("album just mutated");
+        let authority = self
+            .authorities
+            .get_mut(&album_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("authority {album_id}")))?;
+        authority.attest_epoch(
+            &album.admin,
+            AmkVersion(next),
+            &album.write_tier.verifying_key(),
+            true,
+        );
+        Ok(next)
+    }
+
     fn album(&self, album_id: &Uuid) -> Result<&AlbumKeys> {
         self.albums
             .get(album_id)
@@ -260,8 +359,11 @@ impl Workspace {
         ))
     }
 
-    fn file_key(&self, album: &AlbumKeys, file_id: &Uuid) -> [u8; 32] {
-        let amk = Amk::from_bytes(album.amks[&album.current_epoch]);
+    /// Derive the per-file key under a *specific* epoch's AMK. Callers pass the epoch the asset
+    /// was written under (`amk_version`), never assuming the album's current epoch — so an asset
+    /// imported before a rotation still derives the key it was encrypted with.
+    fn file_key(&self, album: &AlbumKeys, epoch: u32, file_id: &Uuid) -> [u8; 32] {
+        let amk = Amk::from_bytes(album.amks[&epoch]);
         amk.derive_file_key(file_id)
     }
 
@@ -299,6 +401,40 @@ impl Workspace {
         Ok(())
     }
 
+    /// Write the queryable index row + user tags for `asset` into `library.sqlite`. Re-syncs on
+    /// every change (import, metadata edit, soft-delete/restore), so the index reflects the
+    /// asset's current rating, tags, and deletion state. Upsert keeps it conflict-safe even
+    /// though the legacy importer shares the same `assets` table.
+    fn index_asset_row(&self, asset: &AssetState) -> Result<()> {
+        self.library
+            .db
+            .upsert_asset(&asset_row_from_state(asset))
+            .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        let tags: Vec<String> = asset.sidecar.tags_user.value().into_iter().collect();
+        self.library
+            .db
+            .replace_asset_tags(&asset.asset_id.to_string(), &tags)
+            .map_err(|e| LifecycleError::Db(e.to_string()))
+    }
+
+    /// Record the asset's own original as a device-owned cache representation — exempt from the
+    /// automatic eviction sweep, and the real lifecycle data that sweep then operates on.
+    fn index_original_representation(&self, asset: &AssetState, bytes: usize) -> Result<()> {
+        self.library
+            .db
+            .upsert_representation(&CachedRepresentationRow {
+                uuid: asset.asset_id.to_string(),
+                tier: "original".to_string(),
+                format: Some(asset.ext.clone()),
+                bytes: bytes as i64,
+                path: self.media_path(asset).to_string_lossy().into_owned(),
+                last_accessed_at: Utc::now().timestamp(),
+                pinned: false,
+                is_owned_original: true,
+            })
+            .map_err(|e| LifecycleError::Db(e.to_string()))
+    }
+
     /// Import a file into `album_id`: encrypt, build the signed create manifest + provenance,
     /// write the signed sidecar, and self-verify through `verify_asset`. Returns the asset id.
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
@@ -312,7 +448,7 @@ impl Workspace {
         let capture_utc = Utc::now().timestamp();
 
         let album = self.album(&album_id)?;
-        let file_key = self.file_key(album, &asset_id);
+        let file_key = self.file_key(album, album.current_epoch, &asset_id);
         let (enc, ciphertext) = stream::encrypt_asset_vec_full(&file_key, &plaintext);
 
         let core = ManifestCore {
@@ -387,6 +523,8 @@ impl Workspace {
             sidecar,
         };
         self.write_asset_files(&asset, &plaintext)?;
+        self.index_asset_row(&asset)?;
+        self.index_original_representation(&asset, plaintext.len())?;
         self.assets.insert(asset_id, asset);
         Ok(asset_id)
     }
@@ -401,7 +539,7 @@ impl Workspace {
         let head = &asset.chain.records().last().unwrap().manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let file_key = self.file_key(album, &head.core.file_id);
+        let file_key = self.file_key(album, head.core.amk_version.0, &head.core.file_id);
         let (_, ciphertext) =
             stream::encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
 
@@ -467,7 +605,8 @@ impl Workspace {
         let asset = self.assets.get(asset_id).unwrap();
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        self.write_asset_files(asset, &plaintext)
+        self.write_asset_files(asset, &plaintext)?;
+        self.index_asset_row(asset)
     }
 
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.
@@ -517,21 +656,19 @@ impl Workspace {
             let head = &asset.chain.records().last().unwrap().manifest;
             let plaintext =
                 fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-            let file_key = self.file_key(album, &head.core.file_id);
+            let epoch = head.core.amk_version.0;
+            let file_key = self.file_key(album, epoch, &head.core.file_id);
             let (_, ciphertext) = stream::encrypt_asset_vec_with_prefix(
                 &file_key,
                 head.core.nonce_prefix,
                 &plaintext,
             );
-            let amk = Amk::from_bytes(album.amks[&album.current_epoch]);
+            let amk = Amk::from_bytes(album.amks[&epoch]);
             let metadata_blob = seal_blob(
                 &amk.derive_blob_key(&asset.asset_id),
                 &asset.sidecar.to_canonical_vec(),
             );
-            amks.insert(
-                (asset.album_id, head.core.amk_version.0),
-                album.amks[&album.current_epoch],
-            );
+            amks.insert((asset.album_id, epoch), album.amks[&epoch]);
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
@@ -595,6 +732,8 @@ impl Workspace {
                 sidecar,
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
+            self.index_asset_row(&asset)?;
+            self.index_original_representation(&asset, restored.plaintext.len())?;
             self.assets.insert(restored.asset_id, asset);
             added += 1;
         }
@@ -653,6 +792,12 @@ impl Workspace {
     /// A managed asset's current state.
     pub fn asset(&self, asset_id: &Uuid) -> Option<&AssetState> {
         self.assets.get(asset_id)
+    }
+
+    /// The library's queryable SQLite index — the timeline, user tags, and cached representations
+    /// the crypto lifecycle writes through to.
+    pub fn db(&self) -> &DatabaseDriver {
+        &self.library.db
     }
 }
 
@@ -757,5 +902,104 @@ mod tests {
             ws3.import_backup(&backup_path, b"recovery-pass", &imposter)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn epoch_rotation_keeps_old_assets_verifiable_and_backs_up() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let a = src.path().join("a.jpg");
+        let b = src.path().join("b.jpg");
+        fs::write(&a, b"\xFF\xD8\xFF first photo, written at epoch 1").unwrap();
+        fs::write(&b, b"\xFF\xD8\xFF second photo, written at epoch 2").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+
+        // Import at epoch 1, rotate the album, import at epoch 2.
+        let id_a = ws.import_asset(album, &a).unwrap();
+        assert_eq!(ws.rotate_epoch(album).unwrap(), 2);
+        let id_b = ws.import_asset(album, &b).unwrap();
+
+        // Each asset recorded the epoch it was written under...
+        let epoch_of = |ws: &Workspace, id| {
+            ws.asset(id).unwrap().chain.records()[0]
+                .manifest
+                .core
+                .amk_version
+        };
+        assert_eq!(epoch_of(&ws, &id_a), AmkVersion(1));
+        assert_eq!(epoch_of(&ws, &id_b), AmkVersion(2));
+        // ...and BOTH still verify — the pre-rotation asset under its original epoch key (the
+        // regression guard for the `current_epoch` file-key bug).
+        assert_eq!(ws.verify(&id_a).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(ws.verify(&id_b).unwrap(), VerifyOutcome::Accept);
+
+        // A cross-epoch backup escrows each asset's own-epoch AMK; restore into a fresh library
+        // is byte-equal for both (guards the export file-key / blob-key / escrow-value epochs).
+        let backup_path = src.path().join("backup.tar");
+        ws.export_backup(&backup_path, b"recovery-pass").unwrap();
+        let exporter_pub = ws.exporter_verifying_key();
+
+        let fresh = TempDir::new().unwrap();
+        let mut ws2 = fast_workspace(fresh.path());
+        let added = ws2
+            .import_backup(&backup_path, b"recovery-pass", &exporter_pub)
+            .unwrap();
+        assert_eq!(added, 2);
+        assert_eq!(
+            ws2.read_plaintext(&id_a).unwrap(),
+            ws.read_plaintext(&id_a).unwrap()
+        );
+        assert_eq!(
+            ws2.read_plaintext(&id_b).unwrap(),
+            ws.read_plaintext(&id_b).unwrap()
+        );
+    }
+
+    #[test]
+    fn crypto_lifecycle_writes_through_to_the_index() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF indexed photo").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+        let id = ws.import_asset(album, &img).unwrap();
+        let uuid = id.to_string();
+
+        // The import is queryable in the timeline, tagged to its album.
+        let timeline = ws.db().query_timeline(0, 100).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].uuid, uuid);
+        assert_eq!(
+            timeline[0].album_id.as_deref(),
+            Some(album.to_string().as_str())
+        );
+
+        // It recorded a device-owned `original` representation, exempt from eviction.
+        let reps = ws.db().representations_for(&uuid).unwrap();
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].tier, "original");
+        assert!(reps[0].is_owned_original);
+        assert!(
+            ws.db().eviction_candidates(0).unwrap().is_empty(),
+            "an owned original is never an eviction candidate"
+        );
+
+        // A tag edit re-syncs into the index.
+        ws.tag_add(&id, "vacation").unwrap();
+        assert_eq!(
+            ws.db().tags_for(&uuid).unwrap(),
+            vec!["vacation".to_string()]
+        );
+
+        // Soft-delete hides it from the timeline; restore brings it back (deletion state is
+        // derived from the provenance chain).
+        ws.soft_delete(&id, 30).unwrap();
+        assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
+        ws.restore(&id).unwrap();
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
     }
 }

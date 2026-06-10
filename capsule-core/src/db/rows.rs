@@ -47,3 +47,20 @@ pub struct AssetTagRow {
     pub uuid: String,
     pub tag: String,
 }
+
+/// One cached, reclaimable representation of an asset. The eviction sweep ranks these by
+/// `last_accessed_at` (LRU) with `tier` as the tiebreaker; `pinned` and `is_owned_original`
+/// rows are exempt. `path` is the on-disk cache file the sweep deletes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CachedRepresentationRow {
+    pub uuid: String,
+    /// `"original"` | `"preview"` | `"thumbnail"`.
+    pub tier: String,
+    pub format: Option<String>,
+    pub bytes: i64,
+    pub path: String,
+    pub last_accessed_at: i64,
+    pub pinned: bool,
+    /// An original this device itself owns as source of truth — never auto-evicted.
+    pub is_owned_original: bool,
+}
