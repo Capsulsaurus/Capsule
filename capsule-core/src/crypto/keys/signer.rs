@@ -19,9 +19,10 @@ use crate::crypto::CryptoError;
 /// Produces hybrid signatures over arbitrary bytes and exposes the matching public key.
 ///
 /// This is the abstraction the device signing key (DSK) is consumed through. Keeping it
-/// object-safe (`&dyn Signer`) lets a software key and a future Secure Enclave / StrongBox /
-/// TPM backend be used interchangeably at every signing site.
-pub trait Signer {
+/// object-safe (`&dyn Signer`) lets a software key and a Secure Enclave / StrongBox / TPM
+/// backend be used interchangeably at every signing site. `Send + Sync` so a `Box<dyn Signer>`
+/// can live inside the (`Mutex`-shared) [`Workspace`](crate::lifecycle::Workspace).
+pub trait Signer: Send + Sync {
     /// Sign `msg`, producing both signature halves (Ed25519 ‖ ML-DSA-65).
     ///
     /// Returns [`CryptoError`] only for a backend that can fail (hardware); the software

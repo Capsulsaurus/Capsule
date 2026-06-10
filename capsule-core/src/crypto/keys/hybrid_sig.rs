@@ -53,6 +53,16 @@ pub struct HybridSignature {
     ml: Vec<u8>,
 }
 
+impl HybridSignature {
+    /// Assemble a signature from its two halves. Used by the hardware-backed signer, which
+    /// produces the Ed25519 half inside a secure element and the ML-DSA-65 half in software.
+    /// The halves are not validated here — verification happens in
+    /// [`HybridVerifyingKey::verify`].
+    pub(crate) fn from_halves(ed: [u8; ED_SIG_LEN], ml: Vec<u8>) -> Self {
+        Self { ed, ml }
+    }
+}
+
 fn to_ml_seed(bytes: &[u8; SEED_LEN]) -> B32 {
     B32::try_from(&bytes[..]).expect("32-byte ML-DSA seed")
 }

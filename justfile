@@ -39,7 +39,7 @@ check: format-check lint-check test
 # Each maps 1:1 to a CI job so the workflow stays consistent with the justfile.
 
 [group('rust')]
-check-rust: format-check-rust lint-check-rust build-rust build-ffi lint-check-ffi gen-bindings
+check-rust: format-check-rust lint-check-rust build-rust build-ffi lint-check-ffi gen-bindings verify-examples
 
 [group('web')]
 check-web: format-check-web lint-check-web test-web build-web
@@ -111,6 +111,27 @@ gen-bindings:
     test -s "$out/kotlin/uniffi/capsule_core/capsule_core.kt"
     test -s "$out/swift/capsule_core.swift"
     echo "uniffi bindings written to $out"
+
+# ── HardwareSigner examples: existence + the Linux software smoke ─────────────
+# Each device-key backend ships a HardwareSigner reference example. CI verifies they exist and
+# runs the software-backend smoke (pure Rust — no uniffi/hardware/TPM). The native (Kotlin/Swift)
+# and TPM examples are exercised locally per their READMEs; see capsule-core-{kotlin,swift}.
+[group('rust')]
+verify-examples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for f in \
+        capsule-core/src/crypto/keys/software.rs \
+        capsule-core/src/crypto/keys/tpm.rs \
+        capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware/SoftwareSigner.kt \
+        capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware/StrongBoxSigner.kt \
+        capsule-core-swift/Sources/CapsuleHardware/SoftwareSigner.swift \
+        capsule-core-swift/Sources/CapsuleHardware/SecureEnclaveSigner.swift; do
+        test -f "$f" || { echo "missing HardwareSigner example: $f" >&2; exit 1; }
+    done
+    # The Linux software-signer smoke: the simplest backend (no uniffi foreign trait, no hardware).
+    cargo test -p capsule-core --features ffi --lib crypto::keys::software
+    echo "HardwareSigner examples present; software-signer smoke passed"
 
 # ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
 # capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links

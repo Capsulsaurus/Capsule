@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
+use crate::crypto::CryptoError;
 use crate::crypto::VerifyOutcome;
-use crate::crypto::keys::HybridVerifyingKey;
+use crate::crypto::keys::{HardwareBackedSigner, HardwareSigner, HybridVerifyingKey};
 use crate::crypto::primitives::DeviceTier;
 use crate::lifecycle::{LifecycleError, Workspace};
 
@@ -81,6 +82,36 @@ impl FfiWorkspace {
     #[uniffi::constructor]
     pub fn create(root: String, passphrase: Vec<u8>, tier: DeviceTier) -> FfiResult<Arc<Self>> {
         let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?;
+        Ok(Arc::new(Self {
+            inner: Mutex::new(ws),
+        }))
+    }
+
+    /// Create a workspace whose device signing key is **hardware-bound**: the Ed25519 half is
+    /// produced by `hardware` (a native Secure Enclave / StrongBox / TPM implementation of
+    /// [`HardwareSigner`]) under `key_alias`, while `ml_seed` (32 bytes) is the software-sealed
+    /// ML-DSA-65 `ξ` half. The published device key and every manifest are signed by the
+    /// composed hardware+software hybrid key.
+    #[uniffi::constructor]
+    pub fn create_with_hardware_signer(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: DeviceTier,
+        hardware: Arc<dyn HardwareSigner>,
+        key_alias: String,
+        ml_seed: Vec<u8>,
+    ) -> FfiResult<Arc<Self>> {
+        let seed: [u8; 32] = ml_seed
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::Malformed("ml_seed must be 32 bytes"))?;
+        let signer = HardwareBackedSigner::enroll(hardware, key_alias, &seed)?;
+        let ws = Workspace::create_with_hardware_signer(
+            &PathBuf::from(root),
+            &passphrase,
+            tier.params(),
+            Box::new(signer),
+        )?;
         Ok(Arc::new(Self {
             inner: Mutex::new(ws),
         }))
@@ -236,5 +267,44 @@ mod tests {
         // An unknown asset id surfaces NotFound.
         let missing = Uuid::now_v7().to_string();
         assert!(ws.read_plaintext(missing).is_err());
+    }
+
+    #[test]
+    fn ffi_hardware_backed_workspace_round_trips() {
+        use crate::crypto::keys::HardwareBackedSigner;
+        use crate::crypto::keys::hardware::MockHardwareSigner;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        std::fs::write(&img, b"\xFF\xD8\xFF hw ffi bytes").unwrap();
+
+        // Build the FFI wrapper over a hardware-backed Workspace (fast Argon2 for the test).
+        let hw = Arc::new(MockHardwareSigner::new([5; 32], false));
+        let signer = HardwareBackedSigner::enroll(hw, "device-dsk".into(), &[6; 32]).unwrap();
+        let ws = FfiWorkspace {
+            inner: Mutex::new(
+                Workspace::create_with_hardware_signer(
+                    lib.path(),
+                    b"pw",
+                    Argon2Params {
+                        mem_kib: 64,
+                        t_cost: 1,
+                        p_cost: 1,
+                    },
+                    Box::new(signer),
+                )
+                .unwrap(),
+            ),
+        };
+
+        let album = ws.create_album("Trip".into()).unwrap();
+        let asset = ws
+            .import_asset(album, img.to_string_lossy().into_owned())
+            .unwrap();
+        assert!(matches!(
+            ws.verify(asset).unwrap(),
+            FfiVerifyOutcome::Accept
+        ));
     }
 }

@@ -22,6 +22,11 @@ required-features = ["ffi-bindgen"]
 # additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
+# `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
+# `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
+# `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
+# TPM-capable host with `--features tpm`.
+tpm = ["dep:tss-esapi"]
 
 [dependencies]
 chrono = { workspace = true }
@@ -62,6 +67,12 @@ sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
 # build (CLI, server, tests) never compiles it.
 uniffi = { version = "0.31", optional = true }
+
+# ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
+# RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system
+# `libtss2`). Optional + off by default so neither the default nor the mobile FFI
+# build pulls in the TPM stack. See `crypto::keys::tpm`.
+tss-esapi = { version = "7", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
