@@ -28,7 +28,7 @@ test-coverage: test-coverage-rust
 # ── Aggregate: build ─────────────────────────────────────────────────────────
 
 [group('all')]
-build: build-rust build-web build-docs build-kotlin
+build: build-rust build-web build-docs build-kotlin build-swift
 
 # ── Aggregate: check (CI gate) ───────────────────────────────────────────────
 
@@ -255,7 +255,7 @@ format-swift:
         echo "Skipping swift format (not macOS)"
         exit 0
     fi
-    cd capsule-swift && swift run -c release --package-path BuildTools swiftformat .
+    cd capsule-swift && mise exec -- swiftformat .
 
 [group('swift')]
 format-check-swift:
@@ -264,7 +264,7 @@ format-check-swift:
         echo "Skipping swift format check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && swift run -c release --package-path BuildTools swiftformat --lint .
+    cd capsule-swift && mise exec -- swiftformat --lint .
 
 [group('swift')]
 lint-swift:
@@ -273,7 +273,7 @@ lint-swift:
         echo "Skipping swiftlint (not macOS)"
         exit 0
     fi
-    cd capsule-swift && swiftlint
+    cd capsule-swift && mise exec -- swiftlint --fix --quiet && mise exec -- swiftlint
 
 [group('swift')]
 lint-check-swift:
@@ -282,7 +282,45 @@ lint-check-swift:
         echo "Skipping swiftlint check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && swiftlint
+    cd capsule-swift && mise exec -- swiftlint --strict
+
+# Cross-compile the Rust core and package CapsuleCoreFFI.xcframework.
+[group('swift')]
+build-ffi-apple:
+    #!/usr/bin/env bash
+    if [ "$(uname)" != "Darwin" ]; then
+        echo "Skipping FFI build (not macOS)"
+        exit 0
+    fi
+    bash capsule-swift/Scripts/build-rust-ffi.sh
+
+# Generate the Xcode workspace with Tuist.
+[group('swift')]
+generate-swift:
+    #!/usr/bin/env bash
+    if [ "$(uname)" != "Darwin" ]; then
+        echo "Skipping tuist generate (not macOS)"
+        exit 0
+    fi
+    cd capsule-swift && mise exec -- tuist generate --no-open
+
+# One-shot: build the FFI xcframework, then generate the workspace.
+[group('swift')]
+setup-swift: build-ffi-apple generate-swift
+
+[group('swift')]
+build-swift: build-ffi-apple
+    #!/usr/bin/env bash
+    if [ "$(uname)" != "Darwin" ]; then
+        echo "Skipping swift build (not macOS)"
+        exit 0
+    fi
+    set -o pipefail
+    cd capsule-swift
+    mise exec -- tuist generate --no-open
+    xcodebuild -workspace Capsule.xcworkspace -scheme Capsule -configuration Debug \
+        -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build \
+        | mise exec -- xcbeautify
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 

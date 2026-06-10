@@ -109,8 +109,7 @@ fn decide(
 }
 
 fn hash_file(path: &Path) -> Result<String, std::io::Error> {
-    let bytes = std::fs::read(path)?;
-    Ok(crate::utils::hash::hash_bytes(&bytes))
+    crate::utils::hash::get_file_hash(path)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────

@@ -1,0 +1,62 @@
+name: Build iOS app
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - "capsule-swift/**"
+      - "capsule-core/**"
+      - "capsule-core-ffi/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/build-ios.yml"
+
+concurrency:
+  group: build-ios-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & test Capsule.app
+    # macOS 26 host: provides libswiftCompatibilitySpan.dylib natively, which the
+    # Xcode 26 / Swift 6.2 toolchain's prebuilt CLIs (tuist, xcbeautify) link
+    # against via @rpath. On macos-15 dyld can't find it and `tuist generate`
+    # aborts. See https://developer.apple.com/forums/thread/817488
+    runs-on: macos-26
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: capsule-swift
+
+      - name: Build Rust FFI xcframework
+        run: bash capsule-swift/Scripts/build-rust-ffi.sh
+
+      - name: Generate Xcode project
+        working-directory: capsule-swift
+        run: mise exec -- tuist generate --no-open
+
+      - name: Build & test
+        run: |
+          set -o pipefail
+          # Resolve an available iPhone simulator at runtime — the runner image's
+          # specific models churn (e.g. iPhone 16 → 17), so pinning a name breaks.
+          sim_id=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid')
+          echo "Using simulator $sim_id"
+          xcodebuild test \
+            -workspace capsule-swift/Capsule.xcworkspace \
+            -scheme Capsule \
+            -configuration Debug \
+            -destination "id=$sim_id" \
+            CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify

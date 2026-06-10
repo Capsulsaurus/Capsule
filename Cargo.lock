@@ -1261,6 +1261,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsule-core-ffi"
+version = "0.1.0"
+dependencies = [
+ "capsule-core",
+ "ciborium",
+ "log",
+ "oslog",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "uniffi",
+]
+
+[[package]]
 name = "capsule-media"
 version = "0.1.0"
 dependencies = [
@@ -1840,6 +1856,19 @@ dependencies = [
  "darling_core 0.21.3",
  "quote",
  "syn 2.0.111",
+]
+
+[[package]]
+name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
 ]
 
 [[package]]
@@ -3901,6 +3930,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bb71e1b3fa6ca1c61f383464aaf2bb0e2f8e772a1f01d486832464de363b951"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "oslog"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80d2043d1f61d77cb2f4b1f7b7b2295f40507f5f8e9d1c8bf10a1ca5f97a3969"
+dependencies = [
+ "cc",
+ "dashmap",
+ "log",
 ]
 
 [[package]]

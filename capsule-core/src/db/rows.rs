@@ -48,6 +48,17 @@ pub struct AssetTagRow {
     pub tag: String,
 }
 
+/// A user-defined album. Membership is tracked via `assets.album_id`
+/// (one album per asset, per the filesystem design doc).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AlbumRow {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub modified_at: i64,
+    pub cover_asset_id: Option<String>,
+}
+
 /// One cached, reclaimable representation of an asset. The eviction sweep ranks these by
 /// `last_accessed_at` (LRU) with `tier` as the tiebreaker; `pinned` and `is_owned_original`
 /// rows are exempt. `path` is the on-disk cache file the sweep deletes.
