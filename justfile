@@ -39,7 +39,7 @@ check: format-check lint-check test
 # Each maps 1:1 to a CI job so the workflow stays consistent with the justfile.
 
 [group('rust')]
-check-rust: format-check-rust lint-check-rust build-rust
+check-rust: format-check-rust lint-check-rust build-rust build-ffi lint-check-ffi gen-bindings
 
 [group('web')]
 check-web: format-check-web lint-check-web test-web build-web
@@ -71,6 +71,7 @@ lint-check-rust:
 [group('rust')]
 test-rust:
     cargo test --workspace --exclude capsule-sdk
+    cargo test -p capsule-core --features ffi
 
 [group('rust')]
 test-coverage-rust:
@@ -79,6 +80,37 @@ test-coverage-rust:
 [group('rust')]
 build-rust:
     cargo build --workspace --exclude capsule-sdk
+
+# ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
+# capsule-core exposes a minimal `FfiWorkspace` over uniffi behind the `ffi`
+# feature; `gen-bindings` emits the Kotlin/Swift sources from the compiled cdylib
+# (library mode). The `ffi-bindgen` feature adds uniffi's CLI for that generator.
+
+[group('rust')]
+build-ffi:
+    cargo build -p capsule-core --features ffi
+
+[group('rust')]
+lint-check-ffi:
+    cargo clippy -p capsule-core --features ffi -- -D warnings
+
+[group('rust')]
+gen-bindings:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build -p capsule-core --features ffi
+    ext="so"; [ "$(uname)" = "Darwin" ] && ext="dylib"
+    lib="target/debug/libcapsule_core.${ext}"
+    out="target/bindings"
+    rm -rf "$out"
+    for lang in kotlin swift; do
+        cargo run -q -p capsule-core --features ffi-bindgen --bin uniffi-bindgen -- \
+            generate --library "$lib" --language "$lang" --out-dir "$out/$lang"
+    done
+    # Smoke: both languages must have produced non-empty sources.
+    test -s "$out/kotlin/uniffi/capsule_core/capsule_core.kt"
+    test -s "$out/swift/capsule_core.swift"
+    echo "uniffi bindings written to $out"
 
 # ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
 # capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links
@@ -115,7 +147,7 @@ build-apple:
     if [ "$(uname)" != "Darwin" ]; then echo "Skipping Apple targets (not macOS)"; exit 0; fi
     for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
         echo ":: building capsule-core for $t"
-        cargo build -p capsule-core --target "$t"
+        cargo build -p capsule-core --features ffi --target "$t"
     done
 
 [group('rust')]
@@ -124,18 +156,18 @@ build-android:
     set -euo pipefail
     if ! command -v cargo-ndk >/dev/null 2>&1; then echo "build-android: cargo-ndk missing; run 'just targets-add'" >&2; exit 1; fi
     if [ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then echo "build-android: set ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) to your Android NDK" >&2; exit 1; fi
-    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 26 build -p capsule-core
+    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 26 build -p capsule-core --features ffi
 
 [group('rust')]
 build-linux-cross:
     #!/usr/bin/env bash
     set -euo pipefail
     if ! command -v cross >/dev/null 2>&1; then echo "build-linux-cross: cross not installed; run 'cargo install cross'" >&2; exit 1; fi
-    cross build -p capsule-core --target aarch64-unknown-linux-gnu
+    cross build -p capsule-core --features ffi --target aarch64-unknown-linux-gnu
 
 [group('rust')]
 build-windows:
-    cargo build -p capsule-core --target x86_64-pc-windows-msvc
+    cargo build -p capsule-core --features ffi --target x86_64-pc-windows-msvc
 
 [group('rust')]
 build-targets: build-apple build-android build-linux-cross

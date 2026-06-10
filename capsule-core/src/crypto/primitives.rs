@@ -67,6 +67,7 @@ pub mod info {
 /// Device hardware tier, selecting Argon2id cost parameters at *wrap* time. The chosen
 /// parameters are recorded in the wrapped blob, so unwrap works on any tier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Enum))]
 pub enum DeviceTier {
     /// ≤ 2 GiB total RAM (entry-level Android / embedded).
     LowRam,

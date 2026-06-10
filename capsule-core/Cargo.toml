@@ -11,6 +11,18 @@ publish.workspace = true
 # so host builds also emit these artifacts — an accepted, cheap cost.
 crate-type = ["lib", "cdylib", "staticlib"]
 
+# Generates the Kotlin/Swift bindings from the compiled cdylib (library mode). Built
+# only with `--features ffi-bindgen`, so the `cli` deps never enter the mobile artifact.
+[[bin]]
+name = "uniffi-bindgen"
+required-features = ["ffi-bindgen"]
+
+[features]
+# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). `ffi-bindgen`
+# additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
+ffi = ["dep:uniffi"]
+ffi-bindgen = ["ffi", "uniffi/cli"]
+
 [dependencies]
 chrono = { workspace = true }
 ciborium = "0.2"
@@ -45,6 +57,11 @@ x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing de
 getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
+
+# ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
+# uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
+# build (CLI, server, tests) never compiles it.
+uniffi = { version = "0.31", optional = true }
 
 [dev-dependencies]
 tempfile = "3"

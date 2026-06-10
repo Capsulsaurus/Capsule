@@ -53,6 +53,7 @@ const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum LifecycleError {
     /// Filesystem error.
     #[error("io: {0}")]

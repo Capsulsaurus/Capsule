@@ -13,3 +13,11 @@ pub mod models;
 pub mod sidecar;
 pub mod utils;
 pub mod validation;
+
+/// uniffi-generated bindings surface for Kotlin/Swift (`ffi` feature). The exported API is a
+/// thin wrapper over [`lifecycle::Workspace`]; see [`ffi`].
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+#[cfg(feature = "ffi")]
+uniffi::setup_scaffolding!();
