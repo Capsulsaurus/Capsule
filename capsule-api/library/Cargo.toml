@@ -14,7 +14,7 @@ capsule-api-entity = { path = "../entity" }
 capsule-api-environment = { path = "../environment", features = ["graphql"] }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service" }
-async-graphql = { version = "7.0.17", features = [
+async-graphql = { version = "7.2.1", features = [
     "apollo_persisted_queries",
     "chrono",
     # "dataloader", // Disabled due to bug: <https://github.com/async-graphql/async-graphql/issues/1726>
@@ -47,3 +47,4 @@ base64 = { workspace = true }
 secrecy = { workspace = true }
 nanoid = { workspace = true }
 argon2 = { workspace = true }
+async-stream = "0.3.6"
