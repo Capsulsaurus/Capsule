@@ -17,8 +17,9 @@
 //!   regenerated deterministically from the manifest's recorded nonce prefix.
 //!
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
-//! encryption produces the artifacts that cross a boundary. Album epoch rotation (the MLS
-//! ceremony) is deferred — albums here are single-epoch (see `DEFERRED.md`).
+//! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
+//! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
+//! add/remove) remains deferred (see `DEFERRED.md`).
 //!
 //! [`verify_asset`]: crate::crypto::verify_asset
 
@@ -73,7 +74,7 @@ pub enum LifecycleError {
 
 type Result<T> = std::result::Result<T, LifecycleError>;
 
-/// One album's key material (single-epoch in this offline core).
+/// One album's key material across one or more epochs.
 pub struct AlbumKeys {
     /// Album id.
     pub album_id: Uuid,
@@ -85,7 +86,7 @@ pub struct AlbumKeys {
     pub write_tier: HybridSigningKey,
     /// Per-album admin signing key.
     pub admin: HybridSigningKey,
-    /// The current (and only) epoch.
+    /// The current (highest) epoch — the one new imports are written under.
     pub current_epoch: u32,
 }
 
@@ -239,6 +240,39 @@ impl Workspace {
         album_id
     }
 
+    /// Rotate `album_id` to a fresh epoch: mint AMK_v{n+1} and a new write-tier key, have the
+    /// album admin attest the new epoch, and advance the current epoch — the design's
+    /// "AMK bump + write-tier rotation are one commit" atomicity. The admin key (the ledger
+    /// root) is stable across epochs, and existing assets stay verifiable under their original
+    /// epoch. Returns the new epoch. Membership changes / the MLS `Welcome` flow remain deferred
+    /// (see `DEFERRED.md`).
+    pub fn rotate_epoch(&mut self, album_id: Uuid) -> Result<u32> {
+        let next = {
+            let album = self
+                .albums
+                .get_mut(&album_id)
+                .ok_or_else(|| LifecycleError::NotFound(format!("album {album_id}")))?;
+            let next = album.current_epoch + 1;
+            album.amks.insert(next, *Amk::generate().as_bytes());
+            album.write_tier = HybridSigningKey::generate();
+            album.current_epoch = next;
+            next
+        };
+        // Disjoint fields: read the album's keys while mutably attesting in its authority.
+        let album = self.albums.get(&album_id).expect("album just mutated");
+        let authority = self
+            .authorities
+            .get_mut(&album_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("authority {album_id}")))?;
+        authority.attest_epoch(
+            &album.admin,
+            AmkVersion(next),
+            &album.write_tier.verifying_key(),
+            true,
+        );
+        Ok(next)
+    }
+
     fn album(&self, album_id: &Uuid) -> Result<&AlbumKeys> {
         self.albums
             .get(album_id)
@@ -260,8 +294,11 @@ impl Workspace {
         ))
     }
 
-    fn file_key(&self, album: &AlbumKeys, file_id: &Uuid) -> [u8; 32] {
-        let amk = Amk::from_bytes(album.amks[&album.current_epoch]);
+    /// Derive the per-file key under a *specific* epoch's AMK. Callers pass the epoch the asset
+    /// was written under (`amk_version`), never assuming the album's current epoch — so an asset
+    /// imported before a rotation still derives the key it was encrypted with.
+    fn file_key(&self, album: &AlbumKeys, epoch: u32, file_id: &Uuid) -> [u8; 32] {
+        let amk = Amk::from_bytes(album.amks[&epoch]);
         amk.derive_file_key(file_id)
     }
 
@@ -312,7 +349,7 @@ impl Workspace {
         let capture_utc = Utc::now().timestamp();
 
         let album = self.album(&album_id)?;
-        let file_key = self.file_key(album, &asset_id);
+        let file_key = self.file_key(album, album.current_epoch, &asset_id);
         let (enc, ciphertext) = stream::encrypt_asset_vec_full(&file_key, &plaintext);
 
         let core = ManifestCore {
@@ -401,7 +438,7 @@ impl Workspace {
         let head = &asset.chain.records().last().unwrap().manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let file_key = self.file_key(album, &head.core.file_id);
+        let file_key = self.file_key(album, head.core.amk_version.0, &head.core.file_id);
         let (_, ciphertext) =
             stream::encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
 
@@ -517,21 +554,19 @@ impl Workspace {
             let head = &asset.chain.records().last().unwrap().manifest;
             let plaintext =
                 fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-            let file_key = self.file_key(album, &head.core.file_id);
+            let epoch = head.core.amk_version.0;
+            let file_key = self.file_key(album, epoch, &head.core.file_id);
             let (_, ciphertext) = stream::encrypt_asset_vec_with_prefix(
                 &file_key,
                 head.core.nonce_prefix,
                 &plaintext,
             );
-            let amk = Amk::from_bytes(album.amks[&album.current_epoch]);
+            let amk = Amk::from_bytes(album.amks[&epoch]);
             let metadata_blob = seal_blob(
                 &amk.derive_blob_key(&asset.asset_id),
                 &asset.sidecar.to_canonical_vec(),
             );
-            amks.insert(
-                (asset.album_id, head.core.amk_version.0),
-                album.amks[&album.current_epoch],
-            );
+            amks.insert((asset.album_id, epoch), album.amks[&epoch]);
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
@@ -756,6 +791,59 @@ mod tests {
         assert!(
             ws3.import_backup(&backup_path, b"recovery-pass", &imposter)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn epoch_rotation_keeps_old_assets_verifiable_and_backs_up() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let a = src.path().join("a.jpg");
+        let b = src.path().join("b.jpg");
+        fs::write(&a, b"\xFF\xD8\xFF first photo, written at epoch 1").unwrap();
+        fs::write(&b, b"\xFF\xD8\xFF second photo, written at epoch 2").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+
+        // Import at epoch 1, rotate the album, import at epoch 2.
+        let id_a = ws.import_asset(album, &a).unwrap();
+        assert_eq!(ws.rotate_epoch(album).unwrap(), 2);
+        let id_b = ws.import_asset(album, &b).unwrap();
+
+        // Each asset recorded the epoch it was written under...
+        let epoch_of = |ws: &Workspace, id| {
+            ws.asset(id).unwrap().chain.records()[0]
+                .manifest
+                .core
+                .amk_version
+        };
+        assert_eq!(epoch_of(&ws, &id_a), AmkVersion(1));
+        assert_eq!(epoch_of(&ws, &id_b), AmkVersion(2));
+        // ...and BOTH still verify — the pre-rotation asset under its original epoch key (the
+        // regression guard for the `current_epoch` file-key bug).
+        assert_eq!(ws.verify(&id_a).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(ws.verify(&id_b).unwrap(), VerifyOutcome::Accept);
+
+        // A cross-epoch backup escrows each asset's own-epoch AMK; restore into a fresh library
+        // is byte-equal for both (guards the export file-key / blob-key / escrow-value epochs).
+        let backup_path = src.path().join("backup.tar");
+        ws.export_backup(&backup_path, b"recovery-pass").unwrap();
+        let exporter_pub = ws.exporter_verifying_key();
+
+        let fresh = TempDir::new().unwrap();
+        let mut ws2 = fast_workspace(fresh.path());
+        let added = ws2
+            .import_backup(&backup_path, b"recovery-pass", &exporter_pub)
+            .unwrap();
+        assert_eq!(added, 2);
+        assert_eq!(
+            ws2.read_plaintext(&id_a).unwrap(),
+            ws.read_plaintext(&id_a).unwrap()
+        );
+        assert_eq!(
+            ws2.read_plaintext(&id_b).unwrap(),
+            ws.read_plaintext(&id_b).unwrap()
         );
     }
 }

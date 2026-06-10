@@ -14,8 +14,9 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   standalone metadata-blob), **hybrid Ed25519 + ML-DSA-65** signatures (both halves required),
   **X-Wing (X25519 + ML-KEM-768)** hybrid DEK (known-answer-validated against
   `draft-connolly-cfrg-xwing-kem`).
-- **Key hierarchy** — master key, default-album-id derivation, AMKs + per-file/blob keys,
-  software keystore (account ↔ encrypted `AccountFile`), signed device directory.
+- **Key hierarchy** — master key, default-album-id derivation, multi-epoch AMKs (offline
+  rotation) + per-file/blob keys, software keystore (account ↔ encrypted `AccountFile`), signed
+  device directory.
 - **Encryption** — STREAM asset encryption with independent ranged-chunk decryption;
   exact metadata-blob wire format.
 - **Provenance** — signed `AssetManifest`/`DerivativeManifest`, append-only hash-chained
@@ -39,9 +40,13 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   consumes (epoch ceiling, per-epoch write-tier pubkey, AMK presence, admin-chain validity).
   `ReferenceAuthority` (an admin-signed epoch ledger) stands in for live MLS and is honored
   only via `&dyn AlbumAuthority`, so an `OpenMlsAuthority` drops in unchanged.
-- **Consequence:** albums are **single-epoch** in the offline core. Epoch rotation,
-  membership add/remove, the `Welcome`/history-delivery flow, and the album upgrade ceremony
-  are deferred with OpenMLS.
+- **Now implemented offline:** **multi-epoch rotation** via `ReferenceAuthority` —
+  `Workspace::rotate_epoch` mints AMK_v{n+1} + a fresh write-tier key and admin-attests the new
+  epoch (assets imported before a rotation stay verifiable under their original epoch), plus a
+  serializable, admin-signed `SignedEpochLedger` (`to_ledger`/`from_ledger`, whose admin chain is
+  re-verified on reload; the local-only AMK-presence flag is restored out-of-band).
+- **Still deferred with OpenMLS:** membership add/remove, the `Welcome`/history-delivery flow,
+  and the album upgrade ceremony — these need live MLS group state, not just the epoch ledger.
 
 ### Hardware-bound key storage
 - Device keys are kept in a **software keystore** (private keys sealed under the
