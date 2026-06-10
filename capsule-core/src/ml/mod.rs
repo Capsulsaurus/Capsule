@@ -25,7 +25,7 @@ pub mod video;
 
 pub use orchestrator::{
     BatchMode, OrchestratorError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,
-    semantic_search, should_pause_for_heat,
+    regenerate_embeddings, semantic_search, should_pause_for_heat,
 };
 pub use registry::{
     DistanceMetric, EmbeddingDim, ModelId, ModelRow, ModelVersion, Registry, RegistryError,
