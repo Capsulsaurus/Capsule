@@ -43,10 +43,11 @@ use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::crypto::{CryptoError, authority::ReferenceAuthority};
-use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
+use crate::db::{AiTagRow, AssetRow, CachedRepresentationRow, DatabaseDriver};
 use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter};
-use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use crate::ml::{ModelId, Registry};
+use crate::sidecar::sidecar_v1::{AiTag, SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
 const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
@@ -410,10 +411,29 @@ impl Workspace {
             .db
             .upsert_asset(&asset_row_from_state(asset))
             .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        let uuid = asset.asset_id.to_string();
         let tags: Vec<String> = asset.sidecar.tags_user.value().into_iter().collect();
         self.library
             .db
-            .replace_asset_tags(&asset.asset_id.to_string(), &tags)
+            .replace_asset_tags(&uuid, &tags)
+            .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        // Project the structurally-separate AI tags into their own index table (the sidecar
+        // OR-set stays the source of truth; this is a rebuildable query cache).
+        let ai_rows: Vec<AiTagRow> = asset
+            .sidecar
+            .tags_ai
+            .value()
+            .into_iter()
+            .map(|t| AiTagRow {
+                uuid: uuid.clone(),
+                tag: t.tag,
+                model_id: t.model_id,
+                model_version: t.model_version,
+            })
+            .collect();
+        self.library
+            .db
+            .replace_ai_tags(&uuid, &ai_rows)
             .map_err(|e| LifecycleError::Db(e.to_string()))
     }
 
@@ -564,7 +584,7 @@ impl Workspace {
         asset_id: &Uuid,
         action: Action,
         retention_until: Option<String>,
-        mutate_sidecar: impl FnOnce(&mut SidecarV1, AddId),
+        mutate_sidecar: impl FnOnce(&mut SidecarV1, &mut Counter),
     ) -> Result<()> {
         let album_id = self
             .assets
@@ -582,9 +602,10 @@ impl Workspace {
             .clone();
         let album = self.album(&album_id)?;
         let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until);
-        let add_id = self.counter.issue();
 
         {
+            // Disjoint field borrows: the asset's state and the device counter. The closure may
+            // issue several `add_id`s (e.g. one per AI tag added in this single update).
             let asset = self.assets.get_mut(asset_id).unwrap();
             asset
                 .chain
@@ -595,7 +616,7 @@ impl Workspace {
                 })
                 .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
             let new_head = asset.chain.head().unwrap();
-            mutate_sidecar(&mut asset.sidecar, add_id);
+            mutate_sidecar(&mut asset.sidecar, &mut self.counter);
             asset.sidecar.provenance_chain_hash = new_head;
             asset.sidecar.signature = None;
             asset.sidecar.sign(&self.account.user_ik);
@@ -612,8 +633,8 @@ impl Workspace {
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.
     pub fn tag_add(&mut self, asset_id: &Uuid, tag: &str) -> Result<()> {
         let tag = tag.to_string();
-        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, add_id| {
-            s.tags_user.add(tag, add_id);
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, counter| {
+            s.tags_user.add(tag, counter.issue());
         })
     }
 
@@ -622,9 +643,115 @@ impl Workspace {
         let caption = caption.to_string();
         let device = self.account.device.device_id;
         let ts = now_rfc3339();
-        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
-            s.caption.set(caption, ts, device);
+        self.append_lifecycle(
+            asset_id,
+            Action::MetadataUpdate,
+            None,
+            move |s, _counter| {
+                s.caption.set(caption, ts, device);
+            },
+        )
+    }
+
+    // ── AI metadata containment (SSoT: metadata § Tag Provenance, ai § AI Output Containment) ──
+
+    /// Add AI-suggested tags to the asset's `tags_ai` OR-set — a namespace **structurally**
+    /// separate from `tags_user`, so an AI suggestion can never overwrite a user tag. Emits one
+    /// `metadata-update`; each tag gets a fresh `add_id` so it can later be dismissed individually.
+    /// A no-op (no record) if `tags` is empty.
+    pub fn add_ai_tags(&mut self, asset_id: &Uuid, tags: Vec<AiTag>) -> Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, counter| {
+            for tag in tags {
+                s.tags_ai.add(tag, counter.issue());
+            }
         })
+    }
+
+    /// The asset's current AI tags paired with their `add_id`s — the surface a client uses to
+    /// dismiss or promote a specific suggestion.
+    pub fn ai_tags(&self, asset_id: &Uuid) -> Result<Vec<(AddId, AiTag)>> {
+        Ok(self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .tags_ai
+            .entries())
+    }
+
+    /// Dismiss an AI tag: an OR-set remove on `tags_ai` keyed by its `add_id`, emitting a
+    /// `metadata-update`. Rejects an `add_id` never observed locally (a fabricated remove) rather
+    /// than silently no-oping.
+    pub fn dismiss_ai_tag(&mut self, asset_id: &Uuid, add_id: AddId) -> Result<()> {
+        let observed = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .tags_ai
+            .observed(&add_id);
+        if !observed {
+            return Err(LifecycleError::NotFound(format!(
+                "unobserved ai-tag add_id {add_id:?}"
+            )));
+        }
+        self.append_lifecycle(
+            asset_id,
+            Action::MetadataUpdate,
+            None,
+            move |s, _counter| {
+                s.tags_ai
+                    .remove(add_id)
+                    .expect("add_id observed above; remove cannot fail");
+            },
+        )
+    }
+
+    /// Promote an AI tag to a user tag: copy its text into `tags_user` with a **fresh user-scoped
+    /// `add_id`**, leaving the AI entry intact (still independently dismissable). An explicit,
+    /// signed lifecycle operation — never automatic.
+    pub fn promote_ai_tag(&mut self, asset_id: &Uuid, tag: &str) -> Result<()> {
+        let present = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .tags_ai
+            .value()
+            .iter()
+            .any(|t| t.tag == tag);
+        if !present {
+            return Err(LifecycleError::NotFound(format!("ai tag '{tag}'")));
+        }
+        let tag = tag.to_string();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, counter| {
+            s.tags_user.add(tag, counter.issue());
+        })
+    }
+
+    /// The asset's AI tags that are **current** under `registry` — their `(model_id,
+    /// model_version)` is the canonical pair for the model's task. Stale suggestions (a superseded
+    /// model version) are excluded until regenerated, mirroring the vector-index stale rule. The
+    /// sidecar retains every AI tag regardless (it is the source of truth).
+    pub fn current_ai_tags(&self, registry: &Registry, asset_id: &Uuid) -> Result<Vec<AiTag>> {
+        let sidecar = &self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar;
+        Ok(sidecar
+            .tags_ai
+            .value()
+            .into_iter()
+            .filter(|t| {
+                registry
+                    .row_for_id(&ModelId::from(t.model_id.as_str()))
+                    .is_some_and(|row| row.canonical_version.as_str() == t.model_version)
+            })
+            .collect())
     }
 
     /// Soft-delete: emit a `delete` record carrying a signed retention window.
@@ -1001,5 +1128,137 @@ mod tests {
         assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
         ws.restore(&id).unwrap();
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    fn ws_with_asset(lib: &TempDir, src: &TempDir) -> (Workspace, Uuid) {
+        let img = src.path().join("p.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF ai containment test bytes \x00\x01").unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("A");
+        let id = ws.import_asset(album, &img).unwrap();
+        (ws, id)
+    }
+
+    fn ai(tag: &str) -> AiTag {
+        AiTag {
+            tag: tag.into(),
+            model_id: "mobileclip-b".into(),
+            model_version: "1".into(),
+        }
+    }
+
+    #[test]
+    fn ai_tags_live_in_a_separate_namespace_and_promotion_is_explicit() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = ws_with_asset(&lib, &src);
+        let uuid = id.to_string();
+
+        ws.add_ai_tags(&id, vec![ai("beach"), ai("sunset")])
+            .unwrap();
+
+        // AI tags land in tags_ai, never tags_user.
+        let st = ws.asset(&id).unwrap();
+        assert!(st.sidecar.tags_user.value().is_empty());
+        let ai_vals: Vec<_> = st
+            .sidecar
+            .tags_ai
+            .value()
+            .into_iter()
+            .map(|t| t.tag)
+            .collect();
+        assert!(ai_vals.contains(&"beach".to_string()) && ai_vals.contains(&"sunset".to_string()));
+        // The DB projects them into the separate ai_tags table; asset_tags stays empty.
+        assert!(ws.db().tags_for(&uuid).unwrap().is_empty());
+        assert_eq!(ws.db().ai_tags_for(&uuid).unwrap().len(), 2);
+
+        // Promote "beach" → a user tag with a FRESH user-scoped add_id; AI entry remains.
+        let beach_ai_add_id = ws
+            .ai_tags(&id)
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t.tag == "beach")
+            .unwrap()
+            .0;
+        ws.promote_ai_tag(&id, "beach").unwrap();
+
+        let st = ws.asset(&id).unwrap();
+        assert!(st.sidecar.tags_user.value().contains("beach"));
+        let beach_user_add_id = st
+            .sidecar
+            .tags_user
+            .entries()
+            .into_iter()
+            .find(|(_, t)| t.as_str() == "beach")
+            .unwrap()
+            .0;
+        assert_ne!(
+            beach_user_add_id, beach_ai_add_id,
+            "promotion mints a fresh user-scoped add_id, not the AI tag's"
+        );
+        // The AI entry is untouched and still independently present.
+        assert!(st.sidecar.tags_ai.value().iter().any(|t| t.tag == "beach"));
+        assert_eq!(ws.db().tags_for(&uuid).unwrap(), vec!["beach".to_string()]);
+        assert_eq!(ws.db().ai_tags_for(&uuid).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn dismiss_ai_tag_removes_by_add_id_and_rejects_unobserved() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = ws_with_asset(&lib, &src);
+        ws.add_ai_tags(&id, vec![ai("beach"), ai("sunset")])
+            .unwrap();
+
+        let beach_id = ws
+            .ai_tags(&id)
+            .unwrap()
+            .into_iter()
+            .find(|(_, t)| t.tag == "beach")
+            .unwrap()
+            .0;
+        ws.dismiss_ai_tag(&id, beach_id).unwrap();
+
+        let remaining: Vec<_> = ws
+            .asset(&id)
+            .unwrap()
+            .sidecar
+            .tags_ai
+            .value()
+            .into_iter()
+            .map(|t| t.tag)
+            .collect();
+        assert_eq!(remaining, vec!["sunset".to_string()]);
+        assert_eq!(ws.db().ai_tags_for(&id.to_string()).unwrap().len(), 1);
+
+        // A fabricated add_id (never observed) is rejected, not silently no-oped.
+        let bogus = AddId {
+            device: Uuid::from_u128(0xBAD),
+            counter: 999,
+        };
+        assert!(ws.dismiss_ai_tag(&id, bogus).is_err());
+    }
+
+    #[test]
+    fn ai_tags_are_provenance_tracked_and_stale_excluded_after_version_bump() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = ws_with_asset(&lib, &src);
+        let before = ws.asset(&id).unwrap().chain.records().len();
+
+        ws.add_ai_tags(&id, vec![ai("beach")]).unwrap();
+        // Emitted exactly one metadata-update provenance record.
+        let st = ws.asset(&id).unwrap();
+        assert_eq!(st.chain.records().len(), before + 1);
+        assert_eq!(
+            st.chain.records().last().unwrap().manifest.core.action,
+            Action::MetadataUpdate
+        );
+
+        // Current under the canonical registry...
+        let mut reg = Registry::canonical();
+        assert_eq!(ws.current_ai_tags(&reg, &id).unwrap().len(), 1);
+        // ...but a model swap (version bump) flags it stale → excluded from the current surface,
+        // while the sidecar still retains it (source of truth).
+        reg.set_canonical_version(crate::ml::TaskKind::SemanticSearch, "2".into());
+        assert!(ws.current_ai_tags(&reg, &id).unwrap().is_empty());
+        assert_eq!(ws.asset(&id).unwrap().sidecar.tags_ai.value().len(), 1);
     }
 }

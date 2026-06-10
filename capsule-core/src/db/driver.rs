@@ -1,4 +1,4 @@
-use crate::db::rows::{AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
+use crate::db::rows::{AiTagRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 use crate::db::schema;
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -352,6 +352,40 @@ impl DatabaseDriver {
         let rows = stmt.query_map(params![uuid], |r| r.get::<_, String>(0))?;
         rows.collect()
     }
+
+    // ── AI tags (ai_tags index — structurally separate from user tags) ────────────
+
+    /// Replace the indexed AI tags for `uuid` with `rows` (the asset's current `tags_ai` value).
+    /// A projection of the sidecar OR-set; the sidecar remains the source of truth.
+    pub fn replace_ai_tags(&self, uuid: &str, rows: &[AiTagRow]) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM ai_tags WHERE uuid = ?1", params![uuid])?;
+        for row in rows {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO ai_tags (uuid, tag, model_id, model_version) \
+                 VALUES (?1, ?2, ?3, ?4)",
+                params![row.uuid, row.tag, row.model_id, row.model_version],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The indexed AI tags for `uuid`, ordered by tag then model.
+    pub fn ai_tags_for(&self, uuid: &str) -> Result<Vec<AiTagRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, tag, model_id, model_version FROM ai_tags \
+             WHERE uuid = ?1 ORDER BY tag, model_id",
+        )?;
+        let rows = stmt.query_map(params![uuid], |r| {
+            Ok(AiTagRow {
+                uuid: r.get(0)?,
+                tag: r.get(1)?,
+                model_id: r.get(2)?,
+                model_version: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 fn now_secs() -> i64 {
@@ -431,7 +465,7 @@ mod tests {
     fn test_init_schema_idempotent() {
         let db = DatabaseDriver::open_in_memory().unwrap();
         db.init_schema().unwrap(); // second call — should not fail
-        assert_eq!(db.schema_version().unwrap(), 3);
+        assert_eq!(db.schema_version().unwrap(), 4);
     }
 
     #[test]

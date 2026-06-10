@@ -1,4 +1,4 @@
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub const DDL: &str = r#"
 PRAGMA journal_mode = WAL;
@@ -50,6 +50,21 @@ CREATE TABLE IF NOT EXISTS asset_tags (
     tag   TEXT NOT NULL,
     PRIMARY KEY (uuid, tag)
 );
+
+-- AI-suggested tags, projected from the sidecar `tags_ai` OR-set. A structurally separate table
+-- from user tags: AI output lands in its own namespace and can never collide with or overwrite a
+-- user tag. Each row carries its embedding-provenance (model_id, model_version) so a superseded
+-- model version is identifiable. Derived from the sidecar (SSoT); re-synced on every edit.
+-- SSoT: design/metadata § Tag Provenance and Namespacing, design/ai § AI Output Containment.
+CREATE TABLE IF NOT EXISTS ai_tags (
+    uuid          TEXT NOT NULL,
+    tag           TEXT NOT NULL,
+    model_id      TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    PRIMARY KEY (uuid, tag, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_tags_tag ON ai_tags(tag);
 
 CREATE INDEX IF NOT EXISTS idx_assets_hash       ON assets(hash_sha256);
 CREATE INDEX IF NOT EXISTS idx_assets_utc        ON assets(capture_utc, capture_timestamp);
