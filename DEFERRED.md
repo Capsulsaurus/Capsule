@@ -60,10 +60,19 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   `FfiWorkspace.createWithHardwareSigner` build a workspace whose directory + manifests are
   hardware-signed; the in-process round-trip + non-exportability contract (`keys.md` Validation)
   runs in CI against a mock element.
-- **Still deferred (per-platform glue):** the real Secure Enclave / StrongBox / TPM adapters and
-  their on-device smoke tests, wiring the generated bindings into the Xcode/Gradle builds, and
-  hardware binding of the device **encryption** key (DEK). Implementer guide:
-  [`capsule-core/HARDWARE_KEYS.md`](capsule-core/HARDWARE_KEYS.md).
+- **Reference adapters + standalone harnesses — now implemented.** Every backend implements the
+  `HardwareSigner` contract as a runnable, locally-testable example (the prose `HARDWARE_KEYS.md`
+  guide is gone — the code is the example): a software fallback
+  (`capsule_core::crypto::keys::SoftwareSigner`, smoke-tested in CI on Linux), a desktop TPM 2.0
+  reference (`crypto::keys::tpm`, behind the `tpm` feature, via `tss-esapi`), and Secure Enclave /
+  StrongBox adapters in standalone harness packages (`capsule-core-swift`, `capsule-core-kotlin`)
+  that link the compiled core and run a per-language smoke test (see each package's README; the
+  Swift `swift test` runs the real Secure Enclave on Apple-Silicon Macs).
+- **Still deferred (per-platform glue):** the three hardware backends (Secure Enclave, StrongBox,
+  TPM) all expose ECDSA-P256, not Ed25519, so they need the **P-256 hybrid-DSK variant** before
+  they compose into the device key — only the software backend integrates end-to-end today; wiring
+  the generated bindings + `cdylib`/`staticlib` into the real Xcode / Gradle apps; on-device CI;
+  the Windows TPM (TBS) path; and hardware binding of the device **encryption** key (DEK).
 
 ### Networked server/client
 - All transport is out of scope here: the HTTP/TUS upload server, GraphQL resolvers, the
