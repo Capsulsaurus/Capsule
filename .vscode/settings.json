@@ -1,3 +1,35 @@
 {
-    "java.configuration.updateBuildConfiguration": "disabled"
+    "java.configuration.updateBuildConfiguration": "disabled",
+    // Run clippy (not just check) with the same curated lint set the justfile/CI enforce,
+    // so the editor flags the same issues live. Keep in sync with `clippy_flags` in the justfile.
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": [
+        "--",
+        "-W", "clippy::pedantic",
+        "-W", "unreachable_pub",
+        "-W", "unused_qualifications",
+        "-D", "warnings",
+        "-A", "clippy::must_use_candidate",
+        "-A", "clippy::missing_errors_doc",
+        "-A", "clippy::missing_panics_doc",
+        "-A", "clippy::doc_markdown",
+        "-A", "clippy::cast_possible_truncation",
+        "-A", "clippy::cast_possible_wrap",
+        "-A", "clippy::cast_sign_loss",
+        "-A", "clippy::cast_lossless",
+        "-A", "clippy::cast_precision_loss",
+        "-A", "clippy::module_name_repetitions",
+        "-A", "clippy::similar_names",
+        "-A", "clippy::too_many_lines",
+        "-A", "clippy::struct_excessive_bools",
+        "-A", "clippy::unused_self",
+        "-A", "clippy::return_self_not_must_use",
+        "-A", "clippy::needless_pass_by_value",
+        "-A", "clippy::trivially_copy_pass_by_ref",
+        "-A", "clippy::unnecessary_wraps",
+        "-A", "clippy::wildcard_imports",
+        "-D", "clippy::unwrap_used",
+        "-D", "clippy::dbg_macro",
+        "-D", "clippy::todo"
+    ]
 }

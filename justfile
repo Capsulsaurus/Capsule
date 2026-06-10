@@ -1,6 +1,12 @@
 # Capsule monorepo task runner
 # Plain name = auto-fix, -check suffix = verify-only
 
+# Curated clippy lint set, applied `--workspace` so every crate gets the identical rules
+# (no per-crate `[lints]` opt-in/opt-out). Levels live here; thresholds in clippy.toml.
+# Enables `pedantic` then allows the doc/cast/ergonomics noise; keeps the high-value checks
+# (unwrap_used denied, mechanical cleanups) plus a couple of rustc lints.
+clippy_flags := "-W clippy::pedantic -W unreachable_pub -W unused_qualifications -D warnings -A clippy::must_use_candidate -A clippy::missing_errors_doc -A clippy::missing_panics_doc -A clippy::doc_markdown -A clippy::cast_possible_truncation -A clippy::cast_possible_wrap -A clippy::cast_sign_loss -A clippy::cast_lossless -A clippy::cast_precision_loss -A clippy::module_name_repetitions -A clippy::similar_names -A clippy::too_many_lines -A clippy::struct_excessive_bools -A clippy::unused_self -A clippy::return_self_not_must_use -A clippy::needless_pass_by_value -A clippy::trivially_copy_pass_by_ref -A clippy::unnecessary_wraps -A clippy::wildcard_imports -D clippy::unwrap_used -D clippy::dbg_macro -D clippy::todo"
+
 # ── Aggregate: format ────────────────────────────────────────────────────────
 
 [group('all')]
@@ -62,11 +68,11 @@ format-check-rust:
 
 [group('rust')]
 lint-rust:
-    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty
+    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty -- {{ clippy_flags }}
 
 [group('rust')]
 lint-check-rust:
-    cargo clippy --workspace --exclude capsule-sdk -- -D warnings
+    cargo clippy --workspace --exclude capsule-sdk -- {{ clippy_flags }}
 
 [group('rust')]
 test-rust:
@@ -92,7 +98,7 @@ build-ffi:
 
 [group('rust')]
 lint-check-ffi:
-    cargo clippy -p capsule-core --features ffi -- -D warnings
+    cargo clippy -p capsule-core --features ffi -- {{ clippy_flags }}
 
 [group('rust')]
 gen-bindings:

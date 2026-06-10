@@ -1,0 +1,16 @@
+# rustfmt runs on the pinned nightly (see rust-toolchain.toml), so the unstable
+# import options below apply directly. Goal: deterministic, merge-friendly imports
+# (adding one `use` never reshuffles a neighbouring line).
+max_width = 100
+newline_style = "Unix"
+
+# Merge imports per-module (one `use` statement per module path) and group them into
+# std / external / crate blocks. "Module" (not "Crate") keeps each module on its own
+# statement, so adding an import under one module never touches another module's line —
+# minimising merge conflicts. Both options are nightly-only rustfmt features.
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+
+# Format code blocks inside doc comments so examples stay consistent.
+format_code_in_doc_comments = true
