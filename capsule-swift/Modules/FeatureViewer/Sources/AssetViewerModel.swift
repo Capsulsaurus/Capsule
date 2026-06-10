@@ -17,9 +17,14 @@ public final class AssetViewerModel {
     public var isInfoPanelPresented = false
     /// The Capsule user albums available as add-to-album targets.
     public private(set) var userAlbums: [AlbumSummary] = []
+    /// Whether the slideshow is auto-advancing through the assets.
+    public private(set) var isPlayingSlideshow = false
 
     private let provider: any AssetProvider
     private let albumProvider: any AlbumProvider
+    // `nonisolated(unsafe)` so `deinit` can cancel it; only touched on the main
+    // actor during the model's life.
+    private nonisolated(unsafe) var slideshowTask: Task<Void, Never>?
 
     public init(
         assets: [Asset],
@@ -83,5 +88,40 @@ public final class AssetViewerModel {
         } catch {
             CapsuleLog.interface.error("add to album failed: \(String(describing: error), privacy: .public)")
         }
+    }
+
+    // MARK: Slideshow
+
+    deinit {
+        slideshowTask?.cancel()
+    }
+
+    /// Start or stop the auto-advancing slideshow.
+    public func toggleSlideshow() {
+        if isPlayingSlideshow { stopSlideshow() } else { startSlideshow() }
+    }
+
+    /// Begin advancing one asset every few seconds, wrapping at the end.
+    public func startSlideshow() {
+        guard !isPlayingSlideshow, assets.count > 1 else { return }
+        isPlayingSlideshow = true
+        slideshowTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                guard let self, isPlayingSlideshow, !Task.isCancelled else { return }
+                advanceSlideshow()
+            }
+        }
+    }
+
+    public func stopSlideshow() {
+        isPlayingSlideshow = false
+        slideshowTask?.cancel()
+        slideshowTask = nil
+    }
+
+    private func advanceSlideshow() {
+        guard !assets.isEmpty else { return }
+        currentIndex = (currentIndex + 1) % assets.count
     }
 }

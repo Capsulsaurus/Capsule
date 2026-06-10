@@ -5,8 +5,11 @@ import FeatureViewer
 import ImagePipeline
 import SwiftUI
 
-/// The search screen — filter the unified library by media type and capture
-/// date, and browse the matches.
+/// The Search screen — a full-screen search panel over the unified library.
+///
+/// A Liquid Glass search field with category suggestions and recent searches;
+/// tapping a suggestion pivots the library on a facet (media type or capture
+/// window). Active facets show as clearable chips above the results grid.
 public struct SearchRootView: View {
     @State private var model: SearchViewModel
     @State private var viewerSelection: SearchViewerSelection?
@@ -30,13 +33,15 @@ public struct SearchRootView: View {
 
     public var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                filterBar
-                Divider()
-                results
-            }
-            .navigationTitle("Search")
-            .navigationBarTitleDisplayMode(.inline)
+            content
+                .navigationTitle("Search")
+                .navigationBarTitleDisplayMode(.inline)
+                .searchable(
+                    text: $model.query,
+                    placement: .navigationBarDrawer(displayMode: .always),
+                    prompt: "Photos, Videos, Moments"
+                )
+                .searchSuggestions { suggestionList }
         }
         .task { await model.load() }
         .fullScreenCover(item: $viewerSelection) { selection in
@@ -50,47 +55,102 @@ public struct SearchRootView: View {
         }
     }
 
-    private var filterBar: some View {
-        VStack(spacing: 10) {
-            Picker("Media Type", selection: $model.filter.mediaType) {
-                Text("All").tag(MediaType?.none)
-                Text("Photos").tag(MediaType?.some(.photo))
-                Text("Videos").tag(MediaType?.some(.video))
-                Text("Live").tag(MediaType?.some(.livePhoto))
-            }
-            .pickerStyle(.segmented)
+    @ViewBuilder
+    private var content: some View {
+        if model.isLoading {
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.filter.isActive {
+            resultsView
+        } else {
+            browseView
+        }
+    }
 
-            Picker("When", selection: $model.filter.dateRange) {
-                ForEach(DateRangeOption.allCases) { option in
-                    Text(option.title).tag(option)
+    // MARK: Browse (idle)
+
+    private var browseView: some View {
+        List {
+            if !model.recentSearches.isEmpty {
+                Section("Recent") {
+                    ForEach(model.recentSearches, id: \.self) { term in
+                        Button { model.applyRecent(term) } label: {
+                            Label(term, systemImage: "clock.arrow.circlepath")
+                        }
+                    }
+                    Button("Clear", role: .destructive) { model.clearRecents() }
+                        .font(.footnote)
                 }
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Section("Categories") {
+                ForEach(model.allSuggestions) { suggestion in
+                    Button { model.apply(suggestion) } label: {
+                        Label(suggestion.title, systemImage: suggestion.systemImage)
+                    }
+                }
+            }
         }
-        .padding()
     }
 
     @ViewBuilder
-    private var results: some View {
-        if model.isLoading {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else if model.results.isEmpty {
-            ContentUnavailableView(
-                "No Matches",
-                systemImage: "magnifyingglass",
-                description: Text("No photos match the selected filters.")
-            )
-        } else {
-            PhotoGridView(
-                sections: [PhotoGridSection(id: "results", title: "", assets: model.results)],
-                columnCount: 5,
-                thumbnails: thumbnails,
-                showsSectionHeaders: false,
-                onSelect: openViewer
-            )
-            .ignoresSafeArea(edges: .bottom)
+    private var suggestionList: some View {
+        ForEach(model.visibleSuggestions) { suggestion in
+            Button { model.apply(suggestion) } label: {
+                Label(suggestion.title, systemImage: suggestion.systemImage)
+            }
         }
+    }
+
+    // MARK: Results (facet active)
+
+    private var resultsView: some View {
+        VStack(spacing: 0) {
+            activeChips
+            Divider()
+            if model.results.isEmpty {
+                ContentUnavailableView(
+                    "No Matches",
+                    systemImage: "magnifyingglass",
+                    description: Text("No photos match these filters.")
+                )
+            } else {
+                PhotoGridView(
+                    sections: [PhotoGridSection(id: "results", title: "", assets: model.results)],
+                    columnCount: 5,
+                    thumbnails: thumbnails,
+                    showsSectionHeaders: false,
+                    onSelect: openViewer
+                )
+                .ignoresSafeArea(edges: .bottom)
+            }
+        }
+    }
+
+    private var activeChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: CapsuleTheme.Spacing.small) {
+                if let mediaType = model.filter.mediaType {
+                    facetChip(SearchSuggestion.media(mediaType).title) { model.clearMediaType() }
+                }
+                if model.filter.dateRange != .anytime {
+                    facetChip(model.filter.dateRange.title) { model.clearDateRange() }
+                }
+            }
+            .padding(.horizontal)
+            .padding(.vertical, CapsuleTheme.Spacing.small)
+        }
+    }
+
+    private func facetChip(_ title: String, onClear: @escaping () -> Void) -> some View {
+        HStack(spacing: CapsuleTheme.Spacing.xSmall) {
+            Text(title).font(.subheadline.weight(.medium))
+            Button(action: onClear) {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Clear \(title)")
+        }
+        .padding(.horizontal, CapsuleTheme.Spacing.medium)
+        .padding(.vertical, CapsuleTheme.Spacing.xSmall)
+        .capsuleGlass(in: Capsule())
     }
 
     private func openViewer(_ asset: Asset) {

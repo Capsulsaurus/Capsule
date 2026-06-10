@@ -41,6 +41,7 @@ public struct AssetViewerView: View {
         .overlay(alignment: .topLeading) { closeButton }
         .overlay(alignment: .bottom) { bottomBar }
         .statusBarHidden()
+        .onDisappear { model.stopSlideshow() }
         .sheet(isPresented: $model.isInfoPanelPresented) {
             if let asset = model.currentAsset {
                 AssetInfoPanel(asset: asset, mediaLoader: mediaLoader)
@@ -81,6 +82,7 @@ public struct AssetViewerView: View {
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .ignoresSafeArea()
+            .animation(.easeInOut(duration: 0.4), value: model.currentIndex)
         }
     }
 
@@ -101,6 +103,10 @@ public struct AssetViewerView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             barButton("square.and.arrow.up", action: share)
+            barButton(model.isPlayingSlideshow ? "pause.fill" : "play.fill") {
+                model.toggleSlideshow()
+            }
+            .accessibilityLabel(model.isPlayingSlideshow ? "Pause Slideshow" : "Play Slideshow")
             barButton("info.circle") { model.isInfoPanelPresented = true }
             if model.currentAsset?.isManaged == true {
                 barButton("rectangle.stack.badge.plus") {
