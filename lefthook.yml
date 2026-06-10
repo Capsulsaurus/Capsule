@@ -23,7 +23,7 @@ pre-commit:
       run: just format-kotlin
     format-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just format-vision
     format-swift:
       priority: 1
@@ -43,7 +43,7 @@ pre-commit:
       run: just lint-docs
     lint-vision:
       priority: 2
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just lint-vision
 
     # Priority 3: fail if any files changed (formatters/linters mutated staged files)
@@ -92,11 +92,11 @@ pre-push:
       run: just lint-check-kotlin
     format-check-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just format-check-vision
     lint-check-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just lint-check-vision
     format-check-swift:
       priority: 1
