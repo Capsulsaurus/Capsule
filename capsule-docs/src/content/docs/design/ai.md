@@ -11,7 +11,7 @@ The three categories:
 - **[Dense Tagging](#dense-tagging):** *local* embeddings for objects, faces, and scene elements for granular search and auto-albums.
 - **[Quality Assessment](#quality-assessment):** per-asset quality scores for filtering and sorting.
 
-Inference orchestration lives in `capsule-core::ml`; per-platform model runners (CoreML, NNAPI, ONNX Runtime) live in `capsule-sdk`; the local vector index lives in `capsule-core::db` (SQLite + `sqlite-vec`).
+Inference orchestration and the model runners live in `capsule-core::ml`: the portable runner is a default-off, weight-fetching feature of `capsule-core` (which already carries the cross-compilation + FFI setup), with per-platform accelerated execution providers (CoreML, NNAPI, ONNX Runtime) selected there. **Model weights are fetched at runtime — never committed to this repository** (experimentation pulls from public hubs; deployed finetunes ship from Capsule's own model repos). `capsule-sdk` stays the network/OpenAPI client and hosts no inference. The local vector index lives in `capsule-core::db` (SQLite + `sqlite-vec`).
 
 ## AI Output Containment
 

@@ -9,6 +9,7 @@ pub mod import;
 pub mod library;
 pub mod lifecycle;
 pub mod metadata;
+pub mod ml;
 pub mod models;
 pub mod sidecar;
 pub mod utils;
