@@ -15,6 +15,8 @@ final class PhotoGridCell: UICollectionViewCell {
     private let imageView = UIImageView()
     private let durationLabel = UILabel()
     private let liveBadge = UIImageView()
+    private let selectionDim = UIView()
+    private let checkmark = UIImageView()
     private var thumbnailTask: Task<Void, Never>?
     private var representedID: AssetID?
 
@@ -41,6 +43,17 @@ final class PhotoGridCell: UICollectionViewCell {
         liveBadge.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(liveBadge)
 
+        selectionDim.backgroundColor = UIColor.black.withAlphaComponent(0.12)
+        selectionDim.isHidden = true
+        selectionDim.isUserInteractionEnabled = false
+        selectionDim.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(selectionDim)
+
+        checkmark.contentMode = .scaleAspectFit
+        checkmark.isHidden = true
+        checkmark.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(checkmark)
+
         NSLayoutConstraint.activate([
             imageView.topAnchor.constraint(equalTo: contentView.topAnchor),
             imageView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
@@ -52,6 +65,14 @@ final class PhotoGridCell: UICollectionViewCell {
             liveBadge.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
             liveBadge.widthAnchor.constraint(equalToConstant: 16),
             liveBadge.heightAnchor.constraint(equalToConstant: 16),
+            selectionDim.topAnchor.constraint(equalTo: contentView.topAnchor),
+            selectionDim.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            selectionDim.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            selectionDim.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            checkmark.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -4),
+            checkmark.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4),
+            checkmark.widthAnchor.constraint(equalToConstant: 22),
+            checkmark.heightAnchor.constraint(equalToConstant: 22),
         ])
     }
 
@@ -77,12 +98,24 @@ final class PhotoGridCell: UICollectionViewCell {
         }
     }
 
+    /// Reflect multi-select state: a corner check in select mode, dimmed when on.
+    func setSelection(isSelecting: Bool, isSelected: Bool) {
+        checkmark.isHidden = !isSelecting
+        if isSelecting {
+            checkmark.image = UIImage(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+            checkmark.tintColor = isSelected ? .systemBlue : .white
+        }
+        selectionDim.isHidden = !(isSelecting && isSelected)
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         thumbnailTask?.cancel()
         thumbnailTask = nil
         imageView.image = nil
         representedID = nil
+        checkmark.isHidden = true
+        selectionDim.isHidden = true
     }
 
     /// Formats a media duration as `m:ss`.

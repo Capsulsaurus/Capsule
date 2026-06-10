@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleFoundation
 import ImagePipeline
 import SwiftUI
 import UIKit
@@ -19,31 +20,41 @@ public struct PhotoGridView: UIViewControllerRepresentable {
     private let thumbnails: any ThumbnailProvider
     private let showsSectionHeaders: Bool
     private let scrollToSectionID: String?
+    private let isSelecting: Bool
+    private let selectedIDs: Set<AssetID>
     private let onSelect: (Asset) -> Void
     private let onSelectSection: ((PhotoGridSection) -> Void)?
     private let onZoomLevelChange: ((Bool) -> Void)?
+    private let onToggleSelection: ((AssetID) -> Void)?
 
     /// The full grid surface: choose a ``PhotoGridStyle``, and — for the
     /// aggregation levels — handle card taps, pinch-to-zoom level changes, and an
-    /// optional section to scroll into view after a level switch.
+    /// optional section to scroll into view after a level switch. Pass
+    /// `isSelecting` / `selectedIDs` / `onToggleSelection` to drive multi-select.
     public init(
         sections: [PhotoGridSection],
         style: PhotoGridStyle,
         thumbnails: any ThumbnailProvider,
         showsSectionHeaders: Bool = true,
         scrollToSectionID: String? = nil,
+        isSelecting: Bool = false,
+        selectedIDs: Set<AssetID> = [],
         onSelect: @escaping (Asset) -> Void,
         onSelectSection: ((PhotoGridSection) -> Void)? = nil,
-        onZoomLevelChange: ((Bool) -> Void)? = nil
+        onZoomLevelChange: ((Bool) -> Void)? = nil,
+        onToggleSelection: ((AssetID) -> Void)? = nil
     ) {
         self.sections = sections
         self.style = style
         self.thumbnails = thumbnails
         self.showsSectionHeaders = showsSectionHeaders
         self.scrollToSectionID = scrollToSectionID
+        self.isSelecting = isSelecting
+        self.selectedIDs = selectedIDs
         self.onSelect = onSelect
         self.onSelectSection = onSelectSection
         self.onZoomLevelChange = onZoomLevelChange
+        self.onToggleSelection = onToggleSelection
     }
 
     /// Convenience initializer for the common uniform-tile grid.
@@ -71,7 +82,14 @@ public struct PhotoGridView: UIViewControllerRepresentable {
         controller.onSelect = onSelect
         controller.onSelectSection = onSelectSection
         controller.onZoomLevelChange = onZoomLevelChange
-        controller.update(sections: sections, style: style, scrollToSectionID: scrollToSectionID)
+        controller.onToggleSelection = onToggleSelection
+        controller.update(
+            sections: sections,
+            style: style,
+            scrollToSectionID: scrollToSectionID,
+            isSelecting: isSelecting,
+            selectedIDs: selectedIDs
+        )
     }
 }
 
@@ -87,6 +105,8 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     /// Called when the user pinches to change aggregation level — `true` to zoom
     /// in (finer), `false` to zoom out (coarser).
     public var onZoomLevelChange: ((Bool) -> Void)?
+    /// Called when the user toggles an asset's selection (select mode).
+    public var onToggleSelection: ((AssetID) -> Void)?
 
     private let thumbnails: any ThumbnailProvider
     private let showsSectionHeaders: Bool
@@ -94,6 +114,8 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     private var style: PhotoGridStyle = .uniform(columns: 3)
     private var scrollToSectionID: String?
     private var appliedFocusID: String?
+    private var isSelecting = false
+    private var selectedIDs: Set<AssetID> = []
     private var hasAppliedSnapshot = false
 
     private lazy var collectionView: UICollectionView = {
@@ -133,15 +155,21 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
         applyState(animated: false)
     }
 
-    /// Push fresh sections, style, and an optional focus section into the grid.
+    /// Push fresh sections, style, focus, and multi-select state into the grid.
     func update(
         sections newSections: [PhotoGridSection],
         style newStyle: PhotoGridStyle,
-        scrollToSectionID newFocus: String?
+        scrollToSectionID newFocus: String?,
+        isSelecting newSelecting: Bool,
+        selectedIDs newSelected: Set<AssetID>
     ) {
         let styleChanged = newStyle != style
+        let selectionChanged = newSelecting != isSelecting || newSelected != selectedIDs
         sections = newSections
         style = newStyle
+        isSelecting = newSelecting
+        selectedIDs = newSelected
+        collectionView.allowsMultipleSelection = newSelecting
         if newFocus == nil { appliedFocusID = nil }
         scrollToSectionID = newFocus
         if styleChanged {
@@ -151,7 +179,20 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
             )
         }
         applyState(animated: hasAppliedSnapshot && !styleChanged)
+        // A snapshot reload re-runs the registration (which sets selection); a
+        // pure selection change does not, so refresh visible cells directly.
+        if selectionChanged, !styleChanged {
+            refreshSelectionAppearance()
+        }
         applyFocusIfNeeded()
+    }
+
+    private func refreshSelectionAppearance() {
+        for indexPath in collectionView.indexPathsForVisibleItems {
+            guard let cell = collectionView.cellForItem(at: indexPath) as? PhotoGridCell,
+                  let asset = dataSource.itemIdentifier(for: indexPath) else { continue }
+            cell.setSelection(isSelecting: isSelecting, isSelected: selectedIDs.contains(asset.id))
+        }
     }
 
     // MARK: Data source
@@ -183,6 +224,7 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
             .CellRegistration<PhotoGridCell, Asset> { [weak self] cell, _, asset in
                 guard let self else { return }
                 cell.configure(with: asset, pixelSize: cellPixelSize, thumbnails: thumbnails)
+                cell.setSelection(isSelecting: isSelecting, isSelected: selectedIDs.contains(asset.id))
             }
         let cardRegistration = UICollectionView
             .CellRegistration<PhotoGridCardCell, Asset> { [weak self] cell, indexPath, asset in
@@ -249,13 +291,20 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     // MARK: UICollectionViewDelegate
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
-        collectionView.deselectItem(at: indexPath, animated: true)
+        collectionView.deselectItem(at: indexPath, animated: !isSelecting)
         switch style {
         case .cards:
             guard indexPath.section < sections.count else { return }
             onSelectSection?(sections[indexPath.section])
         case .uniform:
-            if let asset = dataSource.itemIdentifier(for: indexPath) {
+            guard let asset = dataSource.itemIdentifier(for: indexPath) else { return }
+            if isSelecting {
+                let willSelect = !selectedIDs.contains(asset.id)
+                if willSelect { selectedIDs.insert(asset.id) } else { selectedIDs.remove(asset.id) }
+                (collectionView.cellForItem(at: indexPath) as? PhotoGridCell)?
+                    .setSelection(isSelecting: true, isSelected: willSelect)
+                onToggleSelection?(asset.id)
+            } else {
                 onSelect?(asset)
             }
         }
@@ -340,46 +389,5 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
         let section = NSCollectionLayoutSection(group: group)
         section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         return UICollectionViewCompositionalLayout(section: section)
-    }
-}
-
-// MARK: - PhotoGridHeaderView
-
-/// A pinned section header — a date label over a chrome material so it stays
-/// legible while photos scroll beneath it.
-final class PhotoGridHeaderView: UICollectionReusableView {
-    private let label = UILabel()
-
-    var title: String? {
-        get { label.text }
-        set { label.text = newValue }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        let background = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
-        background.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(background)
-
-        label.font = .systemFont(ofSize: 15, weight: .semibold)
-        label.textColor = .label
-        label.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(label)
-
-        NSLayoutConstraint.activate([
-            background.topAnchor.constraint(equalTo: topAnchor),
-            background.bottomAnchor.constraint(equalTo: bottomAnchor),
-            background.leadingAnchor.constraint(equalTo: leadingAnchor),
-            background.trailingAnchor.constraint(equalTo: trailingAnchor),
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-            label.topAnchor.constraint(equalTo: topAnchor, constant: 8),
-            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -8),
-        ])
-    }
-
-    @available(*, unavailable)
-    required init?(coder _: NSCoder) {
-        fatalError("PhotoGridHeaderView is not loaded from a nib")
     }
 }

@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleFoundation
 import CapsuleUI
 import FeatureViewer
 import ImagePipeline
@@ -15,6 +16,13 @@ public struct TimelineRootView: View {
     @State private var model: TimelineViewModel
     @State private var importer: LibraryImporter
     @State private var viewerSelection: ViewerSelection?
+    @State private var isSelecting = false
+    @State private var selectedIDs: Set<AssetID> = []
+    @State private var userAlbums: [AlbumSummary] = []
+    @State private var isAddToAlbumPresented = false
+    @State private var isDeleteConfirmPresented = false
+    @State private var shareItems: [UIImage] = []
+    @State private var isSharePresented = false
     private let assetProvider: any AssetProvider
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
@@ -41,11 +49,21 @@ public struct TimelineRootView: View {
                 .navigationTitle("Library")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarLeading) { importButton }
-                    if model.state == .ready, !model.sections.isEmpty {
-                        ToolbarItem(placement: .principal) { levelPicker }
-                        if model.level == .all {
-                            ToolbarItem(placement: .topBarTrailing) { densityMenu }
+                    if isSelecting {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button("Cancel") { exitSelection() }
+                        }
+                        ToolbarItem(placement: .principal) {
+                            Text(selectionTitle).font(.headline)
+                        }
+                    } else {
+                        ToolbarItem(placement: .topBarLeading) { importButton }
+                        if model.state == .ready, !model.sections.isEmpty {
+                            ToolbarItem(placement: .principal) { levelPicker }
+                            if model.level == .all {
+                                ToolbarItem(placement: .topBarTrailing) { densityMenu }
+                                ToolbarItem(placement: .topBarTrailing) { selectButton }
+                            }
                         }
                     }
                 }
@@ -78,6 +96,34 @@ public struct TimelineRootView: View {
         } message: { result in
             Text(Self.importSummary(result))
         }
+        .overlay(alignment: .bottom) {
+            if isSelecting { selectionActionBar }
+        }
+        .confirmationDialog(
+            "Delete \(selectedIDs.count) Items?",
+            isPresented: $isDeleteConfirmPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete \(selectedIDs.count) Items", role: .destructive) {
+                Task { await deleteSelected() }
+            }
+        }
+        .confirmationDialog(
+            "Add to Album",
+            isPresented: $isAddToAlbumPresented,
+            titleVisibility: .visible
+        ) {
+            ForEach(userAlbums) { album in
+                Button(album.title) { Task { await addSelectedToAlbum(album) } }
+            }
+        } message: {
+            Text(userAlbums.isEmpty
+                ? "Create an album in Collections first."
+                : "Choose a Capsule album.")
+        }
+        .sheet(isPresented: $isSharePresented) {
+            if !shareItems.isEmpty { TimelineActivityView(items: shareItems) }
+        }
     }
 
     @ViewBuilder
@@ -107,9 +153,12 @@ public struct TimelineRootView: View {
                     style: model.gridStyle,
                     thumbnails: thumbnails,
                     scrollToSectionID: model.focusSectionID,
+                    isSelecting: isSelecting,
+                    selectedIDs: selectedIDs,
                     onSelect: openViewer,
                     onSelectSection: { model.drillDown(into: $0) },
-                    onZoomLevelChange: { model.zoom(in: $0) }
+                    onZoomLevelChange: { model.zoom(in: $0) },
+                    onToggleSelection: { toggleSelection($0) }
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -205,9 +254,112 @@ public struct TimelineRootView: View {
     }
 }
 
+// MARK: - Multi-select
+
+private extension TimelineRootView {
+    var selectButton: some View {
+        Button("Select") { isSelecting = true }
+    }
+
+    var selectionTitle: String {
+        selectedIDs.isEmpty ? "Select Items" : "\(selectedIDs.count) Selected"
+    }
+
+    var selectionActionBar: some View {
+        HStack(spacing: 0) {
+            selectionAction("square.and.arrow.up") { Task { await shareSelected() } }
+            selectionAction("heart") { Task { await favoriteSelected() } }
+            selectionAction("rectangle.stack.badge.plus") { Task { await presentAddToAlbum() } }
+            selectionAction("trash", role: .destructive) { isDeleteConfirmPresented = true }
+        }
+        .padding(.vertical, CapsuleTheme.Spacing.medium)
+        .padding(.horizontal, CapsuleTheme.Spacing.small)
+        .capsuleGlass(in: Capsule())
+        .padding(.horizontal, CapsuleTheme.Spacing.large)
+        .padding(.bottom, CapsuleTheme.Spacing.small)
+        .disabled(selectedIDs.isEmpty)
+    }
+
+    func selectionAction(
+        _ symbol: String,
+        role: ButtonRole? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(role: role, action: action) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .frame(maxWidth: .infinity)
+        }
+    }
+
+    var selectedAssets: [Asset] {
+        model.sections.flatMap(\.assets).filter { selectedIDs.contains($0.id) }
+    }
+
+    func toggleSelection(_ id: AssetID) {
+        if selectedIDs.contains(id) { selectedIDs.remove(id) } else { selectedIDs.insert(id) }
+    }
+
+    func exitSelection() {
+        isSelecting = false
+        selectedIDs = []
+    }
+
+    func deleteSelected() async {
+        let ids = Array(selectedIDs)
+        guard !ids.isEmpty else { return }
+        try? await assetProvider.delete(ids)
+        exitSelection()
+    }
+
+    func favoriteSelected() async {
+        for id in selectedIDs {
+            try? await assetProvider.setFavorite(true, for: id)
+        }
+        exitSelection()
+    }
+
+    func presentAddToAlbum() async {
+        userAlbums = await albumProvider.loadAlbums().filter(\.isUserAlbum)
+        isAddToAlbumPresented = true
+    }
+
+    func addSelectedToAlbum(_ album: AlbumSummary) async {
+        for id in selectedIDs {
+            try? await albumProvider.addAsset(id, to: album.id)
+        }
+        exitSelection()
+    }
+
+    func shareSelected() async {
+        var images: [UIImage] = []
+        for asset in selectedAssets {
+            if let image = await mediaLoader.fullImage(
+                for: asset, targetSize: CGSize(width: 2048, height: 2048)
+            ) {
+                images.append(image)
+            }
+        }
+        guard !images.isEmpty else { return }
+        shareItems = images
+        isSharePresented = true
+    }
+}
+
 /// The asset list and entry index handed to a presented viewer.
 private struct ViewerSelection: Identifiable {
     let id = UUID()
     let assets: [Asset]
     let startIndex: Int
+}
+
+/// A `UIActivityViewController` bridged into SwiftUI for the bulk share sheet.
+private struct TimelineActivityView: UIViewControllerRepresentable {
+    let items: [UIImage]
+
+    func makeUIViewController(context _: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }
