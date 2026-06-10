@@ -50,9 +50,20 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   and the album upgrade ceremony — these need live MLS group state, not just the epoch ledger.
 
 ### Hardware-bound key storage
-- Device keys are kept in a **software keystore** (private keys sealed under the
-  passphrase-wrapped master key). Secure Enclave / StrongBox / TPM adapters
-  (`capsule-sdk::hardware-keys`) are per-platform glue, deferred.
+- **Seam + software fallback + contract — now implemented.** The device signing key (DSK) is
+  consumed through a `capsule_core::crypto::keys::Signer` trait, so the in-memory
+  `HybridSigningKey` (software, default) and a hardware-backed key are interchangeable at every
+  signing site. `HardwareSigner` is a uniffi **foreign trait** (Secure Enclave / StrongBox / TPM
+  implement it natively under the `ffi` feature); `HardwareBackedSigner` composes its
+  hardware-produced **Ed25519** half with a software-sealed **ML-DSA-65** half into the hybrid
+  signature (no secure element holds PQ keys). `Workspace::create_with_hardware_signer` /
+  `FfiWorkspace.createWithHardwareSigner` build a workspace whose directory + manifests are
+  hardware-signed; the in-process round-trip + non-exportability contract (`keys.md` Validation)
+  runs in CI against a mock element.
+- **Still deferred (per-platform glue):** the real Secure Enclave / StrongBox / TPM adapters and
+  their on-device smoke tests, wiring the generated bindings into the Xcode/Gradle builds, and
+  hardware binding of the device **encryption** key (DEK). Implementer guide:
+  [`capsule-core/HARDWARE_KEYS.md`](capsule-core/HARDWARE_KEYS.md).
 
 ### Networked server/client
 - All transport is out of scope here: the HTTP/TUS upload server, GraphQL resolvers, the
