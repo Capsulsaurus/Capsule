@@ -177,6 +177,18 @@ private let moduleTargets: [Target] =
             testDependencies: [supportDependency]
         )
 
+        // Collections home — albums, media types, places, utilities.
+        + module(
+            "FeatureCollections",
+            dependencies: [
+                .target(name: "CapsuleUI"),
+                .target(name: "AssetKit"),
+                .target(name: "ImagePipeline"),
+                .target(name: "FeatureViewer"),
+                .target(name: "FeatureAlbums"),
+            ]
+        )
+
 /// The thin iOS / iPadOS app target — composition root only.
 private let appTarget: Target = .target(
     name: "Capsule",
@@ -193,7 +205,7 @@ private let appTarget: Target = .target(
     dependencies: [
         .target(name: "FeatureTimeline"),
         .target(name: "FeatureViewer"),
-        .target(name: "FeatureAlbums"),
+        .target(name: "FeatureCollections"),
         .target(name: "FeatureSearch"),
         .target(name: "CapsuleUI"),
         .target(name: "ImagePipeline"),

@@ -1,5 +1,5 @@
 import CapsuleUI
-import FeatureAlbums
+import FeatureCollections
 import FeatureSearch
 import FeatureTimeline
 import SwiftUI
@@ -23,8 +23,8 @@ struct RootView: View {
                     importer: environment.importer
                 )
             }
-            Tab("Albums", systemImage: "rectangle.stack") {
-                AlbumsRootView(
+            Tab("Collections", systemImage: "rectangle.stack") {
+                CollectionsRootView(
                     albumProvider: environment.albumProvider,
                     assetProvider: environment.assetProvider,
                     thumbnails: environment.thumbnails,
