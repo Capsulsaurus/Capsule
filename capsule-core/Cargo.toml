@@ -32,7 +32,7 @@ tpm = ["dep:tss-esapi"]
 chrono = { workspace = true }
 ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
-globset = "0.4.16"
+globset = "0.4.18"
 indexmap = { workspace = true }
 kamadak-exif = "0.5"
 log = { workspace = true }

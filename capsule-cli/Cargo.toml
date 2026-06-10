@@ -14,13 +14,13 @@ capsule-core = { path = "../capsule-core" }
 base64 = { workspace = true }
 capitalize = "0.3.4"
 chrono = { workspace = true }
-clap = { version = "4.5.40", features = ["derive"] }
-color-eyre = "0.6.3"
-colored = "3.0.0"
+clap = { version = "4.6.1", features = ["derive"] }
+color-eyre = "0.6.5"
+colored = "3.1.1"
 dialoguer = "0.11.0"
 directories = "6.0"
 eyre = { workspace = true }
-futures = "0.3.31"
+futures = "0.3.32"
 humansize = "2.1"
 indexmap = { workspace = true }
 nanoid = "0.4.0"
@@ -30,11 +30,11 @@ sea-orm = { workspace = true, features = [
     "debug-print",
 ] }
 serde = { workspace = true }
-sysinfo = "0.36.0"
+sysinfo = "0.36.1"
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
-tracing-subscriber = { version = "0.3.10", features = [
+tracing-subscriber = { version = "0.3.23", features = [
     "env-filter",
     "json",
     "fmt",

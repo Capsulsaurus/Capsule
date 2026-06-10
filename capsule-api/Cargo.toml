@@ -15,9 +15,9 @@ capsule-api-sync = { path = "./sync", optional = true }
 capsule-api-environment = { path = "./environment" }
 capsule-api-migration = { path = "./migration" }
 salvo = { workspace = true }
-color-eyre = "0.6.3"
+color-eyre = "0.6.5"
 eyre = { workspace = true }
-listenfd = "1.0.1"
+listenfd = "1.0.2"
 sea-orm = { workspace = true, features = [
     "sqlx-postgres",
     "runtime-tokio-rustls",
@@ -25,10 +25,10 @@ sea-orm = { workspace = true, features = [
 ] }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3.18", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
-clap = { version = "4.5.26", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 
 [features]
 default = ["full"]

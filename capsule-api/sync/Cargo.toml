@@ -28,14 +28,14 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tonic = { workspace = true, features = ["transport", "gzip"] }
-tonic-web = "0.14.2"
+tonic-web = "0.14.6"
 tonic-prost = { workspace = true }
 tonic-health = { workspace = true }
 tonic-types = { workspace = true }
 sync_wrapper = "1.0"
 tokio-stream = "0.1"
 jsonwebtoken = { workspace = true }
-tower = "0.5.2"
+tower = "0.5.3"
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

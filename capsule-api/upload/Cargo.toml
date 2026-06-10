@@ -39,4 +39,4 @@ nanoid = { workspace = true }
 indexmap = { workspace = true }
 bytes = { workspace = true }
 jsonwebtoken = { workspace = true }
-libc = "0.2.180"
+libc = "0.2.186"
