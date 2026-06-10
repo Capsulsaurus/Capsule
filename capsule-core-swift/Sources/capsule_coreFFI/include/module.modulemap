@@ -1,0 +1,4 @@
+module capsule_coreFFI {
+    header "capsule_coreFFI.h"
+    export *
+}

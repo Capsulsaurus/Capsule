@@ -50,9 +50,29 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   and the album upgrade ceremony — these need live MLS group state, not just the epoch ledger.
 
 ### Hardware-bound key storage
-- Device keys are kept in a **software keystore** (private keys sealed under the
-  passphrase-wrapped master key). Secure Enclave / StrongBox / TPM adapters
-  (`capsule-sdk::hardware-keys`) are per-platform glue, deferred.
+- **Seam + software fallback + contract — now implemented.** The device signing key (DSK) is
+  consumed through a `capsule_core::crypto::keys::Signer` trait, so the in-memory
+  `HybridSigningKey` (software, default) and a hardware-backed key are interchangeable at every
+  signing site. `HardwareSigner` is a uniffi **foreign trait** (Secure Enclave / StrongBox / TPM
+  implement it natively under the `ffi` feature); `HardwareBackedSigner` composes its
+  hardware-produced **Ed25519** half with a software-sealed **ML-DSA-65** half into the hybrid
+  signature (no secure element holds PQ keys). `Workspace::create_with_hardware_signer` /
+  `FfiWorkspace.createWithHardwareSigner` build a workspace whose directory + manifests are
+  hardware-signed; the in-process round-trip + non-exportability contract (`keys.md` Validation)
+  runs in CI against a mock element.
+- **Reference adapters + standalone harnesses — now implemented.** Every backend implements the
+  `HardwareSigner` contract as a runnable, locally-testable example (the prose `HARDWARE_KEYS.md`
+  guide is gone — the code is the example): a software fallback
+  (`capsule_core::crypto::keys::SoftwareSigner`, smoke-tested in CI on Linux), a desktop TPM 2.0
+  reference (`crypto::keys::tpm`, behind the `tpm` feature, via `tss-esapi`), and Secure Enclave /
+  StrongBox adapters in standalone harness packages (`capsule-core-swift`, `capsule-core-kotlin`)
+  that link the compiled core and run a per-language smoke test (see each package's README; the
+  Swift `swift test` runs the real Secure Enclave on Apple-Silicon Macs).
+- **Still deferred (per-platform glue):** the three hardware backends (Secure Enclave, StrongBox,
+  TPM) all expose ECDSA-P256, not Ed25519, so they need the **P-256 hybrid-DSK variant** before
+  they compose into the device key — only the software backend integrates end-to-end today; wiring
+  the generated bindings + `cdylib`/`staticlib` into the real Xcode / Gradle apps; on-device CI;
+  the Windows TPM (TBS) path; and hardware binding of the device **encryption** key (DEK).
 
 ### Networked server/client
 - All transport is out of scope here: the HTTP/TUS upload server, GraphQL resolvers, the

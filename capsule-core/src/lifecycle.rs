@@ -36,7 +36,9 @@ use crate::cbor;
 use crate::crypto::encryption::{seal_blob, stream};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
-use crate::crypto::keys::{Account, Amk, AmkVersion, DeviceDirectory, HybridSigningKey};
+use crate::crypto::keys::{
+    Account, Amk, AmkVersion, DeviceDirectory, HybridSigningKey, HybridVerifyingKey, Signer,
+};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::action::Action;
 use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
@@ -53,6 +55,7 @@ const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
+#[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum LifecycleError {
     /// Filesystem error.
     #[error("io: {0}")]
@@ -115,6 +118,11 @@ pub struct AssetState {
 pub struct Workspace {
     root: PathBuf,
     account: Account,
+    /// Signs the device directory and every asset manifest with the device DSK. A software key
+    /// by default; a [hardware-backed signer](crate::crypto::keys::HardwareBackedSigner) when
+    /// the device key lives in a secure element. The account's own software DSK is retained
+    /// (sealed) but unused for signing when a hardware signer is supplied.
+    device_signer: Box<dyn Signer>,
     directory: DeviceDirectory,
     counter: Counter,
     albums: HashMap<Uuid, AlbumKeys>,
@@ -222,6 +230,28 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
+        Self::create_inner(root, passphrase, params, None)
+    }
+
+    /// As [`create_with_params`](Self::create_with_params) but signs with a caller-supplied
+    /// device signer — e.g. a [hardware-backed key](crate::crypto::keys::HardwareBackedSigner)
+    /// (Secure Enclave / StrongBox / TPM). The published device directory and every asset
+    /// manifest are then signed by `device_signer`, and its public half is what peers trust.
+    pub fn create_with_hardware_signer(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        device_signer: Box<dyn Signer>,
+    ) -> Result<Self> {
+        Self::create_inner(root, passphrase, params, Some(device_signer))
+    }
+
+    fn create_inner(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        device_signer: Option<Box<dyn Signer>>,
+    ) -> Result<Self> {
         let library = crate::library::init::init_library(root, "Capsule")
             .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
         let account = Account::create();
@@ -231,11 +261,15 @@ impl Workspace {
         fs::write(root.join(".library").join("account.cbor"), &acct_bytes)
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
 
-        let directory = Self::build_directory(&account);
+        // Default to the account's own software DSK; a hardware signer overrides it.
+        let device_signer: Box<dyn Signer> =
+            device_signer.unwrap_or_else(|| Box::new(account.device.dsk.clone()));
+        let directory = Self::build_directory(&account, device_signer.verifying_key());
         let counter = Counter::new(account.device.device_id);
         Ok(Self {
             root: root.to_path_buf(),
             account,
+            device_signer,
             directory,
             counter,
             albums: HashMap::new(),
@@ -245,14 +279,14 @@ impl Workspace {
         })
     }
 
-    fn build_directory(account: &Account) -> DeviceDirectory {
+    fn build_directory(account: &Account, dsk_public: HybridVerifyingKey) -> DeviceDirectory {
         DirectoryCore {
             user_id: account.user_id,
             directory_version: 1,
             updated_at: now_rfc3339(),
             devices: vec![DeviceEntry {
                 device_id: account.device.device_id,
-                dsk_public: account.device.dsk.verifying_key(),
+                dsk_public,
                 added_at: DEVICE_ADDED_AT.into(),
                 revoked_at: None,
             }],
@@ -376,7 +410,7 @@ impl Workspace {
         action: Action,
         prior: Option<Hash32>,
         retention_until: Option<String>,
-    ) -> AssetManifest {
+    ) -> std::result::Result<AssetManifest, CryptoError> {
         let core = ManifestCore {
             action,
             prior_provenance_hash: prior,
@@ -384,7 +418,7 @@ impl Workspace {
             timestamp: now_rfc3339(),
             ..base.clone()
         };
-        core.sign(&self.account.device.dsk, &album.write_tier)
+        core.sign(self.device_signer.as_ref(), &album.write_tier)
     }
 
     fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
@@ -470,7 +504,7 @@ impl Workspace {
             prior_provenance_hash: None,
             retention_until: None,
         };
-        let manifest = core.sign(&self.account.device.dsk, &album.write_tier);
+        let manifest = core.sign(self.device_signer.as_ref(), &album.write_tier)?;
 
         let mut chain = ProvenanceChain::new();
         chain
@@ -581,7 +615,7 @@ impl Workspace {
             .core
             .clone();
         let album = self.album(&album_id)?;
-        let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until);
+        let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until)?;
         let add_id = self.counter.issue();
 
         {
@@ -685,14 +719,14 @@ impl Workspace {
             source_library_version: "1".into(),
             export_timestamp: now_rfc3339(),
         };
-        let bytes = backup::export(&input, passphrase, &self.account.device.dsk)?;
+        let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
         fs::write(out, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
         Ok(())
     }
 
     /// This device's signing public key (the exporter key a peer verifies a backup against).
-    pub fn exporter_verifying_key(&self) -> crate::crypto::keys::HybridVerifyingKey {
-        self.account.device.dsk.verifying_key()
+    pub fn exporter_verifying_key(&self) -> HybridVerifyingKey {
+        self.device_signer.verifying_key()
     }
 
     /// Open a backup artifact and restore (commit) its assets into this workspace, writing
@@ -1001,5 +1035,51 @@ mod tests {
         assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
         ws.restore(&id).unwrap();
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn hardware_backed_device_imports_and_verifies() {
+        use crate::crypto::keys::HardwareBackedSigner;
+        use crate::crypto::keys::hardware::MockHardwareSigner;
+        use std::sync::Arc;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF hardware-signed asset").unwrap();
+
+        // The DSK's classical half lives in the (mock) secure element; the PQ half is the
+        // software ξ seed. Create the workspace with the hardware-backed signer.
+        let hw = Arc::new(MockHardwareSigner::new([5; 32], false));
+        let signer = HardwareBackedSigner::enroll(hw, "device-dsk".into(), &[6; 32]).unwrap();
+        let mut ws = Workspace::create_with_hardware_signer(
+            lib.path(),
+            b"passphrase",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+            Box::new(signer),
+        )
+        .unwrap();
+
+        // The full offline lifecycle runs on hardware-composed signatures: the manifest's
+        // device_sig (hardware Ed25519 ‖ software ML-DSA) verifies through `verify_asset`
+        // against the directory key the workspace published from the same signer.
+        let album = ws.create_album("Trip");
+        let asset = ws.import_asset(album, &img).unwrap();
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        // A metadata edit re-signs with the hardware signer and still verifies.
+        ws.tag_add(&asset, "vacation").unwrap();
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        // The exporter key is the hardware-backed device key (not the account's software DSK).
+        assert_eq!(
+            ws.exporter_verifying_key(),
+            ws.directory
+                .device(&ws.account.device.device_id)
+                .unwrap()
+                .dsk_public
+        );
     }
 }

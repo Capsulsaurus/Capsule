@@ -172,7 +172,7 @@ mod tests {
         };
         ProvenanceRecord {
             asset_id: Uuid::from_u128(ASSET),
-            manifest: core.sign(&dev(), &wt()),
+            manifest: core.sign(&dev(), &wt()).unwrap(),
             prior_provenance_hash: prior,
         }
     }
