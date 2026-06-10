@@ -77,6 +77,14 @@ private let moduleTargets: [Target] =
     // Foundation — value types, logging, utilities. No dependencies.
     module("CapsuleFoundation", testDependencies: [])
 
+        // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
+        // redacted bug-report bundles, and an opt-in self-hosted uploader.
+        + module(
+            "CapsuleDiagnostics",
+            dependencies: [.target(name: "CapsuleFoundation")],
+            testDependencies: [supportDependency]
+        )
+
         // Catalog — Swift adapter over the Rust UniFFI catalog. Compiles the
         // generated bindings and links the prebuilt xcframework.
         + module(
@@ -117,6 +125,7 @@ private let moduleTargets: [Target] =
             "CapsuleTestSupport",
             dependencies: [
                 .target(name: "CapsuleFoundation"),
+                .target(name: "CapsuleDiagnostics"),
                 .target(name: "CapsuleCatalog"),
                 .target(name: "ManagedStore"),
                 .target(name: "AssetKit"),
@@ -202,6 +211,7 @@ private let appTarget: Target = .target(
             "Capsule shows and organizes the photos and videos in your library.",
     ]),
     sources: ["App/iOS/Sources/**"],
+    resources: ["App/iOS/Resources/**"],
     dependencies: [
         .target(name: "FeatureTimeline"),
         .target(name: "FeatureViewer"),
@@ -210,6 +220,7 @@ private let appTarget: Target = .target(
         .target(name: "CapsuleUI"),
         .target(name: "ImagePipeline"),
         .target(name: "AssetKit"),
+        .target(name: "CapsuleDiagnostics"),
         .target(name: "CapsuleFoundation"),
     ],
     settings: appSettings
@@ -218,6 +229,7 @@ private let appTarget: Target = .target(
 /// Every unit-test target — gathered for the `Capsule` scheme's test action.
 private let testTargetNames: [TestableTarget] = [
     "CapsuleFoundationTests",
+    "CapsuleDiagnosticsTests",
     "CapsuleCatalogTests",
     "ManagedStoreTests",
     "AssetKitTests",

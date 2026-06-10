@@ -42,6 +42,7 @@ public actor ImportService {
             catalog = try await library.catalog()
         } catch {
             CapsuleLog.managedStore.error("import aborted, catalog unavailable: \(String(describing: error), privacy: .public)")
+            Diagnostics.shared.recordError(operation: .importRun)
             return ImportResult(failures: sources.map {
                 ImportFailure(filename: $0.originalFilename, reason: "Library unavailable.")
             })
