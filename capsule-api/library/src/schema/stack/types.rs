@@ -1,6 +1,7 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
-use entity::{asset_stack::Model as StackModel, stack_member::Model as MemberModel};
+use entity::asset_stack::Model as StackModel;
+use entity::stack_member::Model as MemberModel;
 use model;
 
 use crate::schema::asset::AssetMetadata;

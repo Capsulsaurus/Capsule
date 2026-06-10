@@ -1,12 +1,8 @@
 use thiserror::Error;
 
-use crate::{
-    image::{
-        buffer::{ComponentType, ImageBuffer, ImageBufferError, PixelFormat},
-        resize_to_max_dimension,
-    },
-    metadata::ColorSpace,
-};
+use crate::image::buffer::{ComponentType, ImageBuffer, ImageBufferError, PixelFormat};
+use crate::image::resize_to_max_dimension;
+use crate::metadata::ColorSpace;
 
 /// LQIP (thumbhash) struct
 pub struct LQIP(Vec<u8>);

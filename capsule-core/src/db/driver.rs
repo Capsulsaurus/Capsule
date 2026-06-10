@@ -1,7 +1,9 @@
+use std::path::Path;
+
+use rusqlite::{Connection, params};
+
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 use crate::db::schema;
-use rusqlite::{Connection, params};
-use std::path::Path;
 
 pub struct DatabaseDriver {
     conn: Connection,

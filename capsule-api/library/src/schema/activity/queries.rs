@@ -1,8 +1,9 @@
+use async_graphql::*;
+
 use super::{
     Activity, ActivityAction, ActivityType, CreateAlbumActivity, DeleteAlbumActivity,
     DeleteAssetActivity, MoveAssetActivity, UpdateAlbumActivity, UploadAssetsActivity,
 };
-use async_graphql::*;
 
 pub struct ActivityQuery;
 

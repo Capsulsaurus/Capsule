@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{QueryOrder, Set, entity::prelude::*};
+use sea_orm::entity::prelude::*;
+use sea_orm::{QueryOrder, Set};
 
 /// Links assets to stacks with ordering and role information
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

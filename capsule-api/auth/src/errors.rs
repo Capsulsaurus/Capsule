@@ -1,9 +1,9 @@
+use model::errors::InternalServerError;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use thiserror::Error;
 
 use crate::models::errors::BadRegisterUserRequestError;
-use model::errors::InternalServerError;
 
 /// Register user error
 #[derive(Debug)]

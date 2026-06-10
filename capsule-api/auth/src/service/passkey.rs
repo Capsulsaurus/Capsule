@@ -1,8 +1,10 @@
-use crate::errors::{PasskeyAuthenticationError, PasskeyManagementError, PasskeyRegistrationError};
-use sea_orm::DatabaseConnection;
 use std::sync::Arc;
+
+use sea_orm::DatabaseConnection;
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
+
+use crate::errors::{PasskeyAuthenticationError, PasskeyManagementError, PasskeyRegistrationError};
 
 #[derive(Clone)]
 pub struct PasskeyService {

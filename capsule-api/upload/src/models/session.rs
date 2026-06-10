@@ -1,5 +1,4 @@
 use chrono::{DateTime, Utc};
-
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,8 +1,9 @@
-use chrono::NaiveDateTime;
-use exif::{In, Reader, Tag, Value};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+
+use chrono::NaiveDateTime;
+use exif::{In, Reader, Tag, Value};
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ExifExtract {

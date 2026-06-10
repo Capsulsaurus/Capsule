@@ -80,12 +80,14 @@ pub fn write_library_config(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::domain::ImportMode;
     use crate::metadata::AssetType;
     use crate::sidecar::{AssetSidecar, LibraryConfigCbor, LibraryVersionCbor};
-    use std::collections::BTreeMap;
-    use tempfile::TempDir;
 
     fn minimal_sidecar() -> AssetSidecar {
         AssetSidecar {

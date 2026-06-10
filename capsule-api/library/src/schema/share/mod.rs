@@ -1,15 +1,17 @@
+use std::collections::HashMap;
+
 use async_graphql::*;
 use chrono::{DateTime, Utc};
-use entity::share_link::ActiveModel as ShareLinkActiveModel;
-use entity::share_link::Model as ShareLinkModel;
-use entity::share_link::ShareLinkType as EntityShareLinkType;
+use entity::share_link::{
+    ActiveModel as ShareLinkActiveModel, Model as ShareLinkModel,
+    ShareLinkType as EntityShareLinkType,
+};
 use entity::{album, album_share, owner_member, share_link, user};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set};
 
 use super::album::Album;
 use super::user::User;
 use crate::context::AppContext;
-use std::collections::HashMap;
 
 /// Type of content being shared
 #[derive(Enum, Clone, Copy, Eq, PartialEq)]

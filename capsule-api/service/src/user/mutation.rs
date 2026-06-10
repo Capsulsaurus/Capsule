@@ -1,6 +1,8 @@
-use super::{CreateUserArgs, UpdateUserArgs};
-use ::entity::{user, user::Entity as User};
+use ::entity::user;
+use ::entity::user::Entity as User;
 use sea_orm::*;
+
+use super::{CreateUserArgs, UpdateUserArgs};
 
 pub struct Mutation;
 

@@ -1,9 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use crate::common;
     use entity::user::{ActiveModel as UserActiveModel, Column as UserColumn, Entity as User};
     use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
     use uuid::Uuid;
+
+    use crate::common;
 
     #[tokio::test]
     async fn test_create_user() {

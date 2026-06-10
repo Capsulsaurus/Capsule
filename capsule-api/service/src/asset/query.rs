@@ -1,7 +1,5 @@
-use ::entity::{
-    asset::{self, Entity as Asset},
-    owner_member::{self, Entity as OwnerMember},
-};
+use ::entity::asset::{self, Entity as Asset};
+use ::entity::owner_member::{self, Entity as OwnerMember};
 use sea_orm::*;
 
 pub struct Query;

@@ -1,3 +1,5 @@
+use std::sync::Once;
+
 use auth::config::AuthConfig;
 use auth::service::PasskeyService;
 use auth::session::SessionManager;
@@ -5,7 +7,6 @@ use auth::state::AppState;
 use migration::Migrator;
 use sea_orm::{Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
-use std::sync::Once;
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;

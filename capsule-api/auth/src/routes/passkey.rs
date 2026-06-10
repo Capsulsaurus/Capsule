@@ -1,10 +1,11 @@
-use crate::models::responses::*;
-use crate::state::AppState;
-use crate::utils::headers::validate_user_from_headers;
+use std::time::Duration;
+
 use salvo::http::cookie::{Cookie, SameSite};
 use salvo::prelude::*;
 
-use std::time::Duration;
+use crate::models::responses::*;
+use crate::state::AppState;
+use crate::utils::headers::validate_user_from_headers;
 
 #[handler]
 pub async fn start_registration(

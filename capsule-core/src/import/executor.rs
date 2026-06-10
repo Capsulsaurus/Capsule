@@ -409,14 +409,16 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::domain::ImportMode;
     use crate::import::executor_cancellation::CancellationToken;
     use crate::import::planner::{ImportConfig, plan};
     use crate::import::scanner::scan;
     use crate::library::init::init_library;
-    use std::fs;
-    use tempfile::TempDir;
 
     fn noop_event(_: ImportProgressEvent) {}
 

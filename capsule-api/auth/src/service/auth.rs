@@ -1,6 +1,7 @@
 // use crate::models::{CreateUser, UpdateUser};
 use environment::constants::MAX_FAILED_LOGIN_ATTEMPTS;
 use sea_orm::DatabaseConnection;
+use secrecy::{ExposeSecret, SecretString};
 use service::user as UserService;
 
 use super::token::TokenService;
@@ -12,7 +13,6 @@ use crate::models::responses::TokenResponse;
 use crate::session::SessionManager;
 use crate::utils::hash::{hash_password, verify_password};
 use crate::validation::RegistrationValidator;
-use secrecy::{ExposeSecret, SecretString};
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -187,12 +187,14 @@ impl AuthService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::session::InMemorySessionStorage;
+    use std::time::Duration;
+
     use base64::Engine;
     use jsonwebtoken::{DecodingKey, EncodingKey};
     use ring::signature::{Ed25519KeyPair, KeyPair};
-    use std::time::Duration;
+
+    use super::*;
+    use crate::session::InMemorySessionStorage;
 
     fn get_test_keys() -> (EncodingKey, DecodingKey) {
         let doc: Vec<u8> = base64::engine::general_purpose::STANDARD

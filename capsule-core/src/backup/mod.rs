@@ -17,7 +17,6 @@ pub mod artifact;
 pub use artifact::{
     BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, export, export_with_salt,
 };
-
 use thiserror::Error;
 
 use crate::crypto::primitives::DeviceTier;

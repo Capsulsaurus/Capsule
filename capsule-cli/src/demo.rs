@@ -8,13 +8,12 @@
 
 use std::path::PathBuf;
 
-use colored::*;
-use eyre::{Result, eyre};
-
 use capsule_core::backup::{recover_seed, split_seed_2of3};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::Workspace;
+use colored::*;
+use eyre::{Result, eyre};
 
 /// Fast Argon2id parameters — this is a demo; the wrap-key strength is not the point.
 const DEMO_KDF: Argon2Params = Argon2Params {

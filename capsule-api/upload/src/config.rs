@@ -1,8 +1,8 @@
-use environment::wrapper::SecretKeyWrapper;
-use jsonwebtoken::DecodingKey;
 use std::path::PathBuf;
 
 use environment::ServerConfig;
+use environment::wrapper::SecretKeyWrapper;
+use jsonwebtoken::DecodingKey;
 
 #[derive(Clone)]
 pub struct UploadServerConfig {

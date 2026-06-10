@@ -1,5 +1,6 @@
-use chrono::{DateTime, Datelike};
 use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, Datelike};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +125,9 @@ pub fn tmp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use uuid::Uuid;
+
+    use super::*;
 
     fn test_uuid() -> Uuid {
         // Use a fixed UUID for deterministic tests

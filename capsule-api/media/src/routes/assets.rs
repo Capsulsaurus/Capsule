@@ -1,6 +1,7 @@
 //! Asset media serving endpoints with OpenAPI documentation
 
-use crate::state::AppState;
+use std::str::FromStr;
+
 use derive_more::From;
 use entity::asset;
 use model::errors::InternalServerError;
@@ -10,8 +11,9 @@ use salvo::prelude::*;
 use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
 use service::storage::{StorageConfig, StorageService};
-use std::str::FromStr;
 use uuid::Uuid;
+
+use crate::state::AppState;
 
 // TODO: authorization via access token for asset routes
 

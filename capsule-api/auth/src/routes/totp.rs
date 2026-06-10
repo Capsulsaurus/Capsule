@@ -1,5 +1,6 @@
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use secrecy::ExposeSecret;
 
 use crate::claims::{Claims, Scope};
 use crate::models::requests::{
@@ -10,8 +11,6 @@ use crate::models::responses::{
     TotpVerifyEnrollmentResponses, TotpVerifyLoginResponses,
 };
 use crate::state::AppState;
-
-use secrecy::ExposeSecret;
 
 /// Enroll in TOTP - generates secret and provisioning URI
 #[endpoint(operation_id = "totp_enroll", tags("totp"), security(("bearer" = [])))]

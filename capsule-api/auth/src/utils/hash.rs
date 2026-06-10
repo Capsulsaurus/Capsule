@@ -1,9 +1,7 @@
-use argon2::{
-    Argon2,
-    password_hash::{
-        Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
-        rand_core::OsRng,
-    },
+use argon2::Argon2;
+use argon2::password_hash::rand_core::OsRng;
+use argon2::password_hash::{
+    Error as PasswordHashError, PasswordHash, PasswordHasher, PasswordVerifier, SaltString,
 };
 
 /// Hash a password using Argon2id v19 with default parameters.

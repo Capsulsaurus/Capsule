@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
+use ciborium::value::Value;
+use serde::{Deserialize, Serialize};
+
 use crate::domain::{CaptureTzSource, ImportMode};
 use crate::metadata::AssetType;
 use crate::sidecar::StackHint;
-use ciborium::value::Value;
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
 /// CBOR sidecar for a media asset. Unknown fields are preserved verbatim
 /// for forward compatibility (Postel's Law).
@@ -227,11 +229,12 @@ impl<'de> Deserialize<'de> for AssetSidecar {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use crate::domain::{CaptureTzSource, DetectionMethod, ImportMode, MemberRole, StackType};
     use crate::metadata::AssetType;
     use crate::sidecar::StackHint;
-    use std::collections::BTreeMap;
 
     fn minimal_sidecar() -> AssetSidecar {
         AssetSidecar {

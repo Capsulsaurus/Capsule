@@ -1,10 +1,13 @@
-use crate::error::UploadError;
-use crate::models::session::{UploadSession, UploadSessionStatus};
-use bb8_redis::redis::AsyncCommands;
-use bb8_redis::{RedisConnectionManager, bb8::Pool};
-use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::time::Duration;
+
+use bb8_redis::RedisConnectionManager;
+use bb8_redis::bb8::Pool;
+use bb8_redis::redis::AsyncCommands;
+use chrono::{DateTime, Utc};
+
+use crate::error::UploadError;
+use crate::models::session::{UploadSession, UploadSessionStatus};
 
 // TODO: Validate this code
 

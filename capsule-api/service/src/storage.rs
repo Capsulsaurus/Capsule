@@ -1,6 +1,6 @@
-use capsule_core::models::asset::Asset;
-
 use std::path::PathBuf;
+
+use capsule_core::models::asset::Asset;
 
 #[derive(Clone)]
 pub struct StorageConfig {

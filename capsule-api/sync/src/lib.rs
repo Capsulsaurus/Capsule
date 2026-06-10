@@ -1,16 +1,9 @@
+use std::convert::Infallible;
+
 use config::SyncServerConfig;
 use eyre::Result;
 use futures_util::{Stream, StreamExt};
 use http_body_util::BodyExt;
-use salvo::BoxedError;
-use salvo::http::{ResBody, StatusError};
-use salvo::hyper;
-use salvo::prelude::*;
-use sea_orm::DatabaseConnection;
-use std::convert::Infallible;
-use tonic::{Request, Response, Status};
-use tower::Service;
-
 use proto::photolibrary::metadata::v1::photo_library_metadata_service_server::{
     PhotoLibraryMetadataService, PhotoLibraryMetadataServiceServer,
 };
@@ -24,6 +17,12 @@ use proto::photolibrary::metadata::v1::{
     SyncMetadataResponse, UpdateAlbumRequest, UpdateAlbumResponse, UpdatePhotoMetadataRequest,
     UpdatePhotoMetadataResponse,
 };
+use salvo::http::{ResBody, StatusError};
+use salvo::prelude::*;
+use salvo::{BoxedError, hyper};
+use sea_orm::DatabaseConnection;
+use tonic::{Request, Response, Status};
+use tower::Service;
 
 pub mod config;
 

@@ -113,8 +113,9 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn make_library_dir(tmp: &TempDir) {
         fs::create_dir_all(tmp.path().join(".library")).unwrap();

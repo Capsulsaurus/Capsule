@@ -1,5 +1,7 @@
-use capsule_sdk::{AuthenticatedClient, Client, types::AuthModelsRequestsLoginRequest};
 use std::env;
+
+use capsule_sdk::types::AuthModelsRequestsLoginRequest;
+use capsule_sdk::{AuthenticatedClient, Client};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

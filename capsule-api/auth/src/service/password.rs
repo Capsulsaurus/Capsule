@@ -1,8 +1,9 @@
+use std::time::Instant;
+
 use chrono::{Duration, Utc};
 use model::errors::InternalServerError;
 use sea_orm::DatabaseConnection;
 use service::user as UserService;
-use std::time::Instant;
 
 pub struct PasswordService {
     min_operation_time: std::time::Duration,

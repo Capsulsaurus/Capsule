@@ -16,8 +16,10 @@ pub fn convert_ed25519_der_to_jwt_keys(
 
 #[cfg(test)]
 mod tests {
+    use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD as BASE64;
+
     use super::*;
-    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
     /// Test we parse a DER-encoded ED25519 keypair
     #[test]

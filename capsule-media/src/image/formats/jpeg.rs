@@ -5,22 +5,19 @@ use zune_core::colorspace::ColorSpace as ZuneColorSpace;
 use zune_core::options::DecoderOptions;
 use zune_jpeg::JpegDecoder;
 
-use crate::image::metadata::{
-    ContentMetadata, ImageMetadataExtractor,
-    exposure::CaptureSettings,
-    iptc::IptcData,
-    motion::{AuxiliaryImage, MotionPhotoInfo},
-    raw::RawSensorInfo,
-};
-use crate::image::{
-    Image, ImageDecode, ImageEncode, ImageError, ImageMetadata,
-    buffer::{ComponentType, ImageBuffer, PixelFormat},
-};
-use crate::metadata::ColorSpace;
-use crate::metadata::{
-    DeviceMetadata, c2pa::C2PAManifest, exif::ExifData, geo::GpsLocation, icc::IccProfile,
-    xmp::XmpData,
-};
+use crate::image::buffer::{ComponentType, ImageBuffer, PixelFormat};
+use crate::image::metadata::exposure::CaptureSettings;
+use crate::image::metadata::iptc::IptcData;
+use crate::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
+use crate::image::metadata::raw::RawSensorInfo;
+use crate::image::metadata::{ContentMetadata, ImageMetadataExtractor};
+use crate::image::{Image, ImageDecode, ImageEncode, ImageError, ImageMetadata};
+use crate::metadata::c2pa::C2PAManifest;
+use crate::metadata::exif::ExifData;
+use crate::metadata::geo::GpsLocation;
+use crate::metadata::icc::IccProfile;
+use crate::metadata::xmp::XmpData;
+use crate::metadata::{ColorSpace, DeviceMetadata};
 
 #[derive(Debug, Clone)]
 pub struct JpegImage {

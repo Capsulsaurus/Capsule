@@ -1,9 +1,10 @@
-use crate::models::session::{UploadSession, UploadSessionStatus};
 use model::errors::InternalServerError;
 use salvo::http::StatusCode;
 use salvo::oapi::{EndpointOutRegister, ToSchema};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
+
+use crate::models::session::{UploadSession, UploadSessionStatus};
 
 /// Response for a successful upload creation
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]

@@ -5,11 +5,9 @@ use crate::db::DatabaseDriver;
 use crate::library::error::LibraryError;
 use crate::library::library::Library;
 use crate::library::lock;
+use crate::sidecar::LibraryConfigCbor;
+use crate::sidecar::io::{write_library_config, write_library_version};
 use crate::sidecar::library_version::{CURRENT_LIBRARY_VERSION, LibraryVersionCbor};
-use crate::sidecar::{
-    LibraryConfigCbor,
-    io::{write_library_config, write_library_version},
-};
 
 /// Skeleton directory paths (relative to library root).
 const SKELETON_DIRS: &[&str] = &[
@@ -103,9 +101,10 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::sidecar::io::read_library_version;
-    use tempfile::TempDir;
 
     #[test]
     fn test_init_creates_skeleton_dirs() {

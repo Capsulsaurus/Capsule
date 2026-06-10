@@ -1,10 +1,11 @@
+use ::entity::friendship::{self, FriendshipStatus};
+use chrono::Utc;
+use sea_orm::*;
+
 use super::error::{
     AcceptRequestResult, FriendshipError, RejectRequestResult, RemoveFriendshipResult,
     SendRequestResult,
 };
-use ::entity::friendship::{self, FriendshipStatus};
-use chrono::Utc;
-use sea_orm::*;
 
 pub struct Mutation;
 

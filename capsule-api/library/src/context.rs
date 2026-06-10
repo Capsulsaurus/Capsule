@@ -1,7 +1,10 @@
 use std::collections::HashSet;
 
 use async_graphql::{Error, ErrorExtensions, ServerError};
-use auth::{claims::Scope, errors::ClaimValidationError, roles::UserRole, service::AuthService};
+use auth::claims::Scope;
+use auth::errors::ClaimValidationError;
+use auth::roles::UserRole;
+use auth::service::AuthService;
 use salvo::http::HeaderMap;
 use sea_orm::DatabaseConnection;
 use secrecy::ExposeSecret;

@@ -1,13 +1,13 @@
 use config::UploadServerConfig;
 use eyre::Result;
-use sea_orm::DatabaseConnection;
-
 use salvo::cors::{AllowOrigin, Cors};
 use salvo::http::Method;
 use salvo::prelude::*;
+use sea_orm::DatabaseConnection;
 use tracing::info;
 
-use crate::{config::validate_config, state::AppState};
+use crate::config::validate_config;
+use crate::state::AppState;
 
 mod config;
 mod error;

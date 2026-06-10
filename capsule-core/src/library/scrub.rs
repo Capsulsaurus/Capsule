@@ -74,9 +74,11 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_scrub_removes_old_tmp() {

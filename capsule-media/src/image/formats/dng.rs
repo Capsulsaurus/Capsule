@@ -1,20 +1,19 @@
 use std::io::Write;
 use std::path::Path;
 
-use crate::image::metadata::{
-    ContentMetadata, ImageMetadataExtractor,
-    exposure::CaptureSettings,
-    iptc::IptcData,
-    motion::{AuxiliaryImage, MotionPhotoInfo},
-    raw::RawSensorInfo,
-};
-use crate::image::{
-    Image, ImageDecode, ImageEncode, ImageError, ImageMetadata, buffer::ImageBuffer,
-};
-use crate::metadata::{
-    ColorSpace, DeviceMetadata, c2pa::C2PAManifest, exif::ExifData, geo::GpsLocation,
-    icc::IccProfile, xmp::XmpData,
-};
+use crate::image::buffer::ImageBuffer;
+use crate::image::metadata::exposure::CaptureSettings;
+use crate::image::metadata::iptc::IptcData;
+use crate::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
+use crate::image::metadata::raw::RawSensorInfo;
+use crate::image::metadata::{ContentMetadata, ImageMetadataExtractor};
+use crate::image::{Image, ImageDecode, ImageEncode, ImageError, ImageMetadata};
+use crate::metadata::c2pa::C2PAManifest;
+use crate::metadata::exif::ExifData;
+use crate::metadata::geo::GpsLocation;
+use crate::metadata::icc::IccProfile;
+use crate::metadata::xmp::XmpData;
+use crate::metadata::{ColorSpace, DeviceMetadata};
 
 #[derive(Debug, Clone)]
 pub struct DngImage {}

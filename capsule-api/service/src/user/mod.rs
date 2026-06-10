@@ -1,11 +1,10 @@
 pub mod mutation;
 pub mod query;
 
-use serde::{Deserialize, Serialize};
-
 // Re-export specific structs that consumers expect under service::user::X
 pub use mutation::Mutation;
 pub use query::Query;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateUserArgs {

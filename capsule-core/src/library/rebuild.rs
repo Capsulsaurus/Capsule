@@ -207,14 +207,16 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::domain::{DetectionMethod, ImportMode, MemberRole, StackType};
     use crate::library::init::init_library;
     use crate::metadata::AssetType;
     use crate::sidecar::io::write_sidecar;
     use crate::sidecar::{AssetSidecar, StackHint};
-    use std::collections::BTreeMap;
-    use tempfile::TempDir;
 
     fn make_sidecar(uuid: &str, hash: &str, hint: Option<StackHint>) -> AssetSidecar {
         AssetSidecar {

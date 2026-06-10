@@ -29,9 +29,8 @@ pub mod verify_asset;
 
 pub use hash::{Hash32, Sha256Hasher};
 pub use primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION, SuiteId};
-pub use verify_asset::{PendingReason, RejectReason, VerifyOutcome, verify_asset};
-
 use thiserror::Error;
+pub use verify_asset::{PendingReason, RejectReason, VerifyOutcome, verify_asset};
 
 /// Errors surfaced by the cryptographic layer.
 ///

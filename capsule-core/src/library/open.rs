@@ -66,9 +66,10 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::library::init::init_library;
-    use tempfile::TempDir;
 
     #[test]
     fn test_open_initialized_library() {

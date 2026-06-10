@@ -11,10 +11,9 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
-use crate::crypto::CryptoError;
-use crate::crypto::VerifyOutcome;
 use crate::crypto::keys::{HardwareBackedSigner, HardwareSigner, HybridVerifyingKey};
 use crate::crypto::primitives::DeviceTier;
+use crate::crypto::{CryptoError, VerifyOutcome};
 use crate::lifecycle::{LifecycleError, Workspace};
 
 /// Result alias for the FFI layer (every fallible call surfaces a [`LifecycleError`]).
@@ -208,9 +207,10 @@ impl FfiWorkspace {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::crypto::primitives::Argon2Params;
-    use tempfile::TempDir;
 
     /// Build an `FfiWorkspace` over a fast-Argon2 `Workspace` (the FFI constructor uses the
     /// production cost; tests reach the private field to avoid the 64–512 MiB hashing).

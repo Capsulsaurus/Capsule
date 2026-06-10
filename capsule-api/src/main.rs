@@ -1,11 +1,13 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use capsule_api::create_router;
 use environment::Environment;
 use eyre::{Result, eyre};
 use listenfd::ListenFd;
 use migration::{Migrator, MigratorTrait};
-use salvo::{conn::tcp::TcpAcceptor, prelude::*};
+use salvo::conn::tcp::TcpAcceptor;
+use salvo::prelude::*;
 use sea_orm::Database;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tracing::{debug, info};
 use tracing_subscriber::fmt::format::FmtSpan;

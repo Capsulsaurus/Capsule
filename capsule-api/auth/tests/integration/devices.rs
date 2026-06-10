@@ -1,8 +1,9 @@
-use crate::common::{build_service, setup};
 use auth::models::responses::{Device, TokenResponse};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use secrecy::ExposeSecret;
+
+use crate::common::{build_service, setup};
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

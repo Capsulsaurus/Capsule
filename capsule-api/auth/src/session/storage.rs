@@ -1,13 +1,13 @@
-use async_trait::async_trait;
-use bb8_redis::RedisConnectionManager;
-use bb8_redis::bb8::Pool;
-use redis::AsyncCommands;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 
+use async_trait::async_trait;
+use bb8_redis::RedisConnectionManager;
+use bb8_redis::bb8::Pool;
 use model::errors::InternalServerError;
+use redis::AsyncCommands;
+use tokio::sync::RwLock;
 
 /// Result of a rate limit check: count of requests in current window and remaining TTL (secs).
 pub struct RateLimitResult {

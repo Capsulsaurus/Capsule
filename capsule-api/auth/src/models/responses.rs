@@ -1,9 +1,3 @@
-use super::UserProfile;
-use super::errors::*;
-use crate::claims::Claims;
-use crate::errors::TotpEnrollError;
-use crate::errors::TotpVerificationError;
-use crate::errors::{ClaimValidationError, LoginError, RegisterError};
 use derive_more::From;
 use model::errors::InternalServerError;
 use model::passkey::Passkey;
@@ -12,6 +6,13 @@ use salvo::oapi::{EndpointOutRegister, ToSchema};
 use salvo::prelude::*;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
+
+use super::UserProfile;
+use super::errors::*;
+use crate::claims::Claims;
+use crate::errors::{
+    ClaimValidationError, LoginError, RegisterError, TotpEnrollError, TotpVerificationError,
+};
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
 pub struct Device {

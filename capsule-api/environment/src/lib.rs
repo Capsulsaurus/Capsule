@@ -1,11 +1,14 @@
+use std::env;
+use std::num::ParseIntError;
+use std::path::PathBuf;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use dotenvy::dotenv;
-use std::{env, num::ParseIntError, path::PathBuf};
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use thiserror::Error;
 use tracing::level_filters::LevelFilter;
 use wrapper::SecretKeyWrapper;
-
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use jsonwebtoken::{DecodingKey, EncodingKey};
 
 #[cfg(feature = "auth")]
 use crate::constants::{ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY, TOTP_ISSUER};

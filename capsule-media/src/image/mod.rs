@@ -1,15 +1,11 @@
-use std::{
-    io::{BufRead, Write},
-    path::{Path, PathBuf},
-};
+use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::image::{
-    buffer::ImageBuffer,
-    metadata::{ImageMetadata, ImageMetadataProvider},
-    types::ImageFormat,
-};
+use crate::image::buffer::ImageBuffer;
+use crate::image::metadata::{ImageMetadata, ImageMetadataProvider};
+use crate::image::types::ImageFormat;
 
 pub mod buffer;
 pub mod formats;
@@ -310,7 +306,8 @@ mod tests {
     #[test]
     #[ignore = "PngImage not yet implemented"]
     fn test_image_conversion() {
-        use crate::image::formats::{jpeg::JpegImage, png::PngImage};
+        use crate::image::formats::jpeg::JpegImage;
+        use crate::image::formats::png::PngImage;
 
         // Create a sample JPEG image buffer
         let width = 100;

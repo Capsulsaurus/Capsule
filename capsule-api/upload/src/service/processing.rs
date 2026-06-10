@@ -1,6 +1,7 @@
+use std::path::Path;
+
 use capsule_media::fs::{ImageParseError, load_image};
 use chrono::{DateTime, Utc};
-use std::path::Path;
 
 /// Service for processing uploaded assets
 #[derive(Clone)]

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{Set, entity::prelude::*};
+use sea_orm::Set;
+use sea_orm::entity::prelude::*;
 
 /// Type of content being shared via a public link
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

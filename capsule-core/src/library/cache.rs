@@ -45,8 +45,9 @@ pub fn cache_sweep(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn sweep_deletes_cache_files_and_rows_but_not_canonical_media() {

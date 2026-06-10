@@ -1,5 +1,6 @@
-use super::{Album, CreateAlbumInput, ShareAlbumInput, UpdateAlbumInput};
 use async_graphql::*;
+
+use super::{Album, CreateAlbumInput, ShareAlbumInput, UpdateAlbumInput};
 
 pub struct AlbumMutation;
 

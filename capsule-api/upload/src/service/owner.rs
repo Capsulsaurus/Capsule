@@ -1,4 +1,3 @@
-use crate::error::UploadError;
 use chrono::Utc;
 use entity::{owner, owner_member};
 use nanoid::nanoid;
@@ -6,6 +5,8 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
     QueryFilter, Set,
 };
+
+use crate::error::UploadError;
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -36,8 +37,9 @@ impl OwnerService {
         // 1. Find potential owner groups (those containing the first user)
         // Optimization: We only search groups involving the first user.
         // A group strict-matching [A, B] MUST include A.
-        use sea_orm::QuerySelect;
         use std::collections::HashSet;
+
+        use sea_orm::QuerySelect;
 
         let first_user = &user_ids[0];
         let candidates: Vec<String> = owner_member::Entity::find()

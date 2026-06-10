@@ -1,9 +1,7 @@
 use sea_orm::DatabaseConnection;
 
-use crate::{
-    errors::{TotpEnrollError, TotpVerificationError},
-    utils::totp::{generate_secret, get_totp_generator, verify_token},
-};
+use crate::errors::{TotpEnrollError, TotpVerificationError};
+use crate::utils::totp::{generate_secret, get_totp_generator, verify_token};
 
 /// TOTP service for generating and verifying Time-based One-Time Passwords
 pub struct TotpService {

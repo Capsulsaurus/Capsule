@@ -1,5 +1,6 @@
+use std::ops::Deref;
 use std::path::Path;
-use std::{fs, io, ops::Deref};
+use std::{fs, io};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

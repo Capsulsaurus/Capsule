@@ -1,9 +1,7 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
-use entity::face::ActiveModel as FaceActiveModel;
-use entity::face::Model as FaceModel;
-use entity::person::ActiveModel as PersonActiveModel;
-use entity::person::Model as PersonModel;
+use entity::face::{ActiveModel as FaceActiveModel, Model as FaceModel};
+use entity::person::{ActiveModel as PersonActiveModel, Model as PersonModel};
 use entity::{asset, face, person};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,

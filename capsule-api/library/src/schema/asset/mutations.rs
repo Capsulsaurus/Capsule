@@ -1,8 +1,9 @@
-use super::{AssetMetadata, CreateAssetInput, UpdateAssetInput};
-use crate::context::UserContext;
 use async_graphql::*;
 use sea_orm::DatabaseConnection;
 use service::asset::Mutation as AssetServiceMutation;
+
+use super::{AssetMetadata, CreateAssetInput, UpdateAssetInput};
+use crate::context::UserContext;
 
 /// Asset mutation operations
 #[derive(Default)]

@@ -1,6 +1,10 @@
+use std::process::Command;
+use std::sync::OnceLock;
+use std::time::Duration;
+use std::{env, str};
+
 use sea_orm::{Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
-use std::{env, process::Command, str, sync::OnceLock, time::Duration};
 use thiserror::Error;
 use tokio::sync::Mutex;
 

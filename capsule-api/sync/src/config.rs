@@ -1,5 +1,6 @@
-use environment::ServerConfig;
 use std::path::PathBuf;
+
+use environment::ServerConfig;
 
 #[derive(Clone)]
 pub struct SyncServerConfig {

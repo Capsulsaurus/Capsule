@@ -33,6 +33,8 @@ use uuid::Uuid;
 
 use crate::backup::{self, BackupArtifact, BackupAsset, BackupInput, RestoreMode};
 use crate::cbor;
+use crate::crypto::CryptoError;
+use crate::crypto::authority::ReferenceAuthority;
 use crate::crypto::encryption::{seal_blob, stream};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
@@ -44,7 +46,6 @@ use crate::crypto::provenance::action::Action;
 use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
-use crate::crypto::{CryptoError, authority::ReferenceAuthority};
 use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
 use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter};
@@ -837,9 +838,10 @@ impl Workspace {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::crypto::primitives::Argon2Params;
-    use tempfile::TempDir;
 
     fn fast_workspace(dir: &Path) -> Workspace {
         Workspace::create_with_params(
@@ -1039,9 +1041,10 @@ mod tests {
 
     #[test]
     fn hardware_backed_device_imports_and_verifies() {
+        use std::sync::Arc;
+
         use crate::crypto::keys::HardwareBackedSigner;
         use crate::crypto::keys::hardware::MockHardwareSigner;
-        use std::sync::Arc;
 
         let lib = TempDir::new().unwrap();
         let src = TempDir::new().unwrap();
