@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[lib]
+# `lib` (rlib) keeps the rest of the workspace linking capsule-core unchanged.
+# `cdylib` is the Android `.so` and `staticlib` the iOS XCFramework input for the
+# uniffi bindings (see the `ffi` feature). Cargo cannot gate crate-type by feature,
+# so host builds also emit these artifacts — an accepted, cheap cost.
+crate-type = ["lib", "cdylib", "staticlib"]
+
 [dependencies]
 chrono = { workspace = true }
 ciborium = "0.2"

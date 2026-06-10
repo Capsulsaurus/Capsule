@@ -33,6 +33,9 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - 'Cross.toml'
+              - 'justfile'
+              - '.cargo/**'
               - 'capsule-api/**'
               - 'capsule-cli/**'
               - 'capsule-core/**'
@@ -93,6 +96,74 @@ jobs:
         uses: extractions/setup-just@v3
       - name: Test
         run: just test-rust
+
+  # Verify capsule-core cross-compiles to the formally supported targets (mobile +
+  # desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
+  # is best-effort via continue-on-error. The host x86_64 Linux Tier-1 target is
+  # already covered by the `rust` job's workspace build.
+  rust-cross:
+    name: Rust cross (${{ matrix.name }})
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.tier2 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: apple
+            os: macos-14
+            recipe: build-apple
+            targets: aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+            tier2: false
+          - name: android
+            os: ubuntu-latest
+            recipe: build-android
+            targets: aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+            tier2: false
+          - name: windows
+            os: windows-latest
+            recipe: build-windows
+            targets: x86_64-pc-windows-msvc
+            tier2: true
+          - name: linux-arm64
+            os: ubuntu-latest
+            recipe: build-linux-cross
+            targets: aarch64-unknown-linux-gnu
+            tier2: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.targets }}
+      - name: Set up Android NDK
+        if: matrix.name == 'android'
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+      - name: Export ANDROID_NDK_HOME
+        if: matrix.name == 'android' && steps.ndk.outputs.ndk-path != ''
+        run: echo "ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+      - name: Install cargo-ndk
+        if: matrix.name == 'android'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Install cross
+        if: matrix.name == 'linux-arm64'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.name }}
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Build target
+        run: just ${{ matrix.recipe }}
 
   web:
     name: Web (format + lint + test + build)
@@ -170,12 +241,13 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [changes, rust, rust-test, web, docs, vision]
+    needs: [changes, rust, rust-test, rust-cross, web, docs, vision]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.rust.result }}" "${{ needs.web.result }}" \
+          for r in "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+                   "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.vision.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
