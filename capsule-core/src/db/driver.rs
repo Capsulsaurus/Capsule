@@ -4,11 +4,12 @@ use rusqlite::{Connection, params};
 use std::path::Path;
 
 pub struct DatabaseDriver {
-    conn: Connection,
+    pub(in crate::db) conn: Connection,
 }
 
 impl DatabaseDriver {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
         let driver = Self { conn };
         driver.init_schema()?;
@@ -16,6 +17,7 @@ impl DatabaseDriver {
     }
 
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
+        crate::db::vector::ensure_vec_extension();
         let conn = Connection::open_in_memory()?;
         let driver = Self { conn };
         driver.init_schema()?;
@@ -24,6 +26,9 @@ impl DatabaseDriver {
 
     pub fn init_schema(&self) -> Result<(), rusqlite::Error> {
         self.conn.execute_batch(schema::DDL)?;
+        // The per-task vector tables are sized from the canonical model registry (their `vec0`
+        // dimension is registry-declared), so they are created here rather than in the static DDL.
+        crate::db::vector::create_vector_tables(&self.conn, &crate::ml::Registry::canonical())?;
         self.conn.execute_batch(&format!(
             "PRAGMA user_version = {};",
             schema::SCHEMA_VERSION
@@ -426,7 +431,7 @@ mod tests {
     fn test_init_schema_idempotent() {
         let db = DatabaseDriver::open_in_memory().unwrap();
         db.init_schema().unwrap(); // second call — should not fail
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
     }
 
     #[test]

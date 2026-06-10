@@ -276,6 +276,15 @@ impl Registry {
         self.rows.iter().find(|r| r.task == task)
     }
 
+    /// Record a model swap for `task` — a one-row edit setting its canonical version. Embeddings
+    /// stored at the prior version become [stale](Self::is_stale) and are excluded from queries
+    /// until regenerated from the originals.
+    pub fn set_canonical_version(&mut self, task: TaskKind, version: ModelVersion) {
+        if let Some(row) = self.rows.iter_mut().find(|r| r.task == task) {
+            row.canonical_version = version;
+        }
+    }
+
     /// The row a `model_id` belongs to, if any (each id is in at most one row).
     pub fn row_for_id(&self, model_id: &ModelId) -> Option<&ModelRow> {
         self.rows.iter().find(|r| &r.model_id == model_id)
