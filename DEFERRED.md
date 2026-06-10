@@ -28,7 +28,8 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   monotonic add-id counter; signed `SidecarV1` (schema as CBOR field 0); privacy-on-export.
 - **Backup** — deterministic signed tar artifact, AMK ledger, master-key escrow, Shamir
   2-of-3, and dry-run/commit restore with chain reconciliation.
-- **Lifecycle `Workspace`** — ties it together and is showcased end-to-end by `capsule demo`.
+- **Lifecycle `Workspace`** — ties it together and writes through to the queryable
+  `library.sqlite` index; showcased end-to-end by `capsule demo`.
 
 ## Deferred — with the seam in place
 
@@ -75,9 +76,14 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 ### Other
 - Thumbnail/LQIP generation beyond `capsule-media`'s existing utilities.
 - Fusing the crypto data plane into the **existing plaintext import executor**
-  (`capsule_core::import::executor`): that pipeline still writes the legacy `AssetSidecar`.
-  The crypto-integrated lifecycle lives in `capsule_core::lifecycle::Workspace` (used by
-  `capsule demo`); unifying the two import paths is a follow-up.
+  (`capsule_core::import::executor`) — **partially done.** `capsule_core::lifecycle::Workspace`
+  now writes through to the shared `library.sqlite` index: every import / metadata edit /
+  soft-delete upserts the queryable `assets` row (+ user tags) and records a device-owned
+  `original` cache representation, so crypto-imported assets are timeline-queryable and feed the
+  Phase-3 cache sweep. Dedup against `assets` is consequently **global** across both import
+  paths. **Still deferred:** the legacy `import::executor` keeps writing the unsigned
+  `AssetSidecar`; replacing it with the signed `SidecarV1` + manifest + provenance path needs
+  the deferred thumbnail/LQIP (media) generation, so the full executor rewrite is a follow-up.
 
 ## How to see it working
 

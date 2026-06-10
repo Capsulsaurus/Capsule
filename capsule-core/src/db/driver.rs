@@ -310,6 +310,43 @@ impl DatabaseDriver {
         }
         Ok(evict)
     }
+
+    /// All cached representations recorded for `uuid` (any tier).
+    pub fn representations_for(
+        &self,
+        uuid: &str,
+    ) -> Result<Vec<CachedRepresentationRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, tier, format, bytes, path, last_accessed_at, pinned, is_owned_original
+             FROM cached_representations WHERE uuid = ?1 ORDER BY tier",
+        )?;
+        let rows = stmt.query_map(params![uuid], map_cached_representation_row)?;
+        rows.collect()
+    }
+
+    // ── User tags (asset_tags index) ────────────────────────────────────────────
+
+    /// Replace the indexed user tags for `uuid` with `tags` (the asset's current OR-set value).
+    pub fn replace_asset_tags(&self, uuid: &str, tags: &[String]) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM asset_tags WHERE uuid = ?1", params![uuid])?;
+        for tag in tags {
+            self.conn.execute(
+                "INSERT OR IGNORE INTO asset_tags (uuid, tag) VALUES (?1, ?2)",
+                params![uuid, tag],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The indexed user tags for `uuid`, sorted.
+    pub fn tags_for(&self, uuid: &str) -> Result<Vec<String>, rusqlite::Error> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT tag FROM asset_tags WHERE uuid = ?1 ORDER BY tag")?;
+        let rows = stmt.query_map(params![uuid], |r| r.get::<_, String>(0))?;
+        rows.collect()
+    }
 }
 
 fn now_secs() -> i64 {

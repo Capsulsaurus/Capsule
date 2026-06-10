@@ -43,6 +43,8 @@ use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::crypto::{CryptoError, authority::ReferenceAuthority};
+use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
+use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter};
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -70,6 +72,9 @@ pub enum LifecycleError {
     /// CBOR (de)serialization error.
     #[error("cbor: {0}")]
     Cbor(String),
+    /// Library index (SQLite) error.
+    #[error("db: {0}")]
+    Db(String),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;
@@ -115,6 +120,9 @@ pub struct Workspace {
     albums: HashMap<Uuid, AlbumKeys>,
     authorities: HashMap<Uuid, ReferenceAuthority>,
     assets: HashMap<Uuid, AssetState>,
+    /// The open, locked library — its `library.sqlite` is the queryable index the crypto
+    /// lifecycle writes through to. Held for the workspace's lifetime so the lock is retained.
+    library: Library,
 }
 
 fn now_rfc3339() -> String {
@@ -140,6 +148,62 @@ fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
         .join(format!("{:04}-{:02}", dt.year(), dt.month()))
 }
 
+fn asset_type_for(content_type: &str) -> String {
+    if content_type.starts_with("video/") {
+        "video"
+    } else {
+        "photo"
+    }
+    .to_string()
+}
+
+fn rfc3339_to_secs(s: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|d| d.timestamp())
+        .unwrap_or(0)
+}
+
+/// Map a managed asset's in-memory state to its queryable `assets` index row. Deletion state is
+/// derived from the provenance chain's lifecycle actions; media-derived fields (dimensions,
+/// duration, chromahash) stay NULL — they are out of scope in this offline core.
+fn asset_row_from_state(asset: &AssetState) -> AssetRow {
+    let mut is_deleted = false;
+    let mut deleted_at = None;
+    for rec in asset.chain.records() {
+        match rec.manifest.core.action {
+            Action::Delete => {
+                is_deleted = true;
+                deleted_at = Some(rfc3339_to_secs(&rec.manifest.core.timestamp));
+            }
+            Action::TrashRestore => {
+                is_deleted = false;
+                deleted_at = None;
+            }
+            _ => {}
+        }
+    }
+    AssetRow {
+        uuid: asset.asset_id.to_string(),
+        asset_type: asset_type_for(&asset.sidecar.content_type),
+        capture_timestamp: asset.capture_utc,
+        capture_utc: Some(asset.capture_utc),
+        capture_tz_source: None,
+        import_timestamp: rfc3339_to_secs(&asset.sidecar.import_timestamp),
+        hash_sha256: asset.sidecar.hash.to_hex(),
+        width: asset.sidecar.dimensions.as_ref().map(|d| d.width as i64),
+        height: asset.sidecar.dimensions.as_ref().map(|d| d.height as i64),
+        duration_ms: None,
+        stack_id: None,
+        is_stack_hidden: false,
+        chromahash: None,
+        dominant_color: None,
+        album_id: Some(asset.album_id.to_string()),
+        rating: asset.sidecar.rating.get().copied().unwrap_or(0) as i64,
+        is_deleted,
+        deleted_at,
+    }
+}
+
 impl Workspace {
     /// Create a fresh workspace: initialise the library directory and a new account, and
     /// publish a device directory. `passphrase` guards the on-disk account; `tier` sets the
@@ -158,7 +222,7 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
-        crate::library::init::init_library(root, "Capsule")
+        let library = crate::library::init::init_library(root, "Capsule")
             .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
         let account = Account::create();
         let file = account.to_file_with(passphrase, params)?;
@@ -177,6 +241,7 @@ impl Workspace {
             albums: HashMap::new(),
             authorities: HashMap::new(),
             assets: HashMap::new(),
+            library,
         })
     }
 
@@ -336,6 +401,40 @@ impl Workspace {
         Ok(())
     }
 
+    /// Write the queryable index row + user tags for `asset` into `library.sqlite`. Re-syncs on
+    /// every change (import, metadata edit, soft-delete/restore), so the index reflects the
+    /// asset's current rating, tags, and deletion state. Upsert keeps it conflict-safe even
+    /// though the legacy importer shares the same `assets` table.
+    fn index_asset_row(&self, asset: &AssetState) -> Result<()> {
+        self.library
+            .db
+            .upsert_asset(&asset_row_from_state(asset))
+            .map_err(|e| LifecycleError::Db(e.to_string()))?;
+        let tags: Vec<String> = asset.sidecar.tags_user.value().into_iter().collect();
+        self.library
+            .db
+            .replace_asset_tags(&asset.asset_id.to_string(), &tags)
+            .map_err(|e| LifecycleError::Db(e.to_string()))
+    }
+
+    /// Record the asset's own original as a device-owned cache representation — exempt from the
+    /// automatic eviction sweep, and the real lifecycle data that sweep then operates on.
+    fn index_original_representation(&self, asset: &AssetState, bytes: usize) -> Result<()> {
+        self.library
+            .db
+            .upsert_representation(&CachedRepresentationRow {
+                uuid: asset.asset_id.to_string(),
+                tier: "original".to_string(),
+                format: Some(asset.ext.clone()),
+                bytes: bytes as i64,
+                path: self.media_path(asset).to_string_lossy().into_owned(),
+                last_accessed_at: Utc::now().timestamp(),
+                pinned: false,
+                is_owned_original: true,
+            })
+            .map_err(|e| LifecycleError::Db(e.to_string()))
+    }
+
     /// Import a file into `album_id`: encrypt, build the signed create manifest + provenance,
     /// write the signed sidecar, and self-verify through `verify_asset`. Returns the asset id.
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
@@ -424,6 +523,8 @@ impl Workspace {
             sidecar,
         };
         self.write_asset_files(&asset, &plaintext)?;
+        self.index_asset_row(&asset)?;
+        self.index_original_representation(&asset, plaintext.len())?;
         self.assets.insert(asset_id, asset);
         Ok(asset_id)
     }
@@ -504,7 +605,8 @@ impl Workspace {
         let asset = self.assets.get(asset_id).unwrap();
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        self.write_asset_files(asset, &plaintext)
+        self.write_asset_files(asset, &plaintext)?;
+        self.index_asset_row(asset)
     }
 
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.
@@ -630,6 +732,8 @@ impl Workspace {
                 sidecar,
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
+            self.index_asset_row(&asset)?;
+            self.index_original_representation(&asset, restored.plaintext.len())?;
             self.assets.insert(restored.asset_id, asset);
             added += 1;
         }
@@ -688,6 +792,12 @@ impl Workspace {
     /// A managed asset's current state.
     pub fn asset(&self, asset_id: &Uuid) -> Option<&AssetState> {
         self.assets.get(asset_id)
+    }
+
+    /// The library's queryable SQLite index — the timeline, user tags, and cached representations
+    /// the crypto lifecycle writes through to.
+    pub fn db(&self) -> &DatabaseDriver {
+        &self.library.db
     }
 }
 
@@ -845,5 +955,51 @@ mod tests {
             ws2.read_plaintext(&id_b).unwrap(),
             ws.read_plaintext(&id_b).unwrap()
         );
+    }
+
+    #[test]
+    fn crypto_lifecycle_writes_through_to_the_index() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF indexed photo").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+        let id = ws.import_asset(album, &img).unwrap();
+        let uuid = id.to_string();
+
+        // The import is queryable in the timeline, tagged to its album.
+        let timeline = ws.db().query_timeline(0, 100).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].uuid, uuid);
+        assert_eq!(
+            timeline[0].album_id.as_deref(),
+            Some(album.to_string().as_str())
+        );
+
+        // It recorded a device-owned `original` representation, exempt from eviction.
+        let reps = ws.db().representations_for(&uuid).unwrap();
+        assert_eq!(reps.len(), 1);
+        assert_eq!(reps[0].tier, "original");
+        assert!(reps[0].is_owned_original);
+        assert!(
+            ws.db().eviction_candidates(0).unwrap().is_empty(),
+            "an owned original is never an eviction candidate"
+        );
+
+        // A tag edit re-syncs into the index.
+        ws.tag_add(&id, "vacation").unwrap();
+        assert_eq!(
+            ws.db().tags_for(&uuid).unwrap(),
+            vec!["vacation".to_string()]
+        );
+
+        // Soft-delete hides it from the timeline; restore brings it back (deletion state is
+        // derived from the provenance chain).
+        ws.soft_delete(&id, 30).unwrap();
+        assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
+        ws.restore(&id).unwrap();
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
     }
 }
