@@ -29,10 +29,12 @@ aes-gcm = { version = "0.10", features = ["aes"] }
 aead = { version = "0.5", features = ["stream", "alloc"] }
 hkdf = "0.12"
 hmac = "0.12"
+sha3 = "0.10"            # SHA3-256 combiner + SHAKE256 seed expansion for the X-Wing KEM
 argon2 = { workspace = true }
 ed25519-dalek = "2"
 ml-dsa = "0.1"            # RustCrypto FIPS-204 (ML-DSA-65) — the PQ signature half
-ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — KEM for the device encryption key
+ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — PQ half of the X-Wing device KEM
+x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing device KEM
 getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)

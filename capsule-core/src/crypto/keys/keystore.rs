@@ -108,6 +108,13 @@ fn seed64(bytes: Vec<u8>) -> Result<[u8; 64], CryptoError> {
         .map_err(|_| CryptoError::Malformed("sealed key seed wrong length"))
 }
 
+fn seed32(bytes: Vec<u8>) -> Result<[u8; 32], CryptoError> {
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed("sealed key seed wrong length"))
+}
+
 impl AccountFile {
     /// Decrypt the account with `passphrase`. Returns [`CryptoError::Auth`] on a wrong
     /// passphrase (master unwrap fails) or tampering.
@@ -120,7 +127,7 @@ impl AccountFile {
 
         let user_ik = HybridSigningKey::from_seed64(&seed64(master.open(&self.sealed_ik)?)?);
         let dsk = HybridSigningKey::from_seed64(&seed64(master.open(&self.sealed_dsk)?)?);
-        let dek = DekKeypair::from_seed(&seed64(master.open(&self.sealed_dek)?)?);
+        let dek = DekKeypair::from_seed(&seed32(master.open(&self.sealed_dek)?)?);
 
         Ok(Account {
             user_id: self.user_id,

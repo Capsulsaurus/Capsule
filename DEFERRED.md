@@ -12,7 +12,8 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 - **Canonical CBOR** (RFC 8949 §4.2) — the byte-identity contract for every signature/hash.
 - **Crypto primitives** — SHA-256 (streaming), HKDF-SHA512, Argon2id, AES-256-GCM (STREAM +
   standalone metadata-blob), **hybrid Ed25519 + ML-DSA-65** signatures (both halves required),
-  **ML-KEM-768** DEK.
+  **X-Wing (X25519 + ML-KEM-768)** hybrid DEK (known-answer-validated against
+  `draft-connolly-cfrg-xwing-kem`).
 - **Key hierarchy** — master key, default-album-id derivation, AMKs + per-file/blob keys,
   software keystore (account ↔ encrypted `AccountFile`), signed device directory.
 - **Encryption** — STREAM asset encryption with independent ranged-chunk decryption;
@@ -41,11 +42,6 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 - **Consequence:** albums are **single-epoch** in the offline core. Epoch rotation,
   membership add/remove, the `Welcome`/history-delivery flow, and the album upgrade ceremony
   are deferred with OpenMLS.
-
-### X-Wing hybrid DEK
-- `crypto::keys::kem` implements the post-quantum **ML-KEM-768** half (full encapsulate/
-  decapsulate round-trip). The X25519 classical half and the X-Wing combiner land with
-  OpenMLS (the seam is byte-string `encapsulate`/`decapsulate`, combiner-agnostic).
 
 ### Hardware-bound key storage
 - Device keys are kept in a **software keystore** (private keys sealed under the
