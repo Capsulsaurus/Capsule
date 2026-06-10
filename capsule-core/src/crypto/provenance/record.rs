@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use super::manifest::AssetManifest;
+use super::action::DerivativeRole;
+use super::manifest::{AssetManifest, DerivativeManifest};
 use crate::cbor;
 use crate::crypto::hash::{self, Hash32};
 
@@ -128,6 +129,90 @@ impl ProvenanceChain {
                 }
             }
             expected_prior = Some(rec.record_hash());
+        }
+        Ok(())
+    }
+}
+
+/// An append-only, hash-chained log of [`DerivativeManifest`]s for one `(asset, role)` pair.
+///
+/// Mirrors [`ProvenanceChain`] but for derivatives (thumbnail / preview / embedding): the first
+/// manifest of a role has a null `prior_provenance_hash`; each later one (a `derivative-replace`)
+/// must chain to the current head. A replace whose prior does not match the head is **rejected**,
+/// so a buggy client cannot poison a derivative under the receiving side's nose — the existing
+/// derivative is preserved.
+#[derive(Debug, Clone)]
+pub struct DerivativeChain {
+    role: DerivativeRole,
+    manifests: Vec<DerivativeManifest>,
+}
+
+impl DerivativeChain {
+    /// An empty chain for `role`.
+    pub fn new(role: DerivativeRole) -> Self {
+        Self {
+            role,
+            manifests: Vec::new(),
+        }
+    }
+
+    /// The role this chain tracks.
+    pub fn role(&self) -> DerivativeRole {
+        self.role
+    }
+
+    /// The current head hash (the last manifest's hash), or `None` if empty.
+    pub fn head(&self) -> Option<Hash32> {
+        self.manifests.last().map(DerivativeManifest::record_hash)
+    }
+
+    /// All manifests, oldest first.
+    pub fn manifests(&self) -> &[DerivativeManifest] {
+        &self.manifests
+    }
+
+    /// Append a derivative manifest, enforcing the chain invariants: the first manifest must have
+    /// a null prior; every later one's prior must equal the current head; and the manifest's role
+    /// must match this chain's role.
+    pub fn append(&mut self, manifest: DerivativeManifest) -> Result<(), ChainError> {
+        if manifest.core.role != self.role {
+            return Err(ChainError::BadRoot);
+        }
+        match self.head() {
+            None => {
+                if manifest.core.prior_provenance_hash.is_some() {
+                    return Err(ChainError::BadRoot);
+                }
+            }
+            Some(head) => {
+                if manifest.core.prior_provenance_hash != Some(head) {
+                    return Err(ChainError::BrokenLink);
+                }
+            }
+        }
+        self.manifests.push(manifest);
+        Ok(())
+    }
+
+    /// Walk the chain forward, asserting every link holds (structural integrity; signature
+    /// verification is `verify_asset`'s job). Detects a dropped or rewritten manifest.
+    pub fn verify_walk(
+        role: DerivativeRole,
+        manifests: &[DerivativeManifest],
+    ) -> Result<(), ChainError> {
+        let mut expected_prior: Option<Hash32> = None;
+        for (i, m) in manifests.iter().enumerate() {
+            if m.core.role != role {
+                return Err(ChainError::BadRoot);
+            }
+            if i == 0 {
+                if m.core.prior_provenance_hash.is_some() {
+                    return Err(ChainError::BadRoot);
+                }
+            } else if m.core.prior_provenance_hash != expected_prior {
+                return Err(ChainError::BrokenLink);
+            }
+            expected_prior = Some(m.record_hash());
         }
         Ok(())
     }
@@ -261,5 +346,56 @@ mod tests {
         let mut rec = record(Action::Delete, Some(head));
         rec.manifest.core.prior_provenance_hash = Some(Hash32([0x77; 32]));
         assert_eq!(chain.append(rec), Err(ChainError::MirrorMismatch));
+    }
+
+    fn derivative(prior: Option<Hash32>) -> DerivativeManifest {
+        use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+        DerivativeCore {
+            version: DERIVATIVE_MANIFEST_VERSION.into(),
+            crypto_suite_id: CRYPTO_SUITE_ID,
+            source_asset_id: Uuid::from_u128(ASSET),
+            role: DerivativeRole::Embedding,
+            format: "embedding/mobileclip-b".into(),
+            ciphertext_hash: Hash32([0xE0; 32]),
+            generated_by_device: Uuid::from_u128(0xD1),
+            generated_by_client: "t".into(),
+            model_id: Some("mobileclip-b".into()),
+            model_version: Some("1".into()),
+            generated_at: "2026-06-01T00:00:00Z".into(),
+            prior_provenance_hash: prior,
+        }
+        .sign(&dev(), &wt())
+    }
+
+    #[test]
+    fn derivative_chain_add_then_replace_walks_cleanly() {
+        let mut chain = DerivativeChain::new(DerivativeRole::Embedding);
+        chain.append(derivative(None)).unwrap(); // derivative-add
+        let head = chain.head().unwrap();
+        chain.append(derivative(Some(head))).unwrap(); // derivative-replace (e.g. regen)
+        assert_eq!(chain.manifests().len(), 2);
+        DerivativeChain::verify_walk(DerivativeRole::Embedding, chain.manifests()).unwrap();
+    }
+
+    #[test]
+    fn derivative_replace_with_wrong_prior_is_poisoning_and_rejected() {
+        let mut chain = DerivativeChain::new(DerivativeRole::Embedding);
+        chain.append(derivative(None)).unwrap();
+        // A replace whose prior does not chain to the head for this (asset, role) is rejected;
+        // the existing derivative is preserved.
+        assert_eq!(
+            chain.append(derivative(Some(Hash32([0xBA; 32])))),
+            Err(ChainError::BrokenLink)
+        );
+        assert_eq!(chain.manifests().len(), 1);
+    }
+
+    #[test]
+    fn derivative_first_must_have_null_prior() {
+        let mut chain = DerivativeChain::new(DerivativeRole::Embedding);
+        assert_eq!(
+            chain.append(derivative(Some(Hash32([1; 32])))),
+            Err(ChainError::BadRoot)
+        );
     }
 }
