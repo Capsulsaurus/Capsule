@@ -30,7 +30,7 @@ use super::{ARTIFACT_FORMAT_VERSION, BackupError};
 use crate::cbor;
 use crate::crypto::encryption::stream;
 use crate::crypto::hash::{self, Hash32};
-use crate::crypto::keys::{Amk, HybridSigningKey, HybridVerifyingKey};
+use crate::crypto::keys::{Amk, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION, info};
 use crate::crypto::provenance::ProvenanceRecord;
 use crate::crypto::{kdf, pwkdf, rng};
@@ -245,7 +245,7 @@ pub fn export_with_salt(
     input: &BackupInput,
     passphrase: &[u8],
     salt: [u8; 32],
-    exporter: &HybridSigningKey,
+    exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
     let wrap_key = pwkdf::derive_wrap_key(passphrase, &salt, WRAP_PARAMS)?;
 
@@ -330,7 +330,7 @@ pub fn export_with_salt(
     let mut mac = HmacSha256::new_from_slice(&wrap_key).expect("hmac key");
     mac.update(&core_bytes);
     let hmac = mac.finalize().into_bytes().to_vec();
-    let exporter_sig = exporter.sign(&core_bytes);
+    let exporter_sig = exporter.sign(&core_bytes)?;
     let manifest = Manifest {
         core,
         hmac,
@@ -362,7 +362,7 @@ pub fn export_with_salt(
 pub fn export(
     input: &BackupInput,
     passphrase: &[u8],
-    exporter: &HybridSigningKey,
+    exporter: &dyn Signer,
 ) -> Result<Vec<u8>, BackupError> {
     export_with_salt(input, passphrase, rng::random_array::<32>(), exporter)
 }
@@ -581,7 +581,7 @@ impl BackupArtifact {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crypto::keys::{Amk, AmkVersion};
+    use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
     use crate::crypto::provenance::action::Action;
     use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore as MCore};
@@ -629,7 +629,7 @@ mod tests {
                 prior_provenance_hash: None,
                 retention_until: None,
             };
-            let manifest = core.sign(&self.device, &self.write);
+            let manifest = core.sign(&self.device, &self.write).unwrap();
             let record = ProvenanceRecord {
                 asset_id: file_id,
                 manifest,

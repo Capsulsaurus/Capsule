@@ -14,8 +14,9 @@ use uuid::Uuid;
 
 use super::action::{Action, DerivativeRole};
 use crate::cbor;
+use crate::crypto::CryptoError;
 use crate::crypto::hash::Hash32;
-use crate::crypto::keys::{AmkVersion, HybridSignature, HybridSigningKey};
+use crate::crypto::keys::{AmkVersion, HybridSignature, Signer};
 
 /// Current asset-manifest schema string.
 pub const ASSET_MANIFEST_VERSION: &str = "asset-manifest/v1";
@@ -78,16 +79,21 @@ impl ManifestCore {
         cbor::to_canonical_vec(self).expect("manifest core serializes")
     }
 
-    /// Sign this core with the device DSK and the epoch write-tier key.
-    pub fn sign(self, device: &HybridSigningKey, write_tier: &HybridSigningKey) -> AssetManifest {
+    /// Sign this core with the device DSK and the epoch write-tier key. Fallible because the
+    /// device signer may be hardware-backed (the write-tier key is always software).
+    pub fn sign(
+        self,
+        device: &dyn Signer,
+        write_tier: &dyn Signer,
+    ) -> Result<AssetManifest, CryptoError> {
         let bytes = self.signing_bytes();
-        let device_sig = device.sign(&bytes);
-        let write_sig = write_tier.sign(&bytes);
-        AssetManifest {
+        let device_sig = device.sign(&bytes)?;
+        let write_sig = write_tier.sign(&bytes)?;
+        Ok(AssetManifest {
             core: self,
             device_sig,
             write_sig,
-        }
+        })
     }
 }
 
@@ -156,24 +162,26 @@ impl DerivativeCore {
         cbor::to_canonical_vec(self).expect("derivative core serializes")
     }
 
-    /// Sign with the device DSK and epoch write-tier key.
+    /// Sign with the device DSK and epoch write-tier key. Fallible: the device signer may be
+    /// hardware-backed.
     pub fn sign(
         self,
-        device: &HybridSigningKey,
-        write_tier: &HybridSigningKey,
-    ) -> DerivativeManifest {
+        device: &dyn Signer,
+        write_tier: &dyn Signer,
+    ) -> Result<DerivativeManifest, CryptoError> {
         let bytes = self.signing_bytes();
-        DerivativeManifest {
-            device_sig: device.sign(&bytes),
-            write_sig: write_tier.sign(&bytes),
+        Ok(DerivativeManifest {
+            device_sig: device.sign(&bytes)?,
+            write_sig: write_tier.sign(&bytes)?,
             core: self,
-        }
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::keys::HybridSigningKey;
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 
     fn core(action: Action, prior: Option<Hash32>) -> ManifestCore {
@@ -202,7 +210,7 @@ mod tests {
     fn sign_produces_two_verifiable_signatures() {
         let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
         let write = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
-        let m = core(Action::Create, None).sign(&device, &write);
+        let m = core(Action::Create, None).sign(&device, &write).unwrap();
 
         let bytes = m.signing_bytes();
         assert!(device.verifying_key().verify(&bytes, &m.device_sig));
@@ -213,7 +221,7 @@ mod tests {
     fn signing_bytes_are_canonical_and_stable() {
         let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
         let write = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
-        let m = core(Action::Create, None).sign(&device, &write);
+        let m = core(Action::Create, None).sign(&device, &write).unwrap();
         // The core round-trips through canonical CBOR unchanged, and the full manifest too.
         let back: AssetManifest = cbor::from_slice(&cbor::to_canonical_vec(&m).unwrap()).unwrap();
         assert_eq!(back, m);
@@ -226,34 +234,38 @@ mod tests {
         assert!(
             core(Action::Create, None)
                 .sign(&dev(), &wt())
+                .unwrap()
                 .structural_ok()
         );
         // create + non-null prior: violation.
         assert!(
             !core(Action::Create, Some(Hash32([1; 32])))
                 .sign(&dev(), &wt())
+                .unwrap()
                 .structural_ok()
         );
         // non-create + null prior: violation.
         assert!(
             !core(Action::Replace, None)
                 .sign(&dev(), &wt())
+                .unwrap()
                 .structural_ok()
         );
         // non-create + non-null prior: ok.
         assert!(
             core(Action::Replace, Some(Hash32([1; 32])))
                 .sign(&dev(), &wt())
+                .unwrap()
                 .structural_ok()
         );
 
         // retention only on delete.
         let mut c = core(Action::MetadataUpdate, Some(Hash32([1; 32])));
         c.retention_until = Some("2026-07-01T00:00:00Z".into());
-        assert!(!c.sign(&dev(), &wt()).structural_ok());
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
         let mut d = core(Action::Delete, Some(Hash32([1; 32])));
         d.retention_until = Some("2026-07-01T00:00:00Z".into());
-        assert!(d.sign(&dev(), &wt()).structural_ok());
+        assert!(d.sign(&dev(), &wt()).unwrap().structural_ok());
     }
 
     #[test]
@@ -274,7 +286,8 @@ mod tests {
             generated_at: "2026-05-31T12:00:00Z".into(),
             prior_provenance_hash: None,
         }
-        .sign(&device, &write);
+        .sign(&device, &write)
+        .unwrap();
         assert!(
             write
                 .verifying_key()

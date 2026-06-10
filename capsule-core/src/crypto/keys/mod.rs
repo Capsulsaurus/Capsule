@@ -13,6 +13,7 @@ pub mod hybrid_sig;
 pub mod kem;
 pub mod keystore;
 pub mod master;
+pub mod signer;
 
 pub use album::{Amk, AmkVersion};
 pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
@@ -20,3 +21,4 @@ pub use hybrid_sig::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 pub use kem::DekKeypair;
 pub use keystore::{Account, AccountFile, DeviceKeys};
 pub use master::MasterKey;
+pub use signer::Signer;

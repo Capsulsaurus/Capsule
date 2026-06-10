@@ -376,7 +376,7 @@ impl Workspace {
         action: Action,
         prior: Option<Hash32>,
         retention_until: Option<String>,
-    ) -> AssetManifest {
+    ) -> std::result::Result<AssetManifest, CryptoError> {
         let core = ManifestCore {
             action,
             prior_provenance_hash: prior,
@@ -470,7 +470,7 @@ impl Workspace {
             prior_provenance_hash: None,
             retention_until: None,
         };
-        let manifest = core.sign(&self.account.device.dsk, &album.write_tier);
+        let manifest = core.sign(&self.account.device.dsk, &album.write_tier)?;
 
         let mut chain = ProvenanceChain::new();
         chain
@@ -581,7 +581,7 @@ impl Workspace {
             .core
             .clone();
         let album = self.album(&album_id)?;
-        let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until);
+        let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until)?;
         let add_id = self.counter.issue();
 
         {

@@ -262,6 +262,7 @@ mod tests {
         fn valid_create(&self) -> AssetManifest {
             self.core(Action::Create, None)
                 .sign(&self.device, &self.write1)
+                .unwrap()
         }
 
         fn verify(&self, m: &AssetManifest, head: Option<Hash32>) -> VerifyOutcome {
@@ -283,7 +284,8 @@ mod tests {
         let head = crate::crypto::hash::hash_bytes(b"pretend-head");
         let update = f
             .core(Action::MetadataUpdate, Some(head))
-            .sign(&f.device, &f.write1);
+            .sign(&f.device, &f.write1)
+            .unwrap();
         assert_eq!(f.verify(&update, Some(head)), VerifyOutcome::Accept);
         // And the create itself accepts when the asset is unknown locally.
         assert_eq!(f.verify(&create, None), VerifyOutcome::Accept);
@@ -328,7 +330,7 @@ mod tests {
         let f = Fixture::new();
         let mut core = f.core(Action::Create, None);
         core.album_id = Uuid::from_u128(0xBEEF);
-        let m = core.sign(&f.device, &f.write1);
+        let m = core.sign(&f.device, &f.write1).unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::WrongAlbum)
@@ -340,7 +342,7 @@ mod tests {
         let f = Fixture::new();
         let mut core = f.core(Action::Create, None);
         core.crypto_suite_id = 0xFFFF; // unknown suite, signed validly
-        let m = core.sign(&f.device, &f.write1);
+        let m = core.sign(&f.device, &f.write1).unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::SuiteDowngrade)
@@ -363,7 +365,10 @@ mod tests {
     #[test]
     fn reject_structural_non_create_with_null_prior() {
         let f = Fixture::new();
-        let m = f.core(Action::Replace, None).sign(&f.device, &f.write1);
+        let m = f
+            .core(Action::Replace, None)
+            .sign(&f.device, &f.write1)
+            .unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::Structural)
@@ -386,7 +391,7 @@ mod tests {
         let f = Fixture::new();
         let mut core = f.core(Action::Create, None);
         core.created_by_device = Uuid::from_u128(0xDEAD);
-        let m = core.sign(&f.device, &f.write1);
+        let m = core.sign(&f.device, &f.write1).unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::UnknownDevice)
@@ -399,7 +404,7 @@ mod tests {
         let mut core = f.core(Action::Create, None);
         // Manifest claims a time before the device was added to the directory.
         core.timestamp = "2026-05-29T00:00:00Z".into();
-        let m = core.sign(&f.device, &f.write1);
+        let m = core.sign(&f.device, &f.write1).unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::DeviceAddedAfter)
@@ -425,7 +430,8 @@ mod tests {
         let reader_fake_write = HybridSigningKey::from_seed_bytes(&[77; 32], &[78; 32]);
         let m = f
             .core(Action::Create, None)
-            .sign(&f.device, &reader_fake_write);
+            .sign(&f.device, &reader_fake_write)
+            .unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::BadWriteSig)
@@ -437,7 +443,10 @@ mod tests {
         let f = Fixture::new();
         // Signer holds epoch-2's write key but claims epoch 1 (e.g. a writer removed at the
         // epoch-1→2 bump trying to pass off old work). write_sig won't verify under epoch 1's key.
-        let m = f.core(Action::Create, None).sign(&f.device, &f.write2);
+        let m = f
+            .core(Action::Create, None)
+            .sign(&f.device, &f.write2)
+            .unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::BadWriteSig)
@@ -449,7 +458,7 @@ mod tests {
         let f = Fixture::new();
         let mut core = f.core(Action::Create, None);
         core.amk_version = AmkVersion(99); // above the attested ceiling of 2
-        let m = core.sign(&f.device, &f.write1);
+        let m = core.sign(&f.device, &f.write1).unwrap();
         assert_eq!(
             f.verify(&m, None),
             VerifyOutcome::TerminalReject(RejectReason::WrongEpoch)
@@ -463,7 +472,8 @@ mod tests {
         let stale = hash::hash_bytes(b"stale-or-forked");
         let m = f
             .core(Action::Delete, Some(stale))
-            .sign(&f.device, &f.write1);
+            .sign(&f.device, &f.write1)
+            .unwrap();
         // Local head is `head`, but the manifest chains to `stale`.
         assert_eq!(
             f.verify(&m, Some(head)),
@@ -511,7 +521,7 @@ mod tests {
             );
 
         let f = Fixture::new();
-        let m = f.core(Action::Create, None).sign(&device, &write1);
+        let m = f.core(Action::Create, None).sign(&device, &write1).unwrap();
         assert_eq!(
             verify_asset(&m, CIPHERTEXT, &directory, &authority, None),
             VerifyOutcome::Pending(PendingReason::AmkNotYetLocal),
