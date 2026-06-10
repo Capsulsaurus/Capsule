@@ -1,3 +1,13 @@
+# ML model weights are NEVER committed — fetched from Hugging Face at runtime into the local HF
+# cache (outside this repo). These patterns are a guard against accidental commits.
+*.safetensors
+*.onnx
+*.gguf
+*.ckpt
+*.pt
+*.bin.gz
+/models/
+
 *.iml
 .kotlin
 .gradle
