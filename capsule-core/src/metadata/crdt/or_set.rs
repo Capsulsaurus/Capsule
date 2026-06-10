@@ -91,6 +91,17 @@ impl<T: Ord + Clone> OrSet<T> {
     pub fn observed(&self, add_id: &AddId) -> bool {
         self.adds.contains_key(add_id)
     }
+
+    /// The live `(add_id, element)` pairs — those not tombstoned. Unlike [`value`](Self::value)
+    /// this preserves each element's `add_id`, so a caller can surface elements (e.g. AI tags) and
+    /// later target a specific one by `add_id` (dismiss, promote).
+    pub fn entries(&self) -> Vec<(AddId, T)> {
+        self.adds
+            .iter()
+            .filter(|(id, _)| !self.removes.contains(id))
+            .map(|(id, el)| (*id, el.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -179,6 +190,17 @@ mod tests {
         let before = left.clone();
         left.merge(&b);
         assert_eq!(left, before);
+    }
+
+    #[test]
+    fn entries_expose_live_add_ids_and_drop_tombstoned() {
+        let mut s: OrSet<String> = OrSet::new();
+        s.add("a".into(), id(1, 0));
+        s.add("b".into(), id(1, 1));
+        s.remove(id(1, 0)).unwrap();
+        let entries = s.entries();
+        // Only the live element survives, and it carries its add_id.
+        assert_eq!(entries, vec![(id(1, 1), "b".to_string())]);
     }
 
     #[test]

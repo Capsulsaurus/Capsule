@@ -48,6 +48,18 @@ pub struct AssetTagRow {
     pub tag: String,
 }
 
+/// One AI-suggested tag, projected from the sidecar's `tags_ai` OR-set into the queryable index.
+/// Kept in a separate table from user tags ([`AssetTagRow`]) — the AI/user namespace separation
+/// is structural, so an AI tag can never collide with a user tag. Carries its embedding-provenance
+/// `(model_id, model_version)` so stale entries (a superseded model version) are identifiable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiTagRow {
+    pub uuid: String,
+    pub tag: String,
+    pub model_id: String,
+    pub model_version: String,
+}
+
 /// One cached, reclaimable representation of an asset. The eviction sweep ranks these by
 /// `last_accessed_at` (LRU) with `tier` as the tiebreaker; `pinned` and `is_owned_original`
 /// rows are exempt. `path` is the on-disk cache file the sweep deletes.
