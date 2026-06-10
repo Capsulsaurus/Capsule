@@ -49,9 +49,14 @@ jobs:
       - name: Build & test
         run: |
           set -o pipefail
+          # Resolve an available iPhone simulator at runtime — the runner image's
+          # specific models churn (e.g. iPhone 16 → 17), so pinning a name breaks.
+          sim_id=$(xcrun simctl list devices available --json \
+            | jq -r '[.devices | to_entries[] | select(.key | test("iOS")) | .value[] | select(.name | startswith("iPhone"))][0].udid')
+          echo "Using simulator $sim_id"
           xcodebuild test \
             -workspace capsule-swift/Capsule.xcworkspace \
             -scheme Capsule \
             -configuration Debug \
-            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -destination "id=$sim_id" \
             CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify
