@@ -94,9 +94,11 @@ build-rust:
 #   Tier 2 — best-effort (build-only, non-blocking):
 #     x86_64-pc-windows-msvc        aarch64-unknown-linux-gnu
 #
-# Apple builds natively on macOS; Android via cargo-ndk; aarch64 Linux via
-# `cross` (none can build Apple). The build-* recipes self-skip when their
-# toolchain/OS is absent, so `build-targets` is safe to run anywhere.
+# Apple builds natively on macOS; Android via cargo-ndk; aarch64 Linux via `cross`
+# (none can build Apple). build-apple skips off-macOS — a platform constraint, not a
+# fixable dependency. build-android / build-linux-cross instead FAIL when their
+# toolchain is missing, so a silent skip never masks an un-built target; install the
+# toolchains (`just targets-add`, an Android NDK, `cross`) before `build-targets`.
 
 [group('rust')]
 targets-add:
@@ -120,15 +122,15 @@ build-apple:
 build-android:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! command -v cargo-ndk >/dev/null 2>&1; then echo "Skipping Android (cargo-ndk missing; run 'just targets-add')"; exit 0; fi
-    if [ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then echo "Skipping Android (ANDROID_NDK_HOME unset)"; exit 0; fi
+    if ! command -v cargo-ndk >/dev/null 2>&1; then echo "build-android: cargo-ndk missing; run 'just targets-add'" >&2; exit 1; fi
+    if [ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then echo "build-android: set ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) to your Android NDK" >&2; exit 1; fi
     cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 26 build -p capsule-core
 
 [group('rust')]
 build-linux-cross:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! command -v cross >/dev/null 2>&1; then echo "Skipping aarch64 Linux (cross not installed)"; exit 0; fi
+    if ! command -v cross >/dev/null 2>&1; then echo "build-linux-cross: cross not installed; run 'cargo install cross'" >&2; exit 1; fi
     cross build -p capsule-core --target aarch64-unknown-linux-gnu
 
 [group('rust')]
