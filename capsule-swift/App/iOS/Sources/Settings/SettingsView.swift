@@ -94,7 +94,7 @@ struct SettingsView: View {
         persist { $0.uploadEndpoint = url }
     }
 
-    private func persist(_ transform: @escaping (inout DiagnosticsConsent) -> Void) {
+    private func persist(_ transform: @escaping @Sendable (inout DiagnosticsConsent) -> Void) {
         Task { await consentStore.update(transform) }
     }
 

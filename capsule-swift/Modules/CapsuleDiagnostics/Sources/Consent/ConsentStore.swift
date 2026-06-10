@@ -26,7 +26,7 @@ public actor ConsentStore: ConsentReading {
 
     /// Apply a mutation, persist it, and notify observers when it changes.
     @discardableResult
-    public func update(_ transform: (inout DiagnosticsConsent) -> Void) -> DiagnosticsConsent {
+    public func update(_ transform: @Sendable (inout DiagnosticsConsent) -> Void) -> DiagnosticsConsent {
         var updated = consent
         transform(&updated)
         guard updated != consent else { return consent }
