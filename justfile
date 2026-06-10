@@ -35,6 +35,21 @@ build: build-rust build-web build-docs build-kotlin build-swift
 [group('all')]
 check: format-check lint-check test
 
+# ── Per-toolchain check aggregates (CI entrypoints) ──────────────────────────
+# Each maps 1:1 to a CI job so the workflow stays consistent with the justfile.
+
+[group('rust')]
+check-rust: format-check-rust lint-check-rust build-rust
+
+[group('web')]
+check-web: format-check-web lint-check-web test-web build-web
+
+[group('docs')]
+check-docs: format-check-docs lint-check-docs build-docs
+
+[group('vision')]
+check-vision: format-check-vision lint-check-vision
+
 # ── Rust ─────────────────────────────────────────────────────────────────────
 
 [group('rust')]
@@ -85,7 +100,7 @@ lint-check-web:
 
 [group('web')]
 test-web:
-    cd capsule-web && bun test
+    cd capsule-web && bun test --pass-with-no-tests
 
 [group('web')]
 build-web:

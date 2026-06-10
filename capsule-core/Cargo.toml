@@ -7,19 +7,37 @@ publish.workspace = true
 [dependencies]
 chrono = { workspace = true }
 ciborium = "0.2"
+half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.16"
 indexmap = { workspace = true }
 kamadak-exif = "0.5"
 log = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
+serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tzf-rs = "0.4"
-uuid = { workspace = true, features = ["v7", "serde"] }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 walkdir = "2"
-data-encoding = { workspace = true }
-sha2 = "0.10"
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+# ── Cryptography (data plane) ──────────────────────────────────────────────
+# Pin the STABLE RustCrypto line: aes-gcm 0.11 / aead 0.6 deleted the STREAM module.
+aes-gcm = { version = "0.10", features = ["aes"] }
+aead = { version = "0.5", features = ["stream", "alloc"] }
+hkdf = "0.12"
+hmac = "0.12"
+sha3 = "0.10"            # SHA3-256 combiner + SHAKE256 seed expansion for the X-Wing KEM
+argon2 = { workspace = true }
+ed25519-dalek = "2"
+ml-dsa = "0.1"            # RustCrypto FIPS-204 (ML-DSA-65) — the PQ signature half
+ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — PQ half of the X-Wing device KEM
+x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing device KEM
+getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
+tar = "0.4"              # deterministic uncompressed POSIX tar backup container
+sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 
 [dev-dependencies]
 tempfile = "3"

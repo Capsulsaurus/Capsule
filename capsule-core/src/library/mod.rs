@@ -1,3 +1,4 @@
+pub mod cache;
 pub mod error;
 pub mod init;
 #[allow(clippy::module_inception)]
@@ -9,6 +10,7 @@ pub mod rebuild;
 pub mod scrub;
 pub mod trash;
 
+pub use cache::{EvictionReport, cache_sweep};
 pub use error::LibraryError;
 pub use init::init_library;
 pub use library::Library;

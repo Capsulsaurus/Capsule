@@ -77,4 +77,24 @@ CREATE INDEX IF NOT EXISTS idx_stack_members_stack  ON stack_members(stack_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_asset  ON stack_members(asset_id);
 CREATE INDEX IF NOT EXISTS idx_tags_tag          ON asset_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_albums_created    ON albums(created_at);
+
+-- Reclaimable cached representations of an asset (the cache/ tier — thumbnails, previews,
+-- transcodes — plus fetched-but-unpinned originals). Eviction is LRU by last_accessed_at,
+-- tier original → preview → thumbnail at equal recency; pinned and device-owned originals are
+-- exempt. Authoritative local state (re-scannable from disk), untouched by index rebuild.
+-- SSoT: design/filesystem/client § Space Recovery.
+CREATE TABLE IF NOT EXISTS cached_representations (
+    uuid              TEXT    NOT NULL,
+    tier              TEXT    NOT NULL,
+    format            TEXT,
+    bytes             INTEGER NOT NULL,
+    path              TEXT    NOT NULL,
+    last_accessed_at  INTEGER NOT NULL,
+    pinned            INTEGER NOT NULL DEFAULT 0,
+    is_owned_original INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (uuid, tier)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cache_evict
+    ON cached_representations(pinned, is_owned_original, last_accessed_at);
 "#;

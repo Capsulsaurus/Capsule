@@ -25,7 +25,7 @@ pub struct Model {
     pub original_filename: String,
     /// File size in bytes
     pub file_size: i64,
-    /// BLAKE3 hash of the file content (64-char lowercase hex)
+    /// SHA-256 hash of the file content (64-char lowercase hex)
     #[sea_orm(column_type = "String(StringLen::N(64))")]
     pub file_hash: String,
     /// MIME type

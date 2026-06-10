@@ -1,3 +1,6 @@
+# Git hooks delegate to the justfile (single source of truth for commands).
+# Globs keep execution selective: a hook only runs when matching files are staged.
+
 pre-commit:
   parallel: false
   commands:
@@ -5,27 +8,27 @@ pre-commit:
     format-rust:
       priority: 1
       glob: "**/*.rs"
-      run: cargo fmt
+      run: just format-rust
     format-web:
       priority: 1
       glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd capsule-web && bunx biome format --write .
+      run: just format-web
     format-docs:
       priority: 1
       glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd capsule-docs && bunx biome format --write .
+      run: just format-docs
     format-kotlin:
       priority: 1
       glob: "**/*.{kt,kts}"
-      run: ./gradlew ktlintFormat
+      run: just format-kotlin
     format-vision:
       priority: 1
       glob: "capsule-vision/**/*.py"
-      run: cd capsule-vision && uv run ruff format
+      run: just format-vision
     format-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && mise exec -- swiftformat .
+      run: just format-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 
@@ -33,15 +36,15 @@ pre-commit:
     lint-web:
       priority: 2
       glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd capsule-web && bunx biome check --write .
+      run: just lint-web
     lint-docs:
       priority: 2
       glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd capsule-docs && bunx biome check --write .
+      run: just lint-docs
     lint-vision:
       priority: 2
       glob: "capsule-vision/**/*.py"
-      run: cd capsule-vision && uv run ruff check --fix
+      run: just lint-vision
 
     # Priority 3: fail if any files changed (formatters/linters mutated staged files)
     diff-check:
@@ -58,57 +61,53 @@ pre-push:
     format-check-rust:
       priority: 1
       glob: "**/*.rs"
-      run: cargo fmt --check
+      run: just format-check-rust
     lint-check-rust:
       priority: 1
       glob: "**/*.rs"
-      run: cargo clippy --workspace --exclude capsule-sdk -- -D warnings
+      run: just lint-check-rust
     format-check-web:
       priority: 1
       glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd capsule-web && bunx biome format .
+      run: just format-check-web
     lint-check-web:
       priority: 1
       glob: "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"
-      run: cd capsule-web && bunx biome check .
+      run: just lint-check-web
     format-check-docs:
       priority: 1
       glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd capsule-docs && bunx biome format .
+      run: just format-check-docs
     lint-check-docs:
       priority: 1
       glob: "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"
-      run: cd capsule-docs && bunx biome check .
+      run: just lint-check-docs
     format-check-kotlin:
       priority: 1
       glob: "**/*.{kt,kts}"
-      run: ./gradlew ktlintCheck
+      run: just format-check-kotlin
     lint-check-kotlin:
       priority: 1
       glob: "**/*.{kt,kts}"
-      run: ./gradlew detekt
+      run: just lint-check-kotlin
     format-check-vision:
       priority: 1
       glob: "capsule-vision/**/*.py"
-      run: cd capsule-vision && uv run ruff format --check
-    lint-check-vision-ruff:
+      run: just format-check-vision
+    lint-check-vision:
       priority: 1
       glob: "capsule-vision/**/*.py"
-      run: cd capsule-vision && uv run ruff check
-    lint-check-vision-ty:
-      priority: 1
-      glob: "capsule-vision/**/*.py"
-      run: cd capsule-vision && uv run ty check
+      run: just lint-check-vision
     format-check-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && mise exec -- swiftformat --lint .
+      run: just format-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
     lint-check-swift:
       priority: 1
       glob: "capsule-swift/**/*.swift"
-      run: cd capsule-swift && mise exec -- swiftlint --strict
+      run: just lint-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
 
@@ -116,8 +115,8 @@ pre-push:
     test-rust:
       priority: 2
       glob: "**/*.rs"
-      run: cargo test --workspace --exclude capsule-sdk
+      run: just test-rust
     test-web:
       priority: 2
       glob: "capsule-web/**/*.{ts,tsx,js,jsx}"
-      run: cd capsule-web && bun test
+      run: just test-web

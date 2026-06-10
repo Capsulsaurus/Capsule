@@ -1,5 +1,5 @@
 // Related documentations:
-// - https://capsule.justinchung.net/design/import-prioritization/
+// - https://capsule.justinchung.net/design/upload/
 
 use std::{
     collections::{HashMap, HashSet},

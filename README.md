@@ -1,6 +1,6 @@
 # Capsule
 
-Open Asset Management Scaled to Millions.
+Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.
 
 > Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!
 
@@ -17,6 +17,14 @@ Open Asset Management Scaled to Millions.
 - **Open-source**: Capsule is open-source forever and you can host your own server.
 
 <!-- TODO: Update this -->
+
+## Is Capsule for you?
+
+Capsule is highly refined for photographers and prosumers who want to store and share their photos nearly as seamlessly as do cloud photo services that do not necessarily work on all your devices equally as well and own your data.
+
+We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.
+
+However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!
 
 ## Screenshots
 

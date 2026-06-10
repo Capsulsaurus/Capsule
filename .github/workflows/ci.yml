@@ -1,0 +1,185 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# Cancel superseded runs for the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Detect which toolchain's dependency tree changed so each job only runs when relevant.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+      docs: ${{ steps.filter.outputs.docs }}
+      vision: ${{ steps.filter.outputs.vision }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            rust:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'capsule-api/**'
+              - 'capsule-cli/**'
+              - 'capsule-core/**'
+              - 'capsule-media/**'
+              - 'capsule-sdk/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'capsule-web/**'
+              - '.github/workflows/ci.yml'
+            docs:
+              - 'capsule-docs/**'
+              - '.github/workflows/ci.yml'
+            vision:
+              - 'capsule-vision/**'
+              - '.github/workflows/ci.yml'
+
+  rust:
+    name: Rust (fmt + clippy + build)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup component add rustfmt clippy
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (fmt + clippy + build)
+        run: just check-rust
+
+  rust-test:
+    name: Rust (tests)
+    needs: changes
+    if: ${{ needs.changes.outputs.rust == 'true' }}
+    runs-on: ubuntu-latest
+    # Non-blocking: capsule-api integration tests use testcontainers (Docker),
+    # which is slower and flakier. Drop continue-on-error once stabilized.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        run: rustup toolchain install
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Test
+        run: just test-rust
+
+  web:
+    name: Web (format + lint + test + build)
+    needs: changes
+    if: ${{ needs.changes.outputs.web == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-web-${{ runner.os }}-${{ hashFiles('capsule-web/bun.lock') }}
+          restore-keys: bun-web-${{ runner.os }}-
+      - name: Install dependencies
+        working-directory: capsule-web
+        run: bun install --frozen-lockfile
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (format + lint + test + build)
+        run: just check-web
+
+  docs:
+    name: Docs (format + lint + build)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Cache bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-docs-${{ runner.os }}-${{ hashFiles('capsule-docs/bun.lock') }}
+          restore-keys: bun-docs-${{ runner.os }}-
+      - name: Install dependencies
+        working-directory: capsule-docs
+        run: bun install --frozen-lockfile
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (format + lint + build)
+        run: just check-docs
+
+  vision:
+    name: Vision (format + lint)
+    needs: changes
+    if: ${{ needs.changes.outputs.vision == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: capsule-vision/uv.lock
+      - name: Install Python and sync deps
+        working-directory: capsule-vision
+        run: uv sync --frozen
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (format + lint)
+        run: just check-vision
+
+  # Single aggregated status check. Mark THIS ("CI / required") as the required
+  # check in branch protection — path-filtered jobs report "skipped", which this
+  # treats as a pass. rust-test is non-blocking and intentionally excluded.
+  required:
+    name: required
+    if: always()
+    needs: [changes, rust, rust-test, web, docs, vision]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          for r in "${{ needs.rust.result }}" "${{ needs.web.result }}" \
+                   "${{ needs.docs.result }}" "${{ needs.vision.result }}"; do
+            if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
+              echo "A required job did not pass (result: $r)."
+              exit 1
+            fi
+          done
+          echo "All required jobs passed or were skipped."

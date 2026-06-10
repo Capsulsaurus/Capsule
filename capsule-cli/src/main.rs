@@ -22,6 +22,7 @@ use crate::utils::directories::{get_cache_dir, get_config_dir, get_data_dir};
 mod cli;
 mod config;
 mod db;
+mod demo;
 mod import;
 mod status;
 mod utils;
@@ -235,6 +236,11 @@ async fn main() -> Result<()> {
 
             lib.close()
                 .map_err(|e| eyre!("Failed to close library: {e}"))?;
+        }
+
+        // ── Demo ──────────────────────────────────────────────────────────
+        Commands::Demo { workdir, image } => {
+            demo::run(workdir, image)?;
         }
 
         // ── Sync ──────────────────────────────────────────────────────────
