@@ -43,7 +43,10 @@ public struct TimelineRootView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) { importButton }
                     if model.state == .ready, !model.sections.isEmpty {
-                        ToolbarItem(placement: .topBarTrailing) { densityMenu }
+                        ToolbarItem(placement: .principal) { levelPicker }
+                        if model.level == .all {
+                            ToolbarItem(placement: .topBarTrailing) { densityMenu }
+                        }
                     }
                 }
         }
@@ -101,9 +104,12 @@ public struct TimelineRootView: View {
             } else {
                 PhotoGridView(
                     sections: model.sections,
-                    columnCount: model.columnCount,
+                    style: model.gridStyle,
                     thumbnails: thumbnails,
-                    onSelect: openViewer
+                    scrollToSectionID: model.focusSectionID,
+                    onSelect: openViewer,
+                    onSelectSection: { model.drillDown(into: $0) },
+                    onZoomLevelChange: { model.zoom(in: $0) }
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -117,6 +123,20 @@ public struct TimelineRootView: View {
             Image(systemName: "square.and.arrow.down")
         }
         .accessibilityLabel("Import Photos")
+    }
+
+    private var levelPicker: some View {
+        Picker("View", selection: levelBinding) {
+            Text("Years").tag(TimelineViewModel.TimelineLevel.years)
+            Text("Months").tag(TimelineViewModel.TimelineLevel.months)
+            Text("All").tag(TimelineViewModel.TimelineLevel.all)
+        }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 260)
+    }
+
+    private var levelBinding: Binding<TimelineViewModel.TimelineLevel> {
+        Binding(get: { model.level }, set: { model.setLevel($0) })
     }
 
     private var densityMenu: some View {

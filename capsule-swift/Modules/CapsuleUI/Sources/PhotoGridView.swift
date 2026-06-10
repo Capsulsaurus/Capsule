@@ -3,24 +3,6 @@ import ImagePipeline
 import SwiftUI
 import UIKit
 
-// MARK: - PhotoGridSection
-
-/// One titled run of assets in the grid — typically a single capture day.
-public struct PhotoGridSection: Identifiable, Sendable {
-    /// A stable section identifier (e.g. the day key `2024-07-03`).
-    public let id: String
-    /// The header text shown for the section.
-    public let title: String
-    /// The section's assets, in display order.
-    public let assets: [Asset]
-
-    public init(id: String, title: String, assets: [Asset]) {
-        self.id = id
-        self.title = title
-        self.assets = assets
-    }
-}
-
 // MARK: - PhotoGridView
 
 /// A high-performance photo grid for SwiftUI, backed by `UICollectionView` with
@@ -29,15 +11,42 @@ public struct PhotoGridSection: Identifiable, Sendable {
 /// A `UICollectionView` is used over `LazyVGrid` for true cell reuse, first-class
 /// prefetch/cancel, and pinned section headers — the properties a fast,
 /// large-library timeline needs. The grid is source-agnostic: it renders
-/// ``PhotoGridSection`` values, with optional pinned headers, and is reused by
-/// the timeline and album screens.
+/// ``PhotoGridSection`` values as uniform tiles or representative cards, and is
+/// reused by the timeline, album, and aggregation screens.
 public struct PhotoGridView: UIViewControllerRepresentable {
     private let sections: [PhotoGridSection]
-    private let columnCount: Int
+    private let style: PhotoGridStyle
     private let thumbnails: any ThumbnailProvider
     private let showsSectionHeaders: Bool
+    private let scrollToSectionID: String?
     private let onSelect: (Asset) -> Void
+    private let onSelectSection: ((PhotoGridSection) -> Void)?
+    private let onZoomLevelChange: ((Bool) -> Void)?
 
+    /// The full grid surface: choose a ``PhotoGridStyle``, and — for the
+    /// aggregation levels — handle card taps, pinch-to-zoom level changes, and an
+    /// optional section to scroll into view after a level switch.
+    public init(
+        sections: [PhotoGridSection],
+        style: PhotoGridStyle,
+        thumbnails: any ThumbnailProvider,
+        showsSectionHeaders: Bool = true,
+        scrollToSectionID: String? = nil,
+        onSelect: @escaping (Asset) -> Void,
+        onSelectSection: ((PhotoGridSection) -> Void)? = nil,
+        onZoomLevelChange: ((Bool) -> Void)? = nil
+    ) {
+        self.sections = sections
+        self.style = style
+        self.thumbnails = thumbnails
+        self.showsSectionHeaders = showsSectionHeaders
+        self.scrollToSectionID = scrollToSectionID
+        self.onSelect = onSelect
+        self.onSelectSection = onSelectSection
+        self.onZoomLevelChange = onZoomLevelChange
+    }
+
+    /// Convenience initializer for the common uniform-tile grid.
     public init(
         sections: [PhotoGridSection],
         columnCount: Int,
@@ -45,11 +54,13 @@ public struct PhotoGridView: UIViewControllerRepresentable {
         showsSectionHeaders: Bool = true,
         onSelect: @escaping (Asset) -> Void
     ) {
-        self.sections = sections
-        self.columnCount = columnCount
-        self.thumbnails = thumbnails
-        self.showsSectionHeaders = showsSectionHeaders
-        self.onSelect = onSelect
+        self.init(
+            sections: sections,
+            style: .uniform(columns: columnCount),
+            thumbnails: thumbnails,
+            showsSectionHeaders: showsSectionHeaders,
+            onSelect: onSelect
+        )
     }
 
     public func makeUIViewController(context _: Context) -> PhotoGridViewController {
@@ -58,7 +69,9 @@ public struct PhotoGridView: UIViewControllerRepresentable {
 
     public func updateUIViewController(_ controller: PhotoGridViewController, context _: Context) {
         controller.onSelect = onSelect
-        controller.update(sections: sections, columnCount: columnCount)
+        controller.onSelectSection = onSelectSection
+        controller.onZoomLevelChange = onZoomLevelChange
+        controller.update(sections: sections, style: style, scrollToSectionID: scrollToSectionID)
     }
 }
 
@@ -67,19 +80,26 @@ public struct PhotoGridView: UIViewControllerRepresentable {
 /// The `UICollectionView` controller behind ``PhotoGridView``.
 public final class PhotoGridViewController: UIViewController, UICollectionViewDelegate,
     UICollectionViewDataSourcePrefetching {
-    /// Called when the user taps an asset.
+    /// Called when the user taps an asset (uniform style).
     public var onSelect: ((Asset) -> Void)?
+    /// Called when the user taps a representative card (cards style).
+    public var onSelectSection: ((PhotoGridSection) -> Void)?
+    /// Called when the user pinches to change aggregation level — `true` to zoom
+    /// in (finer), `false` to zoom out (coarser).
+    public var onZoomLevelChange: ((Bool) -> Void)?
 
     private let thumbnails: any ThumbnailProvider
     private let showsSectionHeaders: Bool
     private var sections: [PhotoGridSection] = []
-    private var columnCount = 3
+    private var style: PhotoGridStyle = .uniform(columns: 3)
+    private var scrollToSectionID: String?
+    private var appliedFocusID: String?
     private var hasAppliedSnapshot = false
 
     private lazy var collectionView: UICollectionView = {
         let collectionView = UICollectionView(
             frame: .zero,
-            collectionViewLayout: Self.makeLayout(columnCount: columnCount, showsHeaders: showsSectionHeaders)
+            collectionViewLayout: Self.makeLayout(style: style, showsHeaders: showsSectionHeaders)
         )
         collectionView.backgroundColor = .systemBackground
         collectionView.alwaysBounceVertical = true
@@ -106,40 +126,73 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
         collectionView.frame = view.bounds
         collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         view.addSubview(collectionView)
-        applyState()
+
+        let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch))
+        collectionView.addGestureRecognizer(pinch)
+
+        applyState(animated: false)
     }
 
-    /// Push fresh sections and column density into the grid.
-    func update(sections newSections: [PhotoGridSection], columnCount newColumnCount: Int) {
-        let densityChanged = newColumnCount != columnCount
+    /// Push fresh sections, style, and an optional focus section into the grid.
+    func update(
+        sections newSections: [PhotoGridSection],
+        style newStyle: PhotoGridStyle,
+        scrollToSectionID newFocus: String?
+    ) {
+        let styleChanged = newStyle != style
         sections = newSections
-        columnCount = newColumnCount
-        if densityChanged {
+        style = newStyle
+        if newFocus == nil { appliedFocusID = nil }
+        scrollToSectionID = newFocus
+        if styleChanged {
             collectionView.setCollectionViewLayout(
-                Self.makeLayout(columnCount: newColumnCount, showsHeaders: showsSectionHeaders),
+                Self.makeLayout(style: newStyle, showsHeaders: showsSectionHeaders),
                 animated: hasAppliedSnapshot
             )
         }
-        applyState()
+        applyState(animated: hasAppliedSnapshot && !styleChanged)
+        applyFocusIfNeeded()
     }
 
     // MARK: Data source
 
-    private func applyState() {
+    private func applyState(animated: Bool) {
         var snapshot = NSDiffableDataSourceSnapshot<String, Asset>()
         snapshot.appendSections(sections.map(\.id))
         for section in sections {
             snapshot.appendItems(section.assets, toSection: section.id)
         }
-        dataSource.apply(snapshot, animatingDifferences: hasAppliedSnapshot)
+        dataSource.apply(snapshot, animatingDifferences: animated)
         hasAppliedSnapshot = true
     }
 
+    /// Scroll a freshly-focused section to the top, once per distinct request.
+    private func applyFocusIfNeeded() {
+        guard let id = scrollToSectionID, id != appliedFocusID,
+              let index = sections.firstIndex(where: { $0.id == id }) else { return }
+        appliedFocusID = id
+        let indexPath = IndexPath(item: 0, section: index)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, indexPath.section < collectionView.numberOfSections else { return }
+            collectionView.scrollToItem(at: indexPath, at: .top, animated: false)
+        }
+    }
+
     private func makeDataSource() -> UICollectionViewDiffableDataSource<String, Asset> {
-        let cellRegistration = UICollectionView
+        let tileRegistration = UICollectionView
             .CellRegistration<PhotoGridCell, Asset> { [weak self] cell, _, asset in
                 guard let self else { return }
                 cell.configure(with: asset, pixelSize: cellPixelSize, thumbnails: thumbnails)
+            }
+        let cardRegistration = UICollectionView
+            .CellRegistration<PhotoGridCardCell, Asset> { [weak self] cell, indexPath, asset in
+                guard let self, indexPath.section < sections.count else { return }
+                cell.configure(
+                    with: asset,
+                    title: sections[indexPath.section].title,
+                    pixelSize: cellPixelSize,
+                    thumbnails: thumbnails
+                )
             }
         let headerRegistration = UICollectionView
             .SupplementaryRegistration<PhotoGridHeaderView>(
@@ -150,9 +203,14 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
             }
         let source = UICollectionViewDiffableDataSource<String, Asset>(
             collectionView: collectionView
-        ) { collectionView, indexPath, asset in
-            collectionView.dequeueConfiguredReusableCell(
-                using: cellRegistration, for: indexPath, item: asset
+        ) { [weak self] collectionView, indexPath, asset in
+            if self?.style == .cards {
+                return collectionView.dequeueConfiguredReusableCell(
+                    using: cardRegistration, for: indexPath, item: asset
+                )
+            }
+            return collectionView.dequeueConfiguredReusableCell(
+                using: tileRegistration, for: indexPath, item: asset
             )
         }
         source.supplementaryViewProvider = { collectionView, _, indexPath in
@@ -163,20 +221,43 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
         return source
     }
 
-    /// The device-pixel size a grid tile decodes to at the current density.
+    /// The device-pixel size a cell decodes to at the current style.
     private var cellPixelSize: CGSize {
         let width = collectionView.bounds.width
         let scale = max(view.window?.screen.scale ?? traitCollection.displayScale, 1)
-        let side = (width / CGFloat(columnCount)) * scale
-        return CGSize(width: side, height: side)
+        switch style {
+        case let .uniform(columns):
+            let side = (width / CGFloat(columns)) * scale
+            return CGSize(width: side, height: side)
+        case .cards:
+            let pixels = width * scale
+            return CGSize(width: pixels, height: pixels * 0.7)
+        }
+    }
+
+    // MARK: Gestures
+
+    @objc private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+        guard recognizer.state == .ended, onZoomLevelChange != nil else { return }
+        if recognizer.scale > 1.25 {
+            onZoomLevelChange?(true)
+        } else if recognizer.scale < 0.8 {
+            onZoomLevelChange?(false)
+        }
     }
 
     // MARK: UICollectionViewDelegate
 
     public func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         collectionView.deselectItem(at: indexPath, animated: true)
-        if let asset = dataSource.itemIdentifier(for: indexPath) {
-            onSelect?(asset)
+        switch style {
+        case .cards:
+            guard indexPath.section < sections.count else { return }
+            onSelectSection?(sections[indexPath.section])
+        case .uniform:
+            if let asset = dataSource.itemIdentifier(for: indexPath) {
+                onSelect?(asset)
+            }
         }
     }
 
@@ -198,9 +279,17 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
 
     // MARK: Layout
 
-    /// A compositional layout of `columnCount` square tiles per row, with
-    /// pinned section headers when `showsHeaders` is set.
-    private static func makeLayout(columnCount: Int, showsHeaders: Bool) -> UICollectionViewLayout {
+    private static func makeLayout(style: PhotoGridStyle, showsHeaders: Bool) -> UICollectionViewLayout {
+        switch style {
+        case let .uniform(columns):
+            return makeUniformLayout(columnCount: columns, showsHeaders: showsHeaders)
+        case .cards:
+            return makeCardsLayout()
+        }
+    }
+
+    /// `columnCount` square tiles per row, with pinned section headers when set.
+    private static func makeUniformLayout(columnCount: Int, showsHeaders: Bool) -> UICollectionViewLayout {
         let spacing: CGFloat = 0.75
         let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
             widthDimension: .fractionalWidth(1),
@@ -231,6 +320,25 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
             header.pinToVisibleBounds = true
             section.boundarySupplementaryItems = [header]
         }
+        return UICollectionViewCompositionalLayout(section: section)
+    }
+
+    /// One full-width representative card per section, for Years and Months.
+    private static func makeCardsLayout() -> UICollectionViewLayout {
+        let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1),
+            heightDimension: .fractionalHeight(1)
+        ))
+        let group = NSCollectionLayoutGroup.horizontal(
+            layoutSize: NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1),
+                heightDimension: .fractionalWidth(0.62)
+            ),
+            repeatingSubitem: item,
+            count: 1
+        )
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 12, bottom: 6, trailing: 12)
         return UICollectionViewCompositionalLayout(section: section)
     }
 }
