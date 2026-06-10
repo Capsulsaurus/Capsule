@@ -3,4 +3,4 @@ pub mod rows;
 pub mod schema;
 
 pub use driver::DatabaseDriver;
-pub use rows::{AssetRow, AssetStackRow, AssetTagRow, StackMemberRow};
+pub use rows::{AssetRow, AssetStackRow, AssetTagRow, CachedRepresentationRow, StackMemberRow};

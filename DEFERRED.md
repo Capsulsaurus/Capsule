@@ -59,11 +59,13 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   refuse-by-default validation invariants those paths need are implemented in
   `capsule_core::validation` and ready to wire into `capsule-api`.
 - The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
-  recently-viewed blobs, tier-ordered eviction original → preview → thumbnail) is specified in
-  `capsule-docs` [Filesystem — Client → Space Recovery] but **not yet implemented** (issue #23,
-  scoped to documentation). Seam: last-access tracking lives in `capsule-core::db`
-  (`library.sqlite`) and the sweep in `capsule-core::library`, driven by `capsule-sdk`
-  connection-class detection — no core data-plane rework needed to land it.
+  recently-viewed blobs, tier-ordered eviction original → preview → thumbnail, pinned and
+  device-owned originals exempt) is **now implemented** (issue #23): the
+  `cached_representations` table + last-access tracking live in `capsule-core::db` and the sweep
+  `capsule_core::library::cache_sweep` deletes evicted cache files (never the canonical `media/`
+  files or the index). The byte budget is a plain parameter, so `capsule-sdk` connection-class
+  detection drives it unchanged. Still deferred upstream: that connection-class budget detection
+  and the wider networked server/client (HTTP/TUS, GraphQL, `/sync`, federation, peering).
 
 ### ML / AI
 - Embeddings, `sqlite-vec` vector search, the model registry, semantic/face features, and

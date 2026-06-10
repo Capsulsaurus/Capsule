@@ -1,4 +1,4 @@
-use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
+use crate::db::rows::{AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 use crate::db::schema;
 use rusqlite::{Connection, params};
 use std::path::Path;
@@ -236,6 +236,80 @@ impl DatabaseDriver {
         let rows = stmt.query_map(params![threshold], map_asset_row)?;
         rows.collect()
     }
+
+    // ── Cached representations (adaptive cache eviction, issue #23) ──────────────
+
+    /// Insert or replace a cached representation row.
+    pub fn upsert_representation(
+        &self,
+        row: &CachedRepresentationRow,
+    ) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cached_representations
+             (uuid, tier, format, bytes, path, last_accessed_at, pinned, is_owned_original)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                row.uuid,
+                row.tier,
+                row.format,
+                row.bytes,
+                row.path,
+                row.last_accessed_at,
+                row.pinned as i64,
+                row.is_owned_original as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Remove a cached representation row (after its file has been deleted).
+    pub fn remove_representation(&self, uuid: &str, tier: &str) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "DELETE FROM cached_representations WHERE uuid = ?1 AND tier = ?2",
+            params![uuid, tier],
+        )?;
+        Ok(())
+    }
+
+    /// Stamp a representation's last-access time (recency promotion) — viewing an asset keeps its
+    /// representations from eviction. `now` is injected so the policy stays deterministic.
+    pub fn record_access(&self, uuid: &str, tier: &str, now: i64) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE cached_representations SET last_accessed_at = ?1 WHERE uuid = ?2 AND tier = ?3",
+            params![now, uuid, tier],
+        )?;
+        Ok(())
+    }
+
+    /// The reclaimable representations to evict so the reclaimable set fits within `budget_bytes`.
+    /// Pinned and device-owned originals are never candidates. Rows are ranked most-valuable-to-
+    /// keep first (most-recently-accessed; thumbnail over preview over original at equal recency),
+    /// then everything past the budget is evicted — i.e. least-recently-accessed first, original →
+    /// preview → thumbnail at equal recency.
+    pub fn eviction_candidates(
+        &self,
+        budget_bytes: i64,
+    ) -> Result<Vec<CachedRepresentationRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, tier, format, bytes, path, last_accessed_at, pinned, is_owned_original
+             FROM cached_representations
+             WHERE pinned = 0 AND is_owned_original = 0
+             ORDER BY last_accessed_at DESC,
+                      CASE tier WHEN 'thumbnail' THEN 2 WHEN 'preview' THEN 1 WHEN 'original' THEN 0 ELSE -1 END DESC",
+        )?;
+        let keep_first = stmt.query_map([], map_cached_representation_row)?;
+
+        let mut kept_bytes: i64 = 0;
+        let mut evict = Vec::new();
+        for row in keep_first {
+            let row = row?;
+            kept_bytes += row.bytes;
+            if kept_bytes > budget_bytes {
+                evict.push(row);
+            }
+        }
+        Ok(evict)
+    }
 }
 
 fn now_secs() -> i64 {
@@ -265,6 +339,21 @@ fn map_asset_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         rating: row.get(15)?,
         is_deleted: row.get::<_, i64>(16)? != 0,
         deleted_at: row.get(17)?,
+    })
+}
+
+fn map_cached_representation_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CachedRepresentationRow> {
+    Ok(CachedRepresentationRow {
+        uuid: row.get(0)?,
+        tier: row.get(1)?,
+        format: row.get(2)?,
+        bytes: row.get(3)?,
+        path: row.get(4)?,
+        last_accessed_at: row.get(5)?,
+        pinned: row.get::<_, i64>(6)? != 0,
+        is_owned_original: row.get::<_, i64>(7)? != 0,
     })
 }
 
@@ -300,7 +389,7 @@ mod tests {
     fn test_init_schema_idempotent() {
         let db = DatabaseDriver::open_in_memory().unwrap();
         db.init_schema().unwrap(); // second call — should not fail
-        assert_eq!(db.schema_version().unwrap(), 1);
+        assert_eq!(db.schema_version().unwrap(), 2);
     }
 
     #[test]
@@ -421,5 +510,92 @@ mod tests {
         db.upsert_asset(&asset).unwrap();
         let found = db.find_by_hash(&"a".repeat(64)).unwrap().unwrap();
         assert_eq!(found.rating, 5);
+    }
+
+    fn rep(uuid: &str, tier: &str, bytes: i64, last: i64) -> CachedRepresentationRow {
+        CachedRepresentationRow {
+            uuid: uuid.to_string(),
+            tier: tier.to_string(),
+            format: None,
+            bytes,
+            path: format!("/cache/{uuid}.{tier}"),
+            last_accessed_at: last,
+            pinned: false,
+            is_owned_original: false,
+        }
+    }
+
+    fn evicted_ids(rows: &[CachedRepresentationRow]) -> Vec<&str> {
+        rows.iter().map(|r| r.uuid.as_str()).collect()
+    }
+
+    #[test]
+    fn eviction_is_least_recently_accessed_first() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.upsert_representation(&rep("a", "thumbnail", 100, 10))
+            .unwrap();
+        db.upsert_representation(&rep("b", "thumbnail", 100, 20))
+            .unwrap();
+        db.upsert_representation(&rep("c", "thumbnail", 100, 30))
+            .unwrap();
+        // 300 B reclaimable, budget 250 → evict only the least-recently-accessed.
+        let evicted = db.eviction_candidates(250).unwrap();
+        assert_eq!(evicted_ids(&evicted), ["a"]);
+    }
+
+    #[test]
+    fn eviction_tier_order_breaks_recency_ties() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        // Equal recency, three tiers — original (biggest, most regenerable) is evicted first.
+        db.upsert_representation(&rep("x", "original", 100, 50))
+            .unwrap();
+        db.upsert_representation(&rep("x", "preview", 100, 50))
+            .unwrap();
+        db.upsert_representation(&rep("x", "thumbnail", 100, 50))
+            .unwrap();
+        let evicted = db.eviction_candidates(250).unwrap();
+        assert_eq!(
+            evicted.iter().map(|r| r.tier.as_str()).collect::<Vec<_>>(),
+            ["original"]
+        );
+    }
+
+    #[test]
+    fn recency_promotion_protects_touched_representation() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.upsert_representation(&rep("a", "thumbnail", 100, 10))
+            .unwrap();
+        db.upsert_representation(&rep("b", "thumbnail", 100, 20))
+            .unwrap();
+        db.upsert_representation(&rep("c", "thumbnail", 100, 30))
+            .unwrap();
+        // Viewing the oldest makes it newest, so the next-oldest is evicted instead.
+        db.record_access("a", "thumbnail", 100).unwrap();
+        let evicted = db.eviction_candidates(250).unwrap();
+        assert_eq!(evicted_ids(&evicted), ["b"]);
+    }
+
+    #[test]
+    fn pinned_and_owned_originals_are_exempt() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let mut pinned = rep("p", "original", 1000, 10);
+        pinned.pinned = true;
+        let mut owned = rep("o", "original", 1000, 10);
+        owned.is_owned_original = true;
+        db.upsert_representation(&pinned).unwrap();
+        db.upsert_representation(&owned).unwrap();
+        db.upsert_representation(&rep("c", "thumbnail", 100, 30))
+            .unwrap();
+        // Budget 0 reclaims everything reclaimable, but the exempt rows survive the sweep.
+        let evicted = db.eviction_candidates(0).unwrap();
+        assert_eq!(evicted_ids(&evicted), ["c"]);
+    }
+
+    #[test]
+    fn eviction_empty_when_within_budget() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.upsert_representation(&rep("a", "thumbnail", 100, 10))
+            .unwrap();
+        assert!(db.eviction_candidates(1000).unwrap().is_empty());
     }
 }
