@@ -38,15 +38,19 @@ use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{Account, Amk, AmkVersion, DeviceDirectory, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
-use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
-use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
+use crate::crypto::provenance::action::{Action, DerivativeRole};
+use crate::crypto::provenance::manifest::{
+    ASSET_MANIFEST_VERSION, DERIVATIVE_MANIFEST_VERSION, DerivativeCore, ManifestCore,
+};
+use crate::crypto::provenance::{
+    AssetManifest, DerivativeChain, DerivativeManifest, ProvenanceChain, ProvenanceRecord,
+};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::crypto::{CryptoError, authority::ReferenceAuthority};
-use crate::db::{AiTagRow, AssetRow, CachedRepresentationRow, DatabaseDriver};
+use crate::db::{AiTagRow, AssetRow, CachedRepresentationRow, DatabaseDriver, EmbeddingInsert};
 use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter};
-use crate::ml::{ModelId, Registry};
+use crate::ml::{ModelId, Registry, TaskKind};
 use crate::sidecar::sidecar_v1::{AiTag, SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
@@ -76,6 +80,9 @@ pub enum LifecycleError {
     /// Library index (SQLite) error.
     #[error("db: {0}")]
     Db(String),
+    /// Vector index / embedding-provenance error.
+    #[error(transparent)]
+    Vector(#[from] crate::db::VectorIndexError),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;
@@ -110,6 +117,9 @@ pub struct AssetState {
     pub chain: ProvenanceChain,
     /// The signed sidecar.
     pub sidecar: SidecarV1,
+    /// Per-`role` derivative provenance chains (thumbnail / preview / embedding). The signed
+    /// manifests persist to disk; the embedding *vectors* live in the rebuildable vector index.
+    pub derivatives: HashMap<DerivativeRole, DerivativeChain>,
 }
 
 /// An offline Capsule workspace over a client library directory.
@@ -162,6 +172,24 @@ fn rfc3339_to_secs(s: &str) -> i64 {
     chrono::DateTime::parse_from_rfc3339(s)
         .map(|d| d.timestamp())
         .unwrap_or(0)
+}
+
+/// Pack an embedding as little-endian `f32` bytes for content-addressing in its manifest.
+fn embedding_bytes(v: &[f32]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(v.len() * 4);
+    for x in v {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    b
+}
+
+/// A stable on-disk ordering for derivative roles (deterministic `.derivatives.cbor`).
+fn derivative_role_ord(role: DerivativeRole) -> u8 {
+    match role {
+        DerivativeRole::Thumbnail => 0,
+        DerivativeRole::Preview => 1,
+        DerivativeRole::Embedding => 2,
+    }
 }
 
 /// Map a managed asset's in-memory state to its queryable `assets` index row. Deletion state is
@@ -359,6 +387,10 @@ impl Workspace {
             asset.ext
         ))
     }
+    fn derivative_path(&self, asset: &AssetState) -> PathBuf {
+        media_dir(&self.root, asset.capture_utc)
+            .join(format!("{}.derivatives.cbor", asset.asset_id.simple()))
+    }
 
     /// Derive the per-file key under a *specific* epoch's AMK. Callers pass the epoch the asset
     /// was written under (`amk_version`), never assuming the album's current epoch — so an asset
@@ -541,6 +573,7 @@ impl Workspace {
             capture_utc,
             chain,
             sidecar,
+            derivatives: HashMap::new(),
         };
         self.write_asset_files(&asset, &plaintext)?;
         self.index_asset_row(&asset)?;
@@ -754,6 +787,127 @@ impl Workspace {
             .collect())
     }
 
+    // ── Embedding-derivative provenance (SSoT: cryptography/provenance § Derivative Provenance) ──
+
+    /// Generate a signed embedding derivative for `asset_id` under `task`'s canonical model and
+    /// record it two ways: a [`DerivativeManifest`] (role = embedding, carrying the
+    /// `(model_id, model_version)` provenance tuple) appended to the per-`(asset, embedding)`
+    /// derivative chain, and the vector inserted into the local index under the same tuple.
+    /// Re-running it (regeneration at a new model version) appends a `derivative-replace` that
+    /// chains to the previous embedding manifest. The asset's lifecycle chain is untouched, so
+    /// `verify_asset` is unaffected.
+    pub fn add_embedding_derivative(
+        &mut self,
+        registry: &Registry,
+        asset_id: &Uuid,
+        task: TaskKind,
+        platform: &str,
+        embedding: &[f32],
+    ) -> Result<()> {
+        let row = registry
+            .canonical_for(task)
+            .ok_or_else(|| LifecycleError::NotFound(format!("no canonical model for {task:?}")))?;
+        let (dim, _metric) = row.embedding_spec().ok_or_else(|| {
+            crate::db::VectorIndexError::Registry(crate::ml::RegistryError::NotAnEmbeddingTask {
+                task,
+            })
+        })?;
+        if embedding.len() != dim.get() {
+            return Err(crate::db::VectorIndexError::DimMismatch {
+                task,
+                expected: dim.get(),
+                got: embedding.len(),
+            }
+            .into());
+        }
+        let model_id = row.model_id.clone();
+        let model_version = row.canonical_version.clone();
+        let format = row.embedding_format();
+
+        let album_id = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .album_id;
+
+        // The vector lands in the local index first (strict embedding-provenance validation).
+        self.library.db.insert_embedding(
+            registry,
+            EmbeddingInsert {
+                asset_id: &asset_id.to_string(),
+                task,
+                model_id: &model_id,
+                model_version: &model_version,
+                platform,
+                vector: embedding,
+            },
+        )?;
+
+        // Build + sign the derivative manifest, chaining to any prior embedding for this asset.
+        let prior = self.assets[asset_id]
+            .derivatives
+            .get(&DerivativeRole::Embedding)
+            .and_then(DerivativeChain::head);
+        let album = self.album(&album_id)?;
+        let core = DerivativeCore {
+            version: DERIVATIVE_MANIFEST_VERSION.into(),
+            crypto_suite_id: CRYPTO_SUITE_ID,
+            source_asset_id: *asset_id,
+            role: DerivativeRole::Embedding,
+            format,
+            ciphertext_hash: hash::hash_bytes(&embedding_bytes(embedding)),
+            generated_by_device: self.account.device.device_id,
+            generated_by_client: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+            model_id: Some(model_id.to_string()),
+            model_version: Some(model_version.to_string()),
+            generated_at: now_rfc3339(),
+            prior_provenance_hash: prior,
+        };
+        let manifest = core.sign(&self.account.device.dsk, &album.write_tier);
+
+        self.assets
+            .get_mut(asset_id)
+            .unwrap()
+            .derivatives
+            .entry(DerivativeRole::Embedding)
+            .or_insert_with(|| DerivativeChain::new(DerivativeRole::Embedding))
+            .append(manifest)
+            .map_err(|e| LifecycleError::Cbor(format!("derivative chain: {e}")))?;
+
+        self.write_derivative_file(asset_id)
+    }
+
+    /// The signed embedding derivatives recorded for `asset_id` (oldest first).
+    pub fn embedding_derivatives(&self, asset_id: &Uuid) -> Result<Vec<DerivativeManifest>> {
+        Ok(self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .derivatives
+            .get(&DerivativeRole::Embedding)
+            .map(|c| c.manifests().to_vec())
+            .unwrap_or_default())
+    }
+
+    /// Persist an asset's derivative manifests to its `.derivatives.cbor` in a deterministic order.
+    fn write_derivative_file(&self, asset_id: &Uuid) -> Result<()> {
+        let asset = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
+        let mut roles: Vec<DerivativeRole> = asset.derivatives.keys().copied().collect();
+        roles.sort_by_key(|r| derivative_role_ord(*r));
+        let mut all: Vec<DerivativeManifest> = Vec::new();
+        for role in roles {
+            all.extend(asset.derivatives[&role].manifests().iter().cloned());
+        }
+        let bytes =
+            cbor::to_canonical_vec(&all).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+        let dir = media_dir(&self.root, asset.capture_utc);
+        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        fs::write(self.derivative_path(asset), bytes).map_err(|e| LifecycleError::Io(e.to_string()))
+    }
+
     /// Soft-delete: emit a `delete` record carrying a signed retention window.
     pub fn soft_delete(&mut self, asset_id: &Uuid, retain_days: i64) -> Result<()> {
         let until = (Utc::now() + chrono::Duration::days(retain_days)).to_rfc3339();
@@ -857,6 +1011,7 @@ impl Workspace {
                 capture_utc,
                 chain,
                 sidecar,
+                derivatives: HashMap::new(),
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
             self.index_asset_row(&asset)?;
@@ -1260,5 +1415,95 @@ mod tests {
         reg.set_canonical_version(crate::ml::TaskKind::SemanticSearch, "2".into());
         assert!(ws.current_ai_tags(&reg, &id).unwrap().is_empty());
         assert_eq!(ws.asset(&id).unwrap().sidecar.tags_ai.value().len(), 1);
+    }
+
+    /// A one-hot (already L2-normalized) 512-d embedding — matches the registry's MobileCLIP dim.
+    fn emb(i: usize) -> Vec<f32> {
+        let mut v = vec![0.0f32; 512];
+        v[i % 512] = 1.0;
+        v
+    }
+
+    #[test]
+    fn embedding_derivative_is_signed_carries_provenance_and_indexes() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = ws_with_asset(&lib, &src);
+        let album = ws.asset(&id).unwrap().album_id;
+        let reg = Registry::canonical();
+        let platform = "cpu-reference";
+        let vector = emb(7);
+
+        ws.add_embedding_derivative(&reg, &id, TaskKind::SemanticSearch, platform, &vector)
+            .unwrap();
+
+        // A signed embedding derivative was recorded carrying the provenance tuple.
+        let dms = ws.embedding_derivatives(&id).unwrap();
+        assert_eq!(dms.len(), 1);
+        let dm = &dms[0];
+        assert_eq!(dm.core.role, DerivativeRole::Embedding);
+        assert_eq!(dm.core.model_id.as_deref(), Some("mobileclip-b"));
+        assert_eq!(dm.core.model_version.as_deref(), Some("1"));
+        assert_eq!(dm.core.format, "embedding/mobileclip-b");
+        assert!(dm.core.prior_provenance_hash.is_none()); // first of its role
+
+        // Both hybrid signatures verify (device DSK + the album's epoch write-tier key).
+        let bytes = dm.core.signing_bytes();
+        assert!(
+            ws.account
+                .device
+                .dsk
+                .verifying_key()
+                .verify(&bytes, &dm.device_sig)
+        );
+        assert!(
+            ws.albums[&album]
+                .write_tier
+                .verifying_key()
+                .verify(&bytes, &dm.write_sig)
+        );
+
+        // The vector is queryable in the index; the asset's lifecycle chain is untouched.
+        let hits = ws
+            .db()
+            .knn(&reg, TaskKind::SemanticSearch, &vector, 5, platform)
+            .unwrap();
+        assert_eq!(hits[0].asset_id, id.to_string());
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+        // Persisted to disk alongside the sidecar + provenance.
+        assert!(ws.derivative_path(ws.asset(&id).unwrap()).exists());
+    }
+
+    #[test]
+    fn embedding_regen_at_new_version_appends_a_chained_replace() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = ws_with_asset(&lib, &src);
+        let platform = "cpu-reference";
+        let mut reg = Registry::canonical();
+
+        ws.add_embedding_derivative(&reg, &id, TaskKind::SemanticSearch, platform, &emb(1))
+            .unwrap();
+        let first_hash = ws.embedding_derivatives(&id).unwrap()[0].record_hash();
+
+        // Model swap → regenerate at the new version.
+        reg.set_canonical_version(TaskKind::SemanticSearch, "2".into());
+        ws.add_embedding_derivative(&reg, &id, TaskKind::SemanticSearch, platform, &emb(2))
+            .unwrap();
+
+        let dms = ws.embedding_derivatives(&id).unwrap();
+        assert_eq!(dms.len(), 2);
+        // The replace chains to the prior embedding manifest (a derivative-replace).
+        assert_eq!(dms[1].core.prior_provenance_hash, Some(first_hash));
+        assert_eq!(dms[1].core.model_version.as_deref(), Some("2"));
+        DerivativeChain::verify_walk(DerivativeRole::Embedding, &dms).unwrap();
+        // The index holds exactly the new-version vector for the asset (replace, not accumulate).
+        assert_eq!(
+            ws.db().embedding_count(TaskKind::SemanticSearch).unwrap(),
+            1
+        );
+        let hits = ws
+            .db()
+            .knn(&reg, TaskKind::SemanticSearch, &emb(2), 5, platform)
+            .unwrap();
+        assert_eq!(hits[0].asset_id, id.to_string());
     }
 }

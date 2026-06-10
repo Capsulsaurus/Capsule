@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use super::action::{Action, DerivativeRole};
 use crate::cbor;
-use crate::crypto::hash::Hash32;
+use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{AmkVersion, HybridSignature, HybridSigningKey};
 
 /// Current asset-manifest schema string.
@@ -168,6 +168,15 @@ impl DerivativeCore {
             write_sig: write_tier.sign(&bytes),
             core: self,
         }
+    }
+}
+
+impl DerivativeManifest {
+    /// The content hash of this manifest (SHA-256 over its canonical CBOR, signatures included),
+    /// used as the next derivative's `prior_provenance_hash` in the per-`(source_asset_id, role)`
+    /// chain.
+    pub fn record_hash(&self) -> Hash32 {
+        hash::hash_bytes(&cbor::to_canonical_vec(self).expect("derivative manifest serializes"))
     }
 }
 
