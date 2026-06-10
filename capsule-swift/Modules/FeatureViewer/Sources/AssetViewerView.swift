@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleUI
 import ImagePipeline
 import SwiftUI
 import UIKit
@@ -91,7 +92,7 @@ public struct AssetViewerView: View {
                 .font(.headline)
                 .foregroundStyle(.white)
                 .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
+                .capsuleGlass(in: Circle(), interactive: true)
         }
         .padding(.leading, 16)
         .padding(.top, 8)
@@ -118,8 +119,11 @@ public struct AssetViewerView: View {
                 }
             }
         }
-        .padding(.vertical, 12)
-        .background(.ultraThinMaterial)
+        .padding(.vertical, CapsuleTheme.Spacing.medium)
+        .padding(.horizontal, CapsuleTheme.Spacing.small)
+        .capsuleGlass(in: Capsule())
+        .padding(.horizontal, CapsuleTheme.Spacing.large)
+        .padding(.bottom, CapsuleTheme.Spacing.small)
     }
 
     private func barButton(

@@ -149,8 +149,8 @@ public struct TimelineRootView: View {
         ZStack {
             Color.black.opacity(0.3).ignoresSafeArea()
             ProgressView("Importing…")
-                .padding(24)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                .padding(CapsuleTheme.Spacing.xLarge)
+                .capsuleGlass(in: RoundedRectangle(cornerRadius: CapsuleTheme.Radius.medium))
         }
     }
 

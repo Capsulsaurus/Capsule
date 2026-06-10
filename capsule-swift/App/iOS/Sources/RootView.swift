@@ -1,3 +1,4 @@
+import CapsuleUI
 import FeatureAlbums
 import FeatureSearch
 import FeatureTimeline
@@ -40,6 +41,7 @@ struct RootView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .capsuleTabBarMinimizeOnScroll()
         .onReceive(
             NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
         ) { _ in
