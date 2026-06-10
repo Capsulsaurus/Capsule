@@ -98,6 +98,9 @@ impl StorageService {
             .map_err(|e| UploadError::Unknown(e.to_string()))?;
         let size = metadata.len();
 
+        // `reflink_success` is only reassigned inside the Linux-only reflink block
+        // below, so on non-Linux targets the `mut` is genuinely unused.
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
         let mut reflink_success = false;
 
         if !force_copy {

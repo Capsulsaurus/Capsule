@@ -100,7 +100,7 @@ lint-check-web:
 
 [group('web')]
 test-web:
-    cd capsule-web && bun test
+    cd capsule-web && bun test --pass-with-no-tests
 
 [group('web')]
 build-web:

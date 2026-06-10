@@ -1,8 +1,8 @@
+use capsule_api::create_router;
 use environment::Environment;
 use eyre::{Result, eyre};
 use listenfd::ListenFd;
 use migration::{Migrator, MigratorTrait};
-use capsule_api::create_router;
 use salvo::{conn::tcp::TcpAcceptor, prelude::*};
 use sea_orm::Database;
 use std::net::{Ipv4Addr, SocketAddrV4};
