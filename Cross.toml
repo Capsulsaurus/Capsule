@@ -1,0 +1,8 @@
+# `cross` (cross-rs) configuration for the Tier-2, best-effort aarch64 Linux
+# target. Apple targets cannot use cross (they need macOS + Xcode) and Android
+# uses cargo-ndk — see the justfile `build-*` recipes. The default cross image
+# already ships the gcc cross-toolchain that rusqlite's `bundled` SQLite (C) and
+# the RustCrypto stack need, so no extra packages are required; we only pin the
+# image tag for reproducibility.
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:0.2.5"

@@ -80,6 +80,66 @@ test-coverage-rust:
 build-rust:
     cargo build --workspace --exclude capsule-sdk
 
+# ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
+# capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links
+# into iOS/Android. This is the formal definition of the targets the crate
+# verifies; .github/workflows/ci.yml `rust-cross` enforces it.
+#
+#   Tier 1 — CI-gated on every PR:
+#     x86_64-unknown-linux-gnu      (host; covered by the `rust` workspace build)
+#     aarch64-apple-ios             aarch64-apple-ios-sim   x86_64-apple-ios
+#     aarch64-apple-darwin          x86_64-apple-darwin
+#     aarch64-linux-android         armv7-linux-androideabi
+#     x86_64-linux-android          i686-linux-android
+#   Tier 2 — best-effort (build-only, non-blocking):
+#     x86_64-pc-windows-msvc        aarch64-unknown-linux-gnu
+#
+# Apple builds natively on macOS; Android via cargo-ndk; aarch64 Linux via `cross`
+# (none can build Apple). build-apple skips off-macOS — a platform constraint, not a
+# fixable dependency. build-android / build-linux-cross instead FAIL when their
+# toolchain is missing, so a silent skip never masks an un-built target; install the
+# toolchains (`just targets-add`, an Android NDK, `cross`) before `build-targets`.
+
+[group('rust')]
+targets-add:
+    rustup target add \
+        aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios \
+        aarch64-apple-darwin x86_64-apple-darwin \
+        aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+    cargo install cargo-ndk
+
+[group('rust')]
+build-apple:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ "$(uname)" != "Darwin" ]; then echo "Skipping Apple targets (not macOS)"; exit 0; fi
+    for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+        echo ":: building capsule-core for $t"
+        cargo build -p capsule-core --target "$t"
+    done
+
+[group('rust')]
+build-android:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-ndk >/dev/null 2>&1; then echo "build-android: cargo-ndk missing; run 'just targets-add'" >&2; exit 1; fi
+    if [ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then echo "build-android: set ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) to your Android NDK" >&2; exit 1; fi
+    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 26 build -p capsule-core
+
+[group('rust')]
+build-linux-cross:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cross >/dev/null 2>&1; then echo "build-linux-cross: cross not installed; run 'cargo install cross'" >&2; exit 1; fi
+    cross build -p capsule-core --target aarch64-unknown-linux-gnu
+
+[group('rust')]
+build-windows:
+    cargo build -p capsule-core --target x86_64-pc-windows-msvc
+
+[group('rust')]
+build-targets: build-apple build-android build-linux-cross
+
 # ── Web ──────────────────────────────────────────────────────────────────────
 
 [group('web')]
