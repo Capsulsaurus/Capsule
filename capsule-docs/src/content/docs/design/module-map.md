@@ -121,7 +121,7 @@ Navigation from a design doc back to where the code lives.
 | [Federation](/design/federation/)                                   | `capsule-api-sync::federation`                                                                                                |
 | [Peering](/design/peering/)                                         | `capsule-sdk::peering` (planned) + `capsule-core::backup` (artifact format)                                                   |
 | [Organization](/design/organization/)                               | `capsule-core::domain::stack_type`, `capsule-api-service::{album,stack}`                                                      |
-| [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), model registry + per-platform inference runners                                                 |
+| [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (registry + orchestration + feature-gated portable runner), `capsule-core::db` vector index                |
 | [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` + serving in `capsule-api-media`                                                             |
 | [Share Links](/design/share-links/)                                 | `capsule-core::sharing` (planned), `capsule-api-media::shares` (planned)                                                      |
 | [Moderation](/design/moderation/)                                   | `capsule-api::moderation` (planned)                                                                                           |
