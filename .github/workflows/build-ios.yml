@@ -20,7 +20,11 @@ concurrency:
 jobs:
   build:
     name: Build & test Capsule.app
-    runs-on: macos-15
+    # macOS 26 host: provides libswiftCompatibilitySpan.dylib natively, which the
+    # Xcode 26 / Swift 6.2 toolchain's prebuilt CLIs (tuist, xcbeautify) link
+    # against via @rpath. On macos-15 dyld can't find it and `tuist generate`
+    # aborts. See https://developer.apple.com/forums/thread/817488
+    runs-on: macos-26
     steps:
       - name: Check out code
         uses: actions/checkout@v4
