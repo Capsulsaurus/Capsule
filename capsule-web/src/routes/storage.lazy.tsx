@@ -97,9 +97,7 @@ function Storage() {
 
     const [activeTab, setActiveTab] = useState<Suggestion>('trash-files');
 
-    const [previewAssetId, setPreviewAssetId] = useState<string | undefined>(
-        undefined,
-    );
+    const [previewAssetId] = useState<string | undefined>(undefined);
     const [previewOpen, setPreviewOpen] = useState(false);
 
     // Icon mapping for cleanup suggestions

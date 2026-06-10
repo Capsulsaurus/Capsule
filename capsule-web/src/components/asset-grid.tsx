@@ -1,4 +1,3 @@
-import { Checkbox } from '@/components/ui/checkbox';
 import {
     ContextMenu,
     ContextMenuContent,
@@ -122,7 +121,7 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
         setLastClickedId(assetId);
     };
 
-    const handleContextMenu = (asset: Asset, e: React.MouseEvent) => {
+    const handleContextMenu = (asset: Asset, _e: React.MouseEvent) => {
         // If right clicking an item that is NOT selected, select it (and deselect others)
         // mimics standard OS behavior
         if (!selectedIds.has(asset.id)) {

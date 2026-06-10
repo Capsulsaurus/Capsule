@@ -3,7 +3,6 @@ import tailwindcss from '@tailwindcss/vite';
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlightLinksValidator from 'starlight-links-validator';
-import starlightVersions from 'starlight-versions';
 import rehypeNoTranslate from './src/lib/rehype-notranslate.mjs';
 
 // https://astro.build/config
