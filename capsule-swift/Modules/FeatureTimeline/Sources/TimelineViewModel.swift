@@ -87,6 +87,7 @@ public final class TimelineViewModel {
     /// Request access and load the timeline. Safe to call once, on appear.
     public func load() async {
         let status = await provider.requestAuthorization()
+        Diagnostics.shared.record(.photoPermission(granted: status.isUsable))
         guard status.isUsable else {
             state = .needsAuthorization
             return
@@ -138,6 +139,7 @@ public final class TimelineViewModel {
             state = .ready
         } catch {
             CapsuleLog.interface.error("timeline load failed: \(String(describing: error), privacy: .public)")
+            Diagnostics.shared.recordError(operation: .timelineLoad)
             state = .failed("Couldn't load your photo library.")
         }
     }

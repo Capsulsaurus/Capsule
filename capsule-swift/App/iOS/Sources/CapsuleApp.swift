@@ -8,6 +8,8 @@ struct CapsuleApp: App {
 
     init() {
         CapsuleLog.app.info("Capsule launching")
+        let diagnostics = environment.diagnostics
+        Task { await diagnostics.start() }
     }
 
     var body: some Scene {

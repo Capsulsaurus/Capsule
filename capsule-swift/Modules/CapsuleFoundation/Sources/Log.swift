@@ -16,4 +16,5 @@ public enum CapsuleLog {
     public static let assetKit = Logger(subsystem: subsystem, category: "asset-kit")
     public static let imagePipeline = Logger(subsystem: subsystem, category: "image-pipeline")
     public static let interface = Logger(subsystem: subsystem, category: "ui")
+    public static let diagnostics = Logger(subsystem: subsystem, category: "diagnostics")
 }

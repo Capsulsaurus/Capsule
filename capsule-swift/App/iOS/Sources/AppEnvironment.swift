@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleDiagnostics
 import FeatureTimeline
 import Foundation
 import ImagePipeline
@@ -19,6 +20,11 @@ struct AppEnvironment {
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
     let importer: LibraryImporter
+
+    /// Persisted diagnostics & telemetry consent (local-only by default).
+    let consentStore: ConsentStore
+    /// Wires MetricKit, breadcrumbs, the crash prompt, and bug-report export.
+    let diagnostics: DiagnosticsCoordinator
 
     init() {
         let layout = ManagedLibraryLayout(root: Self.libraryRoot())
@@ -42,6 +48,10 @@ struct AppEnvironment {
         thumbnails = ImagePipeline()
         mediaLoader = ViewerMediaLoader()
         importer = LibraryImporter(importService: importService, managedProvider: managedProvider)
+
+        let consent = ConsentStore()
+        consentStore = consent
+        diagnostics = DiagnosticsCoordinator(consent: consent)
     }
 
     /// The managed library's root, falling back to the temporary directory if
