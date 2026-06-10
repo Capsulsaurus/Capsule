@@ -116,6 +116,24 @@ public final class PhotoKitProvider: NSObject, AssetProvider, PHPhotoLibraryChan
         }
     }
 
+    public func locations(for ids: [AssetID]) async -> [AssetID: AssetCoordinate] {
+        let localIdentifiers = ids.compactMap { id -> String? in
+            guard case let .photoKit(localIdentifier) = id else { return nil }
+            return localIdentifier
+        }
+        guard !localIdentifiers.isEmpty else { return [:] }
+        let result = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+        var map: [AssetID: AssetCoordinate] = [:]
+        result.enumerateObjects { asset, _, _ in
+            guard let location = asset.location else { return }
+            map[.photoKit(localIdentifier: asset.localIdentifier)] = AssetCoordinate(
+                latitude: location.coordinate.latitude,
+                longitude: location.coordinate.longitude
+            )
+        }
+        return map
+    }
+
     // MARK: PHPhotoLibraryChangeObserver
 
     public func photoLibraryDidChange(_ changeInstance: PHChange) {

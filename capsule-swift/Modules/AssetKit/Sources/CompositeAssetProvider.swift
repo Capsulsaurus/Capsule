@@ -76,6 +76,15 @@ public final class CompositeAssetProvider: AssetProvider {
         }
     }
 
+    public func locations(for ids: [AssetID]) async -> [AssetID: AssetCoordinate] {
+        var merged: [AssetID: AssetCoordinate] = [:]
+        for provider in providers {
+            let partial = await provider.locations(for: ids)
+            merged.merge(partial) { _, new in new }
+        }
+        return merged
+    }
+
     /// Load every provider's timeline and merge it, newest first. A provider
     /// that throws is skipped.
     private static func mergedSnapshot(of providers: [any AssetProvider]) async -> InMemoryAssetSnapshot {

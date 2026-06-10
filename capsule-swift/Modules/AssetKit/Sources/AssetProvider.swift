@@ -109,4 +109,24 @@ public protocol AssetProvider: Sendable {
     /// For the system Photos library this presents the standard deletion
     /// confirmation; the deletion completes only if the user confirms.
     func delete(_ ids: [AssetID]) async throws
+
+    /// Capture coordinates for the given assets, keyed by id. Assets without a
+    /// location are omitted; the default returns nothing.
+    func locations(for ids: [AssetID]) async -> [AssetID: AssetCoordinate]
+}
+
+public extension AssetProvider {
+    func locations(for _: [AssetID]) async -> [AssetID: AssetCoordinate] { [:] }
+}
+
+/// A photo's capture coordinate, in decimal degrees. A `Sendable` value type so
+/// it crosses actor boundaries without importing CoreLocation into AssetKit.
+public struct AssetCoordinate: Sendable, Hashable {
+    public var latitude: Double
+    public var longitude: Double
+
+    public init(latitude: Double, longitude: Double) {
+        self.latitude = latitude
+        self.longitude = longitude
+    }
 }

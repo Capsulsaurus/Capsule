@@ -79,11 +79,21 @@ public struct CollectionsRootView: View {
                 )
             }
             .navigationDestination(for: CollectionCategory.self) { category in
-                CollectionPlaceholderView(
-                    title: category.title,
-                    systemImage: category.systemImage,
-                    message: category.comingSoonMessage
-                )
+                switch category {
+                case .places:
+                    PlacesMapView(
+                        assetProvider: assetProvider,
+                        albumProvider: albumProvider,
+                        thumbnails: thumbnails,
+                        mediaLoader: mediaLoader
+                    )
+                default:
+                    CollectionPlaceholderView(
+                        title: category.title,
+                        systemImage: category.systemImage,
+                        message: category.comingSoonMessage
+                    )
+                }
             }
             .navigationDestination(for: UtilityCategory.self) { utility in
                 CollectionPlaceholderView(
