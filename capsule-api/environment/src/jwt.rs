@@ -2,7 +2,7 @@ use jsonwebtoken::{DecodingKey, EncodingKey};
 use ring::signature::{Ed25519KeyPair, KeyPair};
 
 /// Convert a PKCS#8 v1 DER-encoded ED25519 key to corresponding jsonwebtoken EdDSA keys
-pub fn convert_ed25519_der_to_jwt_keys(
+pub(crate) fn convert_ed25519_der_to_jwt_keys(
     der: &[u8],
 ) -> Result<(EncodingKey, DecodingKey), ring::error::KeyRejected> {
     let pair = Ed25519KeyPair::from_pkcs8_maybe_unchecked(der)?;

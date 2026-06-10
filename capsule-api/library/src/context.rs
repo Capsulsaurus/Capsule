@@ -10,7 +10,7 @@ use sea_orm::DatabaseConnection;
 use secrecy::ExposeSecret;
 
 #[derive(Debug, Clone)]
-pub enum UserType {
+pub(crate) enum UserType {
     /// A normal user (user_id)
     User(String),
     /// An admin user (user_id)
@@ -20,14 +20,14 @@ pub enum UserType {
 }
 
 #[derive(Debug, Clone)]
-pub struct UserContext {
+pub(crate) struct UserContext {
     user_type: UserType,
     #[allow(dead_code)]
     scopes: HashSet<Scope>,
 }
 
 impl UserContext {
-    pub fn from_salvo_headers(
+    pub(crate) fn from_salvo_headers(
         headers: &HeaderMap,
         auth_service: &AuthService,
     ) -> Result<Self, UserContextError> {
@@ -53,7 +53,7 @@ impl UserContext {
             scopes: scopes.map_or_else(HashSet::new, |scopes| scopes.into_iter().collect()),
         })
     }
-    pub fn user_id(&self) -> Result<&String, Error> {
+    pub(crate) fn user_id(&self) -> Result<&String, Error> {
         match &self.user_type {
             UserType::User(id) | UserType::Admin(id) => Ok(id),
             UserType::Guest => Err(Error::new("Unauthorized: Login required")),
@@ -62,12 +62,12 @@ impl UserContext {
 }
 
 #[derive(Debug, Clone)]
-pub struct DbContext {
+pub(crate) struct DbContext {
     pub conn: DatabaseConnection,
 }
 
 #[derive(Debug, Clone)]
-pub struct AppContext {
+pub(crate) struct AppContext {
     pub user: UserContext,
     pub db: DbContext,
 }
@@ -84,14 +84,14 @@ impl ErrorExtensions for UserContextError {
     // lets define our base extensions
     fn extend(&self) -> Error {
         let error = &self.0;
-        Error::new(format!("{}", error)).extend_with(|_err, e| match error {
+        Error::new(format!("{error}")).extend_with(|_err, e| match error {
             ClaimValidationError::TokenExpired => e.set("code", "TOKEN_MISSING"),
             ClaimValidationError::TokenInvalid(msg) => {
-                e.set("code", format!("TOKEN_INVALID ({})", msg))
+                e.set("code", format!("TOKEN_INVALID ({msg})"));
             }
             ClaimValidationError::TokenMissing => e.set("code", "TOKEN_EXPIRED"),
             ClaimValidationError::UnexpectedHeaderFormat => {
-                e.set("code", "UNEXPECTED_HEADER_FORMAT")
+                e.set("code", "UNEXPECTED_HEADER_FORMAT");
             }
             ClaimValidationError::InvalidScopes => e.set("code", "INVALID_SCOPES"),
         })

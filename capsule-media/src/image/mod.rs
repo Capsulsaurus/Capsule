@@ -146,7 +146,7 @@ pub enum ImageError {
     #[error("Encoding error: {0}")]
     Encode(String),
     #[error("Image buffer error: {0}")]
-    ImageBuffer(#[from] crate::image::buffer::ImageBufferError),
+    ImageBuffer(#[from] buffer::ImageBufferError),
 }
 
 pub trait ImageDecode: Sized + Image + 'static {

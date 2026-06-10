@@ -132,9 +132,8 @@ impl AuthService {
                     .generate_token_pair(&user.id, session_manager)
                     .await
                     .map_err(LoginError::Unexpected);
-            } else {
-                let _ = UserService::Mutation::track_login_failure(&self.conn, &user.id).await;
             }
+            let _ = UserService::Mutation::track_login_failure(&self.conn, &user.id).await;
         } else {
             tracing::info!("User not found");
             // Timing attack mitigation

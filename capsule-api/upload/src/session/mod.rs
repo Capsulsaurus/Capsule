@@ -12,32 +12,32 @@ use crate::models::session::{UploadSession, UploadSessionStatus};
 // TODO: Validate this code
 
 #[derive(Clone)]
-pub struct UploadSessionManager {
+pub(crate) struct UploadSessionManager {
     pool: Pool<RedisConnectionManager>,
     expiration: Duration,
 }
 
 impl UploadSessionManager {
-    pub async fn new(valkey_url: &str) -> Result<Self, UploadError> {
+    pub(crate) async fn new(valkey_url: &str) -> Result<Self, UploadError> {
         let manager = RedisConnectionManager::new(valkey_url)?;
         let pool = Pool::builder().build(manager).await?;
         Ok(Self {
             pool,
-            expiration: Duration::from_secs(24 * 60 * 60), // 24 hours default
+            expiration: Duration::from_hours(24), // 24 hours default
         })
     }
 
     fn key(&self, upload_id: &str) -> String {
-        format!("upload:session:{}", upload_id)
+        format!("upload:session:{upload_id}")
     }
 
     fn owner_index_key(&self, owner_id: &str) -> String {
-        format!("upload:owner_sessions:{}", owner_id)
+        format!("upload:owner_sessions:{owner_id}")
     }
 
     /// Create a new upload session in Redis using HSET.
     /// This sets all fields at once during session creation.
-    pub async fn create(&self, session: &UploadSession) -> Result<(), UploadError> {
+    pub(crate) async fn create(&self, session: &UploadSession) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(&session.id);
 
@@ -52,10 +52,7 @@ impl UploadSessionManager {
                 "received_bytes",
                 session.received_bytes.to_string().into_bytes(),
             ),
-            (
-                "expected_hash",
-                session.expected_hash.to_string().into_bytes(),
-            ),
+            ("expected_hash", session.expected_hash.clone().into_bytes()),
             (
                 "status",
                 serde_json::to_string(&session.status)
@@ -105,7 +102,7 @@ impl UploadSessionManager {
 
     /// Atomically increment received_bytes using HINCRBY.
     /// Returns the new value of received_bytes.
-    pub async fn increment_received_bytes(
+    pub(crate) async fn increment_received_bytes(
         &self,
         upload_id: &str,
         bytes: u64,
@@ -119,7 +116,7 @@ impl UploadSessionManager {
     }
 
     /// Atomically update the upload status.
-    pub async fn update_status(
+    pub(crate) async fn update_status(
         &self,
         upload_id: &str,
         status: UploadSessionStatus,
@@ -134,7 +131,7 @@ impl UploadSessionManager {
     }
 
     /// Get a session by ID using HGETALL.
-    pub async fn get(&self, upload_id: &str) -> Result<Option<UploadSession>, UploadError> {
+    pub(crate) async fn get(&self, upload_id: &str) -> Result<Option<UploadSession>, UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
 
@@ -150,7 +147,7 @@ impl UploadSessionManager {
     }
 
     /// List sessions by owner ID. Returns active session IDs.
-    pub async fn list_by_owner(&self, owner_id: &str) -> Result<Vec<String>, UploadError> {
+    pub(crate) async fn list_by_owner(&self, owner_id: &str) -> Result<Vec<String>, UploadError> {
         let mut conn = self.pool.get().await?;
         let owner_index_key = self.owner_index_key(owner_id);
 
@@ -160,7 +157,7 @@ impl UploadSessionManager {
 
     /// Delete a session from Redis if it exists.
     /// Does not return error if it does not exist.
-    pub async fn delete(&self, upload_id: &str) -> Result<(), UploadError> {
+    pub(crate) async fn delete(&self, upload_id: &str) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
 
@@ -189,7 +186,7 @@ impl UploadSessionManager {
                 UploadError::Unknown(format!("Missing field '{name}' in session {upload_id}"))
             })?;
             String::from_utf8(bytes.clone())
-                .map_err(|e| UploadError::Unknown(format!("Invalid UTF-8 in field {name}: {}", e)))
+                .map_err(|e| UploadError::Unknown(format!("Invalid UTF-8 in field {name}: {e}")))
         };
 
         let id = get_string("id")?;
@@ -206,23 +203,23 @@ impl UploadSessionManager {
 
         let received_bytes: u64 = get_string("received_bytes")?
             .parse()
-            .map_err(|e| UploadError::Unknown(format!("Invalid received_bytes: {}", e)))?;
+            .map_err(|e| UploadError::Unknown(format!("Invalid received_bytes: {e}")))?;
         let total_size: u64 = get_string("total_size")?
             .parse()
-            .map_err(|e| UploadError::Unknown(format!("Invalid total_size: {}", e)))?;
+            .map_err(|e| UploadError::Unknown(format!("Invalid total_size: {e}")))?;
         let expected_hash: String = get_string("expected_hash")?;
 
         let status_str = get_string("status")?;
         let status: UploadSessionStatus = serde_json::from_str(&status_str)
-            .map_err(|e| UploadError::Unknown(format!("Invalid status '{}': {}", status_str, e)))?;
+            .map_err(|e| UploadError::Unknown(format!("Invalid status '{status_str}': {e}")))?;
 
         let created_at: DateTime<Utc> = get_string("created_at")?
             .parse()
-            .map_err(|e| UploadError::Unknown(format!("Invalid created_at: {}", e)))?;
+            .map_err(|e| UploadError::Unknown(format!("Invalid created_at: {e}")))?;
 
         let expires_at: DateTime<Utc> = get_string("expires_at")?
             .parse()
-            .map_err(|e| UploadError::Unknown(format!("Invalid expires_at: {}", e)))?;
+            .map_err(|e| UploadError::Unknown(format!("Invalid expires_at: {e}")))?;
 
         Ok(UploadSession {
             id,

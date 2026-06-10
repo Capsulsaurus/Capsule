@@ -42,7 +42,12 @@ pub fn soft_delete(
             .root
             .join(".library/trash")
             .join(format!("{uuid_plain}.{ext}"));
-        fs::create_dir_all(trash_file.parent().unwrap()).map_err(LibraryError::Io)?;
+        fs::create_dir_all(
+            trash_file
+                .parent()
+                .expect("trash path always has a parent directory"),
+        )
+        .map_err(LibraryError::Io)?;
         fs::rename(media_path, &trash_file).map_err(LibraryError::Io)?;
     }
 
@@ -64,7 +69,7 @@ pub fn purge_expired_trash(library: &Library, older_than_secs: i64) -> Result<()
         if media_dir.exists() {
             for entry in walkdir::WalkDir::new(&media_dir)
                 .into_iter()
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
             {
                 let path = entry.path();
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -81,7 +86,7 @@ pub fn purge_expired_trash(library: &Library, older_than_secs: i64) -> Result<()
         if trash_dir.exists() {
             for entry in fs::read_dir(&trash_dir)
                 .map_err(LibraryError::Io)?
-                .filter_map(|e| e.ok())
+                .filter_map(Result::ok)
             {
                 let path = entry.path();
                 let stem = path

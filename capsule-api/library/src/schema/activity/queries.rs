@@ -57,7 +57,7 @@ impl ActivityQuery {
                 destination_album_id: Some("123".to_string()),
                 destination_album_name: Some("Test Album".to_string()),
                 asset_count: 3,
-                asset_total_size: 234456,
+                asset_total_size: 234_456,
             }),
             Activity::DeleteAsset(DeleteAssetActivity {
                 id: "103".to_string(),

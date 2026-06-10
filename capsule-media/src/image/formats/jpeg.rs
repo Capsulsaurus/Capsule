@@ -127,7 +127,7 @@ impl ImageDecode for JpegImage {
         let mut decoder = JpegDecoder::new(std::io::Cursor::new(data));
         decoder
             .decode_headers()
-            .map_err(|e| ImageError::Decode(format!("{:?}", e)))?;
+            .map_err(|e| ImageError::Decode(format!("{e:?}")))?;
         let info = decoder
             .info()
             .ok_or(ImageError::Decode("Failed to get image info".to_string()))?;
@@ -146,7 +146,7 @@ impl ImageDecode for JpegImage {
 
         let decoded_data = decoder
             .decode()
-            .map_err(|e| ImageError::Decode(format!("{:?}", e)))?;
+            .map_err(|e| ImageError::Decode(format!("{e:?}")))?;
 
         let info = decoder
             .info()

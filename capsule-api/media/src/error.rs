@@ -5,7 +5,7 @@ use thiserror::Error;
 
 #[allow(dead_code)]
 #[derive(Debug, Error)]
-pub enum MediaError {
+pub(crate) enum MediaError {
     #[error("Asset not found")]
     NotFound,
 

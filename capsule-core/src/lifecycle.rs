@@ -167,9 +167,7 @@ fn asset_type_for(content_type: &str) -> String {
 }
 
 fn rfc3339_to_secs(s: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .map(|d| d.timestamp())
-        .unwrap_or(0)
+    chrono::DateTime::parse_from_rfc3339(s).map_or(0, |d| d.timestamp())
 }
 
 /// Map a managed asset's in-memory state to its queryable `assets` index row. Deletion state is
@@ -473,12 +471,11 @@ impl Workspace {
     /// Import a file into `album_id`: encrypt, build the signed create manifest + provenance,
     /// write the signed sidecar, and self-verify through `verify_asset`. Returns the asset id.
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
-        let plaintext =
-            fs::read(src).map_err(|e| LifecycleError::Io(format!("read {src:?}: {e}")))?;
+        let plaintext = fs::read(src)
+            .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
         let ext = src
             .extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_else(|| "bin".into());
+            .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
         let asset_id = Uuid::now_v7();
         let capture_utc = Utc::now().timestamp();
 
@@ -571,7 +568,12 @@ impl Workspace {
             .get(asset_id)
             .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?;
         let album = self.album(&asset.album_id)?;
-        let head = &asset.chain.records().last().unwrap().manifest;
+        let head = &asset
+            .chain
+            .records()
+            .last()
+            .expect("provenance chain is never empty")
+            .manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let file_key = self.file_key(album, head.core.amk_version.0, &head.core.file_id);
@@ -611,7 +613,7 @@ impl Workspace {
             .chain
             .records()
             .last()
-            .unwrap()
+            .expect("provenance chain is never empty")
             .manifest
             .core
             .clone();
@@ -620,7 +622,10 @@ impl Workspace {
         let add_id = self.counter.issue();
 
         {
-            let asset = self.assets.get_mut(asset_id).unwrap();
+            let asset = self
+                .assets
+                .get_mut(asset_id)
+                .expect("asset_id was validated above");
             asset
                 .chain
                 .append(ProvenanceRecord {
@@ -629,7 +634,7 @@ impl Workspace {
                     prior_provenance_hash: prior,
                 })
                 .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
-            let new_head = asset.chain.head().unwrap();
+            let new_head = asset.chain.head().expect("chain has a head after append");
             mutate_sidecar(&mut asset.sidecar, add_id);
             asset.sidecar.provenance_chain_hash = new_head;
             asset.sidecar.signature = None;
@@ -637,7 +642,10 @@ impl Workspace {
         }
 
         // Re-borrow immutably to write the updated artifacts to disk.
-        let asset = self.assets.get(asset_id).unwrap();
+        let asset = self
+            .assets
+            .get(asset_id)
+            .expect("asset_id was validated above");
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
         self.write_asset_files(asset, &plaintext)?;
@@ -688,7 +696,12 @@ impl Workspace {
 
         for asset in self.assets.values() {
             let album = self.album(&asset.album_id)?;
-            let head = &asset.chain.records().last().unwrap().manifest;
+            let head = &asset
+                .chain
+                .records()
+                .last()
+                .expect("provenance chain is never empty")
+                .manifest;
             let plaintext =
                 fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
             let epoch = head.core.amk_version.0;
@@ -738,7 +751,7 @@ impl Workspace {
         &mut self,
         archive: &Path,
         passphrase: &[u8],
-        exporter_pub: &crate::crypto::keys::HybridVerifyingKey,
+        exporter_pub: &HybridVerifyingKey,
     ) -> Result<usize> {
         let bytes = fs::read(archive).map_err(|e| LifecycleError::Io(e.to_string()))?;
         let artifact = BackupArtifact::open(&bytes, passphrase, exporter_pub)?;
@@ -747,7 +760,11 @@ impl Workspace {
         let mut added = 0;
         for restored in &report.applied {
             // Rebuild on-disk artifacts for the restored asset.
-            let head = &restored.provenance.last().unwrap().manifest;
+            let head = &restored
+                .provenance
+                .last()
+                .expect("restored provenance is never empty")
+                .manifest;
             let capture_utc = Utc::now().timestamp();
             let mut chain = ProvenanceChain::new();
             for rec in &restored.provenance {
@@ -802,7 +819,11 @@ impl Workspace {
             device_id: head.core.created_by_device,
             session_id: Uuid::now_v7(),
             gps: None,
-            provenance_chain_hash: restored.provenance.last().unwrap().record_hash(),
+            provenance_chain_hash: restored
+                .provenance
+                .last()
+                .expect("restored provenance is never empty")
+                .record_hash(),
             unknown: BTreeMap::new(),
             signature: None,
         };

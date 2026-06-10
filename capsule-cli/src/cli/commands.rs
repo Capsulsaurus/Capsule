@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
-pub enum Commands {
+pub(crate) enum Commands {
     /// Authentication commands
     Auth {
         #[command(subcommand)]
@@ -80,7 +80,7 @@ pub enum Commands {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum LibraryCommands {
+pub(crate) enum LibraryCommands {
     /// Create a new Capsule library
     Init {
         /// Directory for the new library
@@ -102,7 +102,7 @@ pub enum LibraryCommands {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum AuthCommands {
+pub(crate) enum AuthCommands {
     /// Login to Capsule
     Login,
     /// Logout from Capsule

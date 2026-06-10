@@ -46,7 +46,7 @@ pub async fn start_registration(
             state
                 .session_manager
                 .save_temp_data(
-                    &format!("passkey_reg:{}", challenge_id),
+                    &format!("passkey_reg:{challenge_id}"),
                     &reg_state,
                     Duration::from_secs(300), // 5 minutes
                 )
@@ -116,7 +116,7 @@ pub async fn finish_registration(
     // Retrieve state
     let reg_state: webauthn_rs::prelude::PasskeyRegistration = state
         .session_manager
-        .get_temp_data(&format!("passkey_reg:{}", challenge_id))
+        .get_temp_data(&format!("passkey_reg:{challenge_id}"))
         .await
         .map_err(PasskeyRegistrationFinishResponses::InternalServerError)?
         .ok_or(PasskeyRegistrationFinishResponses::RegistrationFailed(
@@ -126,7 +126,7 @@ pub async fn finish_registration(
     // Clear state
     let _ = state
         .session_manager
-        .delete_temp_data(&format!("passkey_reg:{}", challenge_id))
+        .delete_temp_data(&format!("passkey_reg:{challenge_id}"))
         .await;
 
     state
@@ -166,7 +166,7 @@ pub async fn start_authentication(
             state
                 .session_manager
                 .save_temp_data(
-                    &format!("passkey_auth:{}", challenge_id),
+                    &format!("passkey_auth:{challenge_id}"),
                     &auth_state,
                     Duration::from_secs(300),
                 )
@@ -214,7 +214,7 @@ pub async fn finish_authentication(
     // Retrieve state
     let auth_state: webauthn_rs::prelude::PasskeyAuthentication = state
         .session_manager
-        .get_temp_data(&format!("passkey_auth:{}", challenge_id))
+        .get_temp_data(&format!("passkey_auth:{challenge_id}"))
         .await
         .map_err(PasskeyAuthFinishResponses::InternalServerError)?
         .ok_or(PasskeyAuthFinishResponses::InvalidCredential)?;
@@ -222,7 +222,7 @@ pub async fn finish_authentication(
     // Clear state
     let _ = state
         .session_manager
-        .delete_temp_data(&format!("passkey_auth:{}", challenge_id))
+        .delete_temp_data(&format!("passkey_auth:{challenge_id}"))
         .await;
 
     let user_id = state

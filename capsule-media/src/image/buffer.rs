@@ -15,8 +15,7 @@ impl PixelFormat {
         match self {
             PixelFormat::Gray => 1,
             PixelFormat::Rgb => 3,
-            PixelFormat::Rgba => 4,
-            PixelFormat::Cmyk => 4,
+            PixelFormat::Rgba | PixelFormat::Cmyk => 4,
         }
     }
 }
@@ -216,7 +215,7 @@ impl ImageBuffer {
                     self.color_space,
                 )
             }
-            _ => Err(ImageBufferError::FormatConversionNotImplemented(
+            PixelFormat::Cmyk => Err(ImageBufferError::FormatConversionNotImplemented(
                 self.format,
             )),
         }

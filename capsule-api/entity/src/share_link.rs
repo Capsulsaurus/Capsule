@@ -90,7 +90,7 @@ impl Entity {
         Self::find().filter(
             Column::ExpiresAt
                 .is_null()
-                .or(Column::ExpiresAt.gt(chrono::Utc::now())),
+                .or(Column::ExpiresAt.gt(Utc::now())),
         )
     }
 }

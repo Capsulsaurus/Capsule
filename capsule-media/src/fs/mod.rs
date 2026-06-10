@@ -107,7 +107,7 @@ pub async fn detect_image_type(path: &Path) -> Result<ImageFormat, ReadImageErro
 
     match media_type {
         MediaType::Image(t) => Ok(t),
-        _ => Err(ReadImageError::NotAnImage(media_type)),
+        MediaType::Video(_) => Err(ReadImageError::NotAnImage(media_type)),
     }
 }
 

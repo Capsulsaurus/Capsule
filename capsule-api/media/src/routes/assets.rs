@@ -25,7 +25,7 @@ use crate::state::AppState;
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, ToParameters, ToSchema)]
 #[salvo(parameters(default_parameter_in = Query))]
-pub struct MediaQueryParams {
+pub(super) struct MediaQueryParams {
     /// Max width
     #[salvo(parameter(required = false))]
     pub w: Option<u32>,
@@ -43,7 +43,7 @@ pub struct MediaQueryParams {
 /// Batch download request
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, ToSchema)]
-pub struct BatchDownloadRequest {
+pub(super) struct BatchDownloadRequest {
     /// Asset IDs to download
     pub asset_ids: Vec<String>,
     /// Include metadata JSON sidecar
@@ -55,7 +55,7 @@ pub struct BatchDownloadRequest {
 
 /// Batch download response
 #[derive(Debug, Serialize, ToSchema)]
-pub struct BatchDownloadResponse {
+pub(super) struct BatchDownloadResponse {
     /// Job ID for tracking
     pub job_id: String,
     /// Current status
@@ -70,7 +70,7 @@ pub struct BatchDownloadResponse {
 
 /// Possible responses for asset serving
 #[derive(From, Debug)]
-pub enum AssetResponses {
+pub(super) enum AssetResponses {
     /// Successful file serving
     Ok(Box<NamedFile>),
     /// Asset or file not found
@@ -96,7 +96,7 @@ impl Writer for AssetResponses {
     }
 }
 
-impl salvo::oapi::EndpointOutRegister for AssetResponses {
+impl EndpointOutRegister for AssetResponses {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
         operation.responses.insert(
             String::from("200"),
@@ -118,13 +118,8 @@ impl salvo::oapi::EndpointOutRegister for AssetResponses {
 
 /// Helper to serve asset file
 async fn serve_asset_file(depot: &mut Depot, asset_id_str: &str) -> AssetResponses {
-    let state = match depot.obtain::<AppState>() {
-        Ok(s) => s,
-        Err(_) => {
-            return AssetResponses::InternalServerError(
-                eyre::eyre!("Failed to get app state").into(),
-            );
-        }
+    let Ok(state) = depot.obtain::<AppState>() else {
+        return AssetResponses::InternalServerError(eyre::eyre!("Failed to get app state").into());
     };
 
     // Fetch asset metadata
@@ -225,7 +220,7 @@ pub async fn get_stream(
 /// Possible responses for batch download
 #[allow(dead_code)]
 #[derive(From, Debug)]
-pub enum BatchDownloadResponses {
+pub(super) enum BatchDownloadResponses {
     /// Job created successfully
     Ok(BatchDownloadResponse),
     /// Unauthorized access
@@ -261,7 +256,7 @@ impl Writer for BatchDownloadResponses {
     }
 }
 
-impl salvo::oapi::EndpointOutRegister for BatchDownloadResponses {
+impl EndpointOutRegister for BatchDownloadResponses {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
         operation.responses.insert(
             String::from("200"),

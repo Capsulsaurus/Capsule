@@ -16,7 +16,7 @@ use crate::service::storage::StorageService;
 use crate::session::UploadSessionManager;
 
 #[derive(Clone)]
-pub struct UploadService {
+pub(crate) struct UploadService {
     config: UploadServerConfig,
     storage: StorageService,
     session_manager: UploadSessionManager,
@@ -26,7 +26,7 @@ pub struct UploadService {
 
 // TODO: Update all methods to use more explicit error types
 impl UploadService {
-    pub fn new(
+    pub(crate) fn new(
         config: UploadServerConfig,
         storage: StorageService,
         session_manager: UploadSessionManager,
@@ -43,7 +43,7 @@ impl UploadService {
 
     /// Create a new upload session with asset record in Postgres
     #[allow(clippy::too_many_arguments)]
-    pub async fn create_session(
+    pub(crate) async fn create_session(
         &self,
         owner_id: &str,
         upload_user_id: &str,
@@ -84,18 +84,15 @@ impl UploadService {
         }
 
         // Determine asset type from content_type
-        let asset_type = content_type
-            .as_ref()
-            .map(|ct| {
-                if ct.starts_with("image/") {
-                    asset::AssetType::Photo
-                } else if ct.starts_with("video/") {
-                    asset::AssetType::Video
-                } else {
-                    asset::AssetType::Photo
-                }
-            })
-            .unwrap_or(asset::AssetType::Photo);
+        let asset_type = content_type.as_ref().map_or(asset::AssetType::Photo, |ct| {
+            if ct.starts_with("image/") {
+                asset::AssetType::Photo
+            } else if ct.starts_with("video/") {
+                asset::AssetType::Video
+            } else {
+                asset::AssetType::Photo
+            }
+        });
 
         // Create pending asset in Postgres with uploaded=false
         let asset = AssetService::Mutation::create_pending(
@@ -136,12 +133,15 @@ impl UploadService {
         Ok(session)
     }
 
-    pub async fn get_session(&self, upload_id: &str) -> Result<Option<UploadSession>, UploadError> {
+    pub(crate) async fn get_session(
+        &self,
+        upload_id: &str,
+    ) -> Result<Option<UploadSession>, UploadError> {
         self.session_manager.get(upload_id).await
     }
 
     /// List sessions by owner ID
-    pub async fn list_sessions_by_owner(
+    pub(crate) async fn list_sessions_by_owner(
         &self,
         owner_id: &str,
     ) -> Result<Vec<UploadSession>, UploadError> {
@@ -160,7 +160,7 @@ impl UploadService {
         Ok(sessions)
     }
 
-    pub async fn append_chunk(
+    pub(crate) async fn append_chunk(
         &self,
         upload_id: &str,
         data: bytes::Bytes,
@@ -219,7 +219,10 @@ impl UploadService {
         Ok(updated_session)
     }
 
-    pub async fn finalize_upload(&self, upload_id: &str) -> Result<asset::Model, UploadError> {
+    pub(crate) async fn finalize_upload(
+        &self,
+        upload_id: &str,
+    ) -> Result<asset::Model, UploadError> {
         let session = self
             .get_session(upload_id)
             .await?
@@ -307,7 +310,7 @@ impl UploadService {
         Ok(asset)
     }
 
-    pub async fn cancel_upload(&self, upload_id: &str) -> Result<(), UploadError> {
+    pub(crate) async fn cancel_upload(&self, upload_id: &str) -> Result<(), UploadError> {
         // Get session to find asset_id
         let session = self.get_session(upload_id).await?;
 

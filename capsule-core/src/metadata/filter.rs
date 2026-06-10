@@ -15,9 +15,9 @@ pub fn is_ignored_file(path: &Path, ignore_rules: &[String]) -> bool {
             builder.add(glob);
         }
     }
-    let globset = match builder.build() {
-        Ok(gs) => gs,
-        Err(_) => return false, // If rules are invalid, don't ignore
+    // If rules are invalid, don't ignore
+    let Ok(globset) = builder.build() else {
+        return false;
     };
     globset.is_match(path)
 }

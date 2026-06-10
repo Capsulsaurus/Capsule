@@ -504,7 +504,7 @@ impl DatabaseDriver {
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("system clock is before the UNIX epoch")
         .as_secs() as i64
 }
 

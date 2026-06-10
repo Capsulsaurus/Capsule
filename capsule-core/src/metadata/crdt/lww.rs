@@ -68,7 +68,10 @@ impl<T: Clone + PartialEq> Lww<T> {
             Some(cur) => match beats(&incoming, cur) {
                 None => false,
                 Some(true) => {
-                    let loser = self.current.replace(incoming).unwrap();
+                    let loser = self
+                        .current
+                        .replace(incoming)
+                        .expect("current is Some in this match arm");
                     self.push_superseded(loser);
                     true
                 }

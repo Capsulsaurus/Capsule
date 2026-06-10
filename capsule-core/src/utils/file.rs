@@ -28,7 +28,7 @@ pub fn are_there_nested_paths(paths: &[PathBuf]) -> std::io::Result<bool> {
 
         // Add ancestors of the path to the set
         let current_path_ancestors = absolute_path.ancestors();
-        for ancestor in current_path_ancestors.into_iter() {
+        for ancestor in current_path_ancestors {
             ancestors.insert(ancestor.to_path_buf());
         }
     }

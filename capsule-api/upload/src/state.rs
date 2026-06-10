@@ -5,18 +5,18 @@ use sea_orm::DatabaseConnection;
 use crate::config::UploadServerConfig;
 
 #[derive(Clone)]
-pub struct AppState {
+pub(crate) struct AppState {
     inner: Arc<AppStateInner>,
 }
 
-pub struct AppStateInner {
+pub(crate) struct AppStateInner {
     pub conn: DatabaseConnection,
     pub config: UploadServerConfig,
     pub upload_service: crate::service::upload::UploadService,
 }
 
 impl AppState {
-    pub fn new(
+    pub(crate) fn new(
         conn: DatabaseConnection,
         config: UploadServerConfig,
         upload_service: crate::service::upload::UploadService,

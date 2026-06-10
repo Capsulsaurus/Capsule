@@ -72,13 +72,11 @@ impl FileMetadata {
         // Get timestamps
         let created_timestamp = metadata
             .created()
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
 
         let modified_timestamp = metadata
             .modified()
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
 
         let import_timestamp = Utc::now();
 

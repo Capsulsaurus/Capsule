@@ -148,7 +148,7 @@ pub fn hash_bytes(bytes: &[u8]) -> Hash32 {
 /// Stream a reader to completion, hashing in 64 KiB blocks without buffering the whole input.
 pub fn hash_reader<R: Read>(mut reader: R) -> io::Result<Hash32> {
     let mut hasher = Sha256Hasher::new();
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = vec![0u8; 64 * 1024];
     loop {
         let n = reader.read(&mut buf)?;
         if n == 0 {

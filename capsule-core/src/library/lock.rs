@@ -40,8 +40,8 @@ pub fn try_acquire(root: &Path) -> Result<(), LibraryError> {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Read the existing lock record.
             match fs::read_to_string(&lock_path) {
-                Ok(contents) => match serde_json::from_str::<LockRecord>(&contents) {
-                    Ok(existing) => {
+                Ok(contents) => {
+                    if let Ok(existing) = serde_json::from_str::<LockRecord>(&contents) {
                         let same_host = existing.hostname == current_hostname();
                         if same_host && !is_pid_alive(existing.pid) {
                             // Stale lock from a dead process — remove and retry once.
@@ -53,13 +53,12 @@ pub fn try_acquire(root: &Path) -> Result<(), LibraryError> {
                             hostname: existing.hostname,
                             locked_at: existing.locked_at,
                         })
-                    }
-                    Err(_) => {
+                    } else {
                         // Corrupt lock — remove and retry.
                         let _ = fs::remove_file(&lock_path);
                         try_acquire(root)
                     }
-                },
+                }
                 Err(_) => Err(LibraryError::Io(e)),
             }
         }

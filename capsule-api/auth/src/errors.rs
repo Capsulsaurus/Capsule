@@ -17,8 +17,8 @@ impl std::fmt::Display for RegisterError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::UserAlreadyExists => write!(f, "User already exists"),
-            Self::BadRequest(e) => write!(f, "Bad request: {}", e),
-            Self::Unexpected(e) => write!(f, "Internal server error: {}", e),
+            Self::BadRequest(e) => write!(f, "Bad request: {e}"),
+            Self::Unexpected(e) => write!(f, "Internal server error: {e}"),
         }
     }
 }
@@ -72,9 +72,9 @@ impl std::fmt::Display for LoginError {
                 "Account temporarily locked due to too many failed login attempts"
             ),
             Self::RateLimited(retry_after) => {
-                write!(f, "Too many requests. Retry after {} seconds", retry_after)
+                write!(f, "Too many requests. Retry after {retry_after} seconds")
             }
-            Self::Unexpected(e) => write!(f, "Internal server error: {}", e),
+            Self::Unexpected(e) => write!(f, "Internal server error: {e}"),
         }
     }
 }
@@ -109,7 +109,10 @@ impl Writer for LoginError {
                 res.status_code(StatusCode::TOO_MANY_REQUESTS);
                 res.headers_mut().insert(
                     salvo::http::header::RETRY_AFTER,
-                    retry_after.to_string().parse().unwrap(),
+                    retry_after
+                        .to_string()
+                        .parse()
+                        .expect("formatted integer is a valid header value"),
                 );
                 res.render(Text::Plain("Too many requests"));
             }

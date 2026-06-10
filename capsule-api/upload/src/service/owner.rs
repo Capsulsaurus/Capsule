@@ -10,20 +10,20 @@ use crate::error::UploadError;
 
 #[allow(dead_code)]
 #[derive(Clone)]
-pub struct OwnerService {
+pub(crate) struct OwnerService {
     _conn: DatabaseConnection,
 }
 
 #[allow(dead_code)]
 impl OwnerService {
-    pub fn new(conn: DatabaseConnection) -> Self {
+    pub(crate) fn new(conn: DatabaseConnection) -> Self {
         Self { _conn: conn }
     }
 
     /// Gets an existing owner for a set of users or creates a new one.
     /// This finds an owner group that contains EXACTLY the specified users.
     // TODO: Optimize this function
-    pub async fn get_or_create_owner(
+    pub(crate) async fn get_or_create_owner(
         &self,
         user_ids: &[String],
         txn: &DatabaseTransaction,

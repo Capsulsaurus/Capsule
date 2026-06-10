@@ -3,7 +3,7 @@ use thiserror::Error;
 
 #[allow(dead_code)]
 #[derive(Debug, Error)]
-pub enum UploadError {
+pub(crate) enum UploadError {
     #[error("File exceeds size limit")]
     FileTooLarge,
     #[error("File system error: {0}")]
@@ -76,7 +76,7 @@ impl Writer for UploadError {
             ),
             UploadError::InvalidOffset { expected, actual } => (
                 StatusCode::CONFLICT,
-                format!("Invalid offset. Expected {}, got {}", expected, actual),
+                format!("Invalid offset. Expected {expected}, got {actual}"),
             ),
             UploadError::InvalidUpload(msg) => (StatusCode::BAD_REQUEST, msg),
             UploadError::ProcessingError(_) => (
@@ -86,7 +86,7 @@ impl Writer for UploadError {
             UploadError::ParseError(_) => (StatusCode::BAD_REQUEST, String::from("Parse error")),
             UploadError::ChecksumMismatch { expected, actual } => (
                 StatusCode::BAD_REQUEST,
-                format!("Checksum mismatch. Expected {}, got {}", expected, actual),
+                format!("Checksum mismatch. Expected {expected}, got {actual}"),
             ),
             UploadError::InvalidChunkSize(msg) => (
                 StatusCode::BAD_REQUEST,

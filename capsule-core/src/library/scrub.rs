@@ -41,7 +41,7 @@ pub(crate) fn scrub_tmp_files_before(
 ) -> Result<(), LibraryError> {
     for entry in walkdir::WalkDir::new(dir)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
     {
         let path = entry.path();
         if !path.is_file() {

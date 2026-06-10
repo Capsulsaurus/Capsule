@@ -54,7 +54,7 @@ impl Query {
             if is_owner {
                 return Ok(Some(AlbumAccess::Owner));
             }
-        };
+        }
 
         // Check if user has share access
         let share_permission = AlbumShare::find()

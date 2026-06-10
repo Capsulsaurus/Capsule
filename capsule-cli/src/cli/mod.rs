@@ -1,7 +1,7 @@
-pub mod commands;
+pub(crate) mod commands;
 
 use clap::Parser;
-pub use commands::*;
+pub(crate) use commands::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "capsule")]
@@ -9,7 +9,7 @@ pub use commands::*;
 #[command(
     long_about = "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Import photos from local directories\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections"
 )]
-pub struct Cli {
+pub(crate) struct Cli {
     #[command(subcommand)]
     pub command: Commands,
 }

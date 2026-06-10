@@ -74,7 +74,7 @@ impl Query {
         asset_id: &str,
     ) -> Result<bool, DbErr> {
         let asset = Asset::find_by_id(asset_id).one(db).await?;
-        Ok(asset.map(|a| a.stack_id.is_some()).unwrap_or(false))
+        Ok(asset.is_some_and(|a| a.stack_id.is_some()))
     }
 
     // ===== Optimized Queries for UI Views =====

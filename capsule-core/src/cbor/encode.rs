@@ -119,10 +119,9 @@ pub(crate) fn encode_value(value: &Value, out: &mut Vec<u8>) {
         }
         Value::Bool(false) => out.push(0xf4),
         Value::Bool(true) => out.push(0xf5),
-        Value::Null => out.push(0xf6),
         Value::Float(f) => encode_float(*f, out),
-        // `ciborium::Value` is `#[non_exhaustive]`; any future variant has no defined
-        // canonical form here, so encode it as CBOR null rather than panic.
+        // `Value::Null` and any future variant (`ciborium::Value` is `#[non_exhaustive]`)
+        // have no special canonical form here, so encode as CBOR null rather than panic.
         _ => out.push(0xf6),
     }
 }

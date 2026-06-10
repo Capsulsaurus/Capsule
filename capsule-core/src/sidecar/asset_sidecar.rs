@@ -127,9 +127,8 @@ impl<'de> Deserialize<'de> for AssetSidecar {
         use serde::de::Error;
 
         let value = Value::deserialize(deserializer)?;
-        let raw_map = match value {
-            Value::Map(m) => m,
-            _ => return Err(D::Error::custom("expected CBOR map for AssetSidecar")),
+        let Value::Map(raw_map) = value else {
+            return Err(D::Error::custom("expected CBOR map for AssetSidecar"));
         };
 
         // Collect into a BTreeMap keyed by string for easy lookup.

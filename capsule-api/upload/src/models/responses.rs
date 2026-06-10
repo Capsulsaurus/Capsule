@@ -8,7 +8,7 @@ use crate::models::session::{UploadSession, UploadSessionStatus};
 
 /// Response for a successful upload creation
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct CreateUploadResponse {
+pub(crate) struct CreateUploadResponse {
     /// Upload session ID
     pub id: String,
     /// URL to use for uploading chunks
@@ -19,7 +19,7 @@ pub struct CreateUploadResponse {
 
 /// Response for upload head request
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct HeadUploadResponse {
+pub(crate) struct HeadUploadResponse {
     /// Current offset (bytes received)
     pub offset: u64,
     /// Total size if known
@@ -30,13 +30,13 @@ pub struct HeadUploadResponse {
 
 /// Response for session listing
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct ListSessionsResponse {
+pub(crate) struct ListSessionsResponse {
     pub sessions: Vec<UploadSession>,
 }
 
 /// Responses for create upload endpoint
 #[allow(dead_code)]
-pub enum CreateUploadResponses {
+pub(crate) enum CreateUploadResponses {
     Success(CreateUploadResponse),
     Unauthorized(String),
     Forbidden,
@@ -106,7 +106,7 @@ impl EndpointOutRegister for CreateUploadResponses {
 }
 
 /// Responses for head upload endpoint
-pub enum HeadUploadResponses {
+pub(crate) enum HeadUploadResponses {
     Success(HeadUploadResponse),
     Unauthorized(String),
     NotFound,
@@ -175,7 +175,7 @@ impl EndpointOutRegister for HeadUploadResponses {
 }
 
 /// Responses for patch upload (append chunk) endpoint
-pub enum PatchUploadResponses {
+pub(crate) enum PatchUploadResponses {
     Success { new_offset: u64 },
     BadRequest(String),
     Unauthorized(String),
@@ -253,7 +253,7 @@ impl EndpointOutRegister for PatchUploadResponses {
 }
 
 /// Responses for delete upload endpoint
-pub enum DeleteUploadResponses {
+pub(crate) enum DeleteUploadResponses {
     Success,
     Unauthorized(String),
     Forbidden,
@@ -311,7 +311,7 @@ impl EndpointOutRegister for DeleteUploadResponses {
 }
 
 /// Responses for list sessions endpoint
-pub enum ListSessionsResponses {
+pub(crate) enum ListSessionsResponses {
     Success(ListSessionsResponse),
     Unauthorized(String),
     InternalServerError(InternalServerError),

@@ -50,7 +50,12 @@ impl PasswordService {
         // Ensure minimum time elapsed
         let elapsed = start.elapsed();
         if elapsed < self.min_operation_time {
-            tokio::time::sleep(self.min_operation_time - elapsed).await;
+            tokio::time::sleep(
+                self.min_operation_time
+                    .checked_sub(elapsed)
+                    .expect("elapsed is less than min_operation_time (checked above)"),
+            )
+            .await;
         }
 
         result

@@ -178,12 +178,11 @@ impl Handler for GrpcHandler {
         let mut svc = self.service.clone();
 
         // Convert Salvo request to hyper request
-        let hyper_req: hyper::Request<salvo::http::ReqBody> = match req.strip_to_hyper() {
-            Ok(r) => r,
-            Err(_) => {
-                res.render(StatusError::internal_server_error());
-                return;
-            }
+        let hyper_req: hyper::Request<salvo::http::ReqBody> = if let Ok(r) = req.strip_to_hyper() {
+            r
+        } else {
+            res.render(StatusError::internal_server_error());
+            return;
         };
 
         // Call the gRPC service

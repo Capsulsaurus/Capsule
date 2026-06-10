@@ -23,23 +23,20 @@ pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Erro
     let file = File::open(path)?;
     let mut reader = BufReader::new(file);
 
-    let exif = match Reader::new().read_from_container(&mut reader) {
-        Ok(e) => e,
-        Err(_) => {
-            // Not a valid EXIF container — return all-None result
-            return Ok(ExifExtract {
-                date_time_original: None,
-                offset_time_original: None,
-                gps_lat: None,
-                gps_lon: None,
-                make: None,
-                model: None,
-                width: None,
-                height: None,
-                duration_ms: None,
-                content_identifier: None,
-            });
-        }
+    let Ok(exif) = Reader::new().read_from_container(&mut reader) else {
+        // Not a valid EXIF container — return all-None result
+        return Ok(ExifExtract {
+            date_time_original: None,
+            offset_time_original: None,
+            gps_lat: None,
+            gps_lon: None,
+            make: None,
+            model: None,
+            width: None,
+            height: None,
+            duration_ms: None,
+            content_identifier: None,
+        });
     };
 
     // DateTimeOriginal

@@ -99,7 +99,11 @@ pub fn verify_asset(
     authority: &dyn AlbumAuthority,
     local_chain_head: Option<Hash32>,
 ) -> VerifyOutcome {
-    use RejectReason::*;
+    use RejectReason::{
+        BadDeviceSig, BadTimestamp, BadWriteSig, CiphertextHashMismatch, DeviceAddedAfter,
+        ForgedChain, Replayed, Structural, SuiteDowngrade, UnknownDevice, UntrustedAuthority,
+        WrongAlbum, WrongEpoch,
+    };
     use VerifyOutcome::TerminalReject as Reject;
     let core = &manifest.core;
 

@@ -343,7 +343,7 @@ impl ShareMutation {
         let share = album_share::ActiveModel {
             album_id: Set(album_id),
             user_id: Set(user_id.clone()),
-            permission: Set(entity::album_share::SharePermission::View),
+            permission: Set(album_share::SharePermission::View),
             ..Default::default()
         };
 

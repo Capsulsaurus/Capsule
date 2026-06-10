@@ -88,7 +88,7 @@ impl TotpService {
             Err(e) => return Err(e),
         };
 
-        verify_token(&secret, token).map_err(|e| e.into())
+        verify_token(&secret, token).map_err(Into::into)
     }
 
     /// Verify enrollment for user

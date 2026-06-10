@@ -13,7 +13,9 @@ use crate::utils::hash::{hash_password, verify_password};
 /// Get user profile
 #[endpoint(operation_id = "get_user_profile", tags("auth"), security(("bearer" = [])))]
 pub async fn get_user_profile(req: &mut Request, depot: &mut Depot) -> UserProfileResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let headers = req.headers();
 
     // Authorize user
@@ -43,7 +45,9 @@ pub async fn update_user_profile(
     depot: &mut Depot,
     body: JsonBody<UpdateProfileRequest>,
 ) -> UpdateUserProfileResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let headers = req.headers();
 
     // Authorize user

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::utils::directories::get_config_file_path;
 
-pub struct Config {
+pub(crate) struct Config {
     /// API server endpoint
     pub api_endpoint: String,
     /// Authentication token for API access
@@ -13,7 +13,7 @@ pub struct Config {
 
 impl Config {
     /// Creates a new Config instance with default values.
-    pub fn from_default_path() -> Result<Self, String> {
+    pub(crate) fn from_default_path() -> Result<Self, String> {
         // Get default path
         let config_file_path =
             get_config_file_path().ok_or("Failed to get configuration directory")?;
@@ -23,7 +23,7 @@ impl Config {
     }
 
     /// Creates a Config instance from a specific path.
-    pub fn from_path(path: &Path) -> Result<Self, String> {
+    pub(crate) fn from_path(path: &Path) -> Result<Self, String> {
         // For now, we'll just check if the file exists and return a default config
         // In a real implementation, you'd parse a TOML file here
         let config_exists = path.exists();

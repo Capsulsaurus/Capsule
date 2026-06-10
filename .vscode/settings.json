@@ -7,7 +7,6 @@
         "--",
         "-W", "clippy::pedantic",
         "-W", "unreachable_pub",
-        "-W", "unused_qualifications",
         "-D", "warnings",
         "-A", "clippy::must_use_candidate",
         "-A", "clippy::missing_errors_doc",
@@ -28,8 +27,19 @@
         "-A", "clippy::trivially_copy_pass_by_ref",
         "-A", "clippy::unnecessary_wraps",
         "-A", "clippy::wildcard_imports",
+        "-A", "clippy::default_trait_access",
+        "-A", "clippy::upper_case_acronyms",
+        "-A", "clippy::unused_async",
+        "-A", "clippy::unused_async_trait_impl",
+        "-A", "clippy::decimal_bitwise_operands",
+        "-A", "clippy::wrong_self_convention",
+        "-A", "clippy::enum_variant_names",
+        "-A", "clippy::struct_field_names",
+        "-A", "clippy::option_option",
+        "-A", "clippy::used_underscore_binding",
+        "-A", "clippy::ref_option",
+        "-A", "clippy::items_after_statements",
         "-D", "clippy::unwrap_used",
-        "-D", "clippy::dbg_macro",
-        "-D", "clippy::todo"
+        "-D", "clippy::dbg_macro"
     ]
 }

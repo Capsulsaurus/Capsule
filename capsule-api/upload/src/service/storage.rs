@@ -10,7 +10,7 @@ use crate::error::UploadError;
 
 /// Service responsible for managing the physical storage of upload files and chunks on disk.
 #[derive(Clone)]
-pub struct StorageService {
+pub(crate) struct StorageService {
     config: UploadServerConfig,
 }
 
@@ -26,17 +26,17 @@ struct FileCloneRange {
 }
 
 impl StorageService {
-    pub fn new(config: UploadServerConfig) -> Self {
+    pub(crate) fn new(config: UploadServerConfig) -> Self {
         Self { config }
     }
 
     /// Generates the filesystem path for a specific chunk of an upload.
     ///
     /// Chunks are stored with the naming convention: `{upload_id}_{chunk_index}.part`
-    pub fn get_chunk_path(&self, upload_id: &str, chunk_index: u64) -> PathBuf {
+    pub(crate) fn get_chunk_path(&self, upload_id: &str, chunk_index: u64) -> PathBuf {
         self.config
             .upload_dir
-            .join(format!("{}_{}.part", upload_id, chunk_index))
+            .join(format!("{upload_id}_{chunk_index}.part"))
     }
 
     /// Combines all chunk files for an upload into a single destination file.
@@ -47,7 +47,7 @@ impl StorageService {
     /// # Arguments
     /// * `upload_id` - The unique identifier of the upload session
     /// * `num_chunks` - The total number of chunks to combine
-    pub async fn combine_chunks(
+    pub(crate) async fn combine_chunks(
         &self,
         upload_id: &str,
         num_chunks: u64,
@@ -59,15 +59,15 @@ impl StorageService {
         let storage = self.clone();
 
         tokio::task::spawn_blocking(move || {
-            let mut dest = std::fs::File::create(&final_path_clone)
-                .map_err(|e| UploadError::Unknown(e.to_string()))?;
+            let mut dest =
+                File::create(&final_path_clone).map_err(|e| UploadError::Unknown(e.to_string()))?;
 
             let mut current_offset = 0;
 
             for i in 0..num_chunks {
                 let chunk_path = storage.get_chunk_path(&upload_id_str, i);
-                let mut source = std::fs::File::open(&chunk_path)
-                    .map_err(|e| UploadError::Unknown(e.to_string()))?;
+                let mut source =
+                    File::open(&chunk_path).map_err(|e| UploadError::Unknown(e.to_string()))?;
 
                 let written = Self::append_chunk(&mut dest, &mut source, current_offset, false)?;
                 current_offset += written;
@@ -130,7 +130,7 @@ impl StorageService {
     /// Counts how many sequential chunks exist on disk for a given upload_id.
     ///
     /// Checks for chunks starting from index 0 and increments until a gap is found.
-    pub async fn count_chunks(&self, upload_id: &str) -> Result<u64, UploadError> {
+    pub(crate) async fn count_chunks(&self, upload_id: &str) -> Result<u64, UploadError> {
         let mut count = 0;
         loop {
             let path = self.get_chunk_path(upload_id, count);
@@ -145,7 +145,7 @@ impl StorageService {
     /// Delete all chunks for an upload. Used for cleanup on cancellation or after combining.
     ///
     /// Returns the number of chunks successfully deleted.
-    pub async fn delete_chunks(&self, upload_id: &str) -> Result<u64, UploadError> {
+    pub(crate) async fn delete_chunks(&self, upload_id: &str) -> Result<u64, UploadError> {
         let mut deleted = 0;
         loop {
             let chunk_path = self.get_chunk_path(upload_id, deleted);
@@ -162,8 +162,8 @@ impl StorageService {
     }
 
     /// Gets the path for the final combined upload file (.bin).
-    pub fn get_upload_path(&self, upload_id: &str) -> PathBuf {
-        self.config.upload_dir.join(format!("{}.bin", upload_id))
+    pub(crate) fn get_upload_path(&self, upload_id: &str) -> PathBuf {
+        self.config.upload_dir.join(format!("{upload_id}.bin"))
     }
 }
 

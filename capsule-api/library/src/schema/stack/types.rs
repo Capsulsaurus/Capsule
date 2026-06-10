@@ -168,7 +168,7 @@ impl AssetStack {
     }
 
     async fn metadata(&self) -> Option<String> {
-        self.model.metadata.as_ref().map(|v| v.to_string())
+        self.model.metadata.as_ref().map(ToString::to_string)
     }
 
     async fn created_at(&self) -> DateTime<Utc> {
@@ -220,7 +220,7 @@ impl StackMember {
     }
 
     async fn metadata(&self) -> Option<String> {
-        self.model.metadata.as_ref().map(|v| v.to_string())
+        self.model.metadata.as_ref().map(ToString::to_string)
     }
 
     async fn created_at(&self) -> DateTime<Utc> {

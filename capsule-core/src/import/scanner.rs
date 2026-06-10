@@ -95,7 +95,7 @@ fn collect_files(
             }
             true
         })
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
     {
         let path = entry.path().to_path_buf();
         if !path.is_file() {

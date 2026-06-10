@@ -86,7 +86,10 @@ impl Writer for RegisterUserResponses {
                 res.status_code(StatusCode::TOO_MANY_REQUESTS);
                 res.headers_mut().insert(
                     salvo::http::header::RETRY_AFTER,
-                    retry_after.to_string().parse().unwrap(),
+                    retry_after
+                        .to_string()
+                        .parse()
+                        .expect("formatted integer is a valid header value"),
                 );
                 res.render(Json(ApiError::new("Too many requests")));
             }
@@ -176,7 +179,10 @@ impl Writer for LoginResponses {
                 res.status_code(StatusCode::TOO_MANY_REQUESTS);
                 res.headers_mut().insert(
                     salvo::http::header::RETRY_AFTER,
-                    retry_after.to_string().parse().unwrap(),
+                    retry_after
+                        .to_string()
+                        .parse()
+                        .expect("formatted integer is a valid header value"),
                 );
                 res.render(Json(ApiError::new("Too many requests")));
             }
@@ -243,7 +249,7 @@ impl Writer for RefreshTokenResponses {
             }
             Self::InvalidRefreshToken(e) => {
                 res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
+                res.render(Json(ApiError::new(e.clone())));
             }
             Self::InternalServerError(e) => {
                 e.write(req, depot, res).await;
@@ -341,7 +347,10 @@ impl Writer for ResetPasswordRequestResponses {
                 res.status_code(StatusCode::TOO_MANY_REQUESTS);
                 res.headers_mut().insert(
                     salvo::http::header::RETRY_AFTER,
-                    retry_after.to_string().parse().unwrap(),
+                    retry_after
+                        .to_string()
+                        .parse()
+                        .expect("formatted integer is a valid header value"),
                 );
                 res.render(Json(ApiError::new("Too many requests")));
             }
@@ -1012,8 +1021,8 @@ impl From<PasskeyRegistrationError> for PasskeyRegistrationStartResponses {
         match e {
             PasskeyRegistrationError::UserNotFound => Self::UserNotFound,
             PasskeyRegistrationError::AlreadyExists => Self::AlreadyExists,
-            PasskeyRegistrationError::RegistrationFailed(msg) => Self::RegistrationFailed(msg),
-            PasskeyRegistrationError::LimitReached(msg) => Self::RegistrationFailed(msg),
+            PasskeyRegistrationError::RegistrationFailed(msg)
+            | PasskeyRegistrationError::LimitReached(msg) => Self::RegistrationFailed(msg),
             PasskeyRegistrationError::InvalidChallenge => {
                 Self::InternalServerError(eyre::eyre!("Invalid challenge state").into())
             }
@@ -1105,8 +1114,8 @@ impl From<PasskeyRegistrationError> for PasskeyRegistrationFinishResponses {
             PasskeyRegistrationError::AlreadyExists => {
                 Self::RegistrationFailed("Passkey already exists".into())
             }
-            PasskeyRegistrationError::RegistrationFailed(msg) => Self::RegistrationFailed(msg),
-            PasskeyRegistrationError::LimitReached(msg) => Self::RegistrationFailed(msg),
+            PasskeyRegistrationError::RegistrationFailed(msg)
+            | PasskeyRegistrationError::LimitReached(msg) => Self::RegistrationFailed(msg),
             PasskeyRegistrationError::InvalidChallenge => {
                 Self::RegistrationFailed("Invalid challenge".into())
             }
@@ -1245,9 +1254,9 @@ pub enum PasskeyAuthFinishResponses {
 impl From<PasskeyAuthenticationError> for PasskeyAuthFinishResponses {
     fn from(e: PasskeyAuthenticationError) -> Self {
         match e {
-            PasskeyAuthenticationError::UserNotFound => Self::InvalidCredential,
-            PasskeyAuthenticationError::ConstraintViolation(_) => Self::InvalidCredential,
-            PasskeyAuthenticationError::InvalidCredential => Self::InvalidCredential,
+            PasskeyAuthenticationError::UserNotFound
+            | PasskeyAuthenticationError::ConstraintViolation(_)
+            | PasskeyAuthenticationError::InvalidCredential => Self::InvalidCredential,
             PasskeyAuthenticationError::Db(e) => Self::InternalServerError(e.into()),
             PasskeyAuthenticationError::Unexpected(e) => Self::InternalServerError(e.into()),
         }
@@ -1371,8 +1380,9 @@ impl From<Result<(), PasskeyManagementError>> for PasskeyManageResponses {
 impl From<PasskeyManagementError> for PasskeyManageResponses {
     fn from(e: PasskeyManagementError) -> Self {
         match e {
-            PasskeyManagementError::UserNotFound => Self::NotFound,
-            PasskeyManagementError::NotFound => Self::NotFound,
+            PasskeyManagementError::UserNotFound | PasskeyManagementError::NotFound => {
+                Self::NotFound
+            }
             PasskeyManagementError::Db(e) => Self::InternalServerError(e.into()),
             PasskeyManagementError::Unexpected(e) => Self::InternalServerError(e.into()),
         }

@@ -5,7 +5,7 @@
 ///     Added the client-side `albums` table for user-defined album metadata.
 pub const SCHEMA_VERSION: u32 = 2;
 
-pub const DDL: &str = r#"
+pub const DDL: &str = r"
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS assets (
@@ -97,4 +97,4 @@ CREATE TABLE IF NOT EXISTS cached_representations (
 
 CREATE INDEX IF NOT EXISTS idx_cache_evict
     ON cached_representations(pinned, is_owned_original, last_accessed_at);
-"#;
+";

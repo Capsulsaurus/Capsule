@@ -254,9 +254,8 @@ impl SidecarV1 {
     pub fn from_canonical_slice(bytes: &[u8], max_known: u16) -> Result<Self, String> {
         let value: Value =
             ciborium::de::from_reader(bytes).map_err(|e| format!("cbor decode: {e}"))?;
-        let entries = match value {
-            Value::Map(m) => m,
-            _ => return Err("sidecar must be a CBOR map".into()),
+        let Value::Map(entries) = value else {
+            return Err("sidecar must be a CBOR map".into());
         };
 
         let mut schema: Option<u16> = None;
