@@ -136,6 +136,20 @@ impl Catalog {
         Ok(rows.into_iter().map(AssetRecord::from).collect())
     }
 
+    /// All currently soft-deleted assets — the Recently Deleted listing.
+    pub fn query_trash(&self, offset: u64, limit: u64) -> Result<Vec<AssetRecord>, CatalogError> {
+        log::trace!("catalog: query_trash offset={offset} limit={limit}");
+        let rows = self.driver().query_trash(offset as usize, limit as usize)?;
+        Ok(rows.into_iter().map(AssetRecord::from).collect())
+    }
+
+    /// Permanently remove an asset row (the file is deleted by the caller).
+    pub fn purge_asset(&self, uuid: String) -> Result<(), CatalogError> {
+        log::debug!("catalog: purge_asset uuid={uuid}");
+        self.driver().purge_asset(&uuid)?;
+        Ok(())
+    }
+
     // ── Stacks ───────────────────────────────────────────────────────────────
 
     pub fn insert_stack(&self, stack: AssetStackRecord) -> Result<(), CatalogError> {
@@ -272,6 +286,25 @@ mod tests {
         assert!(cat.query_timeline(0, 100).unwrap().is_empty());
         cat.restore_asset("u1".to_string()).unwrap();
         assert_eq!(cat.query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_query_trash_and_purge() {
+        let cat = Catalog::open_in_memory().unwrap();
+        cat.insert_asset(asset("u1", &"a".repeat(64))).unwrap();
+        cat.insert_asset(asset("u2", &"b".repeat(64))).unwrap();
+        assert!(cat.query_trash(0, 100).unwrap().is_empty());
+
+        cat.soft_delete("u1".to_string(), 1_720_000_100).unwrap();
+        let trash = cat.query_trash(0, 100).unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].uuid, "u1");
+        // Still listed in trash but gone from the timeline.
+        assert_eq!(cat.query_timeline(0, 100).unwrap().len(), 1);
+
+        cat.purge_asset("u1".to_string()).unwrap();
+        assert!(cat.query_trash(0, 100).unwrap().is_empty());
+        assert!(cat.find_by_uuid("u1".to_string()).unwrap().is_none());
     }
 
     #[test]

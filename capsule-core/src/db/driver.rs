@@ -268,6 +268,32 @@ impl DatabaseDriver {
         rows.collect()
     }
 
+    /// All currently soft-deleted assets — the Recently Deleted listing,
+    /// most-recently-deleted first.
+    pub fn query_trash(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             FROM assets WHERE is_deleted = 1
+             ORDER BY deleted_at DESC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], map_asset_row)?;
+        rows.collect()
+    }
+
+    /// Permanently remove an asset row. The on-disk file is the caller's concern.
+    pub fn purge_asset(&self, uuid: &str) -> Result<(), rusqlite::Error> {
+        self.conn
+            .execute("DELETE FROM assets WHERE uuid = ?1", params![uuid])?;
+        Ok(())
+    }
+
     // ── Albums ───────────────────────────────────────────────────────────────
 
     pub fn insert_album(&self, row: &AlbumRow) -> Result<(), rusqlite::Error> {

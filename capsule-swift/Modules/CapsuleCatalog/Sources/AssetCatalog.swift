@@ -52,6 +52,13 @@ public protocol AssetCatalog: Sendable {
     /// before now — the trash-purge candidate set.
     func expiredTrash(olderThanSeconds: Int64) async throws -> [CatalogAsset]
 
+    /// A windowed page of the trash — every soft-deleted asset, most-recently-
+    /// deleted first. The Recently Deleted listing.
+    func trash(offset: Int, limit: Int) async throws -> [CatalogAsset]
+
+    /// Permanently remove an asset row. The on-disk file is the caller's concern.
+    func purgeAsset(id: String) async throws
+
     // MARK: Stacks
 
     /// Insert a new stack.

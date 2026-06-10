@@ -95,6 +95,17 @@ public actor CapsuleCatalog: AssetCatalog {
         try catalog.queryExpiredTrash(olderThanSecs: olderThanSeconds).map(CatalogAsset.init)
     }
 
+    public func trash(offset: Int, limit: Int) throws -> [CatalogAsset] {
+        CapsuleLog.catalog.trace("trash offset=\(offset) limit=\(limit)")
+        return try catalog.queryTrash(offset: pageValue(offset), limit: pageValue(limit))
+            .map(CatalogAsset.init)
+    }
+
+    public func purgeAsset(id: String) throws {
+        CapsuleLog.catalog.debug("purgeAsset id=\(id, privacy: .public)")
+        try catalog.purgeAsset(uuid: id)
+    }
+
     // MARK: Stacks
 
     public func insertStack(_ stack: CatalogStack) throws {

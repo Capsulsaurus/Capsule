@@ -5,13 +5,13 @@ import Foundation
 import Observation
 
 /// Drives the timeline screen: authorization, the initial load, live updates,
-/// grid density, and the Years / Months / All aggregation level.
+/// grid density, the Years / Months / All aggregation level, and the hidden
+/// overlay.
 ///
 /// Sectioning runs off the main actor (``buildSections(for:from:)``) so a large
-/// library never blocks a frame; only the resulting `[PhotoGridSection]` is
-/// published back on the main actor. The materialised timeline is cached
-/// (``allAssets``) so switching aggregation level re-sections in memory without
-/// re-reading the library.
+/// library never blocks a frame. The materialised timeline is cached
+/// (``allAssets``) so switching aggregation level re-sections in memory; hidden
+/// assets are filtered out of ``visibleAssets`` before sectioning.
 @MainActor
 @Observable
 public final class TimelineViewModel {
@@ -58,20 +58,30 @@ public final class TimelineViewModel {
     }
 
     private let provider: any AssetProvider
+    private let hiddenStore: HiddenStore?
     private var allAssets: [Asset] = []
-    // `nonisolated(unsafe)` so `deinit` can cancel it: the property is only
+    private var hiddenIDs: Set<AssetID> = []
+    // `nonisolated(unsafe)` so `deinit` can cancel them: the properties are only
     // mutated on the main actor during the model's life, and `deinit` cannot
     // race with that (a live method call would be retaining `self`).
     private nonisolated(unsafe) var changeObservation: Task<Void, Never>?
+    private nonisolated(unsafe) var hiddenObservation: Task<Void, Never>?
 
-    public init(provider: any AssetProvider) {
+    /// The timeline minus hidden assets.
+    private var visibleAssets: [Asset] {
+        hiddenIDs.isEmpty ? allAssets : allAssets.filter { !hiddenIDs.contains($0.id) }
+    }
+
+    public init(provider: any AssetProvider, hiddenStore: HiddenStore? = nil) {
         self.provider = provider
+        self.hiddenStore = hiddenStore
         let stored = UserDefaults.standard.object(forKey: Self.columnCountKey) as? Int
         columnCount = Self.columnOptions.contains(stored ?? 0) ? (stored ?? 5) : 5
     }
 
     deinit {
         changeObservation?.cancel()
+        hiddenObservation?.cancel()
     }
 
     /// Request access and load the timeline. Safe to call once, on appear.
@@ -81,8 +91,10 @@ public final class TimelineViewModel {
             state = .needsAuthorization
             return
         }
+        hiddenIDs = await hiddenStore?.hiddenIDs() ?? []
         await reload()
         observeLibraryChanges()
+        observeHiddenChanges()
     }
 
     /// Switch aggregation level, re-sectioning the cached timeline in memory.
@@ -90,7 +102,7 @@ public final class TimelineViewModel {
         guard newLevel != level else { return }
         level = newLevel
         focusSectionID = nil
-        Task { sections = await Self.buildSections(for: newLevel, from: allAssets) }
+        Task { sections = await Self.buildSections(for: newLevel, from: visibleAssets) }
     }
 
     /// Step the aggregation level for a pinch — `true` zooms in (finer level).
@@ -112,7 +124,7 @@ public final class TimelineViewModel {
         }
         level = finer
         Task {
-            let built = await Self.buildSections(for: finer, from: allAssets)
+            let built = await Self.buildSections(for: finer, from: visibleAssets)
             sections = built
             focusSectionID = built.first { $0.id.hasPrefix(section.id) }?.id
         }
@@ -122,7 +134,7 @@ public final class TimelineViewModel {
         do {
             let snapshot = try await provider.loadTimeline()
             allAssets = Self.materialize(snapshot)
-            sections = await Self.buildSections(for: level, from: allAssets)
+            sections = await Self.buildSections(for: level, from: visibleAssets)
             state = .ready
         } catch {
             CapsuleLog.interface.error("timeline load failed: \(String(describing: error), privacy: .public)")
@@ -139,10 +151,25 @@ public final class TimelineViewModel {
                 guard !Task.isCancelled else { return }
                 let assets = Self.materialize(change.snapshot)
                 guard let self else { return }
-                let level = level
-                let rebuilt = await Self.buildSections(for: level, from: assets)
                 allAssets = assets
-                sections = rebuilt
+                let level = level
+                let visible = visibleAssets
+                sections = await Self.buildSections(for: level, from: visible)
+            }
+        }
+    }
+
+    /// Observe the hidden overlay and re-section when it changes.
+    private func observeHiddenChanges() {
+        guard let hiddenStore else { return }
+        hiddenObservation?.cancel()
+        hiddenObservation = Task { [weak self] in
+            for await _ in hiddenStore.changes() {
+                guard !Task.isCancelled, let self else { return }
+                hiddenIDs = await hiddenStore.hiddenIDs()
+                let level = level
+                let visible = visibleAssets
+                sections = await Self.buildSections(for: level, from: visible)
             }
         }
     }

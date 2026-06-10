@@ -87,6 +87,17 @@ public actor MockCatalog: AssetCatalog {
             .sorted { ($0.deletedAt ?? 0) < ($1.deletedAt ?? 0) }
     }
 
+    public func trash(offset: Int, limit: Int) -> [CatalogAsset] {
+        let deleted = assets.values
+            .filter(\.isDeleted)
+            .sorted { ($0.deletedAt ?? 0) > ($1.deletedAt ?? 0) }
+        return Self.page(deleted, offset: offset, limit: limit)
+    }
+
+    public func purgeAsset(id: String) {
+        assets[id] = nil
+    }
+
     // MARK: Stacks
 
     public func insertStack(_ stack: CatalogStack) {

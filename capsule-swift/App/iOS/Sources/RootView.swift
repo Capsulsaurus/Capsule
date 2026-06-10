@@ -20,13 +20,16 @@ struct RootView: View {
                     albumProvider: environment.albumProvider,
                     thumbnails: environment.thumbnails,
                     mediaLoader: environment.mediaLoader,
-                    importer: environment.importer
+                    importer: environment.importer,
+                    hiddenStore: environment.hiddenStore
                 )
             }
             Tab("Collections", systemImage: "rectangle.stack") {
                 CollectionsRootView(
                     albumProvider: environment.albumProvider,
                     assetProvider: environment.assetProvider,
+                    trashProvider: environment.trashProvider,
+                    hiddenStore: environment.hiddenStore,
                     thumbnails: environment.thumbnails,
                     mediaLoader: environment.mediaLoader
                 )

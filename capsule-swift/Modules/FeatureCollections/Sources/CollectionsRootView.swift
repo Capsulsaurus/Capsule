@@ -18,6 +18,8 @@ public struct CollectionsRootView: View {
     @State private var newAlbumName = ""
     let albumProvider: any AlbumProvider
     let assetProvider: any AssetProvider
+    let trashProvider: any TrashProvider
+    let hiddenStore: HiddenStore
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
 
@@ -29,12 +31,16 @@ public struct CollectionsRootView: View {
     public init(
         albumProvider: any AlbumProvider,
         assetProvider: any AssetProvider,
+        trashProvider: any TrashProvider,
+        hiddenStore: HiddenStore,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader
     ) {
         _albums = State(wrappedValue: AlbumsViewModel(albumProvider: albumProvider))
         self.albumProvider = albumProvider
         self.assetProvider = assetProvider
+        self.trashProvider = trashProvider
+        self.hiddenStore = hiddenStore
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
     }
@@ -96,11 +102,29 @@ public struct CollectionsRootView: View {
                 }
             }
             .navigationDestination(for: UtilityCategory.self) { utility in
-                CollectionPlaceholderView(
-                    title: utility.title,
-                    systemImage: utility.systemImage,
-                    message: utility.comingSoonMessage
-                )
+                switch utility {
+                case .recentlyDeleted:
+                    RecentlyDeletedView(trashProvider: trashProvider)
+                case .hidden:
+                    HiddenView(
+                        assetProvider: assetProvider,
+                        hiddenStore: hiddenStore,
+                        thumbnails: thumbnails
+                    )
+                case .imports:
+                    ImportsView(
+                        assetProvider: assetProvider,
+                        albumProvider: albumProvider,
+                        thumbnails: thumbnails,
+                        mediaLoader: mediaLoader
+                    )
+                case .duplicates:
+                    CollectionPlaceholderView(
+                        title: utility.title,
+                        systemImage: utility.systemImage,
+                        message: utility.comingSoonMessage
+                    )
+                }
             }
         }
         .task { await albums.load() }

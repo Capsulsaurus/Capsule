@@ -10,7 +10,7 @@ import ManagedStore
 /// the catalog; deletion is a soft delete, leaving the file in place. The
 /// import flow calls ``refresh()`` once an import completes so the timeline
 /// picks up the new assets.
-public actor ManagedProvider: AssetProvider {
+public actor ManagedProvider: AssetProvider, TrashProvider {
     /// Upper bound on the managed timeline window for the prototype.
     private static let timelineLimit = 10_000
 
@@ -73,6 +73,29 @@ public actor ManagedProvider: AssetProvider {
 
     /// Re-publish the timeline — called once an import has added assets.
     public func refresh() async {
+        await emitReload()
+    }
+
+    // MARK: TrashProvider
+
+    public func trashedAssets() async throws -> [Asset] {
+        let catalog = try await library.catalog()
+        let rows = try await catalog.trash(offset: 0, limit: Self.timelineLimit)
+        return rows.map(Asset.init(catalogAsset:))
+    }
+
+    public func restore(_ id: AssetID) async throws {
+        guard case let .managed(uuid) = id else { return }
+        let catalog = try await library.catalog()
+        try await catalog.restoreAsset(id: uuid)
+        await emitReload()
+    }
+
+    public func purge(_ id: AssetID) async throws {
+        guard case let .managed(uuid) = id else { return }
+        let catalog = try await library.catalog()
+        // Removes the catalog row; the on-disk file cleanup is a follow-up.
+        try await catalog.purgeAsset(id: uuid)
         await emitReload()
     }
 

@@ -14,6 +14,8 @@ import ManagedStore
 struct AppEnvironment {
     let assetProvider: any AssetProvider
     let albumProvider: any AlbumProvider
+    let trashProvider: any TrashProvider
+    let hiddenStore: HiddenStore
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
     let importer: LibraryImporter
@@ -35,6 +37,8 @@ struct AppEnvironment {
             PhotoKitAlbumProvider(),
             ManagedAlbumProvider(library: library),
         ])
+        trashProvider = managedProvider
+        hiddenStore = HiddenStore()
         thumbnails = ImagePipeline()
         mediaLoader = ViewerMediaLoader()
         importer = LibraryImporter(importService: importService, managedProvider: managedProvider)

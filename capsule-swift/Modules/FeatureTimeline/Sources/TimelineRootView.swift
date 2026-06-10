@@ -27,20 +27,23 @@ public struct TimelineRootView: View {
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let hiddenStore: HiddenStore
 
     public init(
         assetProvider: any AssetProvider,
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader,
-        importer: LibraryImporter
+        importer: LibraryImporter,
+        hiddenStore: HiddenStore
     ) {
-        _model = State(wrappedValue: TimelineViewModel(provider: assetProvider))
+        _model = State(wrappedValue: TimelineViewModel(provider: assetProvider, hiddenStore: hiddenStore))
         _importer = State(wrappedValue: importer)
         self.assetProvider = assetProvider
         self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.hiddenStore = hiddenStore
     }
 
     public var body: some View {
@@ -270,6 +273,7 @@ private extension TimelineRootView {
             selectionAction("square.and.arrow.up") { Task { await shareSelected() } }
             selectionAction("heart") { Task { await favoriteSelected() } }
             selectionAction("rectangle.stack.badge.plus") { Task { await presentAddToAlbum() } }
+            selectionAction("eye.slash") { Task { await hideSelected() } }
             selectionAction("trash", role: .destructive) { isDeleteConfirmPresented = true }
         }
         .padding(.vertical, CapsuleTheme.Spacing.medium)
@@ -316,6 +320,11 @@ private extension TimelineRootView {
         for id in selectedIDs {
             try? await assetProvider.setFavorite(true, for: id)
         }
+        exitSelection()
+    }
+
+    func hideSelected() async {
+        await hiddenStore.setHidden(true, for: Array(selectedIDs))
         exitSelection()
     }
 
