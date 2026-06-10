@@ -17,11 +17,16 @@
 //!
 //! [AI/ML Integrations]: https://docs/design/ai/
 
+#[cfg(feature = "inference")]
+pub mod clip;
 pub mod orchestrator;
 pub mod registry;
 pub mod reid;
 pub mod runner;
 pub mod video;
+
+#[cfg(feature = "inference")]
+pub use clip::{ClipError, ClipRunner};
 
 pub use orchestrator::{
     BatchMode, OrchestratorError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size,

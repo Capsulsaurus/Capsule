@@ -38,7 +38,31 @@ x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing de
 getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
-sqlite-vec = "0.1.9"
+sqlite-vec = "0.1.9"            # local vector index (loadable extension on the bundled SQLite)
+
+# ── On-device inference (optional; off by default) ─────────────────────────
+# The real ML runner. Default-OFF so the standard build/test/CI never compiles a heavy ML stack
+# and NEVER runs inference. Model weights are fetched from Hugging Face at runtime into the local
+# HF cache (outside this repo) — no weights are ever committed. Enable with `--features inference`.
+candle-core = { version = "0.10.2", optional = true }          # pure-Rust tensors (cross-compiles)
+candle-nn = { version = "0.10.2", optional = true }
+candle-transformers = { version = "0.10.2", optional = true }  # ships a ready CLIP image+text model
+hf-hub = { version = "0.5.0", optional = true }                # runtime model download (local cache)
+tokenizers = { version = "0.23.1", optional = true }           # CLIP BPE tokenizer
+image = { version = "0.25.10", optional = true }               # decode/resize images for the encoder
 
 [dev-dependencies]
 tempfile = "3"
+
+[features]
+# Real on-device inference (CLIP runner). Off by default: CI builds/tests without it, so no ML
+# stack is compiled and no inference runs in CI. The weight-dependent validation tests are
+# `#[ignore]`-by-default — run them locally with `cargo test -p capsule-core --features inference -- --ignored`.
+inference = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:hf-hub",
+    "dep:tokenizers",
+    "dep:image",
+]

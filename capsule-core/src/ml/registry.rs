@@ -285,6 +285,22 @@ impl Registry {
         }
     }
 
+    /// Swap the canonical *model* for `task` — a one-row edit of both `model_id` and version (the
+    /// embedding dimension and metric are unchanged). Used when a deployment runs a different model
+    /// than the inventory default (e.g. a base model pending the committed choice); the registry is
+    /// the SSoT, so the runner declaring this model is then accepted by the index.
+    pub fn set_canonical_model(
+        &mut self,
+        task: TaskKind,
+        model_id: ModelId,
+        version: ModelVersion,
+    ) {
+        if let Some(row) = self.rows.iter_mut().find(|r| r.task == task) {
+            row.model_id = model_id;
+            row.canonical_version = version;
+        }
+    }
+
     /// The row a `model_id` belongs to, if any (each id is in at most one row).
     pub fn row_for_id(&self, model_id: &ModelId) -> Option<&ModelRow> {
         self.rows.iter().find(|r| &r.model_id == model_id)
