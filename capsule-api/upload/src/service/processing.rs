@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use capsule_media::fs::{ImageParseError, load_image};
+use chrono::{DateTime, Utc};
 use std::path::Path;
 
 /// Service for processing uploaded assets
