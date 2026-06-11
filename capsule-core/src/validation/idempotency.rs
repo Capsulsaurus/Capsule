@@ -24,7 +24,7 @@ pub fn lifecycle_key(
     prior: Option<Hash32>,
     manifest_hash: &Hash32,
 ) -> IdempotencyKey {
-    let prior = prior.map(|h| h.to_hex()).unwrap_or_else(|| "null".into());
+    let prior = prior.map_or_else(|| "null".into(), |h| h.to_hex());
     IdempotencyKey(format!(
         "lifecycle:{asset_id}:{prior}:{}",
         manifest_hash.to_hex()

@@ -23,7 +23,6 @@
 mod reference;
 
 pub use reference::ReferenceAuthority;
-
 use uuid::Uuid;
 
 use crate::crypto::keys::{AmkVersion, HybridVerifyingKey};

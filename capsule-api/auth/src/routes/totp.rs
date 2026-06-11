@@ -1,5 +1,6 @@
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
+use secrecy::ExposeSecret;
 
 use crate::claims::{Claims, Scope};
 use crate::models::requests::{
@@ -11,12 +12,12 @@ use crate::models::responses::{
 };
 use crate::state::AppState;
 
-use secrecy::ExposeSecret;
-
 /// Enroll in TOTP - generates secret and provisioning URI
 #[endpoint(operation_id = "totp_enroll", tags("totp"), security(("bearer" = [])))]
 pub async fn totp_enroll(req: &mut Request, depot: &mut Depot) -> TotpEnrollResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
 
     // Get authenticated user from token
     let user_id = match crate::utils::headers::validate_user_from_headers(
@@ -44,7 +45,9 @@ pub async fn totp_verify_enrollment(
     depot: &mut Depot,
     body: JsonBody<VerifyTotpEnrollmentRequest>,
 ) -> TotpVerifyEnrollmentResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let request = body.into_inner();
 
     // Get authenticated user
@@ -81,7 +84,9 @@ pub async fn totp_disable(
     depot: &mut Depot,
     body: JsonBody<DisableTotpRequest>,
 ) -> TotpDisableResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let request = body.into_inner();
     let DisableTotpRequest { totp_code } = request;
 
@@ -107,7 +112,9 @@ pub async fn totp_verify_login(
     depot: &mut Depot,
     body: JsonBody<VerifyTotpLoginRequest>,
 ) -> TotpVerifyLoginResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let request = body.into_inner();
 
     // Decode MFA token

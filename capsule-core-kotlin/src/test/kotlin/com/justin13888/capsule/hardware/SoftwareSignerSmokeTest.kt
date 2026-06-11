@@ -1,6 +1,5 @@
 package com.justin13888.capsule.hardware
 
-import java.nio.file.Files
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -11,6 +10,7 @@ import org.junit.jupiter.api.Test
 import uniffi.capsule_core.DeviceTier
 import uniffi.capsule_core.FfiWorkspace
 import uniffi.capsule_core.HardwareSignerException
+import java.nio.file.Files
 
 /**
  * Proves the compiled `capsule-core` works when consumed from Kotlin over uniffi — the Android
@@ -19,8 +19,7 @@ import uniffi.capsule_core.HardwareSignerException
  * first. The StrongBox path is on-device only (see androidInstrumentedTest).
  */
 class SoftwareSignerSmokeTest {
-    private fun freshRoot(): String =
-        Files.createTempDirectory("capsule-kotlin-smoke").toString()
+    private fun freshRoot(): String = Files.createTempDirectory("capsule-kotlin-smoke").toString()
 
     @Test
     fun softwareSignerContractHoldsAndIsHonest() {
@@ -32,10 +31,11 @@ class SoftwareSignerSmokeTest {
         val sig = signer.signClassical("device-dsk", msg)
         assertEquals(64, sig.size, "Ed25519 signature is 64 bytes")
 
-        val verifier = Ed25519Signer().apply {
-            init(false, Ed25519PublicKeyParameters(pub, 0))
-            update(msg, 0, msg.size)
-        }
+        val verifier =
+            Ed25519Signer().apply {
+                init(false, Ed25519PublicKeyParameters(pub, 0))
+                update(msg, 0, msg.size)
+            }
         assertTrue(verifier.verifySignature(sig), "signature verifies against the published key")
 
         // Honest: a software key reports itself exportable, unlike a real secure element.
@@ -56,14 +56,15 @@ class SoftwareSignerSmokeTest {
         // The software signer produces genuine Ed25519, so it drives the full
         // createWithHardwareSigner foreign-trait path end to end.
         val signer = SoftwareSigner(ByteArray(32) { 7 })
-        val ws = FfiWorkspace.createWithHardwareSigner(
-            freshRoot(),
-            "correct horse".toByteArray(),
-            DeviceTier.NORMAL,
-            signer,
-            "device-dsk",
-            ByteArray(32) { 9 },
-        )
+        val ws =
+            FfiWorkspace.createWithHardwareSigner(
+                freshRoot(),
+                "correct horse".toByteArray(),
+                DeviceTier.NORMAL,
+                signer,
+                "device-dsk",
+                ByteArray(32) { 9 },
+            )
         assertFalse(ws.userId().isEmpty())
     }
 }

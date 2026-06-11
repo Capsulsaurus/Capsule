@@ -1,6 +1,12 @@
 # Capsule monorepo task runner
 # Plain name = auto-fix, -check suffix = verify-only
 
+# Curated clippy lint set, applied `--workspace` so every crate gets the identical rules
+# (no per-crate `[lints]` opt-in/opt-out). Levels live here; thresholds in clippy.toml.
+# Enables `pedantic` then allows the doc/cast/ergonomics noise; keeps the high-value checks
+# (unwrap_used denied, mechanical cleanups) plus a couple of rustc lints.
+clippy_flags := "-W clippy::pedantic -W unreachable_pub -D warnings -A clippy::must_use_candidate -A clippy::missing_errors_doc -A clippy::missing_panics_doc -A clippy::doc_markdown -A clippy::cast_possible_truncation -A clippy::cast_possible_wrap -A clippy::cast_sign_loss -A clippy::cast_lossless -A clippy::cast_precision_loss -A clippy::module_name_repetitions -A clippy::similar_names -A clippy::too_many_lines -A clippy::struct_excessive_bools -A clippy::unused_self -A clippy::return_self_not_must_use -A clippy::needless_pass_by_value -A clippy::trivially_copy_pass_by_ref -A clippy::unnecessary_wraps -A clippy::wildcard_imports -A clippy::default_trait_access -A clippy::upper_case_acronyms -A clippy::unused_async -A clippy::unused_async_trait_impl -A clippy::decimal_bitwise_operands -A clippy::wrong_self_convention -A clippy::enum_variant_names -A clippy::struct_field_names -A clippy::option_option -A clippy::used_underscore_binding -A clippy::ref_option -A clippy::items_after_statements -D clippy::unwrap_used -D clippy::dbg_macro"
+
 # ── Aggregate: format ────────────────────────────────────────────────────────
 
 [group('all')]
@@ -12,10 +18,10 @@ format-check: format-check-rust format-check-web format-check-docs format-check-
 # ── Aggregate: lint ──────────────────────────────────────────────────────────
 
 [group('all')]
-lint: lint-rust lint-web lint-docs lint-kotlin lint-vision lint-swift
+lint: lint-rust lint-web lint-docs lint-kotlin lint-vision lint-swift lint-md
 
 [group('all')]
-lint-check: lint-check-rust lint-check-web lint-check-docs lint-check-kotlin lint-check-vision lint-check-swift
+lint-check: lint-check-rust lint-check-web lint-check-docs lint-check-kotlin lint-check-vision lint-check-swift lint-check-md
 
 # ── Aggregate: test ──────────────────────────────────────────────────────────
 
@@ -50,6 +56,12 @@ check-docs: format-check-docs lint-check-docs build-docs
 [group('vision')]
 check-vision: format-check-vision lint-check-vision
 
+[group('kotlin')]
+check-kotlin: format-check-kotlin lint-check-kotlin
+
+[group('markdown')]
+check-md: lint-check-md
+
 # ── Rust ─────────────────────────────────────────────────────────────────────
 
 [group('rust')]
@@ -62,11 +74,11 @@ format-check-rust:
 
 [group('rust')]
 lint-rust:
-    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty
+    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty -- {{ clippy_flags }}
 
 [group('rust')]
 lint-check-rust:
-    cargo clippy --workspace --exclude capsule-sdk -- -D warnings
+    cargo clippy --workspace --exclude capsule-sdk -- {{ clippy_flags }}
 
 [group('rust')]
 test-rust:
@@ -92,7 +104,7 @@ build-ffi:
 
 [group('rust')]
 lint-check-ffi:
-    cargo clippy -p capsule-core --features ffi -- -D warnings
+    cargo clippy -p capsule-core --features ffi -- {{ clippy_flags }}
 
 [group('rust')]
 gen-bindings:
@@ -269,6 +281,12 @@ build-kotlin:
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 
+# Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses those
+# pins via `mise -C` while running in its own dir so it picks up its own .swiftformat /
+# .swiftlint.yml.
+swift_dirs := "capsule-swift capsule-core-swift"
+mise_swift := justfile_directory() / "capsule-swift"
+
 [group('swift')]
 format-swift:
     #!/usr/bin/env bash
@@ -276,7 +294,9 @@ format-swift:
         echo "Skipping swift format (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftformat .
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftformat .)
+    done
 
 [group('swift')]
 format-check-swift:
@@ -285,7 +305,9 @@ format-check-swift:
         echo "Skipping swift format check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftformat --lint .
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftformat --lint .)
+    done
 
 [group('swift')]
 lint-swift:
@@ -294,7 +316,9 @@ lint-swift:
         echo "Skipping swiftlint (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftlint --fix --quiet && mise exec -- swiftlint
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftlint --fix --quiet && mise -C "{{ mise_swift }}" exec -- swiftlint)
+    done
 
 [group('swift')]
 lint-check-swift:
@@ -303,7 +327,9 @@ lint-check-swift:
         echo "Skipping swiftlint check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftlint --strict
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftlint --strict)
+    done
 
 # Cross-compile the Rust core and package CapsuleCoreFFI.xcframework.
 [group('swift')]
@@ -360,6 +386,18 @@ lint-vision:
 [group('vision')]
 lint-check-vision:
     cd capsule-vision && uv run ruff check && uv run ty check
+
+# ── Markdown ─────────────────────────────────────────────────────────────────
+# Repo-wide Markdown linting (READMEs, design docs, root docs). markdownlint-cli2
+# is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
+
+[group('markdown')]
+lint-md:
+    bunx markdownlint-cli2 --fix
+
+[group('markdown')]
+lint-check-md:
+    bunx markdownlint-cli2
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 

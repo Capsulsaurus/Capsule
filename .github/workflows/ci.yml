@@ -23,6 +23,8 @@ jobs:
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
       vision: ${{ steps.filter.outputs.vision }}
+      markdown: ${{ steps.filter.outputs.markdown }}
+      kotlin: ${{ steps.filter.outputs.kotlin }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -50,6 +52,21 @@ jobs:
               - '.github/workflows/ci.yml'
             vision:
               - 'capsule-vision/**'
+              - '.github/workflows/ci.yml'
+            markdown:
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+              - '.github/workflows/ci.yml'
+            kotlin:
+              - 'capsule-android/**'
+              - 'capsule-core-kotlin/**'
+              - '**/*.gradle.kts'
+              - 'gradle.properties'
+              - 'gradle/**'
+              - 'gradlew'
+              - 'gradlew.bat'
+              - '.editorconfig'
+              - 'detekt.yml'
               - '.github/workflows/ci.yml'
 
   rust:
@@ -235,20 +252,63 @@ jobs:
       - name: Check (format + lint)
         run: just check-vision
 
+  markdown:
+    name: Markdown (lint)
+    needs: changes
+    if: ${{ needs.changes.outputs.markdown == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (markdown lint)
+        run: just check-md
+
+  kotlin:
+    name: Kotlin (ktlint + detekt)
+    needs: changes
+    if: ${{ needs.changes.outputs.kotlin == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Gradle 8.11.1 supports JDK 21 (not the JDK 26 used on some dev machines).
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      # The :android module applies the Android Gradle Plugin, so Gradle needs the SDK
+      # (compileSdk 36) just to configure — even for the ktlint/detekt tasks.
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Install just
+        uses: extractions/setup-just@v3
+      - name: Check (ktlint + detekt)
+        run: just check-kotlin
+
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. rust-test is non-blocking and intentionally excluded.
   required:
     name: required
     if: always()
-    needs: [changes, rust, rust-test, rust-cross, web, docs, vision]
+    needs: [changes, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
           for r in "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
-                   "${{ needs.docs.result }}" "${{ needs.vision.result }}"; do
+                   "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
+                   "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

@@ -1,0 +1,27 @@
+{
+    // Curated markdownlint config for the repo's Markdown (READMEs, design docs, root docs).
+    // Keeps the auto-fixable hygiene rules (whitespace, blanks around headings/code/lists,
+    // single trailing newline) — which also keep diffs small — while disabling the
+    // prose-noise rules that fight long-form technical writing.
+    "config": {
+        "default": true,
+        "MD013": false, // line length — prose/tables wrap freely
+        "MD033": false, // inline HTML — used for README badges and layout
+        "MD041": false, // first line need not be a top-level heading (badges/frontmatter)
+        "MD024": { "siblings_only": true }, // duplicate headings OK across different sections
+        "MD036": false, // emphasis-as-heading is sometimes intentional
+        "MD026": false, // trailing punctuation in headings (e.g. "Why?") is fine
+        "MD060": false // table pipe visual alignment is cosmetic; renderers handle layout
+    },
+    "globs": ["**/*.md"],
+    "ignores": [
+        "**/node_modules/**",
+        "**/.venv/**",
+        "**/target/**",
+        "**/.build/**",
+        "**/dist/**",
+        "**/.astro/**",
+        "**/Derived/**",
+        "CLAUDE.md" // symlink to AGENTS.md
+    ]
+}

@@ -1,6 +1,7 @@
+use chrono::{FixedOffset, TimeZone};
+
 use crate::domain::CaptureTzSource;
 use crate::exif::ExifExtract;
-use chrono::{FixedOffset, TimeZone};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimezoneResolution {
@@ -85,10 +86,11 @@ fn lookup_timezone(lat: f64, lon: f64) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::NaiveDateTime;
+
     use super::*;
     use crate::domain::CaptureTzSource;
     use crate::exif::ExifExtract;
-    use chrono::NaiveDateTime;
 
     fn extract_with_offset(dt: &str, offset: &str) -> ExifExtract {
         ExifExtract {

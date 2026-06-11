@@ -1,0 +1,28 @@
+# Detekt overrides, merged on top of detekt's bundled defaults
+# (build-upon-default-config / buildUponDefaultConfig = true). Only the deltas live here.
+
+naming:
+  FunctionNaming:
+    # @Composable functions are PascalCase by Jetpack Compose convention.
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][_A-Z0-9]*'
+
+style:
+  # Too noisy for crypto/byte-size code (e.g. 32, 64); renderers of intent, not bugs.
+  MagicNumber:
+    active: false
+  # Allow expressive return points; common in validation/early-exit code.
+  ReturnCount:
+    max: 4
+
+complexity:
+  # Sane thresholds — relaxed from defaults so ordinary functions/files don't trip.
+  LongMethod:
+    threshold: 80
+  LongParameterList:
+    functionThreshold: 8
+    constructorThreshold: 8
+  TooManyFunctions:
+    thresholdInFiles: 20
+    thresholdInClasses: 20

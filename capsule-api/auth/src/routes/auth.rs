@@ -26,7 +26,7 @@ fn get_client_ip(req: &Request) -> String {
             req.headers()
                 .get("x-real-ip")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
         })
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -38,11 +38,13 @@ pub async fn register_user(
     depot: &mut Depot,
     body: JsonBody<RegisterRequest>,
 ) -> RegisterUserResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
 
     // Per-IP rate limit
     let ip = get_client_ip(req);
-    let rl_key = format!("register:{}", ip);
+    let rl_key = format!("register:{ip}");
     match state
         .session_manager
         .check_rate_limit(
@@ -76,11 +78,13 @@ pub async fn login_user(
     depot: &mut Depot,
     body: JsonBody<LoginRequest>,
 ) -> LoginResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
 
     // Per-IP rate limit
     let ip = get_client_ip(req);
-    let rl_key = format!("login:{}", ip);
+    let rl_key = format!("login:{ip}");
     match state
         .session_manager
         .check_rate_limit(&rl_key, RATE_LIMIT_LOGIN_MAX, RATE_LIMIT_LOGIN_WINDOW_SECS)
@@ -109,7 +113,9 @@ pub async fn refresh_token(
     depot: &mut Depot,
     body: JsonBody<RefreshTokenRequest>,
 ) -> RefreshTokenResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let payload = body.into_inner();
 
     let token = match Claims::decode(
@@ -122,11 +128,8 @@ pub async fn refresh_token(
         }
     };
 
-    let sid = match token.claims.sid {
-        Some(sid) => sid,
-        None => {
-            return ClaimValidationError::TokenInvalid("Missing session ID".to_string()).into();
-        }
+    let Some(sid) = token.claims.sid else {
+        return ClaimValidationError::TokenInvalid("Missing session ID".to_string()).into();
     };
 
     // Validate session
@@ -160,7 +163,9 @@ pub async fn refresh_token(
 /// Validate an access token
 #[endpoint(operation_id = "validate_token", tags("auth"), security(("bearer" = [])))]
 pub async fn validate_token(req: &mut Request, depot: &mut Depot) -> ValidateTokenResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let headers = req.headers();
 
     // Get token string
@@ -185,7 +190,9 @@ pub async fn validate_token(req: &mut Request, depot: &mut Depot) -> ValidateTok
 /// Logout user and invalidate tokens
 #[endpoint(operation_id = "logout", tags("auth"), security(("bearer" = [])))]
 pub async fn logout(req: &mut Request, depot: &mut Depot) -> LogoutResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let headers = req.headers();
 
     // Authorize user
@@ -217,7 +224,9 @@ pub async fn logout(req: &mut Request, depot: &mut Depot) -> LogoutResponses {
 /// Get all active devices (sessions)
 #[endpoint(operation_id = "get_devices", tags("auth"), security(("bearer" = [])))]
 pub async fn get_devices(req: &mut Request, depot: &mut Depot) -> GetDevicesResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let headers = req.headers();
 
     let token_string = match get_token_from_headers(headers) {

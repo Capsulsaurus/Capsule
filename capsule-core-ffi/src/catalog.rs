@@ -26,7 +26,9 @@ impl Catalog {
     /// Poisoning only means an earlier call panicked while holding the lock;
     /// the SQLite connection itself remains valid, so recovery is safe.
     fn driver(&self) -> MutexGuard<'_, DatabaseDriver> {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner())
+        self.inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 

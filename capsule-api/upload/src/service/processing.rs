@@ -1,23 +1,24 @@
+use std::path::Path;
+
 use capsule_media::fs::{ImageParseError, load_image};
 use chrono::{DateTime, Utc};
-use std::path::Path;
 
 /// Service for processing uploaded assets
 #[derive(Clone)]
-pub struct ProcessingService;
+pub(crate) struct ProcessingService;
 
-pub struct ExtractedMetadata {
+pub(crate) struct ExtractedMetadata {
     pub width: i32,
     pub height: i32,
     pub date: Option<DateTime<Utc>>,
 }
 
 impl ProcessingService {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self
     }
 
-    pub async fn extract_metadata(
+    pub(crate) async fn extract_metadata(
         &self,
         path: &Path,
     ) -> Result<ExtractedMetadata, ImageParseError> {

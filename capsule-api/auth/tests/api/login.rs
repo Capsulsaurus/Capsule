@@ -1,8 +1,9 @@
-use crate::common::{build_service, setup};
 use auth::models::responses::TokenResponse;
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use secrecy::ExposeSecret;
+
+use crate::common::{build_service, setup};
 
 async fn register_test_user(service: &salvo::Service) -> TokenResponse {
     let mut res = TestClient::post("http://localhost/register")

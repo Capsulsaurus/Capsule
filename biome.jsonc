@@ -1,5 +1,5 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.8.0/schema.json",
+    "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
     "organizeImports": {
         "enabled": true
     },
@@ -10,11 +10,18 @@
     },
     "formatter": {
         "indentStyle": "space",
-        "indentWidth": 4
+        "indentWidth": 4,
+        "lineEnding": "lf"
     },
     "javascript": {
         "formatter": {
-            "quoteStyle": "single"
+            "quoteStyle": "single",
+            // Explicit (match Biome defaults) so formatting stays deterministic across
+            // tool upgrades. Trailing commas everywhere keep import/array/arg diffs to a
+            // single added line — fewer merge conflicts.
+            "semicolons": "always",
+            "trailingCommas": "all",
+            "bracketSpacing": true
         }
     },
     "css": {
@@ -25,7 +32,24 @@
     "linter": {
         "enabled": true,
         "rules": {
-            "recommended": true
+            "recommended": true,
+            // Keep imports minimal and stable: drop dead imports/vars and split type-only
+            // imports/exports (pairs with organizeImports for clean, merge-friendly blocks).
+            "correctness": {
+                "noUnusedImports": "error",
+                "noUnusedVariables": "error"
+            },
+            "style": {
+                "useImportType": "error",
+                "useExportType": "error"
+            },
+            // Catch questionable code early.
+            "suspicious": {
+                "noConsole": {
+                    "level": "error",
+                    "options": { "allow": ["warn", "error", "info"] }
+                }
+            }
         }
     }
 }

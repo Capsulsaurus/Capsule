@@ -2,7 +2,7 @@ use sea_orm_migration::prelude::*;
 use sea_orm_migration::schema::*;
 
 #[derive(DeriveMigrationName)]
-pub struct Migration;
+pub(crate) struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {

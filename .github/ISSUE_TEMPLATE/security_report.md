@@ -11,6 +11,7 @@ assignees: ''
 <!-- A clear and concise description of the security issue -->
 
 ## Component
+
 - [ ] capsule-android
 - [ ] capsule-api
 - [ ] capsule-cli
@@ -23,6 +24,7 @@ assignees: ''
 - [ ] Other: _____________________
 
 ## Steps to Reproduce (if safe to share)
+
 1.
 2.
 3.

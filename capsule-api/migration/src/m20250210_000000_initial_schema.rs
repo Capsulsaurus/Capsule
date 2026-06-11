@@ -2,7 +2,7 @@ use sea_orm_migration::prelude::*;
 use sea_orm_migration::schema::*;
 
 #[derive(DeriveMigrationName)]
-pub struct Migration;
+pub(crate) struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
@@ -70,11 +70,11 @@ impl MigrationTrait for Migration {
 
         // Create users indices
         db.execute_unprepared(
-            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username))"#,
+            r"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username_lower ON users (LOWER(username))",
         )
         .await?;
         db.execute_unprepared(
-            r#"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))"#,
+            r"CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_lower ON users (LOWER(email))",
         )
         .await?;
         manager
@@ -724,9 +724,9 @@ impl MigrationTrait for Migration {
         // Partial index for "get stacked assets for owner" queries
         // Only indexes rows where stack_id IS NOT NULL for efficiency
         db.execute_unprepared(
-            r#"CREATE INDEX IF NOT EXISTS idx_assets_owner_stacked 
+            r"CREATE INDEX IF NOT EXISTS idx_assets_owner_stacked 
             ON assets (owner_id, stack_id) 
-            WHERE stack_id IS NOT NULL"#,
+            WHERE stack_id IS NOT NULL",
         )
         .await?;
 

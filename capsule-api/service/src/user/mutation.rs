@@ -1,6 +1,8 @@
-use super::{CreateUserArgs, UpdateUserArgs};
-use ::entity::{user, user::Entity as User};
+use ::entity::user;
+use ::entity::user::Entity as User;
 use sea_orm::*;
+
+use super::{CreateUserArgs, UpdateUserArgs};
 
 pub struct Mutation;
 
@@ -140,9 +142,8 @@ impl Mutation {
         secret: Option<String>,
         verified: Option<bool>,
     ) -> Result<bool, DbErr> {
-        let user_model = match User::find_by_id(id).one(db).await? {
-            Some(m) => m,
-            None => return Ok(false),
+        let Some(user_model) = User::find_by_id(id).one(db).await? else {
+            return Ok(false);
         };
 
         let mut user: user::ActiveModel = user_model.into();
@@ -168,9 +169,8 @@ impl Mutation {
     /// Set TOTP secret as verified
     /// Returns true if the secret was set successfully
     pub async fn set_totp_verified(db: &DbConn, id: &str, verified: bool) -> Result<bool, DbErr> {
-        let user_model = match User::find_by_id(id).one(db).await? {
-            Some(m) => m,
-            None => return Ok(false),
+        let Some(user_model) = User::find_by_id(id).one(db).await? else {
+            return Ok(false);
         };
 
         let mut user: user::ActiveModel = user_model.into();

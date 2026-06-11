@@ -328,8 +328,8 @@ async fn test_create_user() {
 4. **Parameterized Queries**: SeaORM handles this, but be careful with raw SQL
 5. **Secret Management**: Use `SecretString` for sensitive data, never log tokens
 6. **Limit Dependencies:** Only depend on the minimum number of crates necessary. This specifically includes:
-   * `sea_orm` code should exist only in `capsule-api-entity`, `capsule-api-migration`, `capsule-api-service`, `capsule-api-testing`
-   * ID generation of any sort (e.q., `uuid`, `nanoid`) should exist only in `capsule-api-entity`, `capsule-api-service`
+   - `sea_orm` code should exist only in `capsule-api-entity`, `capsule-api-migration`, `capsule-api-service`, `capsule-api-testing`
+   - ID generation of any sort (e.q., `uuid`, `nanoid`) should exist only in `capsule-api-entity`, `capsule-api-service`
 
 ### Dependency Hierarchy
 

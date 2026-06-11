@@ -17,7 +17,6 @@ pub mod artifact;
 pub use artifact::{
     BackupArtifact, BackupAsset, BackupInput, RestoreMode, RestoreReport, export, export_with_salt,
 };
-
 use thiserror::Error;
 
 use crate::crypto::primitives::DeviceTier;
@@ -92,7 +91,6 @@ pub fn recover_seed(shares: &[Vec<u8>]) -> Result<Vec<u8>, BackupError> {
     let parsed = parsed.map_err(|_| BackupError::Format("malformed Shamir share".into()))?;
     sharks
         .recover(parsed.iter())
-        .map(|v| v.to_vec())
         .map_err(|e| BackupError::Format(format!("Shamir recover: {e}")))
 }
 

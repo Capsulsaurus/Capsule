@@ -9,7 +9,7 @@ use serde::Serialize;
 
 /// Shared content response
 #[derive(Debug, Serialize, ToSchema)]
-pub struct SharedContentResponse {
+pub(super) struct SharedContentResponse {
     /// Type of shared content
     pub content_type: String,
     /// Expiry timestamp
@@ -18,7 +18,7 @@ pub struct SharedContentResponse {
 
 /// Possible responses for shared content access
 #[allow(dead_code)]
-pub enum SharedContentResponses {
+pub(super) enum SharedContentResponses {
     /// Successful retrieval
     Ok(SharedContentResponse),
     /// Shared content not found or expired
@@ -46,7 +46,7 @@ impl Writer for SharedContentResponses {
     }
 }
 
-impl salvo::oapi::EndpointOutRegister for SharedContentResponses {
+impl EndpointOutRegister for SharedContentResponses {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
         operation.responses.insert(
             String::from("200"),

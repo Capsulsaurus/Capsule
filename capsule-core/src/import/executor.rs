@@ -134,7 +134,7 @@ fn execute_candidate(
         .or_else(|| member_commits.first());
 
     let stack_id = if candidate.stack_type.is_some() {
-        let sid = format!("stack-{}", now);
+        let sid = format!("stack-{now}");
         // Determine primary UUID
         let primary_uuid = primary_commit
             .map(|c| c.uuid_str.clone())
@@ -142,10 +142,10 @@ fn execute_candidate(
 
         let stack_row = AssetStackRow {
             id: sid.clone(),
-            stack_type: candidate
-                .stack_type
-                .map(|st| format!("{st:?}").to_lowercase())
-                .unwrap_or_else(|| "custom".to_string()),
+            stack_type: candidate.stack_type.map_or_else(
+                || "custom".to_string(),
+                |st| format!("{st:?}").to_lowercase(),
+            ),
             primary_asset_id: primary_uuid.clone(),
             cover_asset_id: Some(primary_uuid),
             is_collapsed: true,
@@ -253,7 +253,12 @@ fn commit_member(
 
     // Step 3: Create media dir
     let final_media = media_path(&library.root, &uuid, &ext, capture_utc);
-    fs::create_dir_all(final_media.parent().unwrap()).map_err(|e| format!("mkdir failed: {e}"))?;
+    fs::create_dir_all(
+        final_media
+            .parent()
+            .expect("media path always has a parent directory"),
+    )
+    .map_err(|e| format!("mkdir failed: {e}"))?;
 
     // Step 4: Copy source → tmp
     let tmp_media = tmp_path(&final_media);
@@ -409,14 +414,16 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::domain::ImportMode;
     use crate::import::executor_cancellation::CancellationToken;
     use crate::import::planner::{ImportConfig, plan};
     use crate::import::scanner::scan;
     use crate::library::init::init_library;
-    use std::fs;
-    use tempfile::TempDir;
 
     fn noop_event(_: ImportProgressEvent) {}
 

@@ -1,7 +1,8 @@
-use crate::models::errors::BadRegisterUserRequestError;
-use crate::models::requests::RegisterRequest;
 use secrecy::ExposeSecret;
 use service::user as UserService;
+
+use crate::models::errors::BadRegisterUserRequestError;
+use crate::models::requests::RegisterRequest;
 
 pub struct RegistrationValidator;
 

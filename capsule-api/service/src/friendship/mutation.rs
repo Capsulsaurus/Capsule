@@ -1,10 +1,11 @@
+use ::entity::friendship::{self, FriendshipStatus};
+use chrono::Utc;
+use sea_orm::*;
+
 use super::error::{
     AcceptRequestResult, FriendshipError, RejectRequestResult, RemoveFriendshipResult,
     SendRequestResult,
 };
-use ::entity::friendship::{self, FriendshipStatus};
-use chrono::Utc;
-use sea_orm::*;
 
 pub struct Mutation;
 
@@ -127,12 +128,11 @@ impl Mutation {
         friendship_id: i32,
         user_id: &str,
     ) -> Result<RemoveFriendshipResult, FriendshipError> {
-        let friendship = match friendship::Entity::find_by_id(friendship_id)
+        let Some(friendship) = friendship::Entity::find_by_id(friendship_id)
             .one(db)
             .await?
-        {
-            Some(f) => f,
-            None => return Ok(RemoveFriendshipResult::NotFound),
+        else {
+            return Ok(RemoveFriendshipResult::NotFound);
         };
 
         // Either party can remove the friendship

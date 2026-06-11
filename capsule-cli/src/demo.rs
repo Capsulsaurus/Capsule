@@ -8,13 +8,12 @@
 
 use std::path::PathBuf;
 
-use colored::*;
-use eyre::{Result, eyre};
-
 use capsule_core::backup::{recover_seed, split_seed_2of3};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::Workspace;
+use colored::*;
+use eyre::{Result, eyre};
 
 /// Fast Argon2id parameters — this is a demo; the wrap-key strength is not the point.
 const DEMO_KDF: Argon2Params = Argon2Params {
@@ -37,7 +36,7 @@ fn info(label: &str, value: impl std::fmt::Display) {
 
 /// Run the showcase. `workdir` defaults to a fresh temp directory; `image` defaults to a
 /// small synthetic file.
-pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
+pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
     let root = match workdir {
         Some(p) => p,
         None => std::env::temp_dir().join(format!("capsule-demo-{}", std::process::id())),
@@ -82,23 +81,27 @@ pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
         3,
         "Import an asset (encrypt → sign manifest → provenance → signed sidecar → verify_asset)",
     );
-    let image_path = match image {
-        Some(p) => p,
-        None => {
-            let p = root.join("sample.jpg");
-            // A small synthetic JPEG-ish payload.
-            let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0];
-            bytes.extend((0..4096).map(|i| (i % 256) as u8));
-            std::fs::write(&p, &bytes)?;
-            p
-        }
+    let image_path = if let Some(p) = image {
+        p
+    } else {
+        let p = root.join("sample.jpg");
+        // A small synthetic JPEG-ish payload.
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        bytes.extend((0..4096).map(|i| (i % 256) as u8));
+        std::fs::write(&p, &bytes)?;
+        p
     };
     info("source file", image_path.display());
     let asset = ws
         .import_asset(album, &image_path)
         .map_err(|e| eyre!("import: {e}"))?;
     let st = ws.asset(&asset).ok_or_else(|| eyre!("asset missing"))?;
-    let head = &st.chain.records().last().unwrap().manifest;
+    let head = &st
+        .chain
+        .records()
+        .last()
+        .expect("provenance chain is never empty")
+        .manifest;
     ok("encrypted with AES-256-GCM STREAM; manifest signed (device + write-tier hybrid sigs)");
     info("asset_id", asset);
     info("ciphertext hash", head.core.ciphertext_hash);
@@ -112,7 +115,7 @@ pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
     step(4, "Acknowledge via the verify_asset chokepoint");
     match ws.verify(&asset).map_err(|e| eyre!("verify: {e}"))? {
         VerifyOutcome::Accept => {
-            ok("verify_asset → ACCEPT (both signatures, epoch, chain, AMK all valid)")
+            ok("verify_asset → ACCEPT (both signatures, epoch, chain, AMK all valid)");
         }
         other => return Err(eyre!("unexpected verify outcome: {other:?}")),
     }
@@ -124,7 +127,7 @@ pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
         .map_err(|e| eyre!("tag: {e}"))?;
     ws.set_caption(&asset, "golden hour over the bay")
         .map_err(|e| eyre!("caption: {e}"))?;
-    let st = ws.asset(&asset).unwrap();
+    let st = ws.asset(&asset).expect("imported asset is present");
     let tags: Vec<String> = st.sidecar.tags_user.value().into_iter().collect();
     ok(format!("tags (OR-set): {tags:?}"));
     ok(format!(
@@ -140,7 +143,7 @@ pub fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()> {
     ok("delete manifest signed with retention_until = now + 30 days");
     ws.restore(&asset).map_err(|e| eyre!("restore: {e}"))?;
     ok("trash-restore appended; the delete record is preserved in the chain (audit trail)");
-    let st = ws.asset(&asset).unwrap();
+    let st = ws.asset(&asset).expect("imported asset is present");
     let actions: Vec<String> = st
         .chain
         .records()

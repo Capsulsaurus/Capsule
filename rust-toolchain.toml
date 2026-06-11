@@ -1,3 +1,7 @@
+# Pinned nightly: build, clippy, and rustfmt all run on this one toolchain so the
+# unstable rustfmt import options in rustfmt.toml (imports_granularity / group_imports)
+# apply natively. Bump this date periodically; keep it reasonably recent.
 [toolchain]
-channel = "1.91.1"
+channel = "nightly-2026-06-10"
+components = ["rustfmt", "clippy"]
 targets = ["aarch64-apple-ios", "aarch64-apple-ios-sim", "x86_64-apple-ios"]

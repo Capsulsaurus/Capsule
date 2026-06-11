@@ -15,7 +15,8 @@
 mod encode;
 
 use ciborium::value::Value;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 /// Errors from (de)serializing through the canonical codec.
@@ -67,8 +68,9 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, CanonicalError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ciborium::value::{Integer, Value};
+
+    use super::*;
 
     fn enc(v: Value) -> Vec<u8> {
         value_to_canonical_vec(&v)

@@ -24,5 +24,5 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 
 ### Contributor Checklist
 
-- [ ] I have signed the [Contributor License Agreement](CLA.md).
-- [ ] My code follows the project's style guidelines.
+* [ ] I have signed the [Contributor License Agreement](CLA.md).
+* [ ] My code follows the project's style guidelines.

@@ -56,7 +56,7 @@ There are three API specifications that programatically describe the API:
 Most tests are written to require minimal system dependencies. However, some are still required:
 
 - Enable memory overcommit (Linux): `sudo sysctl vm.overcommit_memory=1` (or add to `/etc/sysctl.d/90-overcommit.conf`)
-- 
+-
 <!-- - If using Podman (i.e. not Docker), testcontainers requires a Docker-compatible socket:
   - Enable socket: `systemctl --user enable --now podman.socket`
   - Check status: `systemctl --user status podman.socket`

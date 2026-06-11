@@ -1,13 +1,13 @@
-use async_trait::async_trait;
-use bb8_redis::RedisConnectionManager;
-use bb8_redis::bb8::Pool;
-use redis::AsyncCommands;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::RwLock;
 
+use async_trait::async_trait;
+use bb8_redis::RedisConnectionManager;
+use bb8_redis::bb8::Pool;
 use model::errors::InternalServerError;
+use redis::AsyncCommands;
+use tokio::sync::RwLock;
 
 /// Result of a rate limit check: count of requests in current window and remaining TTL (secs).
 pub struct RateLimitResult {
@@ -166,7 +166,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:session:{}", sid);
+        let key = format!("capsule:session:{sid}");
         let _: () = con
             .set_ex(&key, session_data, ttl.as_secs())
             .await
@@ -180,7 +180,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:session:{}", sid);
+        let key = format!("capsule:session:{sid}");
         let data: Option<String> = con
             .get(&key)
             .await
@@ -194,7 +194,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:session:{}", sid);
+        let key = format!("capsule:session:{sid}");
         let _: () = con
             .del(&key)
             .await
@@ -213,7 +213,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let user_key = format!("capsule:user_sessions:{}", user_id);
+        let user_key = format!("capsule:user_sessions:{user_id}");
         let _: () = con
             .sadd(&user_key, sid)
             .await
@@ -231,7 +231,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let user_key = format!("capsule:user_sessions:{}", user_id);
+        let user_key = format!("capsule:user_sessions:{user_id}");
         let sessions: Vec<String> = con
             .smembers(&user_key)
             .await
@@ -245,7 +245,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let user_key = format!("capsule:user_sessions:{}", user_id);
+        let user_key = format!("capsule:user_sessions:{user_id}");
         let _: () = con
             .del(&user_key)
             .await
@@ -259,7 +259,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:mfa_attempts:{}", mfa_token_jti);
+        let key = format!("capsule:mfa_attempts:{mfa_token_jti}");
         let count: i32 = con
             .incr(&key, 1)
             .await
@@ -280,7 +280,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:mfa_attempts:{}", mfa_token_jti);
+        let key = format!("capsule:mfa_attempts:{mfa_token_jti}");
         let count: Option<i32> = con
             .get(&key)
             .await
@@ -294,7 +294,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let key = format!("capsule:mfa_attempts:{}", mfa_token_jti);
+        let key = format!("capsule:mfa_attempts:{mfa_token_jti}");
         let _: () = con
             .del(&key)
             .await
@@ -312,7 +312,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let redis_key = format!("capsule:rate_limit:{}", key);
+        let redis_key = format!("capsule:rate_limit:{key}");
         let count: i64 = con
             .incr(&redis_key, 1)
             .await
@@ -344,7 +344,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let redis_key = format!("capsule:temp:{}", key);
+        let redis_key = format!("capsule:temp:{key}");
         let _: () = con
             .set_ex(&redis_key, value, ttl.as_secs())
             .await
@@ -358,7 +358,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let redis_key = format!("capsule:temp:{}", key);
+        let redis_key = format!("capsule:temp:{key}");
         let data: Option<String> = con
             .get(&redis_key)
             .await
@@ -372,7 +372,7 @@ impl SessionStorage for RedisSessionStorage {
             .get()
             .await
             .map_err(|e| InternalServerError::from(eyre::eyre!(e)))?;
-        let redis_key = format!("capsule:temp:{}", key);
+        let redis_key = format!("capsule:temp:{key}");
         let _: () = con
             .del(&redis_key)
             .await

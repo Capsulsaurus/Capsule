@@ -23,11 +23,11 @@ pre-commit:
       run: just format-kotlin
     format-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just format-vision
     format-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just format-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
@@ -43,8 +43,12 @@ pre-commit:
       run: just lint-docs
     lint-vision:
       priority: 2
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just lint-vision
+    lint-md:
+      priority: 2
+      glob: "**/*.md"
+      run: just lint-md
 
     # Priority 3: fail if any files changed (formatters/linters mutated staged files)
     diff-check:
@@ -92,24 +96,28 @@ pre-push:
       run: just lint-check-kotlin
     format-check-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just format-check-vision
     lint-check-vision:
       priority: 1
-      glob: "capsule-vision/**/*.py"
+      glob: "capsule-vision/**/*.{py,ipynb}"
       run: just lint-check-vision
     format-check-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just format-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
     lint-check-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just lint-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
+    lint-check-md:
+      priority: 1
+      glob: "**/*.md"
+      run: just lint-check-md
 
     # Priority 2: tests
     test-rust:

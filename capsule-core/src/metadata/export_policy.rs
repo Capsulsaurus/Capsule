@@ -58,11 +58,13 @@ pub fn strip_for_export(sidecar: &SidecarV1, opts: &ExportOptions) -> SidecarV1 
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use uuid::Uuid;
+
     use super::*;
     use crate::crypto::hash::Hash32;
     use crate::sidecar::sidecar_v1::{CameraId, Gps, GpsSource, SIDECAR_SCHEMA_V1};
-    use std::collections::BTreeMap;
-    use uuid::Uuid;
 
     fn sidecar() -> SidecarV1 {
         SidecarV1 {

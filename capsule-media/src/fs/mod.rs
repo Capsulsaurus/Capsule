@@ -3,19 +3,21 @@ use std::path::Path;
 use thiserror::Error;
 use tokio::fs;
 
-use crate::{
-    core::types::MediaType,
-    image::{
-        ImageFile, ImageReader, ImageWithMetadata,
-        formats::{
-            avif::AvifImage, bmp::BmpImage, gif::GifImage, heif::HeifImage, jpeg::JpegImage,
-            jxl::JxlImage, png::PngImage, raw::RawImage, tiff::TiffImage,
-            webp::WebpImage as WebPImage,
-        },
-        types::ImageFormat,
-    },
-    video::{VideoFile, types::VideoFormat},
-};
+use crate::core::types::MediaType;
+use crate::image::formats::avif::AvifImage;
+use crate::image::formats::bmp::BmpImage;
+use crate::image::formats::gif::GifImage;
+use crate::image::formats::heif::HeifImage;
+use crate::image::formats::jpeg::JpegImage;
+use crate::image::formats::jxl::JxlImage;
+use crate::image::formats::png::PngImage;
+use crate::image::formats::raw::RawImage;
+use crate::image::formats::tiff::TiffImage;
+use crate::image::formats::webp::WebpImage as WebPImage;
+use crate::image::types::ImageFormat;
+use crate::image::{ImageFile, ImageReader, ImageWithMetadata};
+use crate::video::VideoFile;
+use crate::video::types::VideoFormat;
 
 pub mod ext;
 
@@ -105,7 +107,7 @@ pub async fn detect_image_type(path: &Path) -> Result<ImageFormat, ReadImageErro
 
     match media_type {
         MediaType::Image(t) => Ok(t),
-        _ => Err(ReadImageError::NotAnImage(media_type)),
+        MediaType::Video(_) => Err(ReadImageError::NotAnImage(media_type)),
     }
 }
 

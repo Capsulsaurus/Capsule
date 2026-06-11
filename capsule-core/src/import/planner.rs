@@ -116,12 +116,14 @@ fn hash_file(path: &Path) -> Result<String, std::io::Error> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::db::DatabaseDriver;
     use crate::import::scan::ScanResult;
     use crate::import::scanner::scan;
-    use std::fs;
-    use tempfile::TempDir;
 
     fn make_db() -> DatabaseDriver {
         DatabaseDriver::open_in_memory().unwrap()

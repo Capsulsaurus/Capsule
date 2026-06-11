@@ -1,10 +1,10 @@
-use bb8_redis::RedisConnectionManager;
-use bb8_redis::bb8::Pool;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
 
+use bb8_redis::RedisConnectionManager;
+use bb8_redis::bb8::Pool;
 use model::errors::InternalServerError;
+use serde::{Deserialize, Serialize};
 
 pub mod storage;
 pub use self::storage::{

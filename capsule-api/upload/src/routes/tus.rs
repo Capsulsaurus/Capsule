@@ -1,3 +1,7 @@
+use auth::utils::headers::validate_user_from_headers;
+use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::prelude::*;
+
 use crate::models::requests::CreateUploadRequest;
 use crate::models::responses::{
     CreateUploadResponse, CreateUploadResponses, DeleteUploadResponses, HeadUploadResponse,
@@ -5,9 +9,6 @@ use crate::models::responses::{
 };
 use crate::models::session::UploadSessionStatus;
 use crate::state::AppState;
-use auth::utils::headers::validate_user_from_headers;
-use salvo::oapi::extract::{JsonBody, PathParam};
-use salvo::prelude::*;
 
 // TODO: Thoroughly review and test this module.
 
@@ -37,7 +38,9 @@ pub async fn create_upload(
     dep: &mut Depot,
     body: JsonBody<CreateUploadRequest>,
 ) -> CreateUploadResponses {
-    let state = dep.obtain::<AppState>().unwrap();
+    let state = dep
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let request = body.0;
 
     // Authenticate User
@@ -100,7 +103,9 @@ pub async fn head_upload(
     dep: &mut Depot,
     id: PathParam<String>,
 ) -> HeadUploadResponses {
-    let state = dep.obtain::<AppState>().unwrap();
+    let state = dep
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let id = id.into_inner();
 
     // Authenticate User
@@ -142,7 +147,9 @@ pub async fn patch_upload(
     dep: &mut Depot,
     id: PathParam<String>,
 ) -> PatchUploadResponses {
-    let state = dep.obtain::<AppState>().unwrap();
+    let state = dep
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let id = id.into_inner();
 
     // Authenticate User
@@ -161,7 +168,7 @@ pub async fn patch_upload(
         }
         Ok(None) => return PatchUploadResponses::NotFound,
         Err(e) => return PatchUploadResponses::InternalServerError(eyre::eyre!(e).into()),
-    };
+    }
 
     // Parse X-Capsule-Offset header
     let offset: u64 = match req
@@ -180,7 +187,7 @@ pub async fn patch_upload(
     let body = match req.payload().await {
         Ok(b) => b,
         Err(e) => {
-            return PatchUploadResponses::BadRequest(format!("Failed to read body: {}", e));
+            return PatchUploadResponses::BadRequest(format!("Failed to read body: {e}"));
         }
     };
     let bytes = body.clone();
@@ -256,7 +263,9 @@ pub async fn delete_upload(
     dep: &mut Depot,
     id: PathParam<String>,
 ) -> DeleteUploadResponses {
-    let state = dep.obtain::<AppState>().unwrap();
+    let state = dep
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let id = id.into_inner();
 
     // Authenticate User
@@ -275,10 +284,10 @@ pub async fn delete_upload(
         }
         Ok(None) => return DeleteUploadResponses::NotFound,
         Err(e) => return DeleteUploadResponses::InternalServerError(eyre::eyre!(e).into()),
-    };
+    }
 
     match state.upload_service.cancel_upload(&id).await {
-        Ok(_) => DeleteUploadResponses::Success,
+        Ok(()) => DeleteUploadResponses::Success,
         Err(e) => {
             if matches!(e, crate::error::UploadError::SessionNotFound) {
                 DeleteUploadResponses::NotFound
@@ -296,7 +305,9 @@ pub async fn delete_upload(
     security(("bearer" = []))
 )]
 pub async fn list_sessions(req: &mut Request, dep: &mut Depot) -> ListSessionsResponses {
-    let state = dep.obtain::<AppState>().unwrap();
+    let state = dep
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
 
     // Authenticate User
     let user_id =
@@ -308,7 +319,7 @@ pub async fn list_sessions(req: &mut Request, dep: &mut Depot) -> ListSessionsRe
     // Parse query parameters
     let status_filter: Option<UploadSessionStatus> = req
         .query::<String>("status")
-        .and_then(|s| serde_json::from_str::<UploadSessionStatus>(&format!("\"{}\"", s)).ok());
+        .and_then(|s| serde_json::from_str::<UploadSessionStatus>(&format!("\"{s}\"")).ok());
 
     // List sessions by owner
     match state.upload_service.list_sessions_by_owner(&user_id).await {

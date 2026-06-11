@@ -1,6 +1,7 @@
-use crate::claims::Claims;
 use jsonwebtoken::EncodingKey;
 use model::errors::InternalServerError;
+
+use crate::claims::Claims;
 
 /// Token service creates JWT tokens for authentication
 pub struct TokenService;
@@ -38,12 +39,12 @@ impl TokenService {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::claims::{Claims, Scope};
     use base64::Engine;
     use jsonwebtoken::DecodingKey;
-    use ring::signature::Ed25519KeyPair;
-    use ring::signature::KeyPair;
+    use ring::signature::{Ed25519KeyPair, KeyPair};
+
+    use super::*;
+    use crate::claims::{Claims, Scope};
 
     fn get_test_keys() -> (EncodingKey, DecodingKey) {
         let doc: Vec<u8> = base64::engine::general_purpose::STANDARD

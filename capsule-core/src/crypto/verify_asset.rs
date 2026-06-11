@@ -99,7 +99,11 @@ pub fn verify_asset(
     authority: &dyn AlbumAuthority,
     local_chain_head: Option<Hash32>,
 ) -> VerifyOutcome {
-    use RejectReason::*;
+    use RejectReason::{
+        BadDeviceSig, BadTimestamp, BadWriteSig, CiphertextHashMismatch, DeviceAddedAfter,
+        ForgedChain, Replayed, Structural, SuiteDowngrade, UnknownDevice, UntrustedAuthority,
+        WrongAlbum, WrongEpoch,
+    };
     use VerifyOutcome::TerminalReject as Reject;
     let core = &manifest.core;
 
@@ -175,6 +179,8 @@ pub fn verify_asset(
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
     use crate::crypto::authority::ReferenceAuthority;
     use crate::crypto::hash::Hash32;
@@ -183,7 +189,6 @@ mod tests {
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::action::Action;
     use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
-    use uuid::Uuid;
 
     const USER: u128 = 0x05E2;
     const DEVICE: u128 = 0xD1;

@@ -1,8 +1,6 @@
-use ::entity::{
-    album::{self, Entity as Album},
-    album_share::{self, Entity as AlbumShare, SharePermission},
-    owner_member::{self, Entity as OwnerMember},
-};
+use ::entity::album::{self, Entity as Album};
+use ::entity::album_share::{self, Entity as AlbumShare, SharePermission};
+use ::entity::owner_member::{self, Entity as OwnerMember};
 use capsule_core::models::album::AlbumAccess;
 use sea_orm::*;
 
@@ -56,7 +54,7 @@ impl Query {
             if is_owner {
                 return Ok(Some(AlbumAccess::Owner));
             }
-        };
+        }
 
         // Check if user has share access
         let share_permission = AlbumShare::find()

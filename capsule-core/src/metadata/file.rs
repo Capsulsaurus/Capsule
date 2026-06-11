@@ -1,5 +1,6 @@
+use std::ops::Deref;
 use std::path::Path;
-use std::{fs, io, ops::Deref};
+use std::{fs, io};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -71,13 +72,11 @@ impl FileMetadata {
         // Get timestamps
         let created_timestamp = metadata
             .created()
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
 
         let modified_timestamp = metadata
             .modified()
-            .map(DateTime::<Utc>::from)
-            .unwrap_or_else(|_| Utc::now());
+            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
 
         let import_timestamp = Utc::now();
 

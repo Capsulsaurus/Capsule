@@ -1,6 +1,5 @@
 use async_graphql::*;
-use entity::smart_tag::Model as SmartTagModel;
-use entity::smart_tag::TagCategory as EntityTagCategory;
+use entity::smart_tag::{Model as SmartTagModel, TagCategory as EntityTagCategory};
 
 /// Category of AI-generated smart tags
 #[derive(Enum, Clone, Copy, Eq, PartialEq)]

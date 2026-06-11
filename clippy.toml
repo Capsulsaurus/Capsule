@@ -1,0 +1,11 @@
+# Thresholds / config for the curated clippy lint set. The lint *levels* live in the
+# justfile (`clippy_flags`, applied `--workspace` so every crate gets the identical set);
+# this file only carries clippy's configurable knobs.
+
+# unwrap()/expect() are denied in library code but fine in tests.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# This is an application workspace (publish = false); don't soften lints to preserve a
+# public API surface.
+avoid-breaking-exported-api = false

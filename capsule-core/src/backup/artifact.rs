@@ -300,7 +300,11 @@ pub fn export_with_salt(
             });
             payloads.push((path, data.clone()));
         }
-        let head_rec = a.provenance.last().unwrap().record_hash();
+        let head_rec = a
+            .provenance
+            .last()
+            .expect("provenance chain is never empty")
+            .record_hash();
         provenance_heads.push((a.asset_id, head_rec));
     }
     entries.sort_by(|x, y| {

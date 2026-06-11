@@ -1,6 +1,4 @@
 //! This module provides generic metadata structs related to RAW image formats.
-//!
-//!
 
 use serde::{Deserialize, Serialize};
 

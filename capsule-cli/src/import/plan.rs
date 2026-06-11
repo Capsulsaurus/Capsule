@@ -10,7 +10,7 @@ use eyre::{Result, eyre};
 ///
 /// Phase 9 will replace this with proper scanner → planner → executor wiring.
 #[allow(dead_code)]
-pub async fn create_import_plan(source: PathBuf) -> Result<ImportActionPlan> {
+pub(super) async fn create_import_plan(source: PathBuf) -> Result<ImportActionPlan> {
     let paths = vec![source];
     let _scan_result = scan(&paths).map_err(|e| eyre!("scan failed: {e}"))?;
 
@@ -24,7 +24,7 @@ pub async fn create_import_plan(source: PathBuf) -> Result<ImportActionPlan> {
 
 /// Execute an import plan (stub).
 #[allow(dead_code)]
-pub fn plan_summary(plan: &ImportActionPlan) -> String {
+pub(super) fn plan_summary(plan: &ImportActionPlan) -> String {
     let to_import = plan.counts.to_import;
     let dups = plan.counts.duplicates;
     let skip = plan.counts.unsupported + plan.counts.errors;

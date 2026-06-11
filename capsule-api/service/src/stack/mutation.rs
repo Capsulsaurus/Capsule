@@ -1,11 +1,10 @@
-use ::entity::{
-    asset::{self, Entity as Asset},
-    asset_stack::{self, Entity as AssetStack, StackType},
-    stack_member::{self, Entity as StackMember, MemberRole},
-};
+use ::entity::asset::{self, Entity as Asset};
+use ::entity::asset_stack::{self, Entity as AssetStack, StackType};
+use ::entity::stack_member::{self, Entity as StackMember, MemberRole};
 use chrono::Utc;
 use nanoid::nanoid;
-use sea_orm::{prelude::Expr, *};
+use sea_orm::prelude::Expr;
+use sea_orm::*;
 
 pub struct Mutation;
 
@@ -25,7 +24,7 @@ impl Mutation {
         let metadata_json = match metadata {
             Some(s) => Some(
                 serde_json::from_str(&s)
-                    .map_err(|e| DbErr::Custom(format!("Invalid stack metadata JSON: {}", e)))?,
+                    .map_err(|e| DbErr::Custom(format!("Invalid stack metadata JSON: {e}")))?,
             ),
             None => None,
         };
@@ -86,7 +85,7 @@ impl Mutation {
         let asset_model = Asset::find_by_id(&asset_id)
             .one(db)
             .await?
-            .ok_or_else(|| DbErr::Custom(format!("Asset {} not found", asset_id)))?;
+            .ok_or_else(|| DbErr::Custom(format!("Asset {asset_id} not found")))?;
 
         let mut asset: asset::ActiveModel = asset_model.into();
         asset.stack_id = Set(Some(stack_id.to_string()));
@@ -98,7 +97,7 @@ impl Mutation {
         let metadata_json = match metadata {
             Some(s) => Some(
                 serde_json::from_str(&s)
-                    .map_err(|e| DbErr::Custom(format!("Invalid member metadata JSON: {}", e)))?,
+                    .map_err(|e| DbErr::Custom(format!("Invalid member metadata JSON: {e}")))?,
             ),
             None => None,
         };

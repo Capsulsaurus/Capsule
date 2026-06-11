@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
                 EnvFilter::try_new("info")
             }
         })
-        .unwrap();
+        .expect("built-in log filter directives are valid");
     let fmt_layer = fmt::layer()
         .pretty()
         .with_thread_ids(true)
@@ -103,8 +103,7 @@ async fn main() -> Result<()> {
                 println!(
                     "  Last scrubbed:   {}",
                     cfg.last_scrubbed_at
-                        .map(|t| t.to_string())
-                        .unwrap_or_else(|| "never".to_string())
+                        .map_or_else(|| "never".to_string(), |t| t.to_string())
                 );
                 lib.close()
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
@@ -358,7 +357,7 @@ async fn main() -> Result<()> {
                     {
                         println!("{}", format!("Removing {label} directory...").yellow());
                         match std::fs::remove_dir_all(&path) {
-                            Ok(_) => println!(
+                            Ok(()) => println!(
                                 "{}",
                                 format!("Successfully removed {label} directory").green()
                             ),

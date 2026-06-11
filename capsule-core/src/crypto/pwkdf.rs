@@ -14,9 +14,8 @@ use aes_gcm::{Aes256Gcm, Key, Nonce};
 use argon2::{Algorithm, Argon2, Params, Version};
 use serde::{Deserialize, Serialize};
 
-use super::CryptoError;
 use super::primitives::{Argon2Params, DeviceTier};
-use super::rng;
+use super::{CryptoError, rng};
 
 /// A secret sealed under a passphrase-derived key, self-describing for unwrap.
 ///

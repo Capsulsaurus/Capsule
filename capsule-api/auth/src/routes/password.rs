@@ -21,7 +21,7 @@ fn get_client_ip(req: &Request) -> String {
             req.headers()
                 .get("x-real-ip")
                 .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
         })
         .unwrap_or_else(|| "unknown".to_string())
 }
@@ -33,7 +33,9 @@ pub async fn reset_password_request(
     depot: &mut Depot,
     body: JsonBody<ResetPasswordRequestPayload>,
 ) -> ResetPasswordRequestResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
     let payload = body.into_inner();
     let email = payload.email;
 
@@ -59,7 +61,7 @@ pub async fn reset_password_request(
 
     // Per-IP rate limit as secondary guard
     let ip = get_client_ip(req);
-    let ip_rl_key = format!("pwd_reset_ip:{}", ip);
+    let ip_rl_key = format!("pwd_reset_ip:{ip}");
     match state
         .session_manager
         .check_rate_limit(
@@ -95,7 +97,9 @@ pub async fn reset_password(
     depot: &mut Depot,
     body: JsonBody<ResetPasswordPayload>,
 ) -> PasswordResetResponses {
-    let state = depot.obtain::<AppState>().unwrap();
+    let state = depot
+        .obtain::<AppState>()
+        .expect("AppState is injected by middleware");
 
     let ResetPasswordPayload {
         token,
@@ -108,9 +112,8 @@ pub async fn reset_password(
         Err(e) => return PasswordResetResponses::InternalServerError(eyre::eyre!(e).into()),
     };
 
-    let user = match user {
-        Some(user) => user,
-        None => return PasswordResetResponses::InvalidToken,
+    let Some(user) = user else {
+        return PasswordResetResponses::InvalidToken;
     };
 
     // Check expiry

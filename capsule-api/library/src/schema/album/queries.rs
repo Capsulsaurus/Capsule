@@ -1,5 +1,6 @@
-use super::{Album, AlbumFilter};
 use async_graphql::*;
+
+use super::{Album, AlbumFilter};
 
 pub struct AlbumQuery;
 

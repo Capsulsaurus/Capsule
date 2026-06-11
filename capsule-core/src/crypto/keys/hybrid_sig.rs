@@ -22,8 +22,7 @@ use ml_dsa::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::CryptoError;
-use crate::crypto::rng;
+use crate::crypto::{CryptoError, rng};
 
 /// Ed25519 secret/seed length and ML-DSA `ξ` seed length (both 32 bytes).
 const SEED_LEN: usize = 32;

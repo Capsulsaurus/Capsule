@@ -9,7 +9,7 @@ use tracing::debug;
 use crate::utils::directories::get_sqlite_db_path;
 
 #[derive(Debug, Error)]
-pub enum InitDbError {
+pub(crate) enum InitDbError {
     Path(String),
     Db(#[from] DbErr),
     Io(#[from] std::io::Error),
@@ -25,7 +25,7 @@ impl fmt::Display for InitDbError {
     }
 }
 
-pub async fn init_sqlite() -> Result<DatabaseConnection, InitDbError> {
+pub(crate) async fn init_sqlite() -> Result<DatabaseConnection, InitDbError> {
     let db_path = get_sqlite_db_path().ok_or(InitDbError::Path(
         "Failed to get SQLite DB path".to_string(),
     ))?;

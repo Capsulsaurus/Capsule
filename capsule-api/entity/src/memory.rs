@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{Set, entity::prelude::*};
+use sea_orm::Set;
+use sea_orm::entity::prelude::*;
 
 /// Represents an auto-generated memory (e.g., "On This Day", trip highlights)
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

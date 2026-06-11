@@ -1,7 +1,9 @@
+use std::path::Path;
+
+use rusqlite::{Connection, params};
+
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 use crate::db::schema;
-use rusqlite::{Connection, params};
-use std::path::Path;
 
 pub struct DatabaseDriver {
     conn: Connection,
@@ -502,7 +504,7 @@ impl DatabaseDriver {
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("system clock is before the UNIX epoch")
         .as_secs() as i64
 }
 

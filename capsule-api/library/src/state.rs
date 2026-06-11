@@ -3,10 +3,11 @@ use std::sync::Arc;
 use auth::service::AuthService;
 use sea_orm::DatabaseConnection;
 
-use crate::{config::GraphqlServerConfig, schema::AppSchema};
+use crate::config::GraphqlServerConfig;
+use crate::schema::AppSchema;
 
 #[derive(Clone)]
-pub struct AppState {
+pub(crate) struct AppState {
     pub schema: AppSchema,
     pub conn: DatabaseConnection,
     #[allow(dead_code)]

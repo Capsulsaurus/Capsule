@@ -4,5 +4,5 @@ fn main() {
             &["proto/photolibrary/metadata/v1/metadata.proto"],
             &["proto"],
         )
-        .unwrap();
+        .expect("failed to compile protobuf definitions");
 }

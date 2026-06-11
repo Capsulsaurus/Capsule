@@ -144,13 +144,14 @@ pub fn check_manifest_envelope(
 
 #[cfg(test)]
 mod tests {
+    use uuid::Uuid;
+
     use super::*;
     use crate::crypto::CRYPTO_SUITE_ID;
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
     use crate::crypto::provenance::action::Action;
     use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
-    use uuid::Uuid;
 
     #[test]
     fn hash_length_and_size_and_content_type() {

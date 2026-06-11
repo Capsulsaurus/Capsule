@@ -1,9 +1,8 @@
-use ::entity::{
-    asset::{self, Entity as Asset},
-    asset_stack::{self, Entity as AssetStack, StackType},
-    stack_member::{self, Entity as StackMember},
-};
-use sea_orm::{prelude::Expr, *};
+use ::entity::asset::{self, Entity as Asset};
+use ::entity::asset_stack::{self, Entity as AssetStack, StackType};
+use ::entity::stack_member::{self, Entity as StackMember};
+use sea_orm::prelude::Expr;
+use sea_orm::*;
 
 pub struct Query;
 
@@ -75,7 +74,7 @@ impl Query {
         asset_id: &str,
     ) -> Result<bool, DbErr> {
         let asset = Asset::find_by_id(asset_id).one(db).await?;
-        Ok(asset.map(|a| a.stack_id.is_some()).unwrap_or(false))
+        Ok(asset.is_some_and(|a| a.stack_id.is_some()))
     }
 
     // ===== Optimized Queries for UI Views =====

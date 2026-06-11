@@ -34,10 +34,11 @@ dependencyResolutionManagement {
 
 include(":android")
 project(":android").projectDir = file("capsule-android")
-//include(":capsule-core-kotlin")
 include(":core")
 project(":core").projectDir = file("capsule-core-kotlin")
-include(":cli")
-project(":cli").projectDir = file("capsule-cli")
-include(":desktop")
-project(":desktop").projectDir = file("capsule-desktop")
+// :cli is the Rust crate `capsule-cli` (no Gradle build) and capsule-desktop does not
+// exist yet — including them broke Gradle configuration. Re-add :desktop when it lands.
+// include(":cli")
+// project(":cli").projectDir = file("capsule-cli")
+// include(":desktop")
+// project(":desktop").projectDir = file("capsule-desktop")

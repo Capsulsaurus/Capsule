@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use capsule_media::image::{Image, ImageReader, formats::jpeg::JpegImage, lqip::LQIP};
+use capsule_media::image::formats::jpeg::JpegImage;
+use capsule_media::image::lqip::LQIP;
+use capsule_media::image::{Image, ImageReader};
 
 #[tokio::main]
 pub async fn main() {

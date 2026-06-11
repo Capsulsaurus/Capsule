@@ -1,2 +1,2 @@
-pub mod directories;
-pub mod files;
+pub(crate) mod directories;
+pub(crate) mod files;

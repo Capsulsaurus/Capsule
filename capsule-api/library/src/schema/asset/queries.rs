@@ -1,7 +1,7 @@
-use crate::schema::SortDirection;
+use async_graphql::*;
 
 use super::{AssetFilter, AssetMetadata, AssetSort};
-use async_graphql::*;
+use crate::schema::SortDirection;
 
 pub struct AssetQuery;
 

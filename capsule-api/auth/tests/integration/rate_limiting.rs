@@ -1,7 +1,8 @@
-use crate::common::{build_service, setup};
 use salvo::http::StatusCode;
 use salvo::http::header::RETRY_AFTER;
 use salvo::test::TestClient;
+
+use crate::common::{build_service, setup};
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

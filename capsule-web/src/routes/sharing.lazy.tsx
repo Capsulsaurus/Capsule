@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { createLazyFileRoute } from '@tanstack/react-router';
-import { Link as LinkIcon, Plus, Share2, Users } from 'lucide-react';
+import { Link as LinkIcon, Share2, Users } from 'lucide-react';
 import { useState } from 'react';
 import { toast } from 'sonner';
 
@@ -44,11 +44,6 @@ function CreateSharedAlbumDialog() {
 
     const handleCreate = () => {
         // Logic to create album would go here
-        console.log('Creating shared album:', {
-            title,
-            linkSharing,
-            collaborative,
-        });
         toast.success(`Shared album "${title}" created!`);
         setOpen(false);
         setTitle('');

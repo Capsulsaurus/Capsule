@@ -24,8 +24,7 @@ pub struct UpdateUser {
 
 use salvo::oapi::ToSchema;
 use secrecy::{ExposeSecret, SecretString};
-use serde::Serializer;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 pub fn serialize_secret<S>(secret: &SecretString, serializer: S) -> Result<S::Ok, S::Error>
 where

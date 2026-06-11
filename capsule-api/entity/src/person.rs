@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{Set, entity::prelude::*};
+use sea_orm::Set;
+use sea_orm::entity::prelude::*;
 
 /// Represents a recognized person across the photo library
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]

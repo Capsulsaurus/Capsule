@@ -1,12 +1,8 @@
 use thiserror::Error;
 
-use crate::{
-    image::{
-        buffer::{ComponentType, ImageBuffer, ImageBufferError, PixelFormat},
-        resize_to_max_dimension,
-    },
-    metadata::ColorSpace,
-};
+use crate::image::buffer::{ComponentType, ImageBuffer, ImageBufferError, PixelFormat};
+use crate::image::resize_to_max_dimension;
+use crate::metadata::ColorSpace;
 
 /// LQIP (thumbhash) struct
 pub struct LQIP(Vec<u8>);
@@ -25,13 +21,13 @@ impl LQIP {
     where
         T: AsRef<ImageBuffer>,
     {
+        // Downsize so the longest edge is at most MAX_SIZE px before hashing.
+        const MAX_SIZE: usize = 100;
+
         let buffer = buffer.as_ref();
         if buffer.format != PixelFormat::Rgba || buffer.component_type != ComponentType::U8 {
             return Err(LQIPError::UnsupportedFormat);
         }
-
-        // Downsize if any dimension is larger than MAX_SIZE
-        const MAX_SIZE: usize = 100;
 
         // Use a Cow-like approach using a variable for ownership
         let resized_buffer;
@@ -52,20 +48,20 @@ impl LQIP {
     /// Extracts the approximate aspect ratio of the original image
     pub fn approx_aspect_ratio(&self) -> Result<f32, LQIPError> {
         thumbhash::thumb_hash_to_approximate_aspect_ratio(&self.0)
-            .map_err(|_| LQIPError::InvalidHash)
+            .map_err(|()| LQIPError::InvalidHash)
     }
 
     /// Extracts the average color (r,g,b,a) from a ThumbHash
     pub fn average_rgba(&self) -> Result<[f32; 4], LQIPError> {
         let (r, g, b, a) =
-            thumbhash::thumb_hash_to_average_rgba(&self.0).map_err(|_| LQIPError::InvalidHash)?;
+            thumbhash::thumb_hash_to_average_rgba(&self.0).map_err(|()| LQIPError::InvalidHash)?;
         Ok([r, g, b, a])
     }
 
     /// Decodes a ThumbHash to an RGBA image buffer.
     pub fn thumb_hash_to_rgba(&self) -> Result<ImageBuffer, LQIPError> {
         let (width, height, rgba) =
-            thumbhash::thumb_hash_to_rgba(&self.0).map_err(|_| LQIPError::InvalidHash)?;
+            thumbhash::thumb_hash_to_rgba(&self.0).map_err(|()| LQIPError::InvalidHash)?;
 
         ImageBuffer::new(
             rgba,

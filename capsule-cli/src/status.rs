@@ -12,14 +12,14 @@ use crate::utils::directories::{
 };
 use crate::utils::files::get_available_space;
 
-pub struct StatusInfo {
+pub(crate) struct StatusInfo {
     pub auth_status: AuthStatus,
     pub local_env_status: LocalEnvStatus,
     pub server_status: ServerStatus,
     pub sync_status: SyncStatus,
 }
 
-pub struct AuthStatus {
+pub(crate) struct AuthStatus {
     /// Username of logged in user
     pub username: Option<String>,
     /// Whether token is valid according to server
@@ -28,7 +28,7 @@ pub struct AuthStatus {
     pub token_expires_at: Option<DateTime<Utc>>,
 }
 
-pub struct LocalEnvStatus {
+pub(crate) struct LocalEnvStatus {
     /// Configuration directory
     pub config_dir: Option<PathBuf>,
     /// Path to the configuration file
@@ -43,7 +43,7 @@ pub struct LocalEnvStatus {
     pub cache_dir: Option<PathBuf>,
 }
 
-pub struct ServerStatus {
+pub(crate) struct ServerStatus {
     pub api_endpoint: String,
     pub connection_status: ConnectionStatus,
     pub api_version: Option<String>,
@@ -51,7 +51,7 @@ pub struct ServerStatus {
     pub server_health: Option<String>,
 }
 
-pub struct SyncStatus {
+pub(crate) struct SyncStatus {
     /// Last sync time based on local system time
     pub last_sync: Option<SystemTime>,
     /// Number of files pending upload
@@ -67,7 +67,7 @@ pub struct SyncStatus {
 }
 
 #[allow(dead_code)]
-pub struct ConfigStatus {
+pub(crate) struct ConfigStatus {
     pub cli_version: String,
     pub config_valid: bool,
     pub config_errors: Vec<String>,
@@ -76,7 +76,7 @@ pub struct ConfigStatus {
 
 #[derive(Debug)]
 #[allow(dead_code)]
-pub enum ConnectionStatus {
+pub(crate) enum ConnectionStatus {
     Connected,
     Disconnected,
     Unknown, // TODO: Is this needed?
@@ -84,7 +84,7 @@ pub enum ConnectionStatus {
 }
 
 impl StatusInfo {
-    pub async fn collect() -> Result<Self> {
+    pub(crate) async fn collect() -> Result<Self> {
         let config = Config::from_default_path().map_err(|e| eyre!(e))?;
 
         Ok(StatusInfo {
@@ -95,7 +95,7 @@ impl StatusInfo {
         })
     }
 
-    pub fn display(&self) {
+    pub(crate) fn display(&self) {
         println!("{}", "=== Capsule CLI Status ===".bright_blue().bold());
         println!();
 
@@ -114,7 +114,7 @@ impl StatusInfo {
 
 impl AuthStatus {
     // TODO: Implement properly
-    pub async fn check(config: &Config) -> Result<Self> {
+    pub(crate) async fn check(config: &Config) -> Result<Self> {
         // Since backend is not implemented, we'll mock the data
         let username = config.user_id.clone(); // TODO: Fetch from server, otherwise use cache
         let token_valid = config.auth_token.is_some(); // Assume token is valid if it exists
@@ -131,7 +131,7 @@ impl AuthStatus {
         })
     }
 
-    pub fn display(&self) {
+    pub(crate) fn display(&self) {
         println!("{}", "Authentication Status:".bright_yellow().bold());
 
         if self.username.is_some() {
@@ -158,7 +158,7 @@ impl AuthStatus {
 }
 
 impl LocalEnvStatus {
-    pub async fn check() -> Result<Self> {
+    pub(crate) async fn check() -> Result<Self> {
         let config_dir = get_config_dir();
         let config_file_path = get_config_file_path();
         let config_file_exists = config_file_path
@@ -179,7 +179,7 @@ impl LocalEnvStatus {
         })
     }
 
-    pub fn display(&self) {
+    pub(crate) fn display(&self) {
         println!("{}", "Local Environment Status:".bright_yellow().bold());
 
         if let Some(config_dir) = &self.config_dir {
@@ -232,7 +232,7 @@ impl LocalEnvStatus {
 }
 
 impl ServerStatus {
-    pub async fn check(config: &Config) -> Result<Self> {
+    pub(crate) async fn check(config: &Config) -> Result<Self> {
         let api_endpoint = config.api_endpoint.clone();
 
         // TODO: Implement this properly
@@ -251,7 +251,7 @@ impl ServerStatus {
         })
     }
 
-    pub fn display(&self) {
+    pub(crate) fn display(&self) {
         println!("{}", "Server/API Status:".bright_yellow().bold());
 
         println!(
@@ -274,7 +274,7 @@ impl ServerStatus {
                 println!(
                     "  {} {}",
                     "Connection:".dimmed(),
-                    format!("Error: {}", err).red()
+                    format!("Error: {err}").red()
                 );
             }
         }
@@ -300,7 +300,7 @@ impl ServerStatus {
 }
 
 impl SyncStatus {
-    pub async fn check(_config: &Config) -> Result<Self> {
+    pub(crate) async fn check(_config: &Config) -> Result<Self> {
         // TODO: Implement this properly
         // Since backend is not implemented, we'll mock the sync status
         Ok(SyncStatus {
@@ -313,14 +313,14 @@ impl SyncStatus {
         })
     }
 
-    pub fn display(&self) {
+    pub(crate) fn display(&self) {
         println!("{}", "Sync Status:".bright_yellow().bold());
 
         if let Some(last_sync) = self.last_sync {
             println!(
                 "  {} {}",
                 "Last Sync:".dimmed(),
-                format!("{:?}", last_sync).cyan()
+                format!("{last_sync:?}").cyan()
             );
         } else {
             println!("  {} {}", "Last Sync:".dimmed(), "Never".dimmed());

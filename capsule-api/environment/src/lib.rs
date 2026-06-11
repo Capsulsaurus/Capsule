@@ -1,11 +1,14 @@
+use std::env;
+use std::num::ParseIntError;
+use std::path::PathBuf;
+
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use dotenvy::dotenv;
-use std::{env, num::ParseIntError, path::PathBuf};
+use jsonwebtoken::{DecodingKey, EncodingKey};
 use thiserror::Error;
 use tracing::level_filters::LevelFilter;
 use wrapper::SecretKeyWrapper;
-
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use jsonwebtoken::{DecodingKey, EncodingKey};
 
 #[cfg(feature = "auth")]
 use crate::constants::{ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY, TOTP_ISSUER};
@@ -121,14 +124,14 @@ impl Environment {
                 let der = BASE64.decode(s).map_err(|e| {
                     EnvironmentError::ParseError(
                         key.to_string(),
-                        format!("Unable to decode base64: {}", e),
+                        format!("Unable to decode base64: {e}"),
                     )
                 })?;
 
                 convert_ed25519_der_to_jwt_keys(&der).map_err(|e| {
                     EnvironmentError::ParseError(
                         key.to_string(),
-                        format!("Unable to convert DER to JWT keys: {}", e),
+                        format!("Unable to convert DER to JWT keys: {e}"),
                     )
                 })
             })
@@ -182,20 +185,21 @@ impl Environment {
                 #[cfg(any(feature = "auth", feature = "upload"))]
                 valkey_url: load_env("VALKEY_URL")?,
                 #[cfg(any(feature = "auth", feature = "upload"))]
-                allowed_origins: load_env("ALLOWED_ORIGINS")
-                    .map(|v| {
-                        v.split(',')
-                            .map(|s| s.trim().to_string())
-                            .filter(|s| !s.is_empty())
-                            .collect()
-                    })
-                    .unwrap_or_else(|_| {
+                allowed_origins: load_env("ALLOWED_ORIGINS").map_or_else(
+                    |_| {
                         if cfg!(debug_assertions) {
                             vec!["*".to_string()]
                         } else {
                             vec![]
                         }
-                    }),
+                    },
+                    |v| {
+                        v.split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect()
+                    },
+                ),
             },
             log_level: load_log_level("LOG_LEVEL").unwrap_or(if cfg!(debug_assertions) {
                 LevelFilter::TRACE

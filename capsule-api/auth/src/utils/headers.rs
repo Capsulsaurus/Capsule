@@ -1,7 +1,7 @@
-use crate::claims::Claims;
 use salvo::http::HeaderMap;
 use secrecy::{ExposeSecret, SecretString};
 
+use crate::claims::Claims;
 use crate::errors::ClaimValidationError;
 
 /// Get the token from the Authorization header

@@ -1,9 +1,7 @@
 use async_graphql::*;
 use chrono::{DateTime, Utc};
-use entity::face::ActiveModel as FaceActiveModel;
-use entity::face::Model as FaceModel;
-use entity::person::ActiveModel as PersonActiveModel;
-use entity::person::Model as PersonModel;
+use entity::face::{ActiveModel as FaceActiveModel, Model as FaceModel};
+use entity::person::{ActiveModel as PersonActiveModel, Model as PersonModel};
 use entity::{asset, face, person};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter,
@@ -108,7 +106,7 @@ impl Face {
     async fn bounding_box(&self) -> Result<BoundingBox> {
         // Parse JSON bounding box
         serde_json::from_str(&self.model.bounding_box)
-            .map_err(|e| Error::new(format!("Failed to parse bounding box: {}", e)))
+            .map_err(|e| Error::new(format!("Failed to parse bounding box: {e}")))
     }
 
     async fn asset(&self, ctx: &Context<'_>) -> Result<AssetMetadata> {
@@ -399,7 +397,7 @@ impl PersonMutation {
             .ok_or_else(|| Error::new("Asset not found"))?;
 
         let bbox_json = serde_json::to_string(&bounding_box)
-            .map_err(|e| Error::new(format!("Failed to serialize bounding box: {}", e)))?;
+            .map_err(|e| Error::new(format!("Failed to serialize bounding box: {e}")))?;
 
         let model = FaceActiveModel {
             asset_id: Set(asset.id),

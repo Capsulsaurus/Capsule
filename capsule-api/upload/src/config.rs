@@ -1,8 +1,8 @@
-use environment::wrapper::SecretKeyWrapper;
-use jsonwebtoken::DecodingKey;
 use std::path::PathBuf;
 
 use environment::ServerConfig;
+use environment::wrapper::SecretKeyWrapper;
+use jsonwebtoken::DecodingKey;
 
 #[derive(Clone)]
 pub struct UploadServerConfig {
@@ -42,7 +42,7 @@ impl From<&ServerConfig> for UploadServerConfig {
 
 /// Validate the configuration. Returns error if configuration is valid.
 /// Returns a list of warnings if configuration is valid but has potential issues.
-pub fn validate_config(config: &UploadServerConfig) -> Result<Vec<String>, String> {
+pub(crate) fn validate_config(config: &UploadServerConfig) -> Result<Vec<String>, String> {
     let mut warnings = vec![];
     if config.max_file_size >= config.max_cache_size {
         return Err(String::from(

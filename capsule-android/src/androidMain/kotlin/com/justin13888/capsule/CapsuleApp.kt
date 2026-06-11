@@ -14,8 +14,8 @@ class CapsuleApp : Application() {
                 module {
                     factory { ListViewModel(get()) }
                     factory { DetailViewModel(get()) }
-                }
-            )
+                },
+            ),
         )
     }
 }

@@ -9,7 +9,7 @@ foundation that Capsule's networked features are wired into later.
 A single Tuist project: a thin `Capsule` app target over a graph of framework
 modules in `Modules/`.
 
-```
+```text
 App/iOS/            thin app target — composition root only
 Modules/
   CapsuleFoundation   value types, logging, utilities
@@ -109,7 +109,7 @@ selected — it handles build, install, and launch in one action.
 
 Edit `Configuration/Config.xcconfig` and fill in your Apple Developer Team ID:
 
-```
+```text
 TEAM_ID=XXXXXXXXXX    # your 10-character team ID from developer.apple.com
 ```
 

@@ -27,8 +27,7 @@ impl ImportCandidate {
         self.members
             .iter()
             .find(|(_, r)| *r == MemberRole::Primary)
-            .map(|(p, _)| p)
-            .unwrap_or(&self.source_paths[0])
+            .map_or(&self.source_paths[0], |(p, _)| p)
     }
 }
 

@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{Set, entity::prelude::*};
+use sea_orm::Set;
+use sea_orm::entity::prelude::*;
 
 // TODO: Check
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]

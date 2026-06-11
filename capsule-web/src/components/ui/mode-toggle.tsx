@@ -8,14 +8,9 @@ import {
     DropdownMenuItem,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { useEffect } from 'react';
 
 export function ModeToggle() {
     const { theme, setTheme } = useTheme();
-
-    useEffect(() => {
-        console.log('theme', theme);
-    }, [theme]);
 
     return (
         <DropdownMenu>

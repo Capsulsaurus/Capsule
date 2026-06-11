@@ -10,10 +10,9 @@
 
 use std::path::PathBuf;
 
-use capsule_media::{
-    fs::MediaFile,
-    image::{ConvertImage, ImageEncode, formats::jxl::JxlImage},
-};
+use capsule_media::fs::MediaFile;
+use capsule_media::image::formats::jxl::JxlImage;
+use capsule_media::image::{ConvertImage, ImageEncode};
 
 #[tokio::main]
 pub async fn main() {

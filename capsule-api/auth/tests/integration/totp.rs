@@ -1,9 +1,10 @@
-use crate::common::{build_service, setup};
 use auth::models::responses::TokenResponse;
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use secrecy::ExposeSecret;
 use totp_rs::{Algorithm, Secret, TOTP};
+
+use crate::common::{build_service, setup};
 
 // ── helpers ────────────────────────────────────────────────────────────────
 

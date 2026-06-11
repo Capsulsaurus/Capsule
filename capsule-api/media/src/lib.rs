@@ -1,8 +1,7 @@
 use config::MediaServerConfig;
 use eyre::Result;
-use sea_orm::DatabaseConnection;
-
 use salvo::prelude::*;
+use sea_orm::DatabaseConnection;
 
 use crate::state::AppState;
 

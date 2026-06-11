@@ -23,7 +23,9 @@ import uniffi.capsule_core.HardwareSignerException
  * language. BouncyCastle is used so deterministic-from-seed Ed25519 works identically on the JVM
  * (unit tests) and on Android without relying on a particular JCA provider's Ed25519 support.
  */
-class SoftwareSigner(private val seed: ByteArray) : HardwareSigner {
+class SoftwareSigner(
+    private val seed: ByteArray,
+) : HardwareSigner {
     init {
         require(seed.size == 32) { "software signer seed must be 32 bytes" }
     }
@@ -39,10 +41,12 @@ class SoftwareSigner(private val seed: ByteArray) : HardwareSigner {
 
     override fun enroll(keyAlias: String): ByteArray = classicalPublicKey(keyAlias)
 
-    override fun classicalPublicKey(keyAlias: String): ByteArray =
-        privateKey(keyAlias).generatePublicKey().encoded
+    override fun classicalPublicKey(keyAlias: String): ByteArray = privateKey(keyAlias).generatePublicKey().encoded
 
-    override fun signClassical(keyAlias: String, msg: ByteArray): ByteArray =
+    override fun signClassical(
+        keyAlias: String,
+        msg: ByteArray,
+    ): ByteArray =
         Ed25519Signer().run {
             init(true, privateKey(keyAlias))
             update(msg, 0, msg.size)

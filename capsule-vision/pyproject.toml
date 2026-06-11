@@ -21,3 +21,21 @@ dev = ["ipykernel>=7.2.0", "jupyter>=1.1.1", "ruff>=0.15.5", "ty>=0.0.21"]
 
 [[tool.uv.index]]
 url = "https://download.pytorch.org/whl/rocm7.1"
+
+[tool.ruff]
+line-length = 100
+# Lint/format the exploratory notebooks too.
+extend-include = ["*.ipynb"]
+
+[tool.ruff.lint]
+# Curated high-value set: pyflakes/pycodestyle, import sorting (I), naming (N),
+# pyupgrade (UP), bugbear (B), simplify (SIM), comprehensions (C4), flake8-pie
+# (PIE), and ruff's own lints (RUF).
+select = ["E", "F", "I", "N", "UP", "B", "SIM", "C4", "PIE", "RUF"]
+
+[tool.ruff.lint.isort]
+# Deterministic, merge-friendly import blocks: group by section and merge
+# `as` imports so adding one import never reshuffles a neighbour.
+force-sort-within-sections = true
+combine-as-imports = true
+known-first-party = ["capsule_vision"]

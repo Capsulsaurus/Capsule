@@ -49,8 +49,7 @@ impl Mutation {
             .one(conn)
             .await?
             .ok_or(DbErr::RecordNotFound(format!(
-                "Passkey not found: {}",
-                passkey_id
+                "Passkey not found: {passkey_id}"
             )))?;
 
         let mut active: passkey::ActiveModel = passkey.into();

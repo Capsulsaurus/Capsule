@@ -1,16 +1,9 @@
+use std::convert::Infallible;
+
 use config::SyncServerConfig;
 use eyre::Result;
 use futures_util::{Stream, StreamExt};
 use http_body_util::BodyExt;
-use salvo::BoxedError;
-use salvo::http::{ResBody, StatusError};
-use salvo::hyper;
-use salvo::prelude::*;
-use sea_orm::DatabaseConnection;
-use std::convert::Infallible;
-use tonic::{Request, Response, Status};
-use tower::Service;
-
 use proto::photolibrary::metadata::v1::photo_library_metadata_service_server::{
     PhotoLibraryMetadataService, PhotoLibraryMetadataServiceServer,
 };
@@ -24,6 +17,12 @@ use proto::photolibrary::metadata::v1::{
     SyncMetadataResponse, UpdateAlbumRequest, UpdateAlbumResponse, UpdatePhotoMetadataRequest,
     UpdatePhotoMetadataResponse,
 };
+use salvo::http::{ResBody, StatusError};
+use salvo::prelude::*;
+use salvo::{BoxedError, hyper};
+use sea_orm::DatabaseConnection;
+use tonic::{Request, Response, Status};
+use tower::Service;
 
 pub mod config;
 
@@ -179,12 +178,11 @@ impl Handler for GrpcHandler {
         let mut svc = self.service.clone();
 
         // Convert Salvo request to hyper request
-        let hyper_req: hyper::Request<salvo::http::ReqBody> = match req.strip_to_hyper() {
-            Ok(r) => r,
-            Err(_) => {
-                res.render(StatusError::internal_server_error());
-                return;
-            }
+        let hyper_req: hyper::Request<salvo::http::ReqBody> = if let Ok(r) = req.strip_to_hyper() {
+            r
+        } else {
+            res.render(StatusError::internal_server_error());
+            return;
         };
 
         // Call the gRPC service

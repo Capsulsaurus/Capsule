@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use nanoid::nanoid;
-use sea_orm::{Set, entity::prelude::*};
+use sea_orm::Set;
+use sea_orm::entity::prelude::*;
 
 /// Represents a stack/group of related assets (Burst, Live Photo, HDR, etc.)
 #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]

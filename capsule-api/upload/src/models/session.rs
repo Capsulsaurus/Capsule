@@ -1,10 +1,9 @@
 use chrono::{DateTime, Utc};
-
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct UploadSession {
+pub(crate) struct UploadSession {
     /// Upload Session ID
     pub id: String,
     /// Asset ID (usually created by Postgres during session creation)
@@ -32,7 +31,7 @@ pub struct UploadSession {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
-pub enum UploadSessionStatus {
+pub(crate) enum UploadSessionStatus {
     /// Active with no active upload
     Pending,
     /// Active with an active upload
@@ -48,17 +47,17 @@ pub enum UploadSessionStatus {
 impl UploadSessionStatus {
     /// Returns true if the upload is in progress
     #[allow(dead_code)]
-    pub fn in_progress(&self) -> bool {
+    pub(crate) fn in_progress(&self) -> bool {
         matches!(self, UploadSessionStatus::Uploading)
     }
 
     /// Returns true if upload session is still active
-    pub fn is_active(&self) -> bool {
+    pub(crate) fn is_active(&self) -> bool {
         !self.is_inactive()
     }
 
     /// Returns true is upload session is inactive
-    pub fn is_inactive(&self) -> bool {
+    pub(crate) fn is_inactive(&self) -> bool {
         matches!(
             self,
             UploadSessionStatus::Completed | UploadSessionStatus::FailedProcessing

@@ -1,6 +1,10 @@
+use std::process::Command;
+use std::sync::OnceLock;
+use std::time::Duration;
+use std::{env, str};
+
 use sea_orm::{Database, DatabaseConnection};
 use sea_orm_migration::MigratorTrait;
-use std::{env, process::Command, str, sync::OnceLock, time::Duration};
 use thiserror::Error;
 use tokio::sync::Mutex;
 
@@ -88,7 +92,7 @@ pub async fn setup_test_db() -> Result<DatabaseConnection, TestDbError> {
         .map_err(|_| TestDbError::Docker("Failed to parse port".to_string()))?
         .trim()
         .to_string();
-    let url = format!("postgres://postgres:postgres@127.0.0.1:{}/postgres", port);
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
 
     // Wait for Postgres to accept connections
     let mut attempts = 0u8;

@@ -95,7 +95,7 @@ fn collect_files(
             }
             true
         })
-        .filter_map(|e| e.ok())
+        .filter_map(Result::ok)
     {
         let path = entry.path().to_path_buf();
         if !path.is_file() {
@@ -173,9 +173,11 @@ fn extract_content_identifier(path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::TempDir;
+
+    use super::*;
 
     fn create_file(dir: &Path, name: &str) -> PathBuf {
         let p = dir.join(name);

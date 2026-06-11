@@ -1,11 +1,13 @@
+use std::net::{Ipv4Addr, SocketAddrV4};
+
 use capsule_api::create_router;
 use environment::Environment;
 use eyre::{Result, eyre};
 use listenfd::ListenFd;
 use migration::{Migrator, MigratorTrait};
-use salvo::{conn::tcp::TcpAcceptor, prelude::*};
+use salvo::conn::tcp::TcpAcceptor;
+use salvo::prelude::*;
 use sea_orm::Database;
-use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::net::TcpListener;
 use tracing::{debug, info};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -65,11 +67,16 @@ async fn main() -> Result<()> {
 
     // Setup listenfd
     let mut listenfd = ListenFd::from_env();
-    let listener = match listenfd.take_tcp_listener(0).unwrap() {
+    let listener = match listenfd
+        .take_tcp_listener(0)
+        .expect("failed to take a TCP listener from listenfd")
+    {
         // if we are given a tcp listener on listen fd 0, we use that one
         Some(listener) => {
-            listener.set_nonblocking(true).unwrap();
-            TcpListener::from_std(listener).unwrap()
+            listener
+                .set_nonblocking(true)
+                .expect("failed to set the inherited listener non-blocking");
+            TcpListener::from_std(listener).expect("failed to adopt the std listener into tokio")
         }
         // otherwise fall back to local listening
         None => TcpListener::bind(addr).await?,

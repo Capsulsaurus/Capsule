@@ -1,6 +1,8 @@
 plugins {
-    id("com.android.library") version "8.9.2"
-    id("org.jetbrains.kotlin.android") version "2.1.20"
+    // Versions are managed by the root build (apply false); re-declaring them here
+    // conflicts with the plugin already on the classpath.
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
@@ -41,5 +43,5 @@ dependencies {
 // JVM unit tests load the host libcapsule_core dylib/so through JNA.
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
-    systemProperty("jna.library.path", "${rootDir}/../target/debug")
+    systemProperty("jna.library.path", "$rootDir/../target/debug")
 }

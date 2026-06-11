@@ -24,7 +24,7 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
 
     let mut sidecars = Vec::new();
 
-    for entry in WalkDir::new(&media_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(&media_dir).into_iter().filter_map(Result::ok) {
         let path = entry.path();
         if !path.is_file() {
             continue;
@@ -74,13 +74,11 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
         let primary_uuid = members
             .iter()
             .find(|(_, role, _)| role == "primary")
-            .map(|(uuid, _, _)| uuid.clone())
-            .unwrap_or_else(|| members[0].0.clone());
+            .map_or_else(|| members[0].0.clone(), |(uuid, _, _)| uuid.clone());
 
         let stack_type_str = members
             .first()
-            .map(|(_, _, st)| stack_type_str(*st))
-            .unwrap_or("custom");
+            .map_or("custom", |(_, _, st)| stack_type_str(*st));
 
         let stack_row = AssetStackRow {
             id: stack_id.clone(),
@@ -207,14 +205,16 @@ fn now_secs() -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use tempfile::TempDir;
+
     use super::*;
     use crate::domain::{DetectionMethod, ImportMode, MemberRole, StackType};
     use crate::library::init::init_library;
     use crate::metadata::AssetType;
     use crate::sidecar::io::write_sidecar;
     use crate::sidecar::{AssetSidecar, StackHint};
-    use std::collections::BTreeMap;
-    use tempfile::TempDir;
 
     fn make_sidecar(uuid: &str, hash: &str, hint: Option<StackHint>) -> AssetSidecar {
         AssetSidecar {

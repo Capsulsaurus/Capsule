@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// Request body for creating an upload session
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub struct CreateUploadRequest {
+pub(crate) struct CreateUploadRequest {
     /// Original filename from client
     pub filename: String,
     /// File size in bytes

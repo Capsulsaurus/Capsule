@@ -1,5 +1,6 @@
-use crate::domain::{DetectionMethod, MemberRole, StackType};
 use serde::{Deserialize, Serialize};
+
+use crate::domain::{DetectionMethod, MemberRole, StackType};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StackHint {
