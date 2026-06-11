@@ -43,6 +43,7 @@ jobs:
               - 'capsule-core/**'
               - 'capsule-media/**'
               - 'capsule-sdk/**'
+              - 'xtask/**'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'

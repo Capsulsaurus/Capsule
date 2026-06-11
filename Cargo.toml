@@ -17,6 +17,7 @@ members = [
     "capsule-core-ffi",
     "capsule-media",
     "capsule-sdk",
+    "xtask",
 ]
 # capsule-sdk requires a pre-generated openapi.json (run generate_openapi.sh first)
 default-members = [
