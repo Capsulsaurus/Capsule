@@ -43,5 +43,5 @@ dependencies {
 // JVM unit tests load the host libcapsule_core dylib/so through JNA.
 tasks.withType<Test>().configureEach {
     useJUnitPlatform()
-    systemProperty("jna.library.path", "${rootDir}/../target/debug")
+    systemProperty("jna.library.path", "$rootDir/../target/debug")
 }
