@@ -3,9 +3,9 @@
 Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.
 
 > Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!
-
+>
 > Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.
-
+>
 > Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.
 
 ## Features

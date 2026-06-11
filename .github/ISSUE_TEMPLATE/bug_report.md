@@ -9,6 +9,7 @@ assignees: ''
 <!-- A clear and concise description of the bug -->
 
 ## Steps to Reproduce
+
 1.
 2.
 3.
@@ -17,5 +18,6 @@ assignees: ''
 <!-- What you expected vs what actually happened -->
 
 ## Environment (optional)
+
 - App Version:
 - OS/Device:

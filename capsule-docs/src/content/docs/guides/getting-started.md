@@ -16,5 +16,4 @@ TODO: Add instructions for convenient places to download clients
 Note: Clients are also available on our GitHub releases page.
 <!-- TODO: add link ^^ -->
 
-
 <!-- TODO: Read [about how-to guides](https://diataxis.fr/how-to-guides/) in the Diátaxis framework -->

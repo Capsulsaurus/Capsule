@@ -5,6 +5,7 @@ This package implements experiemental computer vision features for Capsule (not 
 ## Setup
 
 Prerequisite:
+
 - This project uses [uv](https://docs.astral.sh/uv/) for Python dependency management.
 - Since many ML packages are platform-specific, we assume development is done on Linux.
 

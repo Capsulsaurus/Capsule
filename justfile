@@ -18,10 +18,10 @@ format-check: format-check-rust format-check-web format-check-docs format-check-
 # ── Aggregate: lint ──────────────────────────────────────────────────────────
 
 [group('all')]
-lint: lint-rust lint-web lint-docs lint-kotlin lint-vision lint-swift
+lint: lint-rust lint-web lint-docs lint-kotlin lint-vision lint-swift lint-md
 
 [group('all')]
-lint-check: lint-check-rust lint-check-web lint-check-docs lint-check-kotlin lint-check-vision lint-check-swift
+lint-check: lint-check-rust lint-check-web lint-check-docs lint-check-kotlin lint-check-vision lint-check-swift lint-check-md
 
 # ── Aggregate: test ──────────────────────────────────────────────────────────
 
@@ -55,6 +55,9 @@ check-docs: format-check-docs lint-check-docs build-docs
 
 [group('vision')]
 check-vision: format-check-vision lint-check-vision
+
+[group('markdown')]
+check-md: lint-check-md
 
 # ── Rust ─────────────────────────────────────────────────────────────────────
 
@@ -366,6 +369,18 @@ lint-vision:
 [group('vision')]
 lint-check-vision:
     cd capsule-vision && uv run ruff check && uv run ty check
+
+# ── Markdown ─────────────────────────────────────────────────────────────────
+# Repo-wide Markdown linting (READMEs, design docs, root docs). markdownlint-cli2
+# is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
+
+[group('markdown')]
+lint-md:
+    bunx markdownlint-cli2 --fix
+
+[group('markdown')]
+lint-check-md:
+    bunx markdownlint-cli2
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 

@@ -34,6 +34,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 ## Deferred — with the seam in place
 
 ### Real MLS / OpenMLS group state
+
 - **Why:** the design's MLS ciphersuite (`MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`,
   `0x004D`) exists in `openmls` only via a C (`libcrux`) backend on a non-final IETF draft,
   with no IANA codepoint and no RustCrypto PQ backend yet (openmls#1940).
@@ -50,6 +51,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   and the album upgrade ceremony — these need live MLS group state, not just the epoch ledger.
 
 ### Hardware-bound key storage
+
 - **Seam + software fallback + contract — now implemented.** The device signing key (DSK) is
   consumed through a `capsule_core::crypto::keys::Signer` trait, so the in-memory
   `HybridSigningKey` (software, default) and a hardware-backed key are interchangeable at every
@@ -75,6 +77,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   the Windows TPM (TBS) path; and hardware binding of the device **encryption** key (DEK).
 
 ### Networked server/client
+
 - All transport is out of scope here: the HTTP/TUS upload server, GraphQL resolvers, the
   `/sync` feed, federation, peering, and the `capsule-sdk` network client. The **pure**
   refuse-by-default validation invariants those paths need are implemented in
@@ -89,11 +92,13 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   and the wider networked server/client (HTTP/TUS, GraphQL, `/sync`, federation, peering).
 
 ### ML / AI
+
 - Embeddings, `sqlite-vec` vector search, the model registry, semantic/face features, and
   moderation are deferred (explicitly out of scope). The sidecar reserves `tags_ai`
   (separate OR-set) and the manifest reserves `model_id`/`model_version` for them.
 
 ### Other
+
 - Thumbnail/LQIP generation beyond `capsule-media`'s existing utilities.
 - Fusing the crypto data plane into the **existing plaintext import executor**
   (`capsule_core::import::executor`) — **partially done.** `capsule_core::lifecycle::Workspace`
@@ -107,7 +112,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 
 ## How to see it working
 
-```
+```bash
 cargo test --workspace --exclude capsule-sdk      # full unit + e2e test surface
 cargo run -p capsule-cli -- demo --workdir /tmp/capsule-demo   # narrated end-to-end showcase
 ```

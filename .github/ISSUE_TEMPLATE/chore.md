@@ -12,6 +12,7 @@ assignees: ''
 <!-- Why is this necessary? -->
 
 ## Component
+
 - [ ] capsule-android
 - [ ] capsule-api
 - [ ] capsule-cli
