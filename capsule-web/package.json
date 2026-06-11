@@ -53,7 +53,7 @@
         "tailwindcss": "^4.3.0",
         "thumbhash": "^0.1.1",
         "urql": "^4.2.2",
-        "zod": "^3.25.76"
+        "zod": "^4.4.3"
     },
     "devDependencies": {
         "@aaroon/workbox-rspack-plugin": "^0.3.3",
