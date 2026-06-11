@@ -1,6 +1,8 @@
 plugins {
-    id("com.android.library") version "8.9.2"
-    id("org.jetbrains.kotlin.android") version "2.1.20"
+    // Versions are managed by the root build (apply false); re-declaring them here
+    // conflicts with the plugin already on the classpath.
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
 }
 
 android {
