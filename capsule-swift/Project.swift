@@ -6,10 +6,14 @@ private let bundlePrefix = "com.justin13888.capsule"
 private let appDestinations: Destinations = [.iPhone, .iPad]
 private let appDeploymentTargets: DeploymentTargets = .iOS("18.0")
 
-/// The Swift-6 language settings shared by every Capsule target.
+/// The Swift-6 language settings shared by every Capsule target. MARKETING_VERSION is
+/// the iOS app's version source of truth, kept in sync across every package by
+/// `just set-version` (xtask).
 private let baseSettings: SettingsDictionary = [
     "SWIFT_VERSION": "6.0",
     "SWIFT_STRICT_CONCURRENCY": "complete",
+    "MARKETING_VERSION": "0.1.0",
+    "CURRENT_PROJECT_VERSION": "1",
 ]
 
 /// Framework settings: a Release build marks the framework mergeable so the

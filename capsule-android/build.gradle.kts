@@ -48,8 +48,10 @@ android {
         applicationId = "com.justin13888.capsule"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        // Version is the repo-wide source of truth in gradle.properties, kept in sync
+        // across every package by `just set-version` (xtask).
+        versionCode = providers.gradleProperty("capsule.versionCode").get().toInt()
+        versionName = providers.gradleProperty("capsule.versionName").get()
     }
     packaging {
         resources {

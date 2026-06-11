@@ -421,6 +421,18 @@ commit-check msg_file:
 check-commits base="origin/master":
     convco check --first-parent --ignore-reverts {{ base }}..HEAD
 
+# Write one repo-wide version into every package's source of truth (Rust workspace,
+# web/docs package.json, vision pyproject, Android gradle.properties, iOS Project.swift)
+# and bump the Android versionCode. See xtask/src/main.rs for the per-format editors.
+[group('release')]
+set-version version:
+    cargo run -q -p xtask -- set-version {{ version }}
+
+# Regenerate CHANGELOG.md from Conventional Commits. Hand-edits land in the release PR.
+[group('release')]
+changelog:
+    convco changelog > CHANGELOG.md
+
 # ── Setup ────────────────────────────────────────────────────────────────────
 
 [group('setup')]
