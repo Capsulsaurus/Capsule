@@ -1,0 +1,139 @@
+name: Release
+
+# Fires when a release commit (`chore(release): vX.Y.Z`, produced by prepare-release.yml
+# and merged via its PR) lands on master. It builds the `capsule` CLI for each target and
+# publishes a GitHub Release. `gh release create` also creates the tag, so the whole
+# build+publish happens in this one run — no PAT or tag-push re-trigger needed.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  detect:
+    name: Detect release
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.d.outputs.release }}
+      version: ${{ steps.d.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: d
+        run: |
+          set -euo pipefail
+          version="$(grep -m1 '^version = ' Cargo.toml | sed -E 's/^version = "(.*)"/\1/')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "Tag v${version} already exists — nothing to release."
+            echo "release=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git log --format='%s' '${{ github.event.before }}..${{ github.event.after }}' \
+               | grep -qx "chore(release): v${version}"; then
+            echo "Release commit for v${version} detected."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No release commit in this push; skipping."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build capsule (${{ matrix.target }})
+    needs: detect
+    if: ${{ needs.detect.outputs.release == 'true' }}
+    runs-on: ${{ matrix.os }}
+    # Windows is best-effort (mirrors CI's Tier-2 treatment); a failure there doesn't
+    # block the release of the other binaries.
+    continue-on-error: ${{ matrix.optional }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            optional: false
+          - target: aarch64-apple-darwin
+            os: macos-14
+            optional: false
+          - target: x86_64-apple-darwin
+            os: macos-14
+            optional: false
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            optional: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build release binary
+        run: cargo build -p capsule-cli --release --target ${{ matrix.target }}
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="capsule-v${{ needs.detect.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/capsule" "$dist/"
+          cp README.md LICENSE CHANGELOG.md "$dist/" 2>/dev/null || true
+          tar -czf "${dist}.tar.gz" "$dist"
+          echo "ASSET=${dist}.tar.gz" >> "$GITHUB_ENV"
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="capsule-v${{ needs.detect.outputs.version }}-${{ matrix.target }}"
+          mkdir -p "$dist"
+          cp "target/${{ matrix.target }}/release/capsule.exe" "$dist/"
+          7z a "${dist}.zip" "$dist" >/dev/null
+          echo "ASSET=${dist}.zip" >> "$GITHUB_ENV"
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: capsule-${{ matrix.target }}
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [detect, build]
+    if: ${{ needs.detect.outputs.release == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up mise tools (convco)
+        uses: jdx/mise-action@v2
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate release notes
+        run: convco changelog -m 1 --unreleased "${{ needs.detect.outputs.version }}" > NOTES.md
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.detect.outputs.version }}"
+          gh release create "v${version}" \
+            --target "${{ github.sha }}" \
+            --title "v${version}" \
+            --notes-file NOTES.md \
+            dist/*
