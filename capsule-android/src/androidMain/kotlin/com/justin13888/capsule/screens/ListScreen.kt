@@ -57,15 +57,18 @@ private fun ObjectGrid(
     LazyVerticalGrid(
         columns = GridCells.Adaptive(180.dp),
         // TODO simplify padding after https://issuetracker.google.com/issues/365052672 is fixed
-        modifier = modifier
-            .fillMaxSize()
-            .padding(
-                WindowInsets.safeDrawing
-                    .only(WindowInsetsSides.Horizontal)
-                    .asPaddingValues()
-            ),
-        contentPadding = WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical)
-            .asPaddingValues(),
+        modifier =
+            modifier
+                .fillMaxSize()
+                .padding(
+                    WindowInsets.safeDrawing
+                        .only(WindowInsetsSides.Horizontal)
+                        .asPaddingValues(),
+                ),
+        contentPadding =
+            WindowInsets.safeDrawing
+                .only(WindowInsetsSides.Vertical)
+                .asPaddingValues(),
     ) {
         items(objects, key = { it.objectID }) { obj ->
             ObjectFrame(
@@ -85,16 +88,17 @@ private fun ObjectFrame(
     Column(
         modifier
             .padding(8.dp)
-            .clickable { onClick() }
+            .clickable { onClick() },
     ) {
         AsyncImage(
             model = obj.primaryImageSmall,
             contentDescription = obj.title,
             contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .background(Color.LightGray),
+            modifier =
+                Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f)
+                    .background(Color.LightGray),
         )
 
         Spacer(Modifier.height(2.dp))

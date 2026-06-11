@@ -3,13 +3,13 @@ package com.justin13888.capsule.hardware
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import uniffi.capsule_core.HardwareSigner
+import uniffi.capsule_core.HardwareSignerException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.Signature
 import java.security.interfaces.ECPrivateKey
-import uniffi.capsule_core.HardwareSigner
-import uniffi.capsule_core.HardwareSignerException
 
 /**
  * Android StrongBox–backed [HardwareSigner]. The private key is generated inside the
@@ -27,18 +27,21 @@ import uniffi.capsule_core.HardwareSignerException
  *
  * Requires API 23+ (StrongBox: API 28+ on devices that ship a secure element).
  */
-class StrongBoxSigner(private val strongBoxBacked: Boolean = true) : HardwareSigner {
-
+class StrongBoxSigner(
+    private val strongBoxBacked: Boolean = true,
+) : HardwareSigner {
     private val keyStore: KeyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
 
     private fun privateKey(keyAlias: String): ECPrivateKey {
         (keyStore.getKey(keyAlias, null) as? ECPrivateKey)?.let { return it }
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, ANDROID_KEYSTORE)
-        val spec = KeyGenParameterSpec.Builder(keyAlias, KeyProperties.PURPOSE_SIGN)
-            .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setIsStrongBoxBacked(strongBoxBacked)
-            .build()
+        val spec =
+            KeyGenParameterSpec
+                .Builder(keyAlias, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setIsStrongBoxBacked(strongBoxBacked)
+                .build()
         generator.initialize(spec)
         return generator.generateKeyPair().private as ECPrivateKey
     }
@@ -52,7 +55,10 @@ class StrongBoxSigner(private val strongBoxBacked: Boolean = true) : HardwareSig
         keyStore.getCertificate(keyAlias)?.publicKey?.encoded
             ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
 
-    override fun signClassical(keyAlias: String, msg: ByteArray): ByteArray =
+    override fun signClassical(
+        keyAlias: String,
+        msg: ByteArray,
+    ): ByteArray =
         Signature.getInstance("SHA256withECDSA").run {
             initSign(privateKey(keyAlias))
             update(msg)
@@ -60,8 +66,9 @@ class StrongBoxSigner(private val strongBoxBacked: Boolean = true) : HardwareSig
         }
 
     override fun assertNonExportable(keyAlias: String) {
-        val key = keyStore.getKey(keyAlias, null)
-            ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
+        val key =
+            keyStore.getKey(keyAlias, null)
+                ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
         val factory = KeyFactory.getInstance(key.algorithm, ANDROID_KEYSTORE)
         val info = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
         // The private bytes are unreadable by construction; confirm the key is in secure hardware.

@@ -9,9 +9,7 @@ import androidx.compose.ui.res.stringResource
 import com.justin13888.capsule.R
 
 @Composable
-fun EmptyScreenContent(
-    modifier: Modifier = Modifier,
-) {
+fun EmptyScreenContent(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier,
         contentAlignment = Alignment.Center,

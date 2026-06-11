@@ -56,6 +56,9 @@ check-docs: format-check-docs lint-check-docs build-docs
 [group('vision')]
 check-vision: format-check-vision lint-check-vision
 
+[group('kotlin')]
+check-kotlin: format-check-kotlin lint-check-kotlin
+
 [group('markdown')]
 check-md: lint-check-md
 

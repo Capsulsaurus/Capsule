@@ -18,12 +18,14 @@ import kotlinx.serialization.Serializable
 object ListDestination
 
 @Serializable
-data class DetailDestination(val objectId: Int)
+data class DetailDestination(
+    val objectId: Int,
+)
 
 @Composable
 fun App() {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+        colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme(),
     ) {
         Surface {
             val navController = rememberNavController()
@@ -38,7 +40,7 @@ fun App() {
                         objectId = backStackEntry.toRoute<DetailDestination>().objectId,
                         navigateBack = {
                             navController.popBackStack()
-                        }
+                        },
                     )
                 }
             }
