@@ -69,6 +69,22 @@ jobs:
               - 'detekt.yml'
               - '.github/workflows/ci.yml'
 
+  # Enforce Conventional Commits across a PR's commits (convco skips merge commits).
+  # Runs on pull_request only; on push to master it is skipped (the `required` gate
+  # treats skipped as pass). Tooling is pinned in the root mise.toml.
+  commit-lint:
+    name: Commit lint (convco)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up mise tools (convco)
+        uses: jdx/mise-action@v2
+      - name: Check commits follow Conventional Commits
+        run: convco check --first-parent --ignore-reverts ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
   rust:
     name: Rust (fmt + clippy + build)
     needs: changes
@@ -300,12 +316,12 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [changes, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
+    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do
