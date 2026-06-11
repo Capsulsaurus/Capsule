@@ -27,7 +27,7 @@ pre-commit:
       run: just format-vision
     format-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just format-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
@@ -104,13 +104,13 @@ pre-push:
       run: just lint-check-vision
     format-check-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just format-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"
     lint-check-swift:
       priority: 1
-      glob: "capsule-swift/**/*.swift"
+      glob: "{capsule-swift,capsule-core-swift}/**/*.swift"
       run: just lint-check-swift
       skip:
         - run: "[ \"$(uname)\" != \"Darwin\" ]"

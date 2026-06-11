@@ -1,0 +1,57 @@
+# SwiftLint configuration for the capsule-core-swift FFI harness.
+# Mirrors capsule-swift/.swiftlint.yml; only the hand-written signers + tests are linted
+# (the staged uniffi bindings and the C shim are generated and excluded).
+included:
+  - Sources/CapsuleHardware
+  - Tests
+
+excluded:
+  - .build
+  # generated uniffi bindings, staged by ./stage-bindings.sh (gitignored)
+  - Sources/CapsuleHardware/capsule_core.swift
+
+analyzer_rules:
+  - unused_declaration
+  - unused_import
+
+opt_in_rules:
+  - array_init
+  - closure_end_indentation
+  - closure_spacing
+  - collection_alignment
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - empty_collection_literal
+  - empty_count
+  - empty_string
+  - explicit_init
+  - fatal_error_message
+  - first_where
+  - force_unwrapping
+  - implicitly_unwrapped_optional
+  - last_where
+  - legacy_multiple
+  - literal_expression_end_indentation
+  - modifier_order
+  - operator_usage_whitespace
+  - overridden_super_call
+  - prefer_self_type_over_type_of_self
+  - redundant_nil_coalescing
+  - redundant_type_annotation
+  - sorted_first_last
+  - toggle_bool
+  - unneeded_parentheses_in_closure_argument
+  - vertical_whitespace_closing_braces
+  - weak_delegate
+  - yoda_condition
+
+disabled_rules:
+  # swiftformat owns line wrapping (--maxwidth none); avoid a turf war.
+  - line_length
+  - todo
+
+# swiftformat's `--commas always` adds trailing commas to multiline
+# collection literals; require the same here so the two tools agree.
+trailing_comma:
+  mandatory_comma: true

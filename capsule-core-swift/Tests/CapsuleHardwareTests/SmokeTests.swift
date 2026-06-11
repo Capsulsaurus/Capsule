@@ -16,13 +16,13 @@ final class SmokeTests: XCTestCase {
 
     /// The pure-software path: the bindings link and a real workspace is created in Rust.
     func testSoftwarePathCreatesWorkspace() throws {
-        let ws = try FfiWorkspace.create(
+        let workspace = try FfiWorkspace.create(
             root: try freshRoot(),
             passphrase: Data("correct horse".utf8),
             tier: .normal
         )
-        XCTAssertFalse(try ws.userId().isEmpty)
-        XCTAssertFalse(try ws.defaultAlbumId().isEmpty)
+        XCTAssertFalse(try workspace.userId().isEmpty)
+        XCTAssertFalse(try workspace.defaultAlbumId().isEmpty)
     }
 
     /// The full hardware-signer foreign-trait path, driven by the software Ed25519 signer (which
@@ -41,7 +41,7 @@ final class SmokeTests: XCTestCase {
             }
         }
 
-        let ws = try FfiWorkspace.createWithHardwareSigner(
+        let workspace = try FfiWorkspace.createWithHardwareSigner(
             root: try freshRoot(),
             passphrase: Data("correct horse".utf8),
             tier: .normal,
@@ -49,18 +49,18 @@ final class SmokeTests: XCTestCase {
             keyAlias: "device-dsk",
             mlSeed: Data(repeating: 9, count: 32)
         )
-        XCTAssertFalse(try ws.userId().isEmpty)
+        XCTAssertFalse(try workspace.userId().isEmpty)
     }
 
     /// The real Secure Enclave adapter. Skipped where no Secure Enclave is present (CI VMs); runs
     /// on Apple-Silicon / T2 Macs and devices. Verifies the P-256 key lifecycle + non-export.
     func testSecureEnclaveSignerOnDevice() throws {
         try XCTSkipUnless(SecureEnclave.isAvailable, "no Secure Enclave on this host")
-        let se = SecureEnclaveSigner()
-        let pub = try se.enroll(keyAlias: "se-dsk")
+        let enclave = SecureEnclaveSigner()
+        let pub = try enclave.enroll(keyAlias: "se-dsk")
         XCTAssertEqual(pub.count, 65, "P-256 x9.63 public key is 65 bytes")
-        let sig = try se.signClassical(keyAlias: "se-dsk", msg: Data("hello".utf8))
+        let sig = try enclave.signClassical(keyAlias: "se-dsk", msg: Data("hello".utf8))
         XCTAssertEqual(sig.count, 64, "P-256 ECDSA r‖s is 64 bytes")
-        XCTAssertNoThrow(try se.assertNonExportable(keyAlias: "se-dsk"))
+        XCTAssertNoThrow(try enclave.assertNonExportable(keyAlias: "se-dsk"))
     }
 }

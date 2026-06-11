@@ -278,6 +278,12 @@ build-kotlin:
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 
+# Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses those
+# pins via `mise -C` while running in its own dir so it picks up its own .swiftformat /
+# .swiftlint.yml.
+swift_dirs := "capsule-swift capsule-core-swift"
+mise_swift := justfile_directory() / "capsule-swift"
+
 [group('swift')]
 format-swift:
     #!/usr/bin/env bash
@@ -285,7 +291,9 @@ format-swift:
         echo "Skipping swift format (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftformat .
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftformat .)
+    done
 
 [group('swift')]
 format-check-swift:
@@ -294,7 +302,9 @@ format-check-swift:
         echo "Skipping swift format check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftformat --lint .
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftformat --lint .)
+    done
 
 [group('swift')]
 lint-swift:
@@ -303,7 +313,9 @@ lint-swift:
         echo "Skipping swiftlint (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftlint --fix --quiet && mise exec -- swiftlint
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftlint --fix --quiet && mise -C "{{ mise_swift }}" exec -- swiftlint)
+    done
 
 [group('swift')]
 lint-check-swift:
@@ -312,7 +324,9 @@ lint-check-swift:
         echo "Skipping swiftlint check (not macOS)"
         exit 0
     fi
-    cd capsule-swift && mise exec -- swiftlint --strict
+    for d in {{ swift_dirs }}; do
+        (cd "$d" && mise -C "{{ mise_swift }}" exec -- swiftlint --strict)
+    done
 
 # Cross-compile the Rust core and package CapsuleCoreFFI.xcframework.
 [group('swift')]
