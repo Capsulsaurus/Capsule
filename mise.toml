@@ -1,0 +1,15 @@
+# Repo-wide dev tooling, pinned so local and CI install identical versions.
+# Install everything with:  mise install   (run from the repo root)
+#
+# Scope: the release/commit toolchain shared across every package. Language
+# toolchains stay where they belong — Rust in /rust-toolchain.toml, the Apple
+# client's Swift tools in capsule-swift/mise.toml (mise layers child configs on
+# top of this one).
+[tools]
+just = "1"
+lefthook = "2"
+# convco isn't in the mise registry. Its GitHub release assets aren't named in a way the
+# `ubi` backend can resolve on Linux (ambiguous ubuntu/deb zips), so use the `cargo`
+# backend — it fetches a prebuilt binary via cargo-binstall when possible and otherwise
+# builds from source, working uniformly on every OS in CI and locally.
+"cargo:convco" = "0.6.4"

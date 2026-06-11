@@ -399,6 +399,28 @@ lint-md:
 lint-check-md:
     bunx markdownlint-cli2
 
+# ── Commits / release ────────────────────────────────────────────────────────
+# convco enforces Conventional Commits (https://www.conventionalcommits.org).
+# `commit-check` validates a single in-progress message (commit-msg hook);
+# `check-commits` validates a range (pre-push and CI on PRs). convco skips merge
+# commits in a range on its own; the single-message path skips the auto-generated
+# merge/revert/fixup/squash subjects that tooling — not the author — writes.
+
+[group('release')]
+commit-check msg_file:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Skip the auto-generated subjects tooling writes (merge/revert/fixup/squash);
+    # everything else must be conventional. `--strip` drops comments/whitespace.
+    case "$(sed -n '1p' "{{ msg_file }}")" in
+        Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+    esac
+    convco check --from-stdin --strip < "{{ msg_file }}"
+
+[group('release')]
+check-commits base="origin/master":
+    convco check --first-parent --ignore-reverts {{ base }}..HEAD
+
 # ── Setup ────────────────────────────────────────────────────────────────────
 
 [group('setup')]

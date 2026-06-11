@@ -61,6 +61,11 @@ pre-commit:
 pre-push:
   parallel: false
   commands:
+    # Priority 0: Conventional Commits check over the range being pushed.
+    check-commits:
+      priority: 0
+      run: just check-commits
+
     # Priority 1: all format/lint checks (read-only, no writes)
     format-check-rust:
       priority: 1
@@ -128,3 +133,9 @@ pre-push:
       priority: 2
       glob: "capsule-web/**/*.{ts,tsx,js,jsx}"
       run: just test-web
+
+# Validate the message of the commit being written (Conventional Commits).
+commit-msg:
+  commands:
+    convco:
+      run: just commit-check {1}
