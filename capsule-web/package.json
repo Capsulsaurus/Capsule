@@ -32,7 +32,7 @@
         "@tanstack/react-query-devtools": "^5.101.0",
         "@tanstack/react-table": "^8.21.3",
         "@tanstack/react-virtual": "^3.14.2",
-        "@urql/exchange-graphcache": "^7.2.4",
+        "@urql/exchange-graphcache": "^9.0.0",
         "@urql/exchange-persisted": "^4.3.1",
         "@urql/exchange-populate": "^1.2.1",
         "@urql/introspection": "^1.2.1",
