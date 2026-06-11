@@ -1,0 +1,66 @@
+name: Prepare release
+
+# Manually triggered. Computes the next version (or uses an explicit one), writes it
+# into every package via `just set-version`, regenerates the CHANGELOG, and opens a
+# release PR. Merging that PR to master triggers release.yml (build + GitHub Release).
+#
+# Requires a repo secret `RELEASE_PAT` (a PAT with `contents` + `pull-requests` write):
+# PRs opened with the default GITHUB_TOKEN do NOT trigger CI, so the release PR's checks
+# ("all checks before release") would never run. The PAT makes the PR trigger CI.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Explicit version X.Y.Z (leave blank to compute from commits)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare:
+    name: Open release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PAT }}
+      - name: Set up mise tools (just, convco)
+        uses: jdx/mise-action@v2
+      - name: Resolve version
+        id: v
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [ -z "$version" ]; then
+            version="$(convco version --bump)"
+          fi
+          echo "Resolved release version: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Apply version + regenerate changelog
+        run: |
+          set -euo pipefail
+          just set-version "${{ steps.v.outputs.version }}"
+          just changelog "${{ steps.v.outputs.version }}"
+      - name: Open release PR
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.v.outputs.version }}"
+          branch="release/v${version}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git commit -am "chore(release): v${version}"
+          git push -u origin "$branch" --force-with-lease
+          gh pr create --base master --head "$branch" \
+            --title "chore(release): v${version}" \
+            --body "Automated release PR for **v${version}**.
+
+          Review the CHANGELOG and version bumps, then **merge** to tag and publish the release (release.yml builds the \`capsule\` CLI binaries and creates the GitHub Release).
+
+          Part of the release automation (#18)."

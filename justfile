@@ -429,9 +429,11 @@ set-version version:
     cargo run -q -p xtask -- set-version {{ version }}
 
 # Regenerate CHANGELOG.md from Conventional Commits. Hand-edits land in the release PR.
+# Pass the version when cutting a release so its section is titled (e.g. `just changelog 0.2.0`);
+# the default leaves the newest section as "Unreleased".
 [group('release')]
-changelog:
-    convco changelog > CHANGELOG.md
+changelog title="Unreleased":
+    convco changelog --unreleased "{{ title }}" > CHANGELOG.md
 
 # ── Setup ────────────────────────────────────────────────────────────────────
 
