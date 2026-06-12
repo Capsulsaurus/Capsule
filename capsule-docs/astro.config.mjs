@@ -112,6 +112,7 @@ export default defineConfig({
                             items: [
                                 { slug: 'design/organization' },
                                 { slug: 'design/clients' },
+                                { slug: 'design/i18n' },
                                 { slug: 'design/ai' },
                             ],
                         },

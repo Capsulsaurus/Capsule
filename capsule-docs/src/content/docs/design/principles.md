@@ -61,6 +61,7 @@ The owner docs are:
 | Moderation policy + federated reporting + blocklists                  | [Moderation](/design/moderation/)                                   |
 | Quota accounting + enforcement points                                 | [Quota](/design/quota/)                                             |
 | Client validation duties + sandboxed decoder                          | [Clients](/design/clients/)                                         |
+| Translation catalog format + locale resolution + error-code scheme    | [Internationalization](/design/i18n/)                               |
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 
 **Permitted secondary mentions.** Mechanism-explanatory phrasing inside a non-owner doc is fine — for example, "STREAM tags catch chunk reordering" inside [Peering](/design/peering/) is explaining a *behavior*, not declaring a *choice*. What the rule forbids is restating the choice itself ("we use SHA-256") outside the owner doc. When in doubt, link.
