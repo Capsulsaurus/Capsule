@@ -1,0 +1,13 @@
+[package]
+name = "capsule-i18n"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "capsule_i18n"
+path = "src/lib.rs"
+
+[dependencies]
+serde_json = { workspace = true }
+tracing = { workspace = true }

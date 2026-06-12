@@ -45,7 +45,7 @@ check: format-check lint-check test
 # Each maps 1:1 to a CI job so the workflow stays consistent with the justfile.
 
 [group('rust')]
-check-rust: format-check-rust lint-check-rust build-rust build-ffi lint-check-ffi gen-bindings verify-examples
+check-rust: format-check-rust lint-check-rust i18n-check build-rust build-ffi lint-check-ffi gen-bindings verify-examples
 
 [group('web')]
 check-web: format-check-web lint-check-web test-web build-web
@@ -92,6 +92,17 @@ test-coverage-rust:
 [group('rust')]
 build-rust:
     cargo build --workspace --exclude capsule-sdk
+
+# Compile the canonical locales/ catalogs into each platform's native i18n format
+# (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
+[group('rust')]
+i18n:
+    cargo run -q -p xtask -- i18n
+
+# Verify the generated i18n files are in sync with locales/ (CI drift gate).
+[group('rust')]
+i18n-check:
+    cargo run -q -p xtask -- i18n --check
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
 # capsule-core exposes a minimal `FfiWorkspace` over uniffi behind the `ffi`

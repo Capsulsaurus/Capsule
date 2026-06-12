@@ -1055,6 +1055,7 @@ dependencies = [
  "capsule-api-migration",
  "capsule-api-model",
  "capsule-api-service",
+ "capsule-i18n",
  "chrono",
  "derive_more",
  "eyre",
@@ -1383,6 +1384,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "uniffi 0.29.5",
+]
+
+[[package]]
+name = "capsule-i18n"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]
@@ -8781,6 +8790,7 @@ dependencies = [
  "anyhow",
  "regex",
  "semver",
+ "serde_json",
  "toml_edit 0.22.27",
 ]
 

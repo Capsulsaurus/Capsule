@@ -80,7 +80,13 @@ impl Writer for RegisterUserResponses {
             }
             Self::UserAlreadyExists => {
                 res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ApiError::new("User already exists")));
+                // Reference wiring for the i18n error-code contract: attach a stable
+                // catalog code alongside the English detail. Other variants follow
+                // the same pattern as the rollout proceeds.
+                res.render(Json(ApiError::with_code(
+                    "User already exists",
+                    capsule_i18n::error_codes::AUTH_USER_ALREADY_EXISTS,
+                )));
             }
             Self::RateLimited(retry_after) => {
                 res.status_code(StatusCode::TOO_MANY_REQUESTS);

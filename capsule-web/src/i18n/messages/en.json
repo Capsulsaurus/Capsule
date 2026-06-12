@@ -1,0 +1,16 @@
+{
+  "app_name": "Capsule App",
+  "back": "Back",
+  "error.auth.invalid_credentials": "Invalid email or password.",
+  "error.auth.rate_limited": "Too many attempts. Please wait and try again.",
+  "error.auth.user_already_exists": "An account with these details already exists.",
+  "label_artist": "Artist",
+  "label_credits": "Credits",
+  "label_date": "Date",
+  "label_department": "Department",
+  "label_dimensions": "Dimensions",
+  "label_medium": "Medium",
+  "label_repository": "Repository",
+  "label_title": "Title",
+  "no_data_available": "No data available"
+}

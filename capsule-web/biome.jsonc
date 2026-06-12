@@ -2,7 +2,8 @@
     "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
     "extends": ["../biome.jsonc"],
     "files": {
-        "ignore": ["**/routeTree.gen.ts"]
+        // routeTree.gen.ts and src/i18n/messages/** are generated; leave them to their generators.
+        "ignore": ["**/routeTree.gen.ts", "src/i18n/messages/**"]
     },
     "vcs": {
         // Required because as of March 2025, Biome doesn't check nested gitignore files otherwise

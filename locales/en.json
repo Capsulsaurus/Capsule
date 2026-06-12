@@ -1,0 +1,58 @@
+{
+    "app_name": {
+        "message": "Capsule App",
+        "context": "Application name shown in titles and the about screen."
+    },
+    "label_title": {
+        "message": "Title",
+        "context": "Field label for an asset's title."
+    },
+    "label_artist": {
+        "message": "Artist",
+        "context": "Field label for an asset's artist/author."
+    },
+    "label_date": {
+        "message": "Date",
+        "context": "Field label for an asset's date."
+    },
+    "label_dimensions": {
+        "message": "Dimensions",
+        "context": "Field label for an asset's pixel dimensions."
+    },
+    "label_medium": {
+        "message": "Medium",
+        "context": "Field label for an artwork's medium (e.g. oil on canvas)."
+    },
+    "label_department": {
+        "message": "Department",
+        "context": "Field label for a museum/collection department."
+    },
+    "label_repository": {
+        "message": "Repository",
+        "context": "Field label for the holding repository/collection."
+    },
+    "label_credits": {
+        "message": "Credits",
+        "context": "Field label for attribution/credits."
+    },
+    "back": {
+        "message": "Back",
+        "context": "Navigation action that returns to the previous screen."
+    },
+    "no_data_available": {
+        "message": "No data available",
+        "context": "Empty-state message when a view has nothing to show."
+    },
+    "error.auth.user_already_exists": {
+        "message": "An account with these details already exists.",
+        "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."
+    },
+    "error.auth.invalid_credentials": {
+        "message": "Invalid email or password.",
+        "context": "High-level error for HTTP 401 on login. Server sends code `error.auth.invalid_credentials`."
+    },
+    "error.auth.rate_limited": {
+        "message": "Too many attempts. Please wait and try again.",
+        "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
+    }
+}
