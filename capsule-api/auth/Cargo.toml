@@ -12,6 +12,7 @@ path = "src/lib.rs"
 capsule-api-environment = { path = "../environment", features = ["auth"] }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service", features = ["auth"] }
+capsule-i18n = { path = "../../capsule-i18n" }
 argon2 = { workspace = true }
 bb8 = { workspace = true }
 bb8-redis = { workspace = true }

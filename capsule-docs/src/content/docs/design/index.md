@@ -15,7 +15,7 @@ The design stacks in layers, each building on the one below — the sidebar grou
 - **Storage** — the [server](/design/filesystem/server/) and [client](/design/filesystem/client/) filesystems, the [metadata](/design/metadata/) sidecar schema, and [thumbnails](/design/thumbnails/).
 - **Import & sync** — the [import pipeline](/design/import/pipeline/), [upload protocol](/design/import/upload-protocol/), [download & sync](/design/import/download-sync/), [backup](/design/backup-recovery/), and [versioning](/design/versioning/).
 - **Sharing & federation** — server-to-server [federation](/design/federation/), device-to-device [peering](/design/peering/), [share links](/design/share-links/), and [moderation](/design/moderation/).
-- **Organization & clients** — [albums and stacks](/design/organization/), native [client duties](/design/clients/), and on-device [AI/ML](/design/ai/).
+- **Organization & clients** — [albums and stacks](/design/organization/), native [client duties](/design/clients/), [internationalization](/design/i18n/), and on-device [AI/ML](/design/ai/).
 - **Threat model** — the cross-cutting [damage-scenario map](/design/threat-model/scenarios/), [validation invariants](/design/threat-model/validation/), and [schema rules](/design/threat-model/schema-rules/) that bound what a faulty or hostile client can do.
 
 ## Where to start

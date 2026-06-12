@@ -27,6 +27,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-api-testing`     | Shared test utilities (testcontainer setup, schema fixtures)                                                      |
 | `capsule-cli`             | Command-line client                                                                                               |
 | `capsule-media`           | Standalone media utility crate                                                                                    |
+| `capsule-i18n`            | Runtime localization (locale negotiation + ICU message formatting) for the server and CLI                         |
 
 ## Module → Design Doc
 
@@ -84,12 +85,13 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-api-environment`                            | (configuration; no design owner)                                                     | Unit                                        |
 | `capsule-api-testing`                                | (test utilities; no design owner)                                                    | n/a                                         |
 
-### `capsule-cli`, `capsule-media`
+### `capsule-cli`, `capsule-media`, `capsule-i18n`
 
 | Crate           | Owning design doc                                    | Validation tier |
 | --------------- | ---------------------------------------------------- | --------------- |
 | `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client) | Smoke           |
 | `capsule-media` | (small utility crate; no specific design owner)      | Unit            |
+| `capsule-i18n`  | [Internationalization](/design/i18n/)                | Unit + Smoke    |
 
 ## Design Doc → Module (Reverse Lookup)
 
@@ -109,6 +111,7 @@ Navigation from a design doc back to where the code lives.
 | [Authentication](/design/authentication/)                           | `capsule-api-auth::{oidc,session,claims}`                                                                                     |
 | [Authorization](/design/authorization/)                             | `capsule-api-auth::roles`, `capsule-core::crypto::provenance` (verify_asset)                                                  |
 | [Clients](/design/clients/)                                         | `capsule-sdk` + per-platform native code                                                                                      |
+| [Internationalization](/design/i18n/)                               | `capsule-i18n` (runtime) + `xtask::i18n` (codegen) + `locales/` source + per-platform generated catalogs                     |
 | [Versioning](/design/versioning/)                                   | Cross-cutting: `capsule-api` (header enforcement), `capsule-core::crypto::mls` (upgrade ceremony), `capsule-api-migration`    |
 | [Backup and Recovery](/design/backup-recovery/)                     | `capsule-core::backup` (planned), `capsule-api-auth` (escrow surface)                                                         |
 | [Metadata](/design/metadata/)                                       | `capsule-core::{metadata,sidecar,exif}`, `capsule-api-library::schema`                                                        |

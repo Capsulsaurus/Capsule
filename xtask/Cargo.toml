@@ -8,4 +8,5 @@ publish.workspace = true
 anyhow = "1"
 regex = "1"
 semver = "1"
+serde_json = "1"
 toml_edit = "0.22"

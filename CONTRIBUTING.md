@@ -41,6 +41,22 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 * [ ] I have signed the [Contributor License Agreement](CLA.md).
 * [ ] My code follows the project's style guidelines.
 
+## Translations
+
+You can translate Capsule **without touching application code**. All user-facing strings live
+in the canonical [`locales/`](locales/README.md) catalogs (ICU MessageFormat JSON); a build step
+compiles them into every platform's native format.
+
+1. Add your locale to `locales/config.json` and copy `en.json` to `<locale>.json`, translating
+   each `message` (keep the keys identical).
+2. Run `just i18n` to regenerate the per-platform files, then `just i18n-check` to confirm there
+   is no drift.
+3. Open a PR following the workflow above.
+
+See [`locales/README.md`](locales/README.md) for the catalog format and the
+[i18n design doc](capsule-docs/src/content/docs/design/i18n.md) for the overall design. A hosted
+translation UI (Weblate/Crowdin) backed by these same files is planned.
+
 ## Releasing
 
 Releases are automated from Conventional Commits; one version is kept in sync across every

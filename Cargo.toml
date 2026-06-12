@@ -15,6 +15,7 @@ members = [
     "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
+    "capsule-i18n",
     "capsule-media",
     "capsule-sdk",
     "xtask",
@@ -36,6 +37,7 @@ default-members = [
     "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
+    "capsule-i18n",
     "capsule-media",
 ]
 resolver = "3"

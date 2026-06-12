@@ -1,7 +1,10 @@
 import { RouterProvider, createRouter } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
+import { IntlProvider } from 'react-intl';
 import { Client, Provider as UrqlProvider, fetchExchange } from 'urql';
+
+import { SOURCE_LOCALE, messagesFor, resolveLocale } from '@/i18n/locale';
 
 // import schema from './schema';
 
@@ -62,14 +65,21 @@ declare module '@tanstack/react-router' {
 // Render the app
 const rootElement = document.getElementById('root');
 if (rootElement) {
+    const locale = resolveLocale();
     const root = ReactDOM.createRoot(rootElement);
     root.render(
         <StrictMode>
             <UrqlProvider value={client}>
-                <ThemeProvider>
-                    <RouterProvider router={router} />
-                    <Toaster />
-                </ThemeProvider>
+                <IntlProvider
+                    locale={locale}
+                    defaultLocale={SOURCE_LOCALE}
+                    messages={messagesFor(locale)}
+                >
+                    <ThemeProvider>
+                        <RouterProvider router={router} />
+                        <Toaster />
+                    </ThemeProvider>
+                </IntlProvider>
             </UrqlProvider>
         </StrictMode>,
     );

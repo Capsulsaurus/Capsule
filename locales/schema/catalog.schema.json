@@ -1,0 +1,22 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://capsule.justinchung.net/schema/i18n-catalog.json",
+    "title": "Capsule i18n message catalog",
+    "description": "A per-locale message catalog. Each property is a message key mapped to its ICU MessageFormat string plus optional translator context.",
+    "type": "object",
+    "additionalProperties": {
+        "type": "object",
+        "required": ["message"],
+        "additionalProperties": false,
+        "properties": {
+            "message": {
+                "type": "string",
+                "description": "The ICU MessageFormat string for this key in this locale."
+            },
+            "context": {
+                "type": "string",
+                "description": "A note for translators describing where and how the message is used."
+            }
+        }
+    }
+}

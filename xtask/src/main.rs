@@ -1,9 +1,16 @@
 //! Repo-maintenance tasks for the Capsule workspace.
 //!
-//! Currently one command, `set-version <X.Y.Z>`, which writes a single repo-wide
-//! version string into every package's source of truth so a release bump stays in
-//! sync across Rust, web, docs, Python, Android, and iOS. Each per-format editor is a
-//! pure `&str -> Result<String>` function so it can be unit-tested without disk I/O.
+//! Two commands:
+//!
+//! - `set-version <X.Y.Z>` writes a single repo-wide version string into every
+//!   package's source of truth so a release bump stays in sync across Rust, web,
+//!   docs, Python, Android, and iOS. Each per-format editor is a pure
+//!   `&str -> Result<String>` function so it can be unit-tested without disk I/O.
+//! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
+//!   platform's native localization format (see [`i18n`]). `--check` verifies the
+//!   committed files are up to date instead of writing them.
+
+mod i18n;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -12,6 +19,8 @@ use anyhow::{Context, Result, bail};
 use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
+
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check]>";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -22,8 +31,12 @@ fn main() -> Result<()> {
                 .with_context(|| format!("`{raw}` is not a valid semantic version"))?;
             set_version(&repo_root(), &version.to_string())
         }
-        Some(other) => bail!("unknown command `{other}`; usage: xtask set-version <X.Y.Z>"),
-        None => bail!("usage: xtask set-version <X.Y.Z>"),
+        Some("i18n") => {
+            let check = args.next().as_deref() == Some("--check");
+            i18n::run(&repo_root(), check)
+        }
+        Some(other) => bail!("unknown command `{other}`; {USAGE}"),
+        None => bail!("{USAGE}"),
     }
 }
 
