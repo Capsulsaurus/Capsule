@@ -7,16 +7,17 @@ Open-source, federated, E2E encrypted photo management and sharing service built
 > Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.
 >
 > Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.
+> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.
 
 ## Features
 
-- **Cross-platform**: Capsule is available on all common desktop and mobile platforms. They're fast on all.
+- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.
 - **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!
+- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.
 - **Privacy**: Your data is yours and end-to-end encrypted.
-- **Asset-first**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.
+- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.
+- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.
 - **Open-source**: Capsule is open-source forever and you can host your own server.
-
-<!-- TODO: Update this -->
 
 ## Is Capsule for you?
 
@@ -48,19 +49,7 @@ This is a personal choice but if you're happy with existing services like Google
 
 ## Getting Started
 
-Capsule is available on all common platforms. We expect the smoothest possible experience whether you are uploading straight from your phone or uploading from your dedicated cameras (e.g. mirrorless, GoPro, drone, cinema cameras).
-
-<!-- Install any of the following clients for your use case:
-
-- **Desktop**: [Download for Windows](#) | [Download for macOS](#) | [Download for Linux](#)
-- **Mobile**: [Download for Android](#) | [Download for iOS](#)
-- **Web**: [Open in browser](#)
-
-### Self-hosting
-
-Capsule is open-source and designed to be friendly to self-host. See this [guide](#) for more information. -->
-
-<!-- TODO -->
+[See our docs](https://capsule.justinchung.net/guides/getting-started/).
 
 ### Features Relevant to New Users
 
