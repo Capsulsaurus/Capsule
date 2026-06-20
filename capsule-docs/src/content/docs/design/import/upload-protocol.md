@@ -110,6 +110,8 @@ When received bytes reach the declared size, the server finalizes:
 
 The server verifies only the *ciphertext* hash — it has no other option. The client independently verifies the *plaintext* on download via the [STREAM construction](/design/cryptography/encryption/#stream-construction)'s per-chunk authentication tags, which detect truncation, reordering, and chunk deletion. The two checks are complementary: the server guarantees "the bytes I stored are the bytes you declared," and the AEAD guarantees "the plaintext I decrypted is authentic."
 
+`Completed` is a one-time transfer receipt, not a standing durability guarantee a client can re-query later. After finalization, a client confirms an asset remains durably stored, indexed, and retrievable — the precondition for releasing its local copy — through the separate [storage-verification endpoint](/design/import/storage-verification/), which re-checks state that server-side GC, migration, or corruption could change after `Completed`.
+
 ## Robustness
 
 - An upload is not expected to run to completion in a single connection. The server tolerates arbitrarily long pauses within the session TTL, and clients resume via `HEAD`. [Auto syncing](/design/import/download-sync/#auto-syncing) explicitly assumes interrupted transfers are normal.

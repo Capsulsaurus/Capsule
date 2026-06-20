@@ -65,11 +65,13 @@ The reclaimable set is held within a **user-configurable cache budget**. When it
 - **Tier order within a sweep.** Where recency does not decide it, eviction proceeds in descending size and ascending value: **original → preview → thumbnail**. The metadata tier — the sidecar and its embedded LQIP (see [Thumbnails](/design/thumbnails/)) — is tiny and canonical and is effectively never reclaimed, so an asset always remains listable and previewable at LQIP fidelity even after every heavier representation is gone.
 - **Pin exemption.** Representations the user has explicitly pinned for offline use, and originals the device itself uploaded and still owns as source of truth, are exempt from automatic eviction regardless of recency or budget pressure.
 
+**Releasing a device-owned original is gated on server durability.** A pinned or device-owned original is exempt from *automatic* eviction, but it can still be **deliberately released** — by the [user-driven path](#user-driven-reclamation) below, or automatically by a storage-constrained [streaming import](/design/import/pipeline/). Because such an original may be the only copy of irreplaceable bytes, a client releases it only after [`POST /storage/verify`](/design/import/storage-verification/#verify-before-destroy) returns a `durable` verdict and [`verify_asset`](/design/cryptography/keys/#write-authorization) accepts it; once released it becomes an ordinary server-only asset, transparently re-fetched on demand. This verify-before-destroy gate governs every post-write local cleanup, not just eviction — see [Storage Verification](/design/import/storage-verification/).
+
 An evicted representation is not lost: the next access transparently re-fetches it through the [tiered fetch](/design/import/download-sync/#tiered-on-demand-fetch) path, under the prevailing connection rules. This keeps the cache faithful to the recovery-first and ephemeral-derived-data [principles](/design/principles/#principles) — nothing here is a source of truth, so reclaiming it is always safe.
 
 ### User-driven reclamation
 
-Beyond the automatic budget, Capsule surfaces the biggest storage consumers and lets the user selectively delete — for reclaiming below the configured budget, or for dropping pinned content the user no longer wants offline. This path can release pinned representations the automatic sweep would not, but it still never touches the canonical `media/` files.
+Beyond the automatic budget, Capsule surfaces the biggest storage consumers and lets the user selectively delete — for reclaiming below the configured budget, or for dropping pinned content the user no longer wants offline. This path can release pinned representations the automatic sweep would not, but it still never touches the canonical `media/` files, and releasing a device-owned original is gated on a `durable` [storage-verification](/design/import/storage-verification/#verify-before-destroy) verdict just as above.
 
 ## Validation
 
@@ -82,5 +84,6 @@ Beyond the automatic budget, Capsule surfaces the biggest storage consumers and 
 - **Tier-order eviction (unit).** With representations of equal recency over budget, assert eviction proceeds original → preview → thumbnail, and that the metadata tier (sidecar + LQIP) is never reclaimed.
 - **Recency promotion (unit).** View an asset to stamp its last-access, then trigger an over-budget sweep; assert its representations survive while older ones are evicted.
 - **Pin exemption (unit).** Pin a representation for offline use; push the cache over budget; assert the pinned representation survives the automatic sweep and is reclaimable only via the user-driven path.
+- **Verify-before-release gate (smoke).** Attempt to release a device-owned original with [`/storage/verify`](/design/import/storage-verification/) mocked to return non-`durable`; assert the original is retained and the unconfirmed state surfaced; return `durable`; assert the release proceeds and the asset becomes a server-only, re-fetchable representation.
 
 Cross-module case (full library lifecycle: import → upload → restore on a fresh client) is bounded E2E surface in [Module Map](/design/module-map/#e2e-test-surface).

@@ -73,6 +73,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-api-library::loaders`                       | [Filesystem — Server](/design/filesystem/server/)                                    | Unit (DataLoader)                           |
 | `capsule-api-upload`                                 | [Import — Upload Protocol](/design/import/upload-protocol/)                          | Unit + Smoke + 1 E2E                        |
 | `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
+| `capsule-api-media::verify` (planned)                | [Import — Storage Verification](/design/import/storage-verification/) | Unit + Smoke                                |
 | `capsule-api-media::shares` (planned)                | [Share Links](/design/share-links/)                                                  | Unit + Smoke                                |
 | `capsule-api-sync` (sync feed)                       | [Import — Download & Sync](/design/import/download-sync/)                            | Unit + Smoke + 1 E2E                        |
 | `capsule-api-sync::federation`                       | [Federation](/design/federation/)                                                    | Unit + Smoke + 1 E2E                        |
@@ -121,6 +122,7 @@ Navigation from a design doc back to where the code lives.
 | [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*`                                                                                                     |
 | [Import — Upload Protocol](/design/import/upload-protocol/)         | `capsule-sdk::upload` (client) + `capsule-api-upload` (server)                                                                |
 | [Import — Download & Sync](/design/import/download-sync/)           | `capsule-sdk` (client) + `capsule-api-sync` (server)                                                                          |
+| [Import — Storage Verification](/design/import/storage-verification/) | `capsule-api-media::verify` (route) + `capsule-sdk` (client) + `capsule-core` (verify-before-destroy predicate)              |
 | [Federation](/design/federation/)                                   | `capsule-api-sync::federation`                                                                                                |
 | [Peering](/design/peering/)                                         | `capsule-sdk::peering` (planned) + `capsule-core::backup` (artifact format)                                                   |
 | [Organization](/design/organization/)                               | `capsule-core::domain::stack_type`, `capsule-api-service::{album,stack}`                                                      |

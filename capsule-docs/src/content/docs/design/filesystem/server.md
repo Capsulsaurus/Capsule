@@ -106,6 +106,10 @@ The server cannot read an asset's `is_deleted` flag — it lives inside the encr
 - **A Postgres↔filesystem mismatch is never resolved by deletion.** The two directions are asymmetric because only one risks data loss. A blob in `blobs/` with no referencing row is an orphan, reclaimed by the zero-reference sweep above. A committed row referencing a blob **missing** from `blobs/` is a *loud* integrity error — surfaced, logged, and quarantined for an operator — **never** auto-deleted: erasing the dangling row would destroy the only record that the asset should exist, exactly the data-loss class the [data-integrity principle](/design/principles/) forbids.
 - **Auditable, reversible by default.** Every GC decision is logged with the blob hash, the observed reference count, and the mark/sweep timestamps (per the [traceability principle](/design/principles/)); a dry-run mode reports what *would* be collected without removing anything, so a suspect sweep can be inspected before it runs.
 
+## Storage Verification
+
+Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route lives in `capsule-api-media`.
+
 ## Validation
 
 - **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash[0:2]}/{hash[2:4]}/{hash}` on disk. Recompute the hash from disk; assert match.
@@ -114,5 +118,6 @@ The server cannot read an asset's `is_deleted` flag — it lives inside the encr
 - **Deployment-profile parity (smoke).** Run the upload-server smoke suite against the Postgres-only profile and the Postgres+Valkey profile; assert byte-identical client-observable behavior.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
 - **Dangling-reference safety (unit).** Point a committed row at a blob hash absent from `blobs/`; run the integrity check; assert the row is surfaced/quarantined and **never** auto-deleted, and that the missing blob is not treated as collectable.
+- **Storage-verification verdict (unit).** Compose the no-key verdict for a finalized asset (stored + indexed + retrievable → `durable`); then mark a referenced blob `collectable_since` and assert it reports non-retrievable, and remove a blob from `blobs/` and assert non-stored. Owner: [Import — Storage Verification](/design/import/storage-verification/).
 
 Cross-module cases (upload → finalize → rebuild from blobs) are bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).

@@ -82,6 +82,16 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   `/sync` feed, federation, peering, and the `capsule-sdk` network client. The **pure**
   refuse-by-default validation invariants those paths need are implemented in
   `capsule_core::validation` and ready to wire into `capsule-api`.
+- The **storage-verification endpoint (`POST /storage/verify`) + verify-before-destroy gate**
+  is deferred with the rest of the networked surface. The endpoint returns a key-free
+  durability verdict (stored = blob-store `stat`; indexed = committed `uploaded=true` row;
+  retrievable = refcount > 0 and not `collectable_since`/quarantined/dangling), and the
+  standing client rule is that no destructive local cleanup of irreplaceable bytes proceeds
+  without a `durable` verdict. **Seam:** the verdict is pure index+filesystem inspection that
+  drops into `capsule-api-media`; the verify-before-destroy predicate is a pure `capsule-core`
+  function the cache-eviction sweep, move-import, and streaming import all consume; the
+  offline core's `verify_asset` already covers the complementary crypto-validity half of the
+  gate.
 - The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
   recently-viewed blobs, tier-ordered eviction original → preview → thumbnail, pinned and
   device-owned originals exempt) is **now implemented** (issue #23): the

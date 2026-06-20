@@ -50,6 +50,7 @@ Because every blob is content-addressed, a fetch is skipped entirely when the bl
 
 - Large originals are fetched with HTTP `Range` requests; an interrupted download resumes from the last persisted byte instead of restarting, mirroring the [upload protocol's](/design/import/upload-protocol/) resumability.
 - The client verifies integrity itself. Since the server can only attest to ciphertext, the client recomputes the [ciphertext content hash](/design/cryptography/primitives/) against the requested content address, then decrypts and relies on the [STREAM construction](/design/cryptography/encryption/#stream-construction)'s authentication tags to detect truncation, reordering, or chunk deletion. Any failure discards the blob and re-fetches it.
+- Before any sync-driven reconciliation drops the only local copy of a *local-origin* asset (for instance an upload the device just completed), the client first confirms durable server storage via [`/storage/verify`](/design/import/storage-verification/#verify-before-destroy) — the same verify-before-destroy gate that governs [cache eviction](/design/filesystem/client/#space-recovery). Re-fetchable server-origin blobs are unaffected: they came from the server, so discarding them is always safe.
 
 ## Prefetch and Frugality
 

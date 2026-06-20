@@ -5,6 +5,8 @@ description: The portable backup artifact, the master-key escrow, and the recove
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class failure mode. Recovery rests on a single rule: holding the recovery secret must restore every asset, even after every device is lost. This document defines the two artifacts and the mechanisms that uphold it.
 
+The live server is the everyday backstop a device leans on between explicit backups: a device that has uploaded an asset may release its local copy and re-fetch on demand. That reliance is not an unverified assumption about durable hardware — before discarding the only local copy a client confirms, via the [storage-verification endpoint](/design/import/storage-verification/), that the server durably holds the bytes (stored, indexed, retrievable), so "the server has it" is a checked fact.
+
 Two distinct things are called a "backup" here, and they are kept separate on purpose:
 
 - The **[backup artifact](#backup-artifact)** — a portable, encrypted export of a library's assets.
