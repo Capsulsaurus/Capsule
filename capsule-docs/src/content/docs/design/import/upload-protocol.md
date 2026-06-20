@@ -118,6 +118,7 @@ The server verifies only the *ciphertext* hash — it has no other option. The c
 - A chunk re-sent at an already-acknowledged offset is idempotent. A chunk at a stale offset receives `409` together with the authoritative offset so the client can re-align.
 - Concurrent finalization attempts on a single session are guarded — a second attempt observes a non-`Pending`/`Uploading` status and returns a conflict rather than double-processing.
 - Every critical step — session creation, each chunk, assembly, hash verification, finalization — is logged with the upload ID so an interrupted or failed upload can be reconstructed and recovered after the fact.
+- [Streaming import-upload mode](/design/import/pipeline/#import-upload-streaming-mode) for storage-constrained devices uses these same sessions unchanged: it creates, uploads, and finalizes them one bounded window at a time and releases each local original after a durable [storage-verification](/design/import/storage-verification/) check. The wire protocol is identical — only the pipeline's drive pattern differs — and a server connection loss simply leaves the in-flight sessions resumable via `HEAD`.
 
 ## Adaptive Chunk Sizing
 

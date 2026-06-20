@@ -66,7 +66,7 @@ The standing rule, enforced across every client: **after any write the server is
 Concretely, the gate applies to:
 
 - **Releasing or evicting a device-owned original.** An original the device itself uploaded is the source of truth until the server durably holds it; it is [exempt from automatic eviction](/design/filesystem/client/#space-recovery) and may be released only after a `durable` verdict, after which it becomes an ordinary server-only, re-fetchable asset.
-- **Move-mode import source deletion.** Deleting the external source after an import (Move mode) waits on `durable` — never on the local library copy alone — so a crash mid-import cannot lose the only copy. This is load-bearing for [streaming import](/design/import/pipeline/), where the local copy is also released.
+- **Move-mode import source deletion.** Deleting the external source after an import (Move mode) waits on `durable` — never on the local library copy alone — so a crash mid-import cannot lose the only copy. This is load-bearing for [streaming import](/design/import/pipeline/#import-upload-streaming-mode), where the local copy is also released.
 - **Streaming-mode release.** The sliding-window import→upload→**verify**→release loop releases each asset only on its `durable` verdict.
 - **Discarding any local working state tied to a write** — staged temporaries, the pre-edit copy retained across a `replace`/`metadata-update`, and similar — once the new state is confirmed durable.
 

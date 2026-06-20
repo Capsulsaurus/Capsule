@@ -119,7 +119,7 @@ Navigation from a design doc back to where the code lives.
 | [Filesystem — Server](/design/filesystem/server/)                   | `capsule-api`, `capsule-api-entity`, blob store glue                                                                          |
 | [Filesystem — Client](/design/filesystem/client/)                   | `capsule-core::{library,db}`, per-platform native code                                                                        |
 | [Filesystem — Maintenance](/design/filesystem/maintenance/)         | `capsule-core::library::{scrub,rebuild,trash}`, server-side scrub in `capsule-api-upload`                                     |
-| [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*`                                                                                                     |
+| [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*` (incl. the streaming import-upload loop) + `capsule-core::library::available_bytes` (free-space probe) |
 | [Import — Upload Protocol](/design/import/upload-protocol/)         | `capsule-sdk::upload` (client) + `capsule-api-upload` (server)                                                                |
 | [Import — Download & Sync](/design/import/download-sync/)           | `capsule-sdk` (client) + `capsule-api-sync` (server)                                                                          |
 | [Import — Storage Verification](/design/import/storage-verification/) | `capsule-api-media::verify` (route) + `capsule-sdk` (client) + `capsule-core` (verify-before-destroy predicate)              |

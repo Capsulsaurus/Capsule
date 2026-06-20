@@ -92,6 +92,14 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   function the cache-eviction sweep, move-import, and streaming import all consume; the
   offline core's `verify_asset` already covers the complementary crypto-validity half of the
   gate.
+- **Import-upload streaming mode + free-space probe** is deferred with the networked path. For
+  storage-constrained devices, import runs a sliding-window import→upload→verify→release loop
+  that bounds peak local disk to the in-flight window, auto-detected from a free-space probe and
+  halting (no further source admitted into the library) if the server connection drops. **Seam:**
+  the planner already emits `total_size`; what's added is `capsule_core::library::available_bytes()`
+  (a thin `statvfs`/`GetDiskFreeSpaceEx` wrapper), the `streaming_recommended` plan flag, and an
+  executor drive mode that interleaves the existing offline import, the deferred upload client, and
+  the storage-verify gate above — with no change to the upload wire protocol.
 - The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
   recently-viewed blobs, tier-ordered eviction original → preview → thumbnail, pinned and
   device-owned originals exempt) is **now implemented** (issue #23): the

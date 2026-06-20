@@ -69,7 +69,7 @@ Sync is checked conservatively. When a check fires, the client reconciles everyt
 The actual synchronization criteria are strict and scale with the reconciliation amount (i.e. total upload + download transfer):
 
 - **Small reconciliation** — a handful of new assets, or metadata-only deltas: synced proactively whenever the device has any non-metered connection.
-- **Large reconciliation** — bulk uploads, or original-tier downloads: deferred until the device is connected to unmetered Wi-Fi.
+- **Large reconciliation** — bulk uploads, or original-tier downloads: deferred until the device is connected to unmetered Wi-Fi. A storage-constrained [streaming import](/design/import/pipeline/#import-upload-streaming-mode) is a large reconciliation and obeys these same rules, pausing if the connection drops or becomes metered.
 
 ### Platform Limitations
 

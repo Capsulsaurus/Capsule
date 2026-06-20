@@ -30,6 +30,8 @@ The server independently enforces a closed-enum `content_type` allow-list at ses
 
 The planner is **pure**: given the scanned files and their extracted metadata, it produces an `ImportPlan { added: [..], skipped: [..], conflicts: [..], total_size }` deterministically. The plan is shown to the user (summary of what will be imported, total size, any issues), and the user confirms or adjusts.
 
+**Free-space probe.** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
+
 - If an asset is already uploaded *locally* in the library, import refuses it — no merge needed.
 - If an asset already exists *remotely* under a different ciphertext (e.g. re-encrypted under a newer album key), import still admits it; the [upload protocol](/design/import/upload-protocol/#deduplication-and-merge) then resolves it as a merge (the existing blob is linked rather than re-uploaded).
 
@@ -48,6 +50,24 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
+## Import-Upload Streaming Mode
+
+The default pipeline imports every file into the local library *before* upload, so the device temporarily holds the whole import on disk. That is impossible on a storage-constrained device — a laptop with a near-full SSD importing a library larger than its free space. **Streaming mode** removes the requirement that the full import ever land locally at once.
+
+It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
+
+1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
+2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).
+3. Confirm the asset is durably stored with [`POST /storage/verify`](/design/import/storage-verification/#verify-before-destroy).
+4. **Release** the local original (and delete the [Move-mode](#execute) source, if any) only after the `durable` verdict; the asset becomes an ordinary server-only, re-fetchable representation (see [Space Recovery](/design/filesystem/client/#space-recovery)).
+5. Advance the window to the next file.
+
+Peak local disk is therefore bounded to the in-flight window, not the whole import, so an import far larger than free space can complete. The verify-before-release step *is* the [verify-before-destroy](/design/import/storage-verification/#verify-before-destroy) rule applied per asset — the device never drops the only copy of bytes the server has not confirmed it holds.
+
+**Halt on lost connectivity.** Streaming mode depends on the server: releasing local copies is safe only because the server is confirmed to hold them. If the connection to the server drops, the pipeline **pauses** — it stops admitting new source files into the library (continuing would refill the very disk the mode exists to spare) and waits, rather than importing ahead into space it does not have. In-flight uploads resume via the protocol's [`HEAD` resumption](/design/import/upload-protocol/#session-lifecycle) once connectivity returns; if the source media itself is removed mid-import, the deterministic planner re-derives the remaining work on resume. Bulk streaming import is a *large reconciliation* and obeys the same metered/Wi-Fi [connection rules](/design/import/download-sync/#synchronization-criteria) as auto-sync.
+
+**Quota.** Streaming creates one upload session per asset, so server [quota](/design/quota/#enforcement-points) is enforced exactly as for any upload — at session creation, no new enforcement point. If quota is exhausted mid-stream the next session creation is refused; the pipeline pauses and surfaces the remediable state rather than failing the whole import, and no local original is released for an asset that did not upload.
+
 ## Upload Prioritization
 
 When many files are processed simultaneously, the order they are *started* is decided by these heuristics:
@@ -64,8 +84,9 @@ The pipeline decides which assets to *start*; the [upload protocol](/design/impo
 
 What the rest of the system depends on this module for:
 
-- `ImportPlan` — the deterministic output of the planner; rendered to the UI for confirmation. Schema fields: `added` (each entry carrying its resolved destination `album_id`), `skipped`, `conflicts`, `total_size`, `import_id` (UUIDv7).
-- `execute(plan, cancel_token) → ImportExecutionReport` — the executor entry-point. Honors the cancel token at every file boundary. Returns per-file status.
+- `ImportPlan` — the deterministic output of the planner; rendered to the UI for confirmation. Schema fields: `added` (each entry carrying its resolved destination `album_id`), `skipped`, `conflicts`, `total_size`, `import_id` (UUIDv7), and `streaming_recommended` (set at confirmation from the [free-space probe](#plan--confirm), not by the pure planner).
+- `available_bytes() → u64` — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
+- `execute(plan, cancel_token) → ImportExecutionReport` — the executor entry-point. Honors the cancel token at every file boundary. Returns per-file status. In [streaming mode](#import-upload-streaming-mode) it drives the per-asset import→upload→verify→release window instead of executing-then-uploading in bulk.
 - A stable progress event stream so the UI can report per-asset state (queued / encrypting / uploading / done / failed).
 
 ## Validation
@@ -74,5 +95,8 @@ What the rest of the system depends on this module for:
 - **Scanner format-rejection (unit).** Every unsupported extension and every malformed-header case produces a structured rejection, never a panic.
 - **Executor cancellation (smoke).** Run a real executor against a temp library, cancel mid-flight, assert no partial bundle is left on disk and a re-run produces the same plan minus already-completed files.
 - **Resume after interruption (smoke).** Plan → execute partially → kill the process → re-run. The deterministic planner re-derives the same plan; already-completed assets are skipped.
+- **Streaming auto-detect (unit).** With `available_bytes()` mocked below and above `total_size + headroom`, assert `streaming_recommended` is set in the constrained case and clear otherwise.
+- **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
+- **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.
 
 The cross-module case — pipeline → upload protocol → server finalization → assets visible in `/sync` — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
