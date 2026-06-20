@@ -99,6 +99,22 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 
 ### Other
 
+- **Rewrite re-keying + metadata↔manifest binding (contract tightened).** The
+  offline crypto core already draws a fresh nonce per asset/metadata encryption
+  and seals every metadata blob fresh. The design contract now additionally
+  requires: (a) folding that fresh nonce into the key-derivation salt
+  (`salt = file_id || nonce_prefix` for assets, `blob_id || nonce` for metadata)
+  so a same-`file_id`/same-epoch `replace` and a constant-`blob_id`
+  `metadata-update` re-roll the **key** as well as the nonce — making any
+  `(key, nonce)` reuse structurally impossible; and (b) a new server-visible
+  `metadata_blob_hash` field on the signed `AssetManifest` plus a client
+  round-trip-equivalence check (decrypt of the metadata blob must equal the
+  signed local sidecar) and the matching no-key server check (validation
+  invariant 25). **Seam:** the key-salt change is local to `crypto::encryption`
+  key derivation; the manifest field, the round-trip check in `verify_asset`, and
+  the envelope hash-match check land in `crypto::provenance` /
+  `crypto::verify_asset` and the `capsule-api` envelope validator when the
+  networked write path is wired.
 - Thumbnail/LQIP generation beyond `capsule-media`'s existing utilities.
 - Fusing the crypto data plane into the **existing plaintext import executor**
   (`capsule_core::import::executor`) — **partially done.** `capsule_core::lifecycle::Workspace`

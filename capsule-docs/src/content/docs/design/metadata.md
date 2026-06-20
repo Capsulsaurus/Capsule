@@ -73,6 +73,15 @@ The sidecar — and the [encrypted metadata blob](/design/cryptography/encryptio
 
 Every implementation — the Rust `capsule-core::sidecar` encoder and any FFI consumer — MUST emit identical bytes for the same document, enforced as a **blocking cross-language conformance gate** against shared **known-answer vectors** committed in `capsule-core::sidecar` (the same fixtures [Encryption](/design/cryptography/encryption/#metadata-blob-wire-format) tests against): a consumer that drifts cannot ship, because its signatures would not verify across peers.
 
+### Local and Server Metadata Equivalence
+
+The plaintext of the server's [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption) *is* this signed `SidecarV1` — the same canonical CBOR document the client stores at `media/{uuid}.cbor`. Two facts bind the local copy to what the server exposes, so the two can never silently diverge:
+
+- The asset's [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to `metadata_blob_hash`, the content address of the current encrypted metadata blob, on every `create`, `replace`, and `metadata-update`. Both manifest signatures cover it, so the metadata bytes the server holds and exposes are signature-bound to the asset.
+- The sidecar carries its own hybrid signature over every byte (including `_unknown`). A client that decrypts the metadata blob recomputes this canonical CBOR and **MUST** find it byte-identical to the locally-stored signed sidecar, and the blob's content hash **MUST** equal the manifest's `metadata_blob_hash`.
+
+A client therefore never persists a sidecar that does not round-trip to the committed `metadata_blob_hash`, and a server can expose only the exact metadata bytes the originating client encrypted. The matching client-side check is a [client-side validation invariant](/design/threat-model/validation/#client-side-validation-invariants); the no-key server enforces the blob-hash match structurally as [invariant 25](/design/threat-model/validation/#server-side-validation-invariants).
+
 ### Add-id Binding
 
 `add_id` is the tuple `(device_id: UUIDv4, monotonic_counter: u64)`, where `monotonic_counter` is incremented per-device per-(asset, OR-set) pair. Every OR-set add carries an `add_id`; every OR-set remove targets a specific `add_id`. A remove that names an `add_id` the receiver has never observed an add for is **rejected**, not silently no-op — preventing the "remove an element you never added" attack noted in the [Threat Model](/design/threat-model/scenarios/).
@@ -165,6 +174,7 @@ The sidecar schema is the contract; validation focuses on serde determinism + CR
 - **Add-id rejection (unit).** Issue a remove with an `add_id` never observed locally; assert rejection (not silent no-op).
 - **LWW with superseded capture (unit).** Two devices write captions within milliseconds; merge; assert the winner is the lexicographic-tiebreak chosen, and the loser appears in `superseded_captions`.
 - **Privacy-on-export stripping (unit).** Each row of the privacy table is a fixture test: assert the field is stripped by default, retained when opt-in is set, and that the local sidecar is unchanged either way.
+- **Local–server metadata equivalence (unit).** Seal a sidecar into a metadata blob; assert that decrypting it is byte-identical to the signed sidecar and that the blob's content hash equals the manifest's `metadata_blob_hash`. Mutate the local sidecar by one byte; assert the round-trip check rejects it rather than persisting a divergent copy.
 - **Concurrent-edit reconciliation (smoke).** Two test clients edit the same album offline; merge over MLS; assert convergence with no manual conflict resolution needed.
 
 Cross-module case: metadata edited on device A → synced via server → applied on device B with correct CRDT merge. Bounded E2E surface in [Module Map](/design/module-map/#e2e-test-surface).

@@ -22,6 +22,9 @@ AssetManifest {
   album_id:               UUID,
   amk_version:            u32,            // identifies the AMK epoch + write-tier key
   ciphertext_hash:        bytes,          // content-address digest; algorithm fixed by crypto_suite_id; reused by upload protocol
+  metadata_blob_hash:     bytes,          // content-address of the asset's encrypted metadata blob (see Encryption);
+                                          //   a ciphertext hash (server-visible, no plaintext leak); set on
+                                          //   create | replace | metadata-update
   plaintext_size:         u64,
   chunk_size:             u32,            // plaintext bytes per chunk (65,520)
   nonce_prefix:           [u8; 7],        // STREAM nonce prefix, random per file
@@ -55,6 +58,8 @@ The manifest carries **two signatures**, and a client acknowledges the asset onl
 The signed manifest is stored as the encrypted asset's header and is itself part of the [provenance record](#provenance-of-library-modifications). The same signing approach applies to other surfaces — [metadata blobs](/design/cryptography/encryption/#metadata-encryption) and the [device directory](/design/cryptography/keys/#device-directory) are each hybrid, device-signed, and versioned.
 
 **Streaming is preserved.** STREAM authentication tags verify every chunk *during* the stream. The manifest signature is a one-time provenance check. `ciphertext_hash` is computed incrementally as bytes arrive and confirmed at stream end — no separate pass, no buffering the whole file.
+
+**Rewrite re-rolls keys and binds metadata.** A `replace` mints new ciphertext with a fresh `file_key` and `nonce_prefix` — re-rolled even under the same `file_id` and AMK epoch (see [Encryption — Re-keying on Rewrite](/design/cryptography/encryption/#re-keying-on-rewrite)). A `metadata-update` mints a new metadata blob the same way. Every `create`, `replace`, and `metadata-update` manifest commits to `metadata_blob_hash`, the content address of the asset's current encrypted metadata blob; because the field is covered by both signatures, the metadata bytes the server stores are signature-bound to the asset and cannot diverge from the [signed sidecar](/design/metadata/#local-and-server-metadata-equivalence) the client holds locally.
 
 The closed action enum is owned by [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set).
 

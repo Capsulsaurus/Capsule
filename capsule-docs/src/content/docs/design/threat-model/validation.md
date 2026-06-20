@@ -57,6 +57,10 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 - **23.** A published `DeviceDirectory` has `directory_version` **strictly greater** than the version currently stored for that user, and the master signature covers it. A non-advancing or regressing publish is rejected (`409`). Owner: [Cryptography — Device Directory](/design/cryptography/keys/#device-directory).
 - **24.** A federated **report** (an out-of-band moderation message, not a state write) carries a valid signature from the reporting server and is within that peer's report rate budget; otherwise it is dropped before reaching the admin queue. Owner: [Moderation — Federated Reporting](/design/moderation/#federated-reporting).
 
+### On any write whose bundle carries a metadata blob
+
+- **25.** The encrypted metadata blob in the bundle has a content hash equal to the manifest's `metadata_blob_hash`. The server holds no key, but it can compare the content address it stores against the value the signed manifest commits to, so a client cannot present the server a metadata blob different from the one its asset manifest is signed over. A mismatch is rejected (`400`) and no state is written. This applies on `POST /upload` (the `create` bundle), at finalization, and on a non-upload `metadata-update`. Owner: [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
+
 Every rejection is logged with a structured reason code; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
 
 ## Client-Side Validation Invariants
@@ -68,6 +72,7 @@ Mirror checklist that every client implements before applying any received data 
 - Reject an incoming `protocol_version` outside `[Min, Max]` known to the client. The same handshake the server runs.
 - Reject an unknown enum value for any field whose enum is closed at the current schema (notably `action`, `content_type`, `gps.source`, `DerivativeManifest.role`). Unknown CBOR map keys are preserved per [Postel's Law](/design/principles/#postels-law-asymmetric) and never executed.
 - Maintain a local `latest_provenance_hash` per `asset_id`. Refuse to apply any manifest whose `prior_provenance_hash` is behind the local value. Surface it.
+- Round-trip the metadata blob on decode: the plaintext sidecar a client persists MUST be byte-identical to the canonical CBOR obtained by decrypting the asset's metadata blob, and the blob's content hash MUST equal the manifest's `metadata_blob_hash`. A divergence is quarantined, never persisted. See [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
 - Maintain a per-user `directory_version` high-water mark. Refuse a `DeviceDirectory` whose `directory_version` is below it (a server attempting to roll back a revocation or hide a device); pin and surface the regression.
 - Reject an OR-set remove whose `add_id` was never observed locally as an add.
 - Refuse to follow a `revoke_all_sessions` confirmation that did not include a master-key proof.

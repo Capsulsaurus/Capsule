@@ -20,7 +20,7 @@ account_master_key (backed up — see Failure Modes)
   ├─ wraps device identity private keys (IK / DSK / DEK private halves)
   └─ anchors the encrypted backup that escrows:
         AMK_v{n}  (random 32 bytes, per album, minted per MLS epoch)
-          └─ HKDF-SHA512(ikm=AMK_v{n}, salt=file_id, info="asset-file/v1") → 32-byte AES file key
+          └─ HKDF-SHA512(ikm=AMK_v{n}, salt=file_id||nonce_prefix, info="asset-file/v1") → 32-byte AES file key
                 └─ AES-256-GCM-STREAM
 ```
 
@@ -29,7 +29,7 @@ Construction rules (consistent with the [KDF choice](/design/cryptography/primit
 - Always include a version string in `info` so the KDF can be rotated later.
 - Salt with something unique per scope (`album_id`, `file_id`) — never reuse salts across scopes.
 - The 512-bit KDF output is truncated to 32 bytes for the AES-256 file key.
-- Each file gets a fresh derived key, so the STREAM nonce can safely start at zero per file.
+- Each **encryption** gets a fresh derived key: the per-encryption `nonce_prefix` is folded into the `salt` (`file_id || nonce_prefix`; see [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation)), so even a same-`file_id` [`replace`](/design/authorization/#the-closed-action-set) under the same epoch re-rolls the key, never merely the nonce. The STREAM nonce can therefore safely start at zero per encryption, and no `(file_key, nonce_prefix)` pair is ever reused.
 
 The master key also derives one **identifier** — the [default album](/design/organization/#the-default-album)'s `album_id`, via HKDF with a dedicated `info` label — so any device can recompute which album is the de facto default from the master key alone, even after recovery. This derives an *ID*, not a key: the default album is an ordinary album with a random per-epoch AMK like any other.
 
