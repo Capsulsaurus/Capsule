@@ -792,7 +792,7 @@ wheels = [
 
 [[package]]
 name = "jupyter-server"
-version = "2.19.0"
+version = "2.20.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
@@ -814,9 +814,9 @@ dependencies = [
     { name = "traitlets" },
     { name = "websocket-client" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/76/a0/eb3c511f54df7b54ca5fc7bff3f4d2277d69052d6a7f521643dfed5279d6/jupyter_server-2.19.0.tar.gz", hash = "sha256:1731236bc32b680223e1ceb9d68209a845203475012ef68773a81434b46a31a7", size = 754561, upload-time = "2026-05-29T11:21:26.057Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6b/dc/db3a582633170186f8c8b31298d7eb26ad0eb031a1f53476c258b64eed05/jupyter_server-2.20.0.tar.gz", hash = "sha256:b5778ba337d8015a3dc2b80803ecdd5ac18d3797fddf61a50ea5fb472b4ebe14", size = 756523, upload-time = "2026-06-17T12:09:09.435Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/78/d2881e68894cecdcd05912a9c585cfb776ef1fb38b62c8dba98f12ab3adc/jupyter_server-2.19.0-py3-none-any.whl", hash = "sha256:cb76591b76d7093584c2ad2ae72ac3d58614a4b597507a1bb04e1f9f683cf9ea", size = 392244, upload-time = "2026-05-29T11:21:23.871Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/71/8c002223e873a870f5c41dc69b0a7c922301123e4a31d5d01ecb700aef77/jupyter_server-2.20.0-py3-none-any.whl", hash = "sha256:c3b67c93c471e947c18b5026f04f21614218adb706df8f48227d3ee8e0a7cdcc", size = 393143, upload-time = "2026-06-17T12:09:07.234Z" },
 ]
 
 [[package]]
@@ -1404,13 +1404,14 @@ wheels = [
 
 [[package]]
 name = "pywinpty"
-version = "3.0.4"
+version = "3.0.5"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a9/ef/2d27f30c59a67be7025b2d7858c8c2d282b74d66544b2384730b82de74fd/pywinpty-3.0.5.tar.gz", hash = "sha256:61db0db063de9865adbea66db294628f8577f608d9764a4c7d3384eeacc4e81b", size = 16223484, upload-time = "2026-06-11T00:11:58.93Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5b/77/39af026e681e350073495155d885b82947a88b29ae7a61f016e1ac8c744e/pywinpty-3.0.4-cp314-cp314-win_amd64.whl", hash = "sha256:b028b4d8ece77a4b35282461234d2e38c472c6dc4be6e5cccdeffcd2776ebf7f", size = 1501228, upload-time = "2026-06-10T06:06:18.748Z" },
-    { url = "https://files.pythonhosted.org/packages/4c/ae/76cc0e1e9fa92ce1dddb3d90d082c5eb0facb1665446019916156e244ba6/pywinpty-3.0.4-cp314-cp314-win_arm64.whl", hash = "sha256:171b60831057b519bc3673970eb970352b99e6efdfd22cad169b7a815699d862", size = 238201, upload-time = "2026-06-10T06:02:33.894Z" },
-    { url = "https://files.pythonhosted.org/packages/b0/86/48fb10e2c7db43461dcc69179e81a648ebf8f350271c8cc079aed65b354b/pywinpty-3.0.4-cp314-cp314t-win_amd64.whl", hash = "sha256:3771c364b38a5e4956582ee68d912e35763d78310e362ddce6d390cf5ff94f58", size = 1500583, upload-time = "2026-06-10T06:02:53.12Z" },
-    { url = "https://files.pythonhosted.org/packages/2a/40/a94cf31db8a759ed871c0e9f10f8aa0a042ddc6592f233a26a4c0d757047/pywinpty-3.0.4-cp314-cp314t-win_arm64.whl", hash = "sha256:819eb417254eac67553c93d2f38b12617bb0ebb65e6b840d51fe7e5a4a824646", size = 237067, upload-time = "2026-06-10T06:02:35.677Z" },
+    { url = "https://files.pythonhosted.org/packages/e9/23/f3cd1b1e5fc56517f54452c49f92049e7dd9ffc8a63de22a495581f50d04/pywinpty-3.0.5-cp314-cp314-win_amd64.whl", hash = "sha256:03bb3c16d691d9242267201830bcd0e64a9b663170e9042bc84b210da9de15ac", size = 2090663, upload-time = "2026-06-10T23:43:59.845Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/dd/96d6cbfc6d9ddab5c1c2f92c26545ae8997446a2ba7ee2024cd43c81f49b/pywinpty-3.0.5-cp314-cp314-win_arm64.whl", hash = "sha256:89c5c6ef08997a3b4b277b214a35fe15cab4dd6d119f0140aa71df5b1168fdbc", size = 815700, upload-time = "2026-06-10T23:40:50.001Z" },
+    { url = "https://files.pythonhosted.org/packages/30/36/d98087bce0acaa4cce7f196103cfa7be3f63ce65f52473bb3e38784ae5d9/pywinpty-3.0.5-cp314-cp314t-win_amd64.whl", hash = "sha256:7b566165e0c5fdd6abe167a5ac8b954be6a843eb55a85946576d6bc1dea03d6d", size = 2090093, upload-time = "2026-06-10T23:40:58.933Z" },
+    { url = "https://files.pythonhosted.org/packages/57/fd/fe2b0db922ba052ce3976a08f3fc05d0c05047c8b4ebb6102e832b8ef563/pywinpty-3.0.5-cp314-cp314t-win_arm64.whl", hash = "sha256:24366280a8aa677323da87bec729cb3ea3b35367386cece0978bdc6e4695c690", size = 814517, upload-time = "2026-06-10T23:42:34.946Z" },
 ]
 
 [[package]]
@@ -1853,7 +1854,7 @@ wheels = [
 
 [[package]]
 name = "torch"
-version = "2.12.0+rocm7.1"
+version = "2.12.1+rocm7.1"
 source = { registry = "https://download.pytorch.org/whl/rocm7.1" }
 dependencies = [
     { name = "filelock" },
@@ -1866,13 +1867,13 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torch-2.12.0%2Brocm7.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:09b47d85373b87d8bd651ce5bae5b28d2075096da6dc230fa14ff00f2251dc61", upload-time = "2026-05-13T00:47:17Z" },
-    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torch-2.12.0%2Brocm7.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:44c71b2d73f332a2683c00e9d13af64730d6502a59163ad21a111e5208863896", upload-time = "2026-05-13T00:50:47Z" },
+    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torch-2.12.1%2Brocm7.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:a6d3bda7f5ff33980e4e7a10ec4e589aaca1cbc1ef57f774fb6f5296040f285f", upload-time = "2026-06-18T03:27:00Z" },
+    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torch-2.12.1%2Brocm7.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:bd93ba27d314d56c93f182f32ddaa44575028880ba719c6b71051461bc94ffc4", upload-time = "2026-06-18T03:30:28Z" },
 ]
 
 [[package]]
 name = "torchvision"
-version = "0.27.0+rocm7.1"
+version = "0.27.1+rocm7.1"
 source = { registry = "https://download.pytorch.org/whl/rocm7.1" }
 dependencies = [
     { name = "numpy" },
@@ -1880,8 +1881,8 @@ dependencies = [
     { name = "torch" },
 ]
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torchvision-0.27.0%2Brocm7.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:fb2c763eb0fd903d7867ebf05dd9db6a7cf807eb846f4e41b36190e3c40d540f", upload-time = "2026-05-12T16:20:50Z" },
-    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torchvision-0.27.0%2Brocm7.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:027688a47e9d6d9480137d3f678e85614f8f8e23414af10a9b9fde91bfbb8374", upload-time = "2026-05-12T16:20:50Z" },
+    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torchvision-0.27.1%2Brocm7.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:d96c28d118a356b92a47c425cd99ba700ab8fe487f1b692e1bade8b86a1fde8e", upload-time = "2026-06-17T15:44:51Z" },
+    { url = "https://download-r2.pytorch.org/whl/rocm7.1/torchvision-0.27.1%2Brocm7.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:09f80a35f8999aa5f40ec1cfb9b058e6eaf106f4bff8e7cf9ae2b529314472fd", upload-time = "2026-06-17T15:44:51Z" },
 ]
 
 [[package]]
@@ -1943,11 +1944,13 @@ wheels = [
 
 [[package]]
 name = "triton-rocm"
-version = "3.7.0"
+version = "3.7.1"
 source = { registry = "https://download.pytorch.org/whl/rocm7.1" }
 wheels = [
-    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.0-cp314-cp314-linux_x86_64.whl", hash = "sha256:0f259f981310c8411f3c7cd7d0bbed05a80550c3be757e6d9da743746b016e67", upload-time = "2026-05-12T15:04:12Z" },
-    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.0-cp314-cp314t-linux_x86_64.whl", hash = "sha256:b3e3b62300ac249980d605bef8134c303835464dc91a2689f37f39c169258284", upload-time = "2026-05-12T15:04:28Z" },
+    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.1-cp314-cp314-linux_x86_64.whl", hash = "sha256:9165b042e35edd1201f5e579fa6074a783280b137287f47e4cdcd850c4633a54", upload-time = "2026-06-17T17:05:58Z" },
+    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.1-cp314-cp314t-linux_x86_64.whl", hash = "sha256:63f72fa709f2109f27438fe67a35147967d3ad1bb58fa318d9be19a45c0fb884", upload-time = "2026-06-17T17:06:22Z" },
+    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.1-cp315-cp315-linux_x86_64.whl", hash = "sha256:502892fc13cec6714aad5fdc757f4edcc67c61875de75003d9431d1b810ee12a", upload-time = "2026-06-17T17:06:42Z" },
+    { url = "https://download-r2.pytorch.org/whl/triton_rocm-3.7.1-cp315-cp315t-linux_x86_64.whl", hash = "sha256:fafbefa900e8e931ba8451727d1bc3c6e5819bd9cebf73a0756676b1d769a4aa", upload-time = "2026-06-17T17:07:27Z" },
 ]
 
 [[package]]
