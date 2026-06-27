@@ -1,7 +1,7 @@
-import { AssetGrid } from '@/components/asset-grid';
-import { useAssets } from '@/data/hooks';
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { Archive as ArchiveIcon } from 'lucide-react';
+import { AssetGrid } from '@/components/asset-grid';
+import { useAssets } from '@/data/hooks';
 
 export const Route = createLazyFileRoute('/library/archive')({
     component: Archive,

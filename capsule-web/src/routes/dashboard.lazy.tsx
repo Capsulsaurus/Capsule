@@ -1,3 +1,8 @@
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import { filesize } from 'filesize';
+import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
     Table,
@@ -7,14 +12,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { filesize } from 'filesize';
-import { toast } from 'sonner';
-
-import { Link, createLazyFileRoute } from '@tanstack/react-router';
-import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
-
 import { useAlbums, useAssets } from '@/data/hooks';
-import { useState } from 'react';
 
 export const Route = createLazyFileRoute('/dashboard')({
     component: () => <Dashboard />,

@@ -1,6 +1,6 @@
+import { createFileRoute, Link } from '@tanstack/react-router';
 import { Card, CardContent } from '@/components/ui/card';
 import { useAlbums } from '@/data/hooks';
-import { Link, createFileRoute } from '@tanstack/react-router';
 
 export const Route = createFileRoute('/albums/')({
     staleTime: Number.POSITIVE_INFINITY,

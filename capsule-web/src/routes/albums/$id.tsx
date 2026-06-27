@@ -1,8 +1,8 @@
+import { createFileRoute } from '@tanstack/react-router';
+import { MoreHorizontal, Play, Share2 } from 'lucide-react';
 import { AssetGrid } from '@/components/asset-grid';
 import { Button } from '@/components/ui/button';
 import { useAlbum, useAlbumAssets } from '@/data/hooks';
-import { createFileRoute } from '@tanstack/react-router';
-import { MoreHorizontal, Play, Share2 } from 'lucide-react';
 
 export const Route = createFileRoute('/albums/$id')({
     component: Album,

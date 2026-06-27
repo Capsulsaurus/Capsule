@@ -1,8 +1,8 @@
+import { createLazyFileRoute } from '@tanstack/react-router';
+import { Trash2 } from 'lucide-react';
 import { AssetGrid } from '@/components/asset-grid';
 import { Button } from '@/components/ui/button';
 import { useAssets } from '@/data/hooks';
-import { createLazyFileRoute } from '@tanstack/react-router';
-import { Trash2 } from 'lucide-react';
 
 export const Route = createLazyFileRoute('/library/trash')({
     component: Trash,

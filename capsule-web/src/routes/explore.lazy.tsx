@@ -1,8 +1,7 @@
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import { AssetGrid } from '@/components/asset-grid';
 import { Card } from '@/components/ui/card';
 import { useAlbums, useAssets } from '@/data/hooks';
-import { createLazyFileRoute } from '@tanstack/react-router';
-import { Link } from '@tanstack/react-router';
 
 export const Route = createLazyFileRoute('/explore')({
     component: Explore,

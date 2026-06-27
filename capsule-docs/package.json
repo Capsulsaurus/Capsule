@@ -22,7 +22,7 @@
         "tailwindcss": "^4.3.0"
     },
     "devDependencies": {
-        "@biomejs/biome": "^1.9.4",
+        "@biomejs/biome": "^2.5.1",
         "rehype": "^13.0.2",
         "vitest": "^3.2.6",
         "wrangler": "^4.99.0"

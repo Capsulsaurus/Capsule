@@ -1,3 +1,5 @@
+import { UploadCloud } from 'lucide-react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -8,8 +10,6 @@ import {
     DialogTitle,
     DialogTrigger,
 } from '@/components/ui/dialog';
-import { UploadCloud } from 'lucide-react';
-import { useState } from 'react';
 
 export function UploadDialog({ children }: { children: React.ReactNode }) {
     const [isUploading, setIsUploading] = useState(false);

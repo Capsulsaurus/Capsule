@@ -1,9 +1,9 @@
-import { RouterProvider, createRouter } from '@tanstack/react-router';
+import { createRouter, RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
 import { IntlProvider } from 'react-intl';
 
-import { SOURCE_LOCALE, messagesFor, resolveLocale } from '@/i18n/locale';
+import { messagesFor, resolveLocale, SOURCE_LOCALE } from '@/i18n/locale';
 
 // Import the generated route tree
 import { routeTree } from './routeTree.gen';

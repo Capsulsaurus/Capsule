@@ -1,3 +1,7 @@
+import { useVirtualizer } from '@tanstack/react-virtual';
+import { Check, FolderInput, PlayCircle, Share, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import {
     ContextMenu,
     ContextMenuContent,
@@ -10,10 +14,6 @@ import {
 } from '@/components/ui/context-menu';
 import { useAlbums } from '@/data/hooks';
 import type { Album, Asset } from '@/domain';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { Check, FolderInput, PlayCircle, Share, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { toast } from 'sonner';
 import { LazyImage } from './lazy-image';
 
 interface AssetGridProps {

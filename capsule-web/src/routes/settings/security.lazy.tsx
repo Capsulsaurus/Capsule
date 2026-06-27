@@ -1,3 +1,7 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import type React from 'react';
+import { useState } from 'react';
 import { PasskeyRegister } from '@/components/mfa/passkey-register';
 import { TotpEnroll } from '@/components/mfa/totp-enroll';
 import { Button } from '@/components/ui/button';
@@ -13,16 +17,12 @@ import { Label } from '@/components/ui/label';
 import {
     ApiError,
     type Device,
-    type PasskeyCredential,
     deletePasskey,
     getDevices,
     listPasskeys,
+    type PasskeyCredential,
     totpDisable,
 } from '@/lib/api';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, createLazyFileRoute } from '@tanstack/react-router';
-import type React from 'react';
-import { useState } from 'react';
 
 export const Route = createLazyFileRoute('/settings/security')({
     component: SecuritySettings,
@@ -66,7 +66,10 @@ function DeviceCard({ device }: { device: Device }) {
 function PasskeyRow({
     passkey,
     onDeleted,
-}: { passkey: PasskeyCredential; onDeleted: () => void }) {
+}: {
+    passkey: PasskeyCredential;
+    onDeleted: () => void;
+}) {
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
 

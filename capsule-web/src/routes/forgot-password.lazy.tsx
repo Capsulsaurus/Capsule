@@ -1,3 +1,7 @@
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import { MountainIcon } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -10,10 +14,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, requestPasswordReset } from '@/lib/api';
-import { Link, createLazyFileRoute } from '@tanstack/react-router';
-import { MountainIcon } from 'lucide-react';
-import type React from 'react';
-import { useState } from 'react';
 
 export const Route = createLazyFileRoute('/forgot-password')({
     component: ForgotPassword,
