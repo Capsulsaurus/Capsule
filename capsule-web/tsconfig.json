@@ -6,9 +6,8 @@
         "noEmit": true,
         "skipLibCheck": true,
         "useDefineForClassFields": true,
-        "baseUrl": "./",
         "paths": {
-            "@/*": ["src/*"]
+            "@/*": ["./src/*"]
         },
         /* modules */
         "module": "ESNext",
