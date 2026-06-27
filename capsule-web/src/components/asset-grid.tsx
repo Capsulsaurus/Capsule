@@ -8,7 +8,8 @@ import {
     ContextMenuSubTrigger,
     ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { type Asset, mockAlbums } from '@/lib/mock-data';
+import { useAlbums } from '@/data/hooks';
+import type { Album, Asset } from '@/domain';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, FolderInput, PlayCircle, Share, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -61,6 +62,7 @@ interface RowData {
 
 export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
     const { ref: containerRef, size } = useElementSize<HTMLDivElement>();
+    const { data: albums = [] } = useAlbums();
 
     // Selection State
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -228,6 +230,7 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
                     <VirtualList
                         rows={rows}
                         containerRef={containerRef}
+                        albums={albums}
                         // Props for Item
                         selectedIds={selectedIds}
                         onAssetClick={handleAssetClick}
@@ -251,6 +254,7 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
 interface VirtualListProps {
     rows: RowData[];
     containerRef: React.RefObject<HTMLDivElement | null>;
+    albums: Album[];
     selectedIds: Set<string>;
     onAssetClick: (asset: Asset, e: React.MouseEvent) => void;
     onToggleSelection: (id: string) => void;
@@ -262,6 +266,7 @@ interface VirtualListProps {
 const VirtualList = ({
     rows,
     containerRef,
+    albums,
     selectedIds,
     onAssetClick,
     onToggleSelection,
@@ -303,6 +308,7 @@ const VirtualList = ({
                             >
                                 <AssetCard
                                     asset={item.asset}
+                                    albums={albums}
                                     selected={selectedIds.has(item.asset.id)}
                                     onClick={(e) => onAssetClick(item.asset, e)}
                                     onToggle={() =>
@@ -325,6 +331,7 @@ const VirtualList = ({
 
 interface AssetCardProps {
     asset: Asset;
+    albums: Album[];
     selected: boolean;
     onClick: (e: React.MouseEvent) => void;
     onToggle: () => void;
@@ -335,6 +342,7 @@ interface AssetCardProps {
 
 const AssetCard = ({
     asset,
+    albums,
     selected,
     onClick,
     onToggle,
@@ -407,7 +415,7 @@ const AssetCard = ({
                         Move to Album
                     </ContextMenuSubTrigger>
                     <ContextMenuSubContent className="w-48">
-                        {mockAlbums.map((album) => (
+                        {albums.map((album) => (
                             <ContextMenuItem
                                 key={album.id}
                                 onClick={() => onMoveToAlbum(album.title)}

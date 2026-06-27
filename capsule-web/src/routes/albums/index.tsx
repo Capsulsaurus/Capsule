@@ -1,19 +1,20 @@
 import { Card, CardContent } from '@/components/ui/card';
-import { mockAlbums } from '@/lib/mock-data';
+import { useAlbums } from '@/data/hooks';
 import { Link, createFileRoute } from '@tanstack/react-router';
 
-// TODO: Implement
 export const Route = createFileRoute('/albums/')({
     staleTime: Number.POSITIVE_INFINITY,
     component: () => <Albums />,
 });
 
 const Albums = () => {
+    const { data: albums = [] } = useAlbums();
+
     return (
         <div className="p-4 md:p-8">
             <h1 className="text-2xl font-bold mb-6">Albums</h1>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                {mockAlbums.map((album) => (
+                {albums.map((album) => (
                     <Link
                         to="/albums/$id"
                         params={{ id: album.id }}
@@ -40,8 +41,6 @@ const Albums = () => {
                     </Link>
                 ))}
             </div>
-            {/* Create Album Placeholder Card */}
-            {/* Can add later */}
         </div>
     );
 };

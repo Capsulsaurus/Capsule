@@ -13,7 +13,7 @@ import { toast } from 'sonner';
 import { Link, createLazyFileRoute } from '@tanstack/react-router';
 import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
 
-import { mockAlbums, mockAssets } from '@/lib/mock-data';
+import { useAlbums, useAssets } from '@/data/hooks';
 import { useState } from 'react';
 
 export const Route = createLazyFileRoute('/dashboard')({
@@ -22,12 +22,14 @@ export const Route = createLazyFileRoute('/dashboard')({
 
 const Dashboard = () => {
     const [fetching, setFetching] = useState(false);
+    const { data: assets = [] } = useAssets();
+    const { data: albums = [] } = useAlbums();
 
     // Calculate mock stats
     const stats = {
-        totalPhotos: mockAssets.length,
-        totalAlbums: mockAlbums.length,
-        usedStorage: mockAssets.length * 1024 * 1024 * 5, // Mock 5MB per photo
+        totalPhotos: assets.length,
+        totalAlbums: albums.length,
+        usedStorage: assets.length * 1024 * 1024 * 5, // Mock 5MB per photo
     };
 
     return (

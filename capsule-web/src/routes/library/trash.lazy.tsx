@@ -1,6 +1,6 @@
 import { AssetGrid } from '@/components/asset-grid';
 import { Button } from '@/components/ui/button';
-import { mockAssets } from '@/lib/mock-data';
+import { useAssets } from '@/data/hooks';
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { Trash2 } from 'lucide-react';
 
@@ -9,7 +9,8 @@ export const Route = createLazyFileRoute('/library/trash')({
 });
 
 function Trash() {
-    const trashAssets = mockAssets.slice(25, 30);
+    const { data: assets = [] } = useAssets();
+    const trashAssets = assets.slice(25, 30);
 
     return (
         <div className="p-4 pt-2">
@@ -36,7 +37,7 @@ function Trash() {
             {trashAssets.length > 0 ? (
                 <AssetGrid
                     assets={trashAssets}
-                    onAssetClick={(asset) => console.log('Clicked', asset)}
+                    onAssetClick={(asset) => console.info('Clicked', asset)}
                 />
             ) : (
                 <div className="flex flex-col items-center justify-center p-20 text-muted-foreground">
