@@ -104,11 +104,12 @@ Considering all the technologies used, you may have to switch between IDEs to de
 
 ### Setup
 
-We use [Bazel](https://bazel.build) as our build system due to its strong multi-language support. As of writing, there are 5+ programming languages used (Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python). Various tools will need to be setup based on services you need to work on.
+This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) pins the shared dev tooling (`just`, `lefthook`, `convco`) and [just](https://just.systems) is the task runner that ties the per-language tasks together (`just check`, `just build`, etc.). Various tools will need to be setup based on services you need to work on.
 
 Setup in the following order:
 
-- Install [Bazelisk](https://bazel.build/install/bazelisk) for development.
+- Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.
+- Install the git hooks with `just hooks-install`.
 - Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>
 - Setup each of the following tools in the Development sections of each component's README.
 
