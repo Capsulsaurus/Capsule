@@ -16,7 +16,7 @@ Implemented in `capsule-api-auth`: OIDC handler (`oidc`), session ledger (`sessi
 
 - **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP or passkeys, which cryptographically bind the user to their master key.
 - **Delegated/sponsored accounts.** Encrypted with keys derived from a registered account's master key. They do not have their own identity and rely on the registered account for authentication and key management. Owners of the sponsored account have full access. See [Cryptography — Keys: Delegated/Sponsored accounts](/design/cryptography/keys/#delegatedsponsored-accounts) for the key derivation.
-- **Non-registered accounts.** No associated identity or master key — typically used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link.
+- **Non-registered accounts.** No associated identity or master key — used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link, and for [web-upload links](/design/web-upload/), where a guest seals contributions to a link-scoped key without read access.
 
 ## Identity and Discovery
 

@@ -58,6 +58,7 @@ The owner docs are:
 | Server- + client-side refuse-by-default validation invariants         | [Threat Model — Validation](/design/threat-model/validation/)       |
 | Schema evolution rules, forbidden behaviors, deprecation policy       | [Threat Model — Schema Rules](/design/threat-model/schema-rules/)   |
 | Share links + public-share serving                                    | [Share Links](/design/share-links/)                                 |
+| Web upload — upload links, guest drops, adoption                      | [Web Upload](/design/web-upload/)                                   |
 | Moderation policy + federated reporting + blocklists                  | [Moderation](/design/moderation/)                                   |
 | Quota accounting + enforcement points                                 | [Quota](/design/quota/)                                             |
 | Client validation duties + sandboxed decoder                          | [Clients](/design/clients/)                                         |
@@ -97,7 +98,7 @@ A faulty, malicious, or version-mismatched client must not be able to inflict ir
 
 In particular, the threat model owns:
 
-- The **client class taxonomy** (honest, faulty, malicious, old, new) — how each is authenticated and what stops each from doing harm.
+- The **client class taxonomy** (honest, faulty, malicious, old, new, and the web-guest uploader) — how each is authenticated and what stops each from doing harm.
 - The **damage scenario → invariant map** — for every concrete attack or bug class, the single owner doc that defeats it.
 - **Server- and client-side validation invariants** — the refuse-by-default structural checks a key-less server and every client run on every write.
 - **Protocol and capability negotiation** — the universal fail-closed handshake that rejects version mismatches before any state is written.

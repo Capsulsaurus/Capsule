@@ -100,6 +100,23 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   (a thin `statvfs`/`GetDiskFreeSpaceEx` wrapper), the `streaming_recommended` plan flag, and an
   executor drive mode that interleaves the existing offline import, the deferred upload client, and
   the storage-verify gate above — with no change to the upload wire protocol.
+- **Web upload (guest drops)** is deferred with the rest of the networked surface. A browser/WASM
+  guest, holding only a provisioned **upload link**, seals each asset under a fresh random key
+  encapsulated to a link-scoped **Drop Key** and uploads it to a per-user staging inbox charged to
+  the provisioning user's quota; the bytes become a library asset only when one of that user's
+  trusted clients reviews and **adopts** the drop, rewrapping the guest's key under the album AMK
+  (`key_mode = wrapped` + `wrapped_file_key`) **without re-uploading**. Designed in the
+  `web-upload` design doc. **Seam:** every primitive already exists offline — X-Wing
+  encapsulation, AES-256-GCM-STREAM, content-addressing — so web upload is purely additive: a
+  `capsule_core::drop` module (sealing + link issuance + adoption rewrap), a `capsule-api-media`
+  drop store/inbox + the atomic inbox→album promotion, a drop upload protocol that reuses the
+  existing upload-protocol chunk/finalization mechanics, and the `capsule-web` browser client. The
+  offline core's `verify_asset`, append-only provenance chain, STREAM construction, and the
+  sandboxed-decoder rule are reused unchanged; the only crypto-core addition is the **wrapped
+  file-key mode** — a stored, AMK-wrapped per-file key for externally-authored bytes that cannot be
+  re-derived from the AMK — landing in `crypto::encryption` key derivation (the `asset-keywrap/v1`
+  label) and the `crypto::provenance` `AssetManifest` (`key_mode`/`wrapped_file_key`), with
+  authorization unchanged (the adopter's write-tier signature remains the sole authority).
 - The **adaptive cache-eviction policy** (bounded budget, LRU-by-last-access retention of
   recently-viewed blobs, tier-ordered eviction original → preview → thumbnail, pinned and
   device-owned originals exempt) is **now implemented** (issue #23): the

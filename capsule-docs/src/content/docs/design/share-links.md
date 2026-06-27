@@ -19,7 +19,7 @@ In scope:
 
 Out of scope for v1 (deliberate non-goals):
 
-- **Writable share links.** Writing requires a write-tier key + a place in the MLS group; a non-registered user has neither. Supporting writes would require an ephemeral link-scoped key hierarchy — a substantial new design that is not justified for v1.
+- **Writable share links.** Writing requires a write-tier key + a place in the MLS group; a non-registered user has neither. Supporting writes would require an ephemeral link-scoped key hierarchy — a substantial new design that is not justified for v1. Guest *contribution* (a non-registered user depositing assets) is instead provided by [Web Upload](/design/web-upload/)'s upload links — a distinct write-to-inbox capability whose product is a staged drop, which does **not** make these view links writable.
 - **Per-recipient analytics.** Link views are not tracked per-recipient. The link is the credential; the server knows it was used, not by whom.
 
 ## Security Contract

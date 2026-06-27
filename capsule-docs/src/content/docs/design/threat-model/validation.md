@@ -61,6 +61,20 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 
 - **25.** The encrypted metadata blob in the bundle has a content hash equal to the manifest's `metadata_blob_hash`. The server holds no key, but it can compare the content address it stores against the value the signed manifest commits to, so a client cannot present the server a metadata blob different from the one its asset manifest is signed over. A mismatch is rejected (`400`) and no state is written. This applies on `POST /upload` (the `create` bundle), at finalization, and on a non-upload `metadata-update`. Owner: [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
 
+### On `POST /drop` (upload-link drop session) and adoption
+
+A [web-upload](/design/web-upload/) drop carries **no `AssetManifest`** — no signatures, no `album_id`, no provenance — so it runs its own structural checks instead of 1–8, and is written only to the provisioning user's inbox, never the library. Owner: [Web Upload — Security Contract](/design/web-upload/#security-contract).
+
+- **26.** `{opaque-id}` resolves to a **live** upload link: it exists, is not expired, is not revoked, and its per-link caps (cumulative bytes, file count) are not already exhausted. A not-found, expired, or revoked link returns an **indistinguishable `404`** (never `410`); a cap exhausted on an otherwise-live link returns `409` / `413`.
+- **27.** `content_type` ∈ the closed enum for the link's pinned `protocol_version` (the same set as invariant 5). Otherwise `400`.
+- **28.** `size` ∈ (0, the link's `max_file_size`]. Otherwise `400` / `413`.
+- **29.** The provisioning (link-owner) user's quota admits the drop at session creation: `quota_used(owner) + declared_size ≤ hard_limit`. Otherwise `403 Quota Exceeded`. This reuses the single [quota enforcement point](/design/quota/#enforcement-points) with `upload_user_id = owner_id`.
+- **30.** The `DropDescriptor` is structurally well-formed and `kem_ct`'s length matches the KEM ciphertext size for the link's `crypto_suite_id`; the drop request carries **no** `album_id`, `amk_version`, manifest, or provenance field. A drop that names an album or supplies signatures is rejected (`400`) — a drop can only ever land in the inbox.
+- **31.** Drop-session creation is rate-limited per `{opaque-id}` and per source IP (the same two limiters as the [share-link serve path](/design/share-links/#security-contract)). Otherwise `429`.
+- **32.** On **adoption** (`POST /drops/{id}/adopt`, a `create` manifest referencing an inbox blob): the manifest re-runs invariants 1–8, 16–18, and 25; additionally the manifest's `ciphertext_hash` must reference a drop blob in **the caller's own inbox**, and `key_mode` must be in its closed enum (`derived | wrapped`). The server then atomically promotes the blob from inbox to album asset and deletes the inbox row, in one transaction. Otherwise `400` / `403` / `409`, with no state written.
+
+Drop **chunks** reuse the `PATCH` chunk rules (9–12) and **finalization** reuses the integrity checks (13–14) unchanged; only drop-session creation (26–31) and adoption (32) differ from the album upload path.
+
 Every rejection is logged with a structured reason code; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
 
 ## Client-Side Validation Invariants
