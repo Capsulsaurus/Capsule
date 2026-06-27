@@ -105,6 +105,7 @@ export default defineConfig({
                                 { slug: 'design/federation' },
                                 { slug: 'design/peering' },
                                 { slug: 'design/share-links' },
+                                { slug: 'design/web-upload' },
                                 { slug: 'design/moderation' },
                             ],
                         },

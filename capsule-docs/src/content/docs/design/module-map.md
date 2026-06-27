@@ -28,6 +28,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-cli`             | Command-line client                                                                                               |
 | `capsule-media`           | Standalone media utility crate                                                                                    |
 | `capsule-i18n`            | Runtime localization (locale negotiation + ICU message formatting) for the server and CLI                         |
+| `capsule-web`             | Browser/WASM web-upload client: guest drop sealing + upload (planned)                                             |
 
 ## Module → Design Doc
 
@@ -52,6 +53,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `models::*`                                                             | [Metadata](/design/metadata/), [Import — Pipeline](/design/import/pipeline/)                                   | Unit                                          |
 | `ml` (planned)                                                          | [AI/ML Integrations](/design/ai/)                                                                             | Unit + Smoke (inference parity per-platform)  |
 | `sharing` (planned)                                                     | [Share Links](/design/share-links/)                                                                            | Unit                                          |
+| `drop` (planned)                                                        | [Web Upload](/design/web-upload/)                                                                              | Unit (seal round-trip + adoption rewrap)      |
 
 ### `capsule-sdk`
 
@@ -75,6 +77,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
 | `capsule-api-media::verify` (planned)                | [Import — Storage Verification](/design/import/storage-verification/) | Unit + Smoke                                |
 | `capsule-api-media::shares` (planned)                | [Share Links](/design/share-links/)                                                  | Unit + Smoke                                |
+| `capsule-api-media::drops` (planned)                 | [Web Upload](/design/web-upload/)                                                    | Unit + Smoke                                |
 | `capsule-api-sync` (sync feed)                       | [Import — Download & Sync](/design/import/download-sync/)                            | Unit + Smoke + 1 E2E                        |
 | `capsule-api-sync::federation`                       | [Federation](/design/federation/)                                                    | Unit + Smoke + 1 E2E                        |
 | `capsule-api-service::album`                         | [Organization](/design/organization/)                                                | Unit                                        |
@@ -86,13 +89,14 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-api-environment`                            | (configuration; no design owner)                                                     | Unit                                        |
 | `capsule-api-testing`                                | (test utilities; no design owner)                                                    | n/a                                         |
 
-### `capsule-cli`, `capsule-media`, `capsule-i18n`
+### `capsule-cli`, `capsule-media`, `capsule-i18n`, `capsule-web`
 
-| Crate           | Owning design doc                                    | Validation tier |
-| --------------- | ---------------------------------------------------- | --------------- |
-| `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client) | Smoke           |
-| `capsule-media` | (small utility crate; no specific design owner)      | Unit            |
-| `capsule-i18n`  | [Internationalization](/design/i18n/)                | Unit + Smoke    |
+| Crate           | Owning design doc                                                 | Validation tier      |
+| --------------- | ----------------------------------------------------------------- | -------------------- |
+| `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client)              | Smoke                |
+| `capsule-media` | (small utility crate; no specific design owner)                   | Unit                 |
+| `capsule-i18n`  | [Internationalization](/design/i18n/)                             | Unit + Smoke         |
+| `capsule-web`   | [Web Upload](/design/web-upload/), [Clients](/design/clients/)    | Smoke (browser/WASM) |
 
 ## Design Doc → Module (Reverse Lookup)
 
@@ -129,6 +133,7 @@ Navigation from a design doc back to where the code lives.
 | [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), model registry + per-platform inference runners                                                 |
 | [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` + serving in `capsule-api-media`                                                             |
 | [Share Links](/design/share-links/)                                 | `capsule-core::sharing` (planned), `capsule-api-media::shares` (planned)                                                      |
+| [Web Upload](/design/web-upload/)                                   | `capsule-core::drop` (planned), `capsule-api-media::drops` (planned), `capsule-web` (planned); reuses `capsule-api-upload` for drop chunks |
 | [Moderation](/design/moderation/)                                   | `capsule-api::moderation` (planned)                                                                                           |
 | [Quota](/design/quota/)                                             | `capsule-api-service::quota` (planned)                                                                                        |
 | [Threat Model](/design/threat-model/)                               | Enforced across every validation chokepoint: `capsule-core::crypto::verify_asset` (client), `capsule-api` validators (server) |
@@ -140,7 +145,7 @@ Navigation from a design doc back to where the code lives.
 
 The bounded global list of cross-module integration tests. Editing this list requires updating the relevant doc's Validation section. **Adding an E2E case past this list is a signal the design has unwanted coupling worth examining** before adding the test.
 
-Target count: ≤ 12 cases. Each one is named by what it proves — not "test X" but "X works through Y and Z."
+Target count: ≤ 13 cases. Each one is named by what it proves — not "test X" but "X works through Y and Z."
 
 1. **Auth → Library query.** Log in via OIDC → access-token → GraphQL query for own albums returns expected list. Covers `capsule-api-auth::oidc + session` × `capsule-api-library::schema`.
 2. **Full import + upload + finalize.** Local scan → plan → execute → upload session → finalize → blob present at `blobs/{hash}` + index row marked uploaded. Covers `capsule-core::import` × `capsule-sdk::upload` × `capsule-api-upload` × `capsule-api-entity`.
@@ -154,6 +159,7 @@ Target count: ≤ 12 cases. Each one is named by what it proves — not "test X"
 10. **Model regen after version bump.** Bump canonical model version; assert stale embeddings excluded from queries; background regen produces fresh embeddings; queries return correct results post-regen. Covers `capsule-core::ml` × `capsule-core::db` vector index.
 11. **Server crash mid-finalization.** Inject crash between blob rename and Postgres transaction commit; restart; assert session moves to `FailedProcessing` cleanly, no orphaned blob, no zombie pending row. Covers `capsule-api-upload` × `capsule-api-entity` × `capsule-api`'s startup scrub.
 12. **Cross-device enrollment.** Existing device A authorizes new device B over a verified channel (enrollment code + safety-code check) → B generates hardware keys → A cross-signs B into the device directory → B joins each album's MLS group → B's library matches A's. Includes one MITM-on-relay abort. Covers `capsule-api-auth::devices` × `capsule-core::crypto::keys` × `capsule-sdk::hardware-keys`.
+13. **Web drop → adopt.** A browser/WASM web client seals a drop to an upload link → the provisioning user's native client decapsulates, rewraps the key under the album AMK, and adopts it in place → the asset appears in the library and `verify_asset`-accepts on a second device. The only case exercising the web/WASM client and the wrapped-key path. Covers `capsule-web` × `capsule-api-media::drops` × `capsule-core::drop` × `capsule-api-upload` (drop chunks) × `capsule-core::crypto` (rewrap + `verify_asset`) × `capsule-core::library`.
 
 ## Using This Map
 

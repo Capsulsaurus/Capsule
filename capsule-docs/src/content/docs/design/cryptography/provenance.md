@@ -28,6 +28,11 @@ AssetManifest {
   plaintext_size:         u64,
   chunk_size:             u32,            // plaintext bytes per chunk (65,520)
   nonce_prefix:           [u8; 7],        // STREAM nonce prefix, random per file
+  key_mode:               enum,           // derived | wrapped — how the file key is obtained
+                                          //   derived (default): recomputed from the AMK; wrapped_file_key absent
+                                          //   wrapped: carried in wrapped_file_key (an adopted web-upload drop)
+  wrapped_file_key:       Option<bytes>,  // present iff key_mode = wrapped; the random file key sealed under the
+                                          //   AMK (see Encryption — Asset Key Derivation). Opaque to the server.
   created_by_user:        UUID,
   created_by_device:      UUID,
   client_version:         String,
@@ -60,6 +65,8 @@ The signed manifest is stored as the encrypted asset's header and is itself part
 **Streaming is preserved.** STREAM authentication tags verify every chunk *during* the stream. The manifest signature is a one-time provenance check. `ciphertext_hash` is computed incrementally as bytes arrive and confirmed at stream end — no separate pass, no buffering the whole file.
 
 **Rewrite re-rolls keys and binds metadata.** A `replace` mints new ciphertext with a fresh `file_key` and `nonce_prefix` — re-rolled even under the same `file_id` and AMK epoch (see [Encryption — Re-keying on Rewrite](/design/cryptography/encryption/#re-keying-on-rewrite)). A `metadata-update` mints a new metadata blob the same way. Every `create`, `replace`, and `metadata-update` manifest commits to `metadata_blob_hash`, the content address of the asset's current encrypted metadata blob; because the field is covered by both signatures, the metadata bytes the server stores are signature-bound to the asset and cannot diverge from the [signed sidecar](/design/metadata/#local-and-server-metadata-equivalence) the client holds locally.
+
+**Two ways the file key is delivered.** `key_mode` is a closed enum: `derived` (the default — the file key is recomputed from the AMK and `wrapped_file_key` is absent) or `wrapped` (the file key was chosen externally and is carried in `wrapped_file_key`, sealed under the AMK; see [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation)). Wrapped mode exists only for a [web-upload drop](/design/web-upload/) a client [adopts in place](/design/web-upload/#why-adopt-in-place); it is set at the adopting `create` and never on a `replace`. Both fields are covered by both signatures, so neither the mode nor the wrapped key can be altered without breaking verification, and the mode is [authorization-neutral](/design/cryptography/keys/#write-authorization) — it changes how a reader obtains the decryption key, never who was authorized to write. Like every manifest enum, `key_mode` is closed per [protocol version](/design/threat-model/schema-rules/).
 
 The closed action enum is owned by [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set).
 
@@ -130,6 +137,7 @@ This is the cryptography sub-doc most directly responsible for the `verify_asset
 
 - **`verify_asset` positive cases** — a manifest signed by the correct device + correct epoch write-tier key, with a matching `prior_provenance_hash`, verifies. Tested with fixed test vectors so a refactor cannot silently shift the contract.
 - **`verify_asset` negative cases (exhaustive)** — reader-signed (no write-tier sig), removed-writer (write-tier sig from a now-retired epoch), wrong-epoch (sig from the wrong AMK version), forged certificate chain (device not in the user's directory or `added_at` postdates the manifest), replayed manifest (`prior_provenance_hash` does not match local chain head), suite-downgrade (re-signed under a weaker `crypto_suite_id`). Each case is its own unit test with a hand-crafted manifest fixture.
+- **Wrapped-key mode (unit).** A `key_mode = wrapped` manifest whose `wrapped_file_key` (or `key_mode` itself) has been altered after signing fails `verify_asset` like any other tampered signed field; a member holding the AMK unwraps a valid `wrapped_file_key` to recover the file key and STREAM-decrypts the unchanged ciphertext. Exercises the [adopted web-upload drop](/design/web-upload/#why-adopt-in-place) path; authorization checks are unchanged from the derived case.
 - **Chain advance enforcement** — unit test that appending a record whose `prior_provenance_hash` does not match the current head is rejected. Both client-side (`verify_asset`) and server-side (no-key envelope check) reject the same way.
 - **Append-only enforcement (cryptographic, not just storage).** The guarantee is the signature chain, not the file mode. A unit test drops or rewrites a record in a serialized chain and asserts the forward walk from `create` detects the break (a non-matching prior hash, or a signature that no longer verifies). A companion test confirms the server rejects any overwrite or delete of an existing provenance entry at its structural validation layer (invariant 17), and that a client whose local `.provenance.cbor` has been tampered re-derives the authoritative chain from the server rather than trusting the local bytes.
 - **Derivative poisoning rejection** — unit test that a `derivative-replace` whose `prior_provenance_hash` does not chain to the current head for `(asset_id, role)` is rejected; the existing derivative is preserved.
