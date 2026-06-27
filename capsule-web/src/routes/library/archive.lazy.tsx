@@ -1,14 +1,15 @@
-import { AssetGrid } from '@/components/asset-grid';
-import { mockAssets } from '@/lib/mock-data';
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { Archive as ArchiveIcon } from 'lucide-react';
+import { AssetGrid } from '@/components/asset-grid';
+import { useAssets } from '@/data/hooks';
 
 export const Route = createLazyFileRoute('/library/archive')({
     component: Archive,
 });
 
 function Archive() {
-    const archivedAssets = mockAssets.slice(15, 25);
+    const { data: assets = [] } = useAssets();
+    const archivedAssets = assets.slice(15, 25);
 
     return (
         <div className="p-4 pt-2">
@@ -27,7 +28,7 @@ function Archive() {
             {archivedAssets.length > 0 ? (
                 <AssetGrid
                     assets={archivedAssets}
-                    onAssetClick={(asset) => console.log('Clicked', asset)}
+                    onAssetClick={(asset) => console.info('Clicked', asset)}
                 />
             ) : (
                 <div className="flex flex-col items-center justify-center p-20 text-muted-foreground">

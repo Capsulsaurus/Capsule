@@ -1,3 +1,7 @@
+import { createLazyFileRoute, Link, useNavigate } from '@tanstack/react-router';
+import { KeyRoundIcon, MountainIcon } from 'lucide-react';
+import type React from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -18,10 +22,6 @@ import {
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { authenticateWithPasskey } from '@/lib/webauthn';
-import { Link, createLazyFileRoute, useNavigate } from '@tanstack/react-router';
-import { KeyRoundIcon, MountainIcon } from 'lucide-react';
-import type React from 'react';
-import { useEffect, useState } from 'react';
 
 export const Route = createLazyFileRoute('/login')({
     component: Login,

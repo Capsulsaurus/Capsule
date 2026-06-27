@@ -1,17 +1,19 @@
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import { AssetGrid } from '@/components/asset-grid';
 import { Card } from '@/components/ui/card';
-import { mockAlbums, mockAssets } from '@/lib/mock-data';
-import { createLazyFileRoute } from '@tanstack/react-router';
-import { Link } from '@tanstack/react-router';
+import { useAlbums, useAssets } from '@/data/hooks';
 
 export const Route = createLazyFileRoute('/explore')({
     component: Explore,
 });
 
 function Explore() {
+    const { data: assets = [] } = useAssets();
+    const { data: albums = [] } = useAlbums();
+
     // Just mixing some data for the 'explore' feel
-    const featuredAssets = mockAssets.slice(0, 10);
-    const featuredAlbums = mockAlbums.slice(0, 4);
+    const featuredAssets = assets.slice(0, 10);
+    const featuredAlbums = albums.slice(0, 4);
 
     return (
         <div className="p-4 md:p-8 space-y-8">
@@ -61,7 +63,7 @@ function Explore() {
                 <h2 className="text-2xl font-bold mb-4">Trending Photos</h2>
                 <AssetGrid
                     assets={featuredAssets}
-                    onAssetClick={(asset) => console.log('Clicked', asset)}
+                    onAssetClick={(asset) => console.info('Clicked', asset)}
                 />
             </section>
         </div>

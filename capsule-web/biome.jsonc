@@ -1,9 +1,15 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+    "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
     "extends": ["../biome.jsonc"],
     "files": {
-        // routeTree.gen.ts and src/i18n/messages/** are generated; leave them to their generators.
-        "ignore": ["**/routeTree.gen.ts", "src/i18n/messages/**"]
+        // routeTree.gen.ts and i18n/messages are generated; index.css uses Tailwind v4
+        // at-rules (@theme, @custom-variant) that Biome's CSS parser rejects.
+        "includes": [
+            "**",
+            "!**/routeTree.gen.ts",
+            "!**/src/i18n/messages",
+            "!src/index.css"
+        ]
     },
     "vcs": {
         // Required because as of March 2025, Biome doesn't check nested gitignore files otherwise

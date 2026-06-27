@@ -1,16 +1,15 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
 import {
-    Outlet,
     createRootRoute,
+    Outlet,
     useNavigate,
     useRouterState,
 } from '@tanstack/react-router';
-
+import React, { Suspense, useEffect } from 'react';
 import { AppSidebar } from '@/components/app-sidebar';
 import { Header } from '@/components/header';
 import { AuthProvider, useAuth } from '@/lib/auth-context';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
-import React, { Suspense, useEffect } from 'react';
 
 const queryClient = new QueryClient();
 
@@ -18,7 +17,7 @@ const TanStackRouterDevtools =
     process.env.NODE_ENV === 'production'
         ? () => null // Render nothing in production
         : React.lazy(() =>
-              import('@tanstack/router-devtools').then((res) => ({
+              import('@tanstack/react-router-devtools').then((res) => ({
                   default: res.TanStackRouterDevtools,
               })),
           );

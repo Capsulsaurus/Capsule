@@ -5,6 +5,8 @@
  * 3. Call POST /auth/passkey/register/finish with the credential + optional name
  */
 
+import { KeyRoundIcon } from 'lucide-react';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -14,8 +16,6 @@ import {
     passkeyRegisterStart,
 } from '@/lib/api';
 import { registerPasskey } from '@/lib/webauthn';
-import { KeyRoundIcon } from 'lucide-react';
-import { useState } from 'react';
 
 interface PasskeyRegisterProps {
     onSuccess: () => void;

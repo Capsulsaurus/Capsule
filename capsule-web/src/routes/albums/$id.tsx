@@ -1,8 +1,8 @@
-import { AssetGrid } from '@/components/asset-grid';
-import { Button } from '@/components/ui/button';
-import { mockAlbums, mockAssets } from '@/lib/mock-data';
 import { createFileRoute } from '@tanstack/react-router';
 import { MoreHorizontal, Play, Share2 } from 'lucide-react';
+import { AssetGrid } from '@/components/asset-grid';
+import { Button } from '@/components/ui/button';
+import { useAlbum, useAlbumAssets } from '@/data/hooks';
 
 export const Route = createFileRoute('/albums/$id')({
     component: Album,
@@ -10,11 +10,18 @@ export const Route = createFileRoute('/albums/$id')({
 
 function Album() {
     const { id } = Route.useParams();
-    // Find mock album or default
-    const album = mockAlbums.find((a) => a.id === id) || mockAlbums[0];
+    const { data: album, isPending } = useAlbum(id);
+    const { data: assets = [] } = useAlbumAssets(id);
 
-    // Default to some assets
-    const assets = mockAssets.slice(0, album.assetCount);
+    if (isPending) return null;
+
+    if (!album) {
+        return (
+            <div className="flex h-full items-center justify-center text-muted-foreground">
+                Album not found
+            </div>
+        );
+    }
 
     return (
         <div className="flex flex-col h-full bg-background">
@@ -52,7 +59,7 @@ function Album() {
             <div className="flex-1 min-h-0 relative">
                 <AssetGrid
                     assets={assets}
-                    onAssetClick={(a) => console.log('Clicked', a)}
+                    onAssetClick={(a) => console.info('Clicked', a)}
                 />
             </div>
         </div>

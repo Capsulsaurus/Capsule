@@ -1,8 +1,7 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
-    "organizeImports": {
-        "enabled": true
-    },
+    "root": false,
+    "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
+    "assist": { "actions": { "source": { "organizeImports": "on" } } },
     "vcs": {
         "enabled": true,
         "clientKind": "git",
@@ -32,7 +31,13 @@
     "linter": {
         "enabled": true,
         "rules": {
-            "recommended": true,
+            "preset": "recommended",
+            // Promoted to recommended in Biome 2 but flags interactive static
+            // elements across the current placeholder UI; defer to the UI rebuild
+            // (keeps the effective lint scope from before the 2.0 bump).
+            "a11y": {
+                "noStaticElementInteractions": "off"
+            },
             // Keep imports minimal and stable: drop dead imports/vars and split type-only
             // imports/exports (pairs with organizeImports for clean, merge-friendly blocks).
             "correctness": {

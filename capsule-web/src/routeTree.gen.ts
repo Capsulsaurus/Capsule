@@ -10,378 +10,235 @@
 
 import { createFileRoute } from '@tanstack/react-router'
 
-// Import Routes
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
+import { Route as AlbumsIndexRouteImport } from './routes/albums/index'
+import { Route as AlbumsIdRouteImport } from './routes/albums/$id'
 
-import { Route as rootRoute } from './routes/__root'
-import { Route as ResetPasswordImport } from './routes/reset-password'
-import { Route as AlbumsIndexImport } from './routes/albums/index'
-import { Route as AlbumsIdImport } from './routes/albums/$id'
+const StorageLazyRouteImport = createFileRoute('/storage')()
+const SharingLazyRouteImport = createFileRoute('/sharing')()
+const SettingsLazyRouteImport = createFileRoute('/settings')()
+const PhotosLazyRouteImport = createFileRoute('/photos')()
+const LoginLazyRouteImport = createFileRoute('/login')()
+const ForgotPasswordLazyRouteImport = createFileRoute('/forgot-password')()
+const ExploreLazyRouteImport = createFileRoute('/explore')()
+const DashboardLazyRouteImport = createFileRoute('/dashboard')()
+const IndexLazyRouteImport = createFileRoute('/')()
+const SettingsSecurityLazyRouteImport = createFileRoute('/settings/security')()
+const LibraryTrashLazyRouteImport = createFileRoute('/library/trash')()
+const LibraryFavoritesLazyRouteImport = createFileRoute('/library/favorites')()
+const LibraryArchiveLazyRouteImport = createFileRoute('/library/archive')()
 
-// Create Virtual Routes
-
-const StorageLazyImport = createFileRoute('/storage')()
-const SharingLazyImport = createFileRoute('/sharing')()
-const SettingsSecurityLazyImport = createFileRoute('/settings/security')()
-const SettingsLazyImport = createFileRoute('/settings')()
-const PhotosLazyImport = createFileRoute('/photos')()
-const LoginLazyImport = createFileRoute('/login')()
-const ForgotPasswordLazyImport = createFileRoute('/forgot-password')()
-const ExploreLazyImport = createFileRoute('/explore')()
-const DashboardLazyImport = createFileRoute('/dashboard')()
-const IndexLazyImport = createFileRoute('/')()
-const LibraryTrashLazyImport = createFileRoute('/library/trash')()
-const LibraryFavoritesLazyImport = createFileRoute('/library/favorites')()
-const LibraryArchiveLazyImport = createFileRoute('/library/archive')()
-
-// Create/Update Routes
-
-const StorageLazyRoute = StorageLazyImport.update({
+const StorageLazyRoute = StorageLazyRouteImport.update({
   id: '/storage',
   path: '/storage',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/storage.lazy').then((d) => d.Route))
-
-const SharingLazyRoute = SharingLazyImport.update({
+const SharingLazyRoute = SharingLazyRouteImport.update({
   id: '/sharing',
   path: '/sharing',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/sharing.lazy').then((d) => d.Route))
-
-const SettingsSecurityLazyRoute = SettingsSecurityLazyImport.update({
-  id: '/settings/security',
-  path: '/settings/security',
-  getParentRoute: () => rootRoute,
-} as any).lazy(() => import('./routes/settings/security.lazy').then((d) => d.Route))
-
-const SettingsLazyRoute = SettingsLazyImport.update({
+const SettingsLazyRoute = SettingsLazyRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/settings.lazy').then((d) => d.Route))
-
-const PhotosLazyRoute = PhotosLazyImport.update({
+const PhotosLazyRoute = PhotosLazyRouteImport.update({
   id: '/photos',
   path: '/photos',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/photos.lazy').then((d) => d.Route))
-
-const LoginLazyRoute = LoginLazyImport.update({
+const LoginLazyRoute = LoginLazyRouteImport.update({
   id: '/login',
   path: '/login',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/login.lazy').then((d) => d.Route))
-
-const ForgotPasswordLazyRoute = ForgotPasswordLazyImport.update({
+const ForgotPasswordLazyRoute = ForgotPasswordLazyRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
-  getParentRoute: () => rootRoute,
-} as any).lazy(() => import('./routes/forgot-password.lazy').then((d) => d.Route))
-
-const ExploreLazyRoute = ExploreLazyImport.update({
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() =>
+  import('./routes/forgot-password.lazy').then((d) => d.Route),
+)
+const ExploreLazyRoute = ExploreLazyRouteImport.update({
   id: '/explore',
   path: '/explore',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/explore.lazy').then((d) => d.Route))
-
-const DashboardLazyRoute = DashboardLazyImport.update({
+const DashboardLazyRoute = DashboardLazyRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/dashboard.lazy').then((d) => d.Route))
-
-const IndexLazyRoute = IndexLazyImport.update({
-  id: '/',
-  path: '/',
-  getParentRoute: () => rootRoute,
-} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
-
-const ResetPasswordRoute = ResetPasswordImport.update({
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-
-const AlbumsIndexRoute = AlbumsIndexImport.update({
+const IndexLazyRoute = IndexLazyRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
+const AlbumsIndexRoute = AlbumsIndexRouteImport.update({
   id: '/albums/',
   path: '/albums/',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-
-const LibraryTrashLazyRoute = LibraryTrashLazyImport.update({
+const SettingsSecurityLazyRoute = SettingsSecurityLazyRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => SettingsLazyRoute,
+} as any).lazy(() =>
+  import('./routes/settings/security.lazy').then((d) => d.Route),
+)
+const LibraryTrashLazyRoute = LibraryTrashLazyRouteImport.update({
   id: '/library/trash',
   path: '/library/trash',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/library/trash.lazy').then((d) => d.Route))
-
-const LibraryFavoritesLazyRoute = LibraryFavoritesLazyImport.update({
+const LibraryFavoritesLazyRoute = LibraryFavoritesLazyRouteImport.update({
   id: '/library/favorites',
   path: '/library/favorites',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() =>
   import('./routes/library/favorites.lazy').then((d) => d.Route),
 )
-
-const LibraryArchiveLazyRoute = LibraryArchiveLazyImport.update({
+const LibraryArchiveLazyRoute = LibraryArchiveLazyRouteImport.update({
   id: '/library/archive',
   path: '/library/archive',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any).lazy(() =>
   import('./routes/library/archive.lazy').then((d) => d.Route),
 )
-
-const AlbumsIdRoute = AlbumsIdImport.update({
+const AlbumsIdRoute = AlbumsIdRouteImport.update({
   id: '/albums/$id',
   path: '/albums/$id',
-  getParentRoute: () => rootRoute,
+  getParentRoute: () => rootRouteImport,
 } as any)
-
-// Populate the FileRoutesByPath interface
-
-declare module '@tanstack/react-router' {
-  interface FileRoutesByPath {
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/dashboard': {
-      id: '/dashboard'
-      path: '/dashboard'
-      fullPath: '/dashboard'
-      preLoaderRoute: typeof DashboardLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/explore': {
-      id: '/explore'
-      path: '/explore'
-      fullPath: '/explore'
-      preLoaderRoute: typeof ExploreLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/photos': {
-      id: '/photos'
-      path: '/photos'
-      fullPath: '/photos'
-      preLoaderRoute: typeof PhotosLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordImport
-      parentRoute: typeof rootRoute
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/settings/security': {
-      id: '/settings/security'
-      path: '/settings/security'
-      fullPath: '/settings/security'
-      preLoaderRoute: typeof SettingsSecurityLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/sharing': {
-      id: '/sharing'
-      path: '/sharing'
-      fullPath: '/sharing'
-      preLoaderRoute: typeof SharingLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/storage': {
-      id: '/storage'
-      path: '/storage'
-      fullPath: '/storage'
-      preLoaderRoute: typeof StorageLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/albums/$id': {
-      id: '/albums/$id'
-      path: '/albums/$id'
-      fullPath: '/albums/$id'
-      preLoaderRoute: typeof AlbumsIdImport
-      parentRoute: typeof rootRoute
-    }
-    '/library/archive': {
-      id: '/library/archive'
-      path: '/library/archive'
-      fullPath: '/library/archive'
-      preLoaderRoute: typeof LibraryArchiveLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/library/favorites': {
-      id: '/library/favorites'
-      path: '/library/favorites'
-      fullPath: '/library/favorites'
-      preLoaderRoute: typeof LibraryFavoritesLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/library/trash': {
-      id: '/library/trash'
-      path: '/library/trash'
-      fullPath: '/library/trash'
-      preLoaderRoute: typeof LibraryTrashLazyImport
-      parentRoute: typeof rootRoute
-    }
-    '/albums/': {
-      id: '/albums/'
-      path: '/albums'
-      fullPath: '/albums'
-      preLoaderRoute: typeof AlbumsIndexImport
-      parentRoute: typeof rootRoute
-    }
-  }
-}
-
-// Create and export the route tree
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexLazyRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/dashboard': typeof DashboardLazyRoute
   '/explore': typeof ExploreLazyRoute
   '/forgot-password': typeof ForgotPasswordLazyRoute
   '/login': typeof LoginLazyRoute
   '/photos': typeof PhotosLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
-  '/settings': typeof SettingsLazyRoute
-  '/settings/security': typeof SettingsSecurityLazyRoute
+  '/settings': typeof SettingsLazyRouteWithChildren
   '/sharing': typeof SharingLazyRoute
   '/storage': typeof StorageLazyRoute
   '/albums/$id': typeof AlbumsIdRoute
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
-  '/albums': typeof AlbumsIndexRoute
-}
-
-export interface FileRoutesByTo {
-  '/': typeof IndexLazyRoute
-  '/dashboard': typeof DashboardLazyRoute
-  '/explore': typeof ExploreLazyRoute
-  '/forgot-password': typeof ForgotPasswordLazyRoute
-  '/login': typeof LoginLazyRoute
-  '/photos': typeof PhotosLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
-  '/settings': typeof SettingsLazyRoute
   '/settings/security': typeof SettingsSecurityLazyRoute
-  '/sharing': typeof SharingLazyRoute
-  '/storage': typeof StorageLazyRoute
-  '/albums/$id': typeof AlbumsIdRoute
-  '/library/archive': typeof LibraryArchiveLazyRoute
-  '/library/favorites': typeof LibraryFavoritesLazyRoute
-  '/library/trash': typeof LibraryTrashLazyRoute
-  '/albums': typeof AlbumsIndexRoute
-}
-
-export interface FileRoutesById {
-  __root__: typeof rootRoute
-  '/': typeof IndexLazyRoute
-  '/dashboard': typeof DashboardLazyRoute
-  '/explore': typeof ExploreLazyRoute
-  '/forgot-password': typeof ForgotPasswordLazyRoute
-  '/login': typeof LoginLazyRoute
-  '/photos': typeof PhotosLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
-  '/settings': typeof SettingsLazyRoute
-  '/settings/security': typeof SettingsSecurityLazyRoute
-  '/sharing': typeof SharingLazyRoute
-  '/storage': typeof StorageLazyRoute
-  '/albums/$id': typeof AlbumsIdRoute
-  '/library/archive': typeof LibraryArchiveLazyRoute
-  '/library/favorites': typeof LibraryFavoritesLazyRoute
-  '/library/trash': typeof LibraryTrashLazyRoute
   '/albums/': typeof AlbumsIndexRoute
 }
-
+export interface FileRoutesByTo {
+  '/': typeof IndexLazyRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/dashboard': typeof DashboardLazyRoute
+  '/explore': typeof ExploreLazyRoute
+  '/forgot-password': typeof ForgotPasswordLazyRoute
+  '/login': typeof LoginLazyRoute
+  '/photos': typeof PhotosLazyRoute
+  '/settings': typeof SettingsLazyRouteWithChildren
+  '/sharing': typeof SharingLazyRoute
+  '/storage': typeof StorageLazyRoute
+  '/albums/$id': typeof AlbumsIdRoute
+  '/library/archive': typeof LibraryArchiveLazyRoute
+  '/library/favorites': typeof LibraryFavoritesLazyRoute
+  '/library/trash': typeof LibraryTrashLazyRoute
+  '/settings/security': typeof SettingsSecurityLazyRoute
+  '/albums': typeof AlbumsIndexRoute
+}
+export interface FileRoutesById {
+  __root__: typeof rootRouteImport
+  '/': typeof IndexLazyRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/dashboard': typeof DashboardLazyRoute
+  '/explore': typeof ExploreLazyRoute
+  '/forgot-password': typeof ForgotPasswordLazyRoute
+  '/login': typeof LoginLazyRoute
+  '/photos': typeof PhotosLazyRoute
+  '/settings': typeof SettingsLazyRouteWithChildren
+  '/sharing': typeof SharingLazyRoute
+  '/storage': typeof StorageLazyRoute
+  '/albums/$id': typeof AlbumsIdRoute
+  '/library/archive': typeof LibraryArchiveLazyRoute
+  '/library/favorites': typeof LibraryFavoritesLazyRoute
+  '/library/trash': typeof LibraryTrashLazyRoute
+  '/settings/security': typeof SettingsSecurityLazyRoute
+  '/albums/': typeof AlbumsIndexRoute
+}
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/reset-password'
     | '/dashboard'
     | '/explore'
     | '/forgot-password'
     | '/login'
     | '/photos'
-    | '/reset-password'
     | '/settings'
-    | '/settings/security'
     | '/sharing'
     | '/storage'
     | '/albums/$id'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
-    | '/albums'
+    | '/settings/security'
+    | '/albums/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/reset-password'
     | '/dashboard'
     | '/explore'
     | '/forgot-password'
     | '/login'
     | '/photos'
-    | '/reset-password'
     | '/settings'
-    | '/settings/security'
     | '/sharing'
     | '/storage'
     | '/albums/$id'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/settings/security'
     | '/albums'
   id:
     | '__root__'
     | '/'
+    | '/reset-password'
     | '/dashboard'
     | '/explore'
     | '/forgot-password'
     | '/login'
     | '/photos'
-    | '/reset-password'
     | '/settings'
-    | '/settings/security'
     | '/sharing'
     | '/storage'
     | '/albums/$id'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
+    | '/settings/security'
     | '/albums/'
   fileRoutesById: FileRoutesById
 }
-
 export interface RootRouteChildren {
   IndexLazyRoute: typeof IndexLazyRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   DashboardLazyRoute: typeof DashboardLazyRoute
   ExploreLazyRoute: typeof ExploreLazyRoute
   ForgotPasswordLazyRoute: typeof ForgotPasswordLazyRoute
   LoginLazyRoute: typeof LoginLazyRoute
   PhotosLazyRoute: typeof PhotosLazyRoute
-  ResetPasswordRoute: typeof ResetPasswordRoute
-  SettingsLazyRoute: typeof SettingsLazyRoute
-  SettingsSecurityLazyRoute: typeof SettingsSecurityLazyRoute
+  SettingsLazyRoute: typeof SettingsLazyRouteWithChildren
   SharingLazyRoute: typeof SharingLazyRoute
   StorageLazyRoute: typeof StorageLazyRoute
   AlbumsIdRoute: typeof AlbumsIdRoute
@@ -391,16 +248,144 @@ export interface RootRouteChildren {
   AlbumsIndexRoute: typeof AlbumsIndexRoute
 }
 
+declare module '@tanstack/react-router' {
+  interface FileRoutesByPath {
+    '/storage': {
+      id: '/storage'
+      path: '/storage'
+      fullPath: '/storage'
+      preLoaderRoute: typeof StorageLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sharing': {
+      id: '/sharing'
+      path: '/sharing'
+      fullPath: '/sharing'
+      preLoaderRoute: typeof SharingLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/photos': {
+      id: '/photos'
+      path: '/photos'
+      fullPath: '/photos'
+      preLoaderRoute: typeof PhotosLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/explore': {
+      id: '/explore'
+      path: '/explore'
+      fullPath: '/explore'
+      preLoaderRoute: typeof ExploreLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dashboard': {
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/albums/': {
+      id: '/albums/'
+      path: '/albums'
+      fullPath: '/albums/'
+      preLoaderRoute: typeof AlbumsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/security': {
+      id: '/settings/security'
+      path: '/security'
+      fullPath: '/settings/security'
+      preLoaderRoute: typeof SettingsSecurityLazyRouteImport
+      parentRoute: typeof SettingsLazyRoute
+    }
+    '/library/trash': {
+      id: '/library/trash'
+      path: '/library/trash'
+      fullPath: '/library/trash'
+      preLoaderRoute: typeof LibraryTrashLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/library/favorites': {
+      id: '/library/favorites'
+      path: '/library/favorites'
+      fullPath: '/library/favorites'
+      preLoaderRoute: typeof LibraryFavoritesLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/library/archive': {
+      id: '/library/archive'
+      path: '/library/archive'
+      fullPath: '/library/archive'
+      preLoaderRoute: typeof LibraryArchiveLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/albums/$id': {
+      id: '/albums/$id'
+      path: '/albums/$id'
+      fullPath: '/albums/$id'
+      preLoaderRoute: typeof AlbumsIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+  }
+}
+
+interface SettingsLazyRouteChildren {
+  SettingsSecurityLazyRoute: typeof SettingsSecurityLazyRoute
+}
+
+const SettingsLazyRouteChildren: SettingsLazyRouteChildren = {
+  SettingsSecurityLazyRoute: SettingsSecurityLazyRoute,
+}
+
+const SettingsLazyRouteWithChildren = SettingsLazyRoute._addFileChildren(
+  SettingsLazyRouteChildren,
+)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexLazyRoute: IndexLazyRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   DashboardLazyRoute: DashboardLazyRoute,
   ExploreLazyRoute: ExploreLazyRoute,
   ForgotPasswordLazyRoute: ForgotPasswordLazyRoute,
   LoginLazyRoute: LoginLazyRoute,
   PhotosLazyRoute: PhotosLazyRoute,
-  ResetPasswordRoute: ResetPasswordRoute,
-  SettingsLazyRoute: SettingsLazyRoute,
-  SettingsSecurityLazyRoute: SettingsSecurityLazyRoute,
+  SettingsLazyRoute: SettingsLazyRouteWithChildren,
   SharingLazyRoute: SharingLazyRoute,
   StorageLazyRoute: StorageLazyRoute,
   AlbumsIdRoute: AlbumsIdRoute,
@@ -409,83 +394,6 @@ const rootRouteChildren: RootRouteChildren = {
   LibraryTrashLazyRoute: LibraryTrashLazyRoute,
   AlbumsIndexRoute: AlbumsIndexRoute,
 }
-
-export const routeTree = rootRoute
+export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-/* ROUTE_MANIFEST_START
-{
-  "routes": {
-    "__root__": {
-      "filePath": "__root.tsx",
-      "children": [
-        "/",
-        "/dashboard",
-        "/explore",
-        "/forgot-password",
-        "/login",
-        "/photos",
-        "/reset-password",
-        "/settings",
-        "/settings/security",
-        "/sharing",
-        "/storage",
-        "/albums/$id",
-        "/library/archive",
-        "/library/favorites",
-        "/library/trash",
-        "/albums/"
-      ]
-    },
-    "/": {
-      "filePath": "index.lazy.tsx"
-    },
-    "/dashboard": {
-      "filePath": "dashboard.lazy.tsx"
-    },
-    "/explore": {
-      "filePath": "explore.lazy.tsx"
-    },
-    "/forgot-password": {
-      "filePath": "forgot-password.lazy.tsx"
-    },
-    "/login": {
-      "filePath": "login.lazy.tsx"
-    },
-    "/photos": {
-      "filePath": "photos.lazy.tsx"
-    },
-    "/reset-password": {
-      "filePath": "reset-password.tsx"
-    },
-    "/settings": {
-      "filePath": "settings.lazy.tsx"
-    },
-    "/settings/security": {
-      "filePath": "settings/security.lazy.tsx"
-    },
-    "/sharing": {
-      "filePath": "sharing.lazy.tsx"
-    },
-    "/storage": {
-      "filePath": "storage.lazy.tsx"
-    },
-    "/albums/$id": {
-      "filePath": "albums/$id.tsx"
-    },
-    "/library/archive": {
-      "filePath": "library/archive.lazy.tsx"
-    },
-    "/library/favorites": {
-      "filePath": "library/favorites.lazy.tsx"
-    },
-    "/library/trash": {
-      "filePath": "library/trash.lazy.tsx"
-    },
-    "/albums/": {
-      "filePath": "albums/index.tsx"
-    }
-  }
-}
-ROUTE_MANIFEST_END */

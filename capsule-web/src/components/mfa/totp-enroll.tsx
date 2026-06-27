@@ -7,12 +7,12 @@
  * 5. Call POST /auth/totp/verify-enrollment with the code
  */
 
+import { useState } from 'react';
+import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, totpEnroll, totpVerifyEnrollment } from '@/lib/api';
-import { useState } from 'react';
-import QRCode from 'react-qr-code';
 
 interface TotpEnrollProps {
     onSuccess: () => void;

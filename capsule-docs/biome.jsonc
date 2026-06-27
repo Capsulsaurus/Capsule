@@ -1,6 +1,10 @@
 {
-    "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+    "$schema": "https://biomejs.dev/schemas/2.5.1/schema.json",
     "extends": ["../biome.jsonc"],
+    "files": {
+        // Static assets under public/ (favicons, images) are not lint sources.
+        "includes": ["**", "!public"]
+    },
     "vcs": {
         // Required because as of March 2025, Biome doesn't check nested gitignore files otherwise
         "enabled": true,
