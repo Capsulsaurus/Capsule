@@ -1,0 +1,72 @@
+// Git hooks (hk) — delegate to mise tasks (single source of truth for commands).
+// Each step's `glob` mirrors the per-toolchain file set, so a hook only runs the
+// steps whose files actually changed.
+//
+// The hk version in this URL MUST match `hk` in mise.toml [tools]; bump them together.
+amends "package://github.com/jdx/hk/releases/download/v1.48.0/hk@1.48.0#/Config.pkl"
+
+hooks {
+  // pre-commit: auto-fix formatters/linters and stage the result. hk's native
+  // fix+stage replaces lefthook's "run a fixer, then a diff-check step aborts the
+  // commit" dance — fixes are applied and included in the commit.
+  ["pre-commit"] {
+    fix = true
+    stash = "git"   // hide unstaged content so fixers only see staged code
+    stage = true    // re-stage what the fixers changed; the commit proceeds with fixes
+    steps {
+      ["format-rust"]   { glob = "**/*.rs"; fix = "mise run format-rust" }
+      ["format-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run format-web" }
+      ["format-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run format-docs" }
+      ["format-kotlin"] { glob = "**/*.{kt,kts}"; fix = "mise run format-kotlin" }
+      ["format-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; fix = "mise run format-vision" }
+      // Swift tasks self-skip off macOS (see mise-tasks/format-swift).
+      ["format-swift"]  { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; fix = "mise run format-swift" }
+
+      // Linters run after their formatter — same glob, same files, so depends never
+      // skip-mismatches, and we avoid two fixers writing the same files concurrently.
+      ["lint-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; fix = "mise run lint-web"; depends = "format-web" }
+      ["lint-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; fix = "mise run lint-docs"; depends = "format-docs" }
+      ["lint-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; fix = "mise run lint-vision"; depends = "format-vision" }
+      ["lint-md"]     { glob = "**/*.md"; fix = "mise run lint-md" }
+    }
+  }
+
+  // pre-push: read-only checks + tests over the range being pushed. depends chains
+  // the cargo steps (one shared target/ lock) and the gradle steps (one daemon);
+  // every other toolchain's checks run in parallel.
+  ["pre-push"] {
+    steps {
+      ["check-commits"]       { check = "mise run check-commits" }
+
+      ["format-check-rust"]   { glob = "**/*.rs"; check = "mise run format-check-rust" }
+      ["lint-check-rust"]     { glob = "**/*.rs"; check = "mise run lint-check-rust"; depends = "format-check-rust" }
+      ["test-rust"]           { glob = "**/*.rs"; check = "mise run test-rust"; depends = "lint-check-rust" }
+
+      ["format-check-web"]    { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run format-check-web" }
+      ["lint-check-web"]      { glob = "capsule-web/**/*.{ts,tsx,js,jsx,json,jsonc,css}"; check = "mise run lint-check-web" }
+      ["test-web"]            { glob = "capsule-web/**/*.{ts,tsx,js,jsx}"; check = "mise run test-web" }
+
+      ["format-check-docs"]   { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; check = "mise run format-check-docs" }
+      ["lint-check-docs"]     { glob = "capsule-docs/**/*.{ts,tsx,js,jsx,json,jsonc,css,astro,md,mdx}"; check = "mise run lint-check-docs" }
+
+      ["format-check-kotlin"] { glob = "**/*.{kt,kts}"; check = "mise run format-check-kotlin" }
+      ["lint-check-kotlin"]   { glob = "**/*.{kt,kts}"; check = "mise run lint-check-kotlin"; depends = "format-check-kotlin" }
+
+      ["format-check-vision"] { glob = "capsule-vision/**/*.{py,ipynb}"; check = "mise run format-check-vision" }
+      ["lint-check-vision"]   { glob = "capsule-vision/**/*.{py,ipynb}"; check = "mise run lint-check-vision" }
+
+      // Swift tasks self-skip off macOS (see mise-tasks/*-swift).
+      ["format-check-swift"]  { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; check = "mise run format-check-swift" }
+      ["lint-check-swift"]    { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; check = "mise run lint-check-swift" }
+
+      ["lint-check-md"]       { glob = "**/*.md"; check = "mise run lint-check-md" }
+    }
+  }
+
+  // commit-msg: validate the in-progress message (Conventional Commits via convco).
+  ["commit-msg"] {
+    steps {
+      ["convco"] { check = "mise run commit-check {{commit_msg_file}}" }
+    }
+  }
+}

@@ -117,8 +117,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Set up mise tools (convco)
+      - name: Set up convco (via mise)
         uses: jdx/mise-action@v2
+        with:
+          install_args: convco
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:

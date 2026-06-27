@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Cross-compile the Rust core and package CapsuleCoreFFI.xcframework (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping FFI build (not macOS)"; exit 0; fi
+bash capsule-swift/Scripts/build-rust-ffi.sh

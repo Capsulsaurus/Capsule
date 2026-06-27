@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+#MISE description="Check HardwareSigner examples exist + run the software-signer smoke"
+set -euo pipefail
+# Each device-key backend ships a HardwareSigner reference example. This verifies they
+# exist and runs the software-backend smoke (pure Rust — no uniffi/hardware/TPM). The
+# native (Kotlin/Swift) and TPM examples are exercised locally per their READMEs; see
+# capsule-core-{kotlin,swift}.
+for f in \
+    capsule-core/src/crypto/keys/software.rs \
+    capsule-core/src/crypto/keys/tpm.rs \
+    capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware/SoftwareSigner.kt \
+    capsule-core-kotlin/src/main/kotlin/com/justin13888/capsule/hardware/StrongBoxSigner.kt \
+    capsule-core-swift/Sources/CapsuleHardware/SoftwareSigner.swift \
+    capsule-core-swift/Sources/CapsuleHardware/SecureEnclaveSigner.swift; do
+    test -f "$f" || { echo "missing HardwareSigner example: $f" >&2; exit 1; }
+done
+# The software-signer smoke: the simplest backend (no uniffi foreign trait, no hardware).
+cargo nextest run -p capsule-core --features ffi --lib crypto::keys::software
+echo "HardwareSigner examples present; software-signer smoke passed"

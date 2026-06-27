@@ -1,6 +1,6 @@
 // Locale resolution for the web client.
 //
-// Messages are compiled from the canonical `locales/` catalogs by `just i18n`
+// Messages are compiled from the canonical `locales/` catalogs by `mise run i18n`
 // (see the i18n design doc); they are not authored here. To add a locale, add it
 // to `locales/config.json`, translate it, regenerate, and import its bundle below.
 

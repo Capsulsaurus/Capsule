@@ -1,7 +1,7 @@
 {
     "java.configuration.updateBuildConfiguration": "disabled",
-    // Run clippy (not just check) with the same curated lint set the justfile/CI enforce,
-    // so the editor flags the same issues live. Keep in sync with `clippy_flags` in the justfile.
+    // Run clippy (not just check) with the same curated lint set mise.toml/CI enforce,
+    // so the editor flags the same issues live. Keep in sync with `CLIPPY_FLAGS` in mise.toml.
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.check.extraArgs": [
         "--",

@@ -7,7 +7,7 @@
 # The simulator slice is a universal binary (arm64 + x86_64) so the xcframework
 # links on both Apple Silicon and Intel Macs.
 #
-# Run via `just build-ffi-apple`, or directly. Requires: rustup, cargo, xcodebuild.
+# Run via `mise run build-ffi-apple`, or directly. Requires: rustup, cargo, xcodebuild.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

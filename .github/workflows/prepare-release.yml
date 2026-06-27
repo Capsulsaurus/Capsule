@@ -1,7 +1,7 @@
 name: Prepare release
 
 # Manually triggered. Computes the next version (or uses an explicit one), writes it
-# into every package via `just set-version`, regenerates the CHANGELOG, and opens a
+# into every package via `mise run set-version`, regenerates the CHANGELOG, and opens a
 # release PR. Merging that PR to master triggers release.yml (build + GitHub Release).
 #
 # Requires a repo secret `RELEASE_PAT` (a PAT with `contents` + `pull-requests` write):
@@ -19,6 +19,10 @@ permissions:
   contents: write
   pull-requests: write
 
+# Install convco explicitly (below); never let `mise run` implicitly install [tools].
+env:
+  MISE_AUTO_INSTALL: "false"
+
 jobs:
   prepare:
     name: Open release PR
@@ -28,8 +32,10 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PAT }}
-      - name: Set up mise tools (just, convco)
+      - name: Set up convco (via mise)
         uses: jdx/mise-action@v2
+        with:
+          install_args: convco
       - name: Resolve version
         id: v
         run: |
@@ -43,8 +49,8 @@ jobs:
       - name: Apply version + regenerate changelog
         run: |
           set -euo pipefail
-          just set-version "${{ steps.v.outputs.version }}"
-          just changelog "${{ steps.v.outputs.version }}"
+          mise run set-version "${{ steps.v.outputs.version }}"
+          mise run changelog "${{ steps.v.outputs.version }}"
       - name: Open release PR
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PAT }}

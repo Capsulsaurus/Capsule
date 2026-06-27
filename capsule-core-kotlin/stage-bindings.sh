@@ -4,14 +4,14 @@
 #
 # For on-device (instrumented) StrongBox tests, also build the per-ABI JNI libs and copy them into
 # src/main/jniLibs/<abi>/, e.g.:
-#   (cd .. && just build-android)
+#   (cd .. && mise run build-android)
 #   cp ../target/aarch64-linux-android/debug/libcapsule_core.so src/main/jniLibs/arm64-v8a/
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 
 cd "$repo"
-just gen-bindings   # builds target/debug/libcapsule_core.{so,dylib} and emits target/bindings/kotlin
+mise run gen-bindings   # builds target/debug/libcapsule_core.{so,dylib} and emits target/bindings/kotlin
 
 dest="$here/build/generated-bindings/uniffi/capsule_core"
 mkdir -p "$dest"
