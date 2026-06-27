@@ -1,15 +1,342 @@
-# Repo-wide dev tooling, pinned so local and CI install identical versions.
-# Install everything with:  mise install   (run from the repo root)
+# Capsule monorepo dev tooling + task runner (mise).
 #
-# Scope: the release/commit toolchain shared across every package. Language
-# toolchains stay where they belong — Rust in /rust-toolchain.toml, the Apple
-# client's Swift tools in capsule-swift/mise.toml (mise layers child configs on
-# top of this one).
+# Pinned so local and CI install identical versions. From the repo root:
+#   mise install        # installs the tools below
+#   mise tasks          # lists every task (plain = auto-fix, -check = verify-only)
+#   mise run check-rust  # run a task
+#
+# Scope: the shared toolchain plus the cross-platform task graph (formerly the
+# justfile). Language toolchains stay where they belong — Rust in
+# /rust-toolchain.toml, the Apple client's Swift tools in capsule-swift/mise.toml
+# (mise layers child configs on top of this one).
+
 [tools]
-just = "1"
-lefthook = "2"
-# convco isn't in the mise registry. Its GitHub release assets aren't named in a way the
-# `ubi` backend can resolve on Linux (ambiguous ubuntu/deb zips), so use the `cargo`
-# backend — it fetches a prebuilt binary via cargo-binstall when possible and otherwise
+# hk: git-hook runner (replaces lefthook). The version here MUST match the
+# `amends` URL in hk.pkl, or pkl reports a schema mismatch. Bump both together.
+hk = "1.48.0"
+# convco / cargo-nextest aren't in the mise registry by a short name. The `cargo`
+# backend fetches a prebuilt binary via cargo-binstall when possible and otherwise
 # builds from source, working uniformly on every OS in CI and locally.
 "cargo:convco" = "0.6.4"
+"cargo:cargo-nextest" = "0.9"
+
+[env]
+# Curated clippy lint set, applied `--workspace` so every crate gets identical rules
+# (no per-crate `[lints]` opt-in/opt-out). Levels live here; thresholds in clippy.toml.
+# Enables `pedantic` then allows the doc/cast/ergonomics noise; keeps the high-value
+# checks (unwrap_used denied, mechanical cleanups) plus a couple of rustc lints.
+# Referenced unquoted (`-- $CLIPPY_FLAGS`) so the shell word-splits it into flags.
+CLIPPY_FLAGS = "-W clippy::pedantic -W unreachable_pub -D warnings -A clippy::must_use_candidate -A clippy::missing_errors_doc -A clippy::missing_panics_doc -A clippy::doc_markdown -A clippy::cast_possible_truncation -A clippy::cast_possible_wrap -A clippy::cast_sign_loss -A clippy::cast_lossless -A clippy::cast_precision_loss -A clippy::module_name_repetitions -A clippy::similar_names -A clippy::too_many_lines -A clippy::struct_excessive_bools -A clippy::unused_self -A clippy::return_self_not_must_use -A clippy::needless_pass_by_value -A clippy::trivially_copy_pass_by_ref -A clippy::unnecessary_wraps -A clippy::wildcard_imports -A clippy::default_trait_access -A clippy::upper_case_acronyms -A clippy::unused_async -A clippy::unused_async_trait_impl -A clippy::decimal_bitwise_operands -A clippy::wrong_self_convention -A clippy::enum_variant_names -A clippy::struct_field_names -A clippy::option_option -A clippy::used_underscore_binding -A clippy::ref_option -A clippy::items_after_statements -D clippy::unwrap_used -D clippy::dbg_macro"
+
+# ── Aggregates ───────────────────────────────────────────────────────────────
+# Cross-toolchain fan-outs use `depends` (mise runs them in parallel). The only
+# cargo task inside each is the Rust one, so there's no `target/` lock contention.
+
+[tasks.format]
+description = "Auto-format every toolchain"
+depends = ["format-rust", "format-web", "format-docs", "format-kotlin", "format-vision", "format-swift"]
+
+[tasks.format-check]
+description = "Verify formatting, every toolchain"
+depends = ["format-check-rust", "format-check-web", "format-check-docs", "format-check-kotlin", "format-check-vision", "format-check-swift"]
+
+[tasks.lint]
+description = "Auto-fix lints, every toolchain"
+depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-vision", "lint-swift", "lint-md"]
+
+[tasks.lint-check]
+description = "Verify lints, every toolchain"
+depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md"]
+
+[tasks.test]
+description = "Run tests (rust + web + kotlin)"
+depends = ["test-rust", "test-web", "test-kotlin"]
+
+[tasks.test-coverage]
+description = "Coverage report (rust)"
+depends = ["test-coverage-rust"]
+
+[tasks.build]
+description = "Build every toolchain"
+depends = ["build-rust", "build-web", "build-docs", "build-kotlin", "build-swift"]
+
+# CI gate. Sequential: format-check and lint-check both drive cargo, so running
+# them (and the test build) in parallel would thrash the single `target/` lock.
+[tasks.check]
+description = "Full CI gate (format-check + lint-check + test)"
+run = ["mise run format-check", "mise run lint-check", "mise run test"]
+
+# ── Per-toolchain CI entrypoints ─────────────────────────────────────────────
+# Each maps 1:1 to a CI job so the workflow stays consistent with this file.
+
+# Sequential for the same target-lock reason as `check`: every step here touches cargo.
+[tasks.check-rust]
+description = "Rust CI gate"
+run = [
+  "mise run format-check-rust",
+  "mise run lint-check-rust",
+  "mise run i18n-check",
+  "mise run build-rust",
+  "mise run build-ffi",
+  "mise run lint-check-ffi",
+  "mise run gen-bindings",
+  "mise run verify-examples",
+]
+
+[tasks.check-web]
+description = "Web CI gate"
+depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
+
+[tasks.check-docs]
+description = "Docs CI gate"
+depends = ["format-check-docs", "lint-check-docs", "build-docs"]
+
+[tasks.check-vision]
+description = "Vision CI gate"
+depends = ["format-check-vision", "lint-check-vision"]
+
+[tasks.check-kotlin]
+description = "Kotlin CI gate"
+depends = ["format-check-kotlin", "lint-check-kotlin"]
+
+[tasks.check-md]
+description = "Markdown CI gate"
+depends = ["lint-check-md"]
+
+# ── Rust ─────────────────────────────────────────────────────────────────────
+
+[tasks.format-rust]
+run = "cargo fmt"
+
+[tasks.format-check-rust]
+run = "cargo fmt --check"
+
+[tasks.lint-rust]
+run = "cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty -- $CLIPPY_FLAGS"
+
+[tasks.lint-check-rust]
+run = "cargo clippy --workspace --exclude capsule-sdk -- $CLIPPY_FLAGS"
+
+# nextest: cross-binary parallel scheduling + process-per-test isolation. Two
+# invocations — the workspace (default features), then capsule-core's FFI surface.
+# nextest does not run doctests; the workspace has none (if you add one, also add a
+# `cargo test --doc` step). CI selects the `ci` profile via NEXTEST_PROFILE=ci.
+[tasks.test-rust]
+run = [
+  "cargo nextest run --workspace --exclude capsule-sdk",
+  "cargo nextest run -p capsule-core --features ffi",
+]
+
+[tasks.test-coverage-rust]
+run = "cargo llvm-cov nextest --workspace --exclude capsule-sdk --fail-under-lines 0"
+
+[tasks.build-rust]
+run = "cargo build --workspace --exclude capsule-sdk"
+
+# Compile the canonical locales/ catalogs into each platform's native i18n format
+# (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
+[tasks.i18n]
+description = "Compile locales/ into per-platform i18n files"
+run = "cargo run -q -p xtask -- i18n"
+
+# Verify the generated i18n files are in sync with locales/ (CI drift gate).
+[tasks.i18n-check]
+description = "Verify generated i18n is in sync with locales/"
+run = "cargo run -q -p xtask -- i18n --check"
+
+# ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
+# capsule-core exposes a minimal `FfiWorkspace` over uniffi behind the `ffi`
+# feature; `gen-bindings` (a file task) emits the Kotlin/Swift sources from the
+# compiled cdylib. The `ffi-bindgen` feature adds uniffi's CLI for that generator.
+
+[tasks.build-ffi]
+run = "cargo build -p capsule-core --features ffi"
+
+[tasks.lint-check-ffi]
+run = "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS"
+
+# gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
+
+# ── Cross-compilation: FFI / mobile targets ──────────────────────────────────
+# capsule-core builds as cdylib+staticlib (see its [lib] crate-type) so it links
+# into iOS/Android. This is the formal definition of the targets the crate
+# verifies; .github/workflows/ci.yml `rust-cross` enforces it.
+#
+#   Tier 1 — CI-gated on every PR:
+#     x86_64-unknown-linux-gnu      (host; covered by the `rust` workspace build)
+#     aarch64-apple-ios             aarch64-apple-ios-sim   x86_64-apple-ios
+#     aarch64-apple-darwin          x86_64-apple-darwin
+#     aarch64-linux-android         armv7-linux-androideabi
+#     x86_64-linux-android          i686-linux-android
+#   Tier 2 — best-effort (build-only, non-blocking):
+#     x86_64-pc-windows-msvc        aarch64-unknown-linux-gnu
+#
+# build-apple / build-android / build-linux-cross live in mise-tasks/ (platform
+# guards + toolchain checks). Run `mise run targets-add` first.
+
+[tasks.targets-add]
+description = "Add rustup targets + cargo-ndk for the mobile/desktop FFI builds"
+run = [
+  "rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android",
+  "cargo install cargo-ndk",
+]
+
+[tasks.build-windows]
+description = "Build capsule-core FFI for x86_64-pc-windows-msvc (Tier 2)"
+run = "cargo build -p capsule-core --features ffi --target x86_64-pc-windows-msvc"
+
+# Sequential: each builds capsule-core into the shared target/ tree.
+[tasks.build-targets]
+description = "Build the Tier-1 cross targets (Apple + Android + Linux cross)"
+run = ["mise run build-apple", "mise run build-android", "mise run build-linux-cross"]
+
+# ── Web ──────────────────────────────────────────────────────────────────────
+
+[tasks.format-web]
+dir = "capsule-web"
+run = "bunx biome format --write ."
+
+[tasks.format-check-web]
+dir = "capsule-web"
+run = "bunx biome format ."
+
+[tasks.lint-web]
+dir = "capsule-web"
+run = "bunx biome check --write ."
+
+[tasks.lint-check-web]
+dir = "capsule-web"
+run = "bunx biome check ."
+
+[tasks.test-web]
+dir = "capsule-web"
+run = "bun test --pass-with-no-tests"
+
+[tasks.build-web]
+dir = "capsule-web"
+run = "bun run build"
+
+# ── Docs ─────────────────────────────────────────────────────────────────────
+
+[tasks.format-docs]
+dir = "capsule-docs"
+run = "bunx biome format --write ."
+
+[tasks.format-check-docs]
+dir = "capsule-docs"
+run = "bunx biome format ."
+
+[tasks.lint-docs]
+dir = "capsule-docs"
+run = "bunx biome check --write ."
+
+[tasks.lint-check-docs]
+dir = "capsule-docs"
+run = "bunx biome check ."
+
+[tasks.build-docs]
+dir = "capsule-docs"
+run = "bun run build"
+
+# ── Kotlin ───────────────────────────────────────────────────────────────────
+
+[tasks.format-kotlin]
+run = "./gradlew ktlintFormat"
+
+[tasks.format-check-kotlin]
+run = "./gradlew ktlintCheck"
+
+[tasks.lint-kotlin]
+run = "./gradlew detekt"
+
+[tasks.lint-check-kotlin]
+run = "./gradlew detekt"
+
+[tasks.test-kotlin]
+run = "./gradlew test"
+
+[tasks.build-kotlin]
+run = "./gradlew build"
+
+# ── Swift ────────────────────────────────────────────────────────────────────
+# Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses
+# those pins via `mise -C` while running in its own dir. All Swift tasks live in
+# mise-tasks/ (macOS-only guards + per-dir loops): format-swift, format-check-swift,
+# lint-swift, lint-check-swift, build-ffi-apple, generate-swift, build-swift.
+
+# One-shot: build the FFI xcframework, then generate the workspace. Sequential —
+# tuist generate consumes the xcframework build-ffi-apple produces.
+[tasks.setup-swift]
+description = "Build the FFI xcframework, then generate the Xcode workspace"
+run = ["mise run build-ffi-apple", "mise run generate-swift"]
+
+# ── Vision ───────────────────────────────────────────────────────────────────
+
+[tasks.format-vision]
+dir = "capsule-vision"
+run = "uv run ruff format"
+
+[tasks.format-check-vision]
+dir = "capsule-vision"
+run = "uv run ruff format --check"
+
+[tasks.lint-vision]
+dir = "capsule-vision"
+run = "uv run ruff check --fix"
+
+[tasks.lint-check-vision]
+dir = "capsule-vision"
+run = "uv run ruff check && uv run ty check"
+
+# ── Markdown ─────────────────────────────────────────────────────────────────
+# Repo-wide Markdown linting (READMEs, design docs, root docs). markdownlint-cli2
+# is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
+
+[tasks.lint-md]
+run = "bunx markdownlint-cli2 --fix"
+
+[tasks.lint-check-md]
+run = "bunx markdownlint-cli2"
+
+# ── Commits / release ────────────────────────────────────────────────────────
+# convco enforces Conventional Commits (https://www.conventionalcommits.org).
+# `commit-check` (mise-tasks/) validates a single in-progress message (commit-msg
+# hook); `check-commits` validates a range (pre-push and CI on PRs).
+
+[tasks.check-commits]
+description = "Conventional Commits check over a range (default origin/master..HEAD)"
+run = "convco check --first-parent --ignore-reverts {{arg(name='base', default='origin/master')}}..HEAD"
+
+# Write one repo-wide version into every package's source of truth (Rust workspace,
+# web/docs package.json, vision pyproject, Android gradle.properties, iOS Project.swift)
+# and bump the Android versionCode. See xtask/src/main.rs for the per-format editors.
+[tasks.set-version]
+description = "Write one version into every package (via xtask)"
+run = "cargo run -q -p xtask -- set-version {{arg(name='version')}}"
+
+# Regenerate CHANGELOG.md from Conventional Commits. Pass the version when cutting a
+# release so its section is titled (e.g. `mise run changelog 0.2.0`); the default
+# leaves the newest section as "Unreleased". (mise quotes a passed arg, so no quotes here.)
+[tasks.changelog]
+description = "Regenerate CHANGELOG.md from Conventional Commits"
+run = "convco changelog --unreleased {{arg(name='title', default='Unreleased')}} > CHANGELOG.md"
+
+# ── Setup ────────────────────────────────────────────────────────────────────
+
+[tasks.hooks-install]
+description = "Install the git hooks (hk)"
+run = "hk install"
+
+[tasks.hooks-uninstall]
+description = "Uninstall the git hooks (hk)"
+run = "hk uninstall"
+
+# Install per-package dependencies (named `setup`, not `install`, to avoid colliding
+# with `mise install`, which installs the [tools] above).
+[tasks.setup]
+description = "Install web/docs/vision package dependencies"
+run = [
+  "cd capsule-web && bun install",
+  "cd capsule-docs && bun install",
+  "cd capsule-vision && uv sync",
+]

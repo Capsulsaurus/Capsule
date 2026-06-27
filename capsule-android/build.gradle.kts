@@ -49,7 +49,7 @@ android {
         minSdk = 26
         targetSdk = 36
         // Version is the repo-wide source of truth in gradle.properties, kept in sync
-        // across every package by `just set-version` (xtask).
+        // across every package by `mise run set-version` (xtask).
         versionCode = providers.gradleProperty("capsule.versionCode").get().toInt()
         versionName = providers.gradleProperty("capsule.versionName").get()
     }

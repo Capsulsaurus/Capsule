@@ -25,7 +25,7 @@ cd capsule-core-kotlin
 On-device StrongBox (a physical device with a secure element; an emulator only has a TEE):
 
 ```sh
-(cd .. && just build-android)      # per-ABI libcapsule_core.so via cargo-ndk
+(cd .. && mise run build-android)      # per-ABI libcapsule_core.so via cargo-ndk
 # copy the .so into src/main/jniLibs/<abi>/ (see stage-bindings.sh), then:
 ./gradlew connectedAndroidTest
 ```

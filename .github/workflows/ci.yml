@@ -13,6 +13,12 @@ concurrency:
 permissions:
   contents: read
 
+# mise is the task runner here, but it must never implicitly install [tools] — each
+# job installs exactly what it needs (nextest via taiki-e on the Rust jobs, convco via
+# mise on the release/commit-lint jobs). hk is local-only and never installed in CI.
+env:
+  MISE_AUTO_INSTALL: "false"
+
 jobs:
   # Detect which toolchain's dependency tree changed so each job only runs when relevant.
   changes:
@@ -36,7 +42,10 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - 'Cross.toml'
-              - 'justfile'
+              - 'mise.toml'
+              - 'mise-tasks/**'
+              - '.config/nextest.toml'
+              - 'hk.pkl'
               - '.cargo/**'
               - 'capsule-api/**'
               - 'capsule-cli/**'
@@ -47,16 +56,24 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
+              - 'mise.toml'
+              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             docs:
               - 'capsule-docs/**'
+              - 'mise.toml'
+              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             vision:
               - 'capsule-vision/**'
+              - 'mise.toml'
+              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+              - 'mise.toml'
+              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             kotlin:
               - 'capsule-android/**'
@@ -68,6 +85,8 @@ jobs:
               - 'gradlew.bat'
               - '.editorconfig'
               - 'detekt.yml'
+              - 'mise.toml'
+              - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
 
   # Enforce Conventional Commits across a PR's commits (convco skips merge commits).
@@ -81,8 +100,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Set up mise tools (convco)
+      - name: Set up convco (via mise)
         uses: jdx/mise-action@v2
+        with:
+          install_args: convco
       - name: Check commits follow Conventional Commits
         run: convco check --first-parent --ignore-reverts ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
 
@@ -103,10 +124,17 @@ jobs:
           rustup component add rustfmt clippy
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Install just
-        uses: extractions/setup-just@v3
+      # check-rust runs the verify-examples smoke via nextest.
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (fmt + clippy + build)
-        run: just check-rust
+        run: mise run check-rust
 
   rust-test:
     name: Rust (tests)
@@ -126,10 +154,18 @@ jobs:
         run: rustup toolchain install
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Test
-        run: just test-rust
+        env:
+          NEXTEST_PROFILE: ci
+        run: mise run test-rust
 
   # Verify capsule-core cross-compiles to the formally supported targets (mobile +
   # desktop). Tier 1 (Apple, Android) gates; Tier 2 (Windows MSVC, aarch64 Linux)
@@ -194,10 +230,12 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: cross-${{ matrix.name }}
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Build target
-        run: just ${{ matrix.recipe }}
+        run: mise run ${{ matrix.recipe }}
 
   web:
     name: Web (format + lint + test + build)
@@ -219,10 +257,12 @@ jobs:
       - name: Install dependencies
         working-directory: capsule-web
         run: bun install --frozen-lockfile
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (format + lint + test + build)
-        run: just check-web
+        run: mise run check-web
 
   docs:
     name: Docs (format + lint + build)
@@ -244,10 +284,12 @@ jobs:
       - name: Install dependencies
         working-directory: capsule-docs
         run: bun install --frozen-lockfile
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (format + lint + build)
-        run: just check-docs
+        run: mise run check-docs
 
   vision:
     name: Vision (format + lint)
@@ -264,10 +306,12 @@ jobs:
       - name: Install Python and sync deps
         working-directory: capsule-vision
         run: uv sync --frozen
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (format + lint)
-        run: just check-vision
+        run: mise run check-vision
 
   markdown:
     name: Markdown (lint)
@@ -280,10 +324,12 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (markdown lint)
-        run: just check-md
+        run: mise run check-md
 
   kotlin:
     name: Kotlin (ktlint + detekt)
@@ -306,10 +352,12 @@ jobs:
         run: sdkmanager "platforms;android-36"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-      - name: Install just
-        uses: extractions/setup-just@v3
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
       - name: Check (ktlint + detekt)
-        run: just check-kotlin
+        run: mise run check-kotlin
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this

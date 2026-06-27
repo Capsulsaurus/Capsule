@@ -4,7 +4,7 @@ This directory is the **single source of truth** for every user-facing string in
 Capsule. You can translate Capsule **without touching any application code** —
 just edit JSON files here and open a pull request.
 
-A build step (`just i18n`) compiles these files into each platform's native
+A build step (`mise run i18n`) compiles these files into each platform's native
 format (web, iOS, Android, and the Rust server/CLI). Nothing here is hand-copied
 into the apps; the generated files are produced from this directory.
 
@@ -72,8 +72,8 @@ localized high-level message. See the design doc for the full contract.
    `pt-BR`).
 2. Copy `en.json` to `<locale>.json` and translate each `message`. Keep the keys
    identical — every key in `en.json` must exist in every translation.
-3. Run `just i18n` to regenerate the per-platform files, then
-   `just i18n-check` to confirm there is no drift.
+3. Run `mise run i18n` to regenerate the per-platform files, then
+   `mise run i18n-check` to confirm there is no drift.
 4. Open a pull request. See [CONTRIBUTING.md](../CONTRIBUTING.md) for the commit
    and review flow.
 

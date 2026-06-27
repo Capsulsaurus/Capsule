@@ -1,0 +1,40 @@
+# cargo-nextest configuration. See https://nexte.st/docs/configuration/
+#
+# `default` runs locally (e.g. the pre-push hook); CI selects `ci` via NEXTEST_PROFILE=ci.
+# nextest does not run doctests — the workspace has none. If you add one, also run
+# `cargo test --doc` separately.
+
+[profile.default]
+# Warn when a test runs longer than 60s, then kill it after 3× (180s). Catches a hung
+# FFI/native test (deadlock, callback never firing) instead of stalling the whole run.
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+[profile.ci]
+# Docker/testcontainers integration tests race on container startup; retry transient
+# failures with backoff. flaky-vs-failed is reported separately by nextest.
+retries = { backoff = "exponential", count = 3, delay = "2s", max-delay = "10s" }
+# Surface every failure in a run rather than stopping at the first.
+fail-fast = false
+slow-timeout = { period = "60s", terminate-after = 3 }
+
+# JUnit output for CI dashboards (written to target/nextest/ci/junit.xml).
+[profile.ci.junit]
+path = "junit.xml"
+
+# The capsule-api-auth integration tests spin up shared Postgres + Valkey containers and
+# share a tracing `Once`; running them concurrently is the main flakiness source. Pin the
+# group to one thread — the causal fix, with retries as the backstop.
+[test-groups.containers]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = 'package(capsule-api-auth)'
+test-group = 'containers'
+# Container startup is slower than a unit test — give it more headroom before the kill.
+slow-timeout = { period = "120s", terminate-after = 3 }
+
+[[profile.ci.overrides]]
+filter = 'package(capsule-api-auth)'
+test-group = 'containers'
+slow-timeout = { period = "120s", terminate-after = 3 }
+retries = 5
