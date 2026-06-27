@@ -12,9 +12,7 @@
         "dev": "rsbuild dev",
         "dev:analyze": "cross-env BUNDLE_ANALYZE=true bun run dev",
         "dev:doctor": "cross-env RSDOCTOR=true bun run dev",
-        "preview": "rsbuild preview",
-        "intl:extract": "formatjs extract 'src/**/*.{ts,tsx}' --out-file build/i18n-extracted.json",
-        "intl:compile": "formatjs compile src/i18n/messages/en.json --ast --out-file build/i18n-en.json"
+        "preview": "rsbuild preview"
     },
     "dependencies": {
         "@radix-ui/react-avatar": "^1.1.12",
@@ -31,9 +29,6 @@
         "@tanstack/react-query-devtools": "^5.101.0",
         "@tanstack/react-table": "^8.21.3",
         "@tanstack/react-virtual": "^3.14.2",
-        "baseline-browser-mapping": "^2.10.35",
-        "caniuse-lite": "^1.0.30001797",
-        "change-case": "^5.4.4",
         "class-variance-authority": "^0.7.1",
         "clsx": "^2.1.1",
         "filesize": "^10.1.6",
@@ -43,7 +38,6 @@
         "react-dom": "^18.3.1",
         "react-intl": "^6.8.9",
         "react-qr-code": "^2.2.0",
-        "recharts": "^2.15.4",
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.6.0",
         "tailwindcss": "^4.3.0",
@@ -53,8 +47,6 @@
     "devDependencies": {
         "@aaroon/workbox-rspack-plugin": "^0.3.3",
         "@biomejs/biome": "^1.9.4",
-        "@formatjs/cli": "^6.16.11",
-        "@parcel/watcher": "^2.5.6",
         "@rsbuild/core": "^1.7.5",
         "@rsbuild/plugin-react": "^1.4.6",
         "@rsdoctor/rspack-plugin": "^0.4.13",
