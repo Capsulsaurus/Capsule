@@ -249,7 +249,7 @@ jobs:
         with:
           bun-version: latest
       - name: Cache bun install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: bun-web-${{ runner.os }}-${{ hashFiles('capsule-web/bun.lock') }}
@@ -276,7 +276,7 @@ jobs:
         with:
           bun-version: latest
       - name: Cache bun install
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: bun-docs-${{ runner.os }}-${{ hashFiles('capsule-docs/bun.lock') }}
