@@ -351,7 +351,7 @@ jobs:
       - name: Install Android platform
         run: sdkmanager "platforms;android-36"
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
