@@ -21,7 +21,7 @@ import java.security.interfaces.ECPrivateKey
  * The AndroidKeyStore exposes **ECDSA over NIST P-256**, not Ed25519, so this returns P-256
  * material: an X.509 `SubjectPublicKeyInfo` public key and an ASN.1/DER ECDSA signature over
  * `msg`. It therefore does **not** yet plug into the Ed25519 `createWithHardwareSigner` path —
- * wiring a StrongBox device in needs the P-256 hybrid-DSK variant tracked in `DEFERRED.md`. It is
+ * wiring a StrongBox device in needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). It is
  * the real hardware adapter + the on-device non-exportability check; for an end-to-end FFI round
  * trip use [SoftwareSigner] (genuine Ed25519).
  *

@@ -10,7 +10,7 @@ import Foundation
 /// The Secure Enclave only does **NIST P-256**, not Ed25519, so this returns P-256 material: a
 /// 65-byte x9.63 public key and a 64-byte ECDSA `r‖s` signature over `msg`. It therefore does
 /// **not** yet plug into the Ed25519 `FfiWorkspace.createWithHardwareSigner` path — wiring a
-/// Secure Enclave device in needs the P-256 hybrid-DSK variant tracked in `DEFERRED.md`. It is the
+/// Secure Enclave device in needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). It is the
 /// real hardware adapter + the on-device non-exportability check; for an end-to-end FFI round trip
 /// in CI/local tests use ``SoftwareSigner`` (genuine Ed25519).
 ///

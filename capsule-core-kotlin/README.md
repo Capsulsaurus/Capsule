@@ -39,5 +39,5 @@ On-device StrongBox (a physical device with a secure element; an emulator only h
 - **Android SDK.** `./gradlew` needs the Android SDK (`ANDROID_HOME` / `local.properties`).
 - **StrongBox** is on-device only and (like Secure Enclave and the TPM) exposes ECDSA-P256, not
   Ed25519, so `StrongBoxSigner` does not yet wire into the Ed25519 `createWithHardwareSigner` path;
-  that needs the P-256 hybrid-DSK variant tracked in the repo `DEFERRED.md`. Use `SoftwareSigner`
+  that needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). Use `SoftwareSigner`
   for an end-to-end FFI round trip.

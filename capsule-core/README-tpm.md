@@ -14,7 +14,7 @@ cargo build -p capsule-core --features tpm
 
 On macOS there is no TPM; the reference is verified to compile + link on Linux. (See the algorithm
 caveat in `src/crypto/keys/tpm.rs`: shipping TPMs do ECDSA-P256, not Ed25519, so this backend
-awaits the P-256 hybrid-DSK variant before it composes into the device key — see `DEFERRED.md`.)
+awaits the P-256 hybrid-DSK variant before it composes into the device key — see `SLICES.md`.)
 
 ## Smoke test with a software TPM (`swtpm`)
 

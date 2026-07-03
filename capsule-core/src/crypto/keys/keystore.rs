@@ -2,7 +2,7 @@
 //! keys) and its encrypted-at-rest form [`AccountFile`].
 //!
 //! This stands in for the hardware-bound keystores (Secure Enclave / StrongBox / TPM) the
-//! design specifies per platform — those are deferred (see `DEFERRED.md`). Here the master
+//! design specifies per platform — those are deferred (see `SLICES.md`). Here the master
 //! key is wrapped under a passphrase via [`pwkdf`], and the device identity private keys
 //! are sealed under the master key (the design's "master key wraps device identity private
 //! keys"). SSoT: [Cryptography — Keys].

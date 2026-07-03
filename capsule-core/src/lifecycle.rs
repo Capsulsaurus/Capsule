@@ -19,7 +19,7 @@
 //! Clients store **plaintext** locally (original + signed sidecar + provenance chain);
 //! encryption produces the artifacts that cross a boundary. Offline epoch rotation is supported
 //! ([`rotate_epoch`](Workspace::rotate_epoch)); the MLS membership ceremony (`Welcome`,
-//! add/remove) remains deferred (see `DEFERRED.md`).
+//! add/remove) remains deferred (see `SLICES.md`).
 //!
 //! [`verify_asset`]: crate::crypto::verify_asset
 
@@ -343,7 +343,7 @@ impl Workspace {
     /// "AMK bump + write-tier rotation are one commit" atomicity. The admin key (the ledger
     /// root) is stable across epochs, and existing assets stay verifiable under their original
     /// epoch. Returns the new epoch. Membership changes / the MLS `Welcome` flow remain deferred
-    /// (see `DEFERRED.md`).
+    /// (see `SLICES.md`).
     pub fn rotate_epoch(&mut self, album_id: Uuid) -> Result<u32> {
         let next = {
             let album = self
