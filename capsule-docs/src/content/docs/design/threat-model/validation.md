@@ -75,7 +75,7 @@ A [web-upload](/design/web-upload/) drop carries **no `AssetManifest`** — no s
 
 Drop **chunks** reuse the `PATCH` chunk rules (9–12) and **finalization** reuses the integrity checks (13–14) unchanged; only drop-session creation (26–31) and adoption (32) differ from the album upload path.
 
-Every rejection is logged with a structured reason code; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
+Every rejection carries a machine-readable [`error.*` code](/design/i18n/#server-error-codes) alongside its transport status — the code, never the bare status, is what clients switch on and localize (see [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping)) — and is logged with it; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
 
 ## Client-Side Validation Invariants
 
@@ -110,6 +110,8 @@ The rules are stated once, in REST terms (headers + HTTP statuses). On the gRPC 
 | `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
 | `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
 
+This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Checksum`, and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift.
+
 ### Fail-Closed Rules
 
 - `X-Capsule-Protocol` outside `[Min, Max]` on a **write**: `426 Upgrade Required`. No session created, no row written.
@@ -134,6 +136,11 @@ Every write surface has a single idempotency key. Duplicates are no-ops; conflic
 | Federation pull                     | `(peer_id, sync_cursor)` — the sync cursor itself is the key                       | Re-pull returns the same page                     |
 | MLS commit                          | Handled by OpenMLS; commits are ordered by the group's commit chain                | OpenMLS rejects duplicates                        |
 | Album upgrade ceremony              | `intent_id` (UUIDv7); see [Versioning](/design/versioning/#album-upgrade-ceremony) | Same intent never produces two forks              |
+| MLS group re-keying ceremony        | `intent_id` (UUIDv7); same machinery as the album upgrade ([MLS Resilience](/design/mls-resilience/#group-re-keying-ceremony)) | Same intent never re-keys twice                   |
+| Device enrollment (code redeem / cross-device add) | The [enrollment code](/design/device-enrollment/#cross-device-add) — single-use, deleted on redemption or expiry | Re-redemption is rejected (the code is consumed); a restarted ceremony mints a fresh code |
+| Share-link / upload-link creation   | Client-supplied operation id (UUIDv7)                                              | Retried create returns the already-minted link    |
+| Share-link / upload-link revoke     | `link_id`                                                                          | Second revoke is a no-op                          |
+| Drop adoption (`POST /drops/{id}/adopt`) | `drop_id` — the atomic inbox→album promotion (invariant 32)                   | A retry after success finds the inbox row gone and returns the already-promoted asset |
 
 A write surface that does not appear here is, by default, **not** idempotent and must be designed before it ships.
 

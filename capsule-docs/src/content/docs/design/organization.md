@@ -39,7 +39,7 @@ A container album must be explicitly created, but a brand-new account has none �
 View albums are organizational surfaces computed entirely client-side over the assets the user can already decrypt (the union of their container-album memberships), materialized by querying the [local index](/design/filesystem/client/#local-index-staleness). A view is **not** an MLS group, holds **no** AMK, **owns no assets**, and is **not** a sharing or access-control boundary — sharing happens only at the container tier. Two kinds:
 
 - **System albums** — built-in and implicit. The canonical one is **All** — every asset the user can see; because that is the union over their containers, every asset appears in it (which is exactly why the [default album](#the-default-album) matters: an import always enters *some* container and so shows up in All). [Trash](#recycling) is another system view, over lifecycle state.
-- **Smart / dynamic albums** — user-defined filtered views whose membership is a predicate over sidecar fields and AI-derived attributes ([Metadata](/design/metadata/#sidecar-schema-v1), [AI](/design/ai/)). Membership is **computed**, never stored: editing a smart album, or an asset's attributes, never moves or re-encrypts an asset. A definition (predicate + display name) is user content — stored in a client-side, E2E-encrypted document synced across the user's devices with the same [CRDT semantics](/design/metadata/#collaborative-metadata) as other collaborative metadata, so the server never learns it.
+- **Smart / dynamic albums** — user-defined filtered views whose membership is a predicate over sidecar fields and AI-derived attributes ([Metadata](/design/metadata/#sidecar-schema-v1), [AI](/design/ai/)). Membership is **computed**, never stored: editing a smart album, or an asset's attributes, never moves or re-encrypts an asset. A definition (predicate + display name) is user content — stored in the per-owner, E2E-encrypted **library-settings document** declared in [Metadata — How Operations Travel](/design/metadata/#how-operations-travel), synced across the user's devices with the same [CRDT semantics](/design/metadata/#collaborative-metadata) as other collaborative metadata, so the server never learns it. (That document's concrete schema is a design follow-up, tracked as its own slice in the repo-root `SLICES.md`; this doc owns only what it must carry — smart-album definitions and the scope-override map.)
 
 ## Asset Stacking
 
@@ -60,7 +60,7 @@ StackMembership {
 }
 ```
 
-`stack_type` is a closed enum per `protocol_version` — adding a new stack type bumps the version. Old albums never see the new type.
+`stack_type` is a closed enum per `protocol_version` — adding a new stack type bumps the version. Old albums never see the new type. The authoritative value set is the closed Rust enum `capsule-core::domain::stack_type`, one variant per type below; the taxonomy prose is descriptive, the enum is normative.
 
 ### Stack Types
 

@@ -29,6 +29,17 @@ Patterns borrowed from Matrix 2.0, with one critical departure: **`.well-known/`
   - **Federated peer lookup** (resolving a user across servers): authenticated by a federation capability token (see [Federation — Federation Capabilities](/design/federation/#federation-capabilities)) and rate-limited per peer.
   - **Anonymous WebFinger**: returns only records the target user has explicitly opted into making public. The default is opt-out: no anonymous record. The opt-in-able record set is deliberately tiny — handle and display name only, never keys, device lists, or album hints; anything richer requires authenticated lookup. This is deliberately stricter than Matrix's default and follows the [deny-by-default rule](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar) from the threat model.
 
+### The `.well-known/capsule/*` Registry
+
+Every well-known path Capsule serves, in one census. Each path's record format is owned by the linked doc; a new path MUST add a row here when introduced.
+
+| Path                                 | Contents                                                                                                                        | Owner                                                                                                   |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `.well-known/capsule/server-info`    | Public server-scoped facts: API base URL, auth + federation endpoints, server signing key, supported `protocol_version` range, deprecation cutoffs. Never a user list. | this doc ([Identity and Discovery](#identity-and-discovery))                                            |
+| `.well-known/capsule/moved/{user}`   | The IK-signed moved certificate for a migrated account.                                                                          | this doc ([Account Portability](#account-portability))                                                  |
+| `.well-known/capsule/revoked-jti`    | Federation capability revocation list (bounded to ≤ 24 h of revocations).                                                        | [Federation](/design/federation/#token-lifecycle-and-chain-of-trust)                                    |
+| `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
+
 ## Account Portability
 
 A user must be able to move servers without losing their identity. Capsule does **not** need a separate DID system: the user identity key (User IK — see [Cryptography — Keys](/design/cryptography/keys/#user-identity-keys-user-iks)) is *already* a server-independent root of trust. Only the `user@server.tld` handle is host-bound.
