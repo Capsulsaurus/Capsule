@@ -56,9 +56,9 @@ ZIP was considered and rejected: its central-directory-at-end makes streaming wr
 
 The account master key is the single backed-up root of the key hierarchy (see [Cryptography — Keys](/design/cryptography/keys/)). It is escrowed server-side so a user holding only their recovery secret can reconstruct it:
 
-- Wrap the account master key with a user-chosen high-entropy passphrase or a randomly generated 48+ bit recovery code.
+- Wrap the account master key with a user-chosen high-entropy passphrase or a randomly generated recovery code of **≥128 bits** (e.g. a BIP39-style phrase) — the same entropy floor as every other unguessable identifier in the system. The escrow blob is offline-attackable once exfiltrated, and [Argon2id](/design/cryptography/primitives/#password-based-kdf) raises brute-force cost only linearly, so the secret itself must carry the security: **no low-entropy code is permitted without an enclave** (below).
 - Derive the wrapping key with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). Store the wrapped blob server-side.
-- If you can run enclaves (SGX/Nitro/SEV-SNP), do Signal's SVR trick: rate-limit PIN attempts inside the enclave so a weak PIN is still safe. Without enclaves, require a real passphrase or recovery code — don't let users pick 4-digit PINs.
+- If you can run enclaves (SGX/Nitro/SEV-SNP), Signal's SVR pattern is the *only* sanctioned way to soften that floor: rate-limit unwrap attempts inside the enclave so a shorter, human-friendly PIN is still safe. Without an attested enclave, the ≥128-bit floor is mandatory — never a 4-digit PIN, never a short numeric code.
 
 ## Recovery Mechanisms
 

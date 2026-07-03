@@ -3,7 +3,7 @@ title: Moderation
 description: Server moderation policy — reports, suspensions, takedowns, blocklists, federated reporting
 ---
 
-Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no content scanner will be built. Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.
+Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no server-side content scanner will be built. (Client-side, opt-in ML over a user's *own* library — [AI/ML](/design/ai/) — is a different thing entirely: it runs where the keys are, under the user's control; its candidate shared-album-flagging classifiers are client-side and user-initiated, never a server scanner.) Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.
 
 Implementation will live in `capsule-api::moderation` (a new sub-crate or service inside `capsule-api`). The boundary surfaces — report submission, federated report exchange, blocklist publication — are the eventual contract; this doc captures what they will need to do.
 
@@ -44,8 +44,8 @@ Server-level blocklists, plus per-user blocks that federate:
 A server admin can suspend a user account on their home server. Suspended accounts:
 
 - Cannot upload — `POST /upload` session creation is refused with a structured `403 AccountSuspended` code (distinct from quota and permission rejections, so the client surfaces the right remediation).
-- Cannot share new albums (existing shares remain valid for the share-link TTL; revocation lists can revoke them).
-- Cannot revoke other devices' sessions (a suspended account's `revoke_all_sessions` is refused — defends against compromised-account-as-DoS).
+- Cannot share new albums or create new share/upload links (existing share links keep serving until they expire or are revoked — [share links](/design/share-links/) have optional expiry plus revocation, no implicit TTL).
+- **Can still secure the account**: `revoke_all_sessions` remains available to a suspended user — it is gated by [master-key proof](/design/authentication/#explicit-revocation), not by account standing, so it cannot be abused by a session-token thief, and a suspended user whose account may be compromised needs it most. Suspension removes upload and sharing capability, never the ability to evict sessions.
 
 The user's *data* is untouched — suspension is an access-level action, not a data-level one. Reversibility (a suspension can be lifted) is the default; permanent termination is a separate policy.
 
@@ -54,7 +54,7 @@ The user's *data* is untouched — suspension is an access-level action, not a d
 When a moderation action requires the *home server* to stop serving a specific asset (e.g. legal request, CSAM report verified by admin viewing in their album):
 
 - The asset is marked unservable on the home server (`served = false` in the index).
-- Federated peers fetching the asset receive `410 Gone`.
+- Federated peers fetching the asset receive `410 Gone`. (This deliberately diverges from the [share-link and drop serve paths](/design/share-links/#security-contract), which return an indistinguishable `404` — those must not confirm a capability URL ever existed, while a takedown *intends* to signal removal of content whose existence the peer already knows. The per-surface rule: capability-URL serving → `404`; takedown of known content → `410`.)
 - The asset's underlying blob is **not** deleted — the user owns the data, and a takedown is a serving constraint, not a destruction; the user can still restore from their own backup. A takedown is therefore **reversible by default** (an admin can lift it). A **legal-hold** variant marks the asset indefinitely unservable where law requires it — lifted only when the legal obligation ends, not at admin discretion — but even then never destroys the user's bytes: the constraint is on the *home server's serving*, not on the data the user holds.
 - The takedown emits a **server-visible moderation provenance record** the user sees in their audit log — what was taken down, when, and (where policy permits) why — honoring the "[No silent operations](#what-moderation-cannot-do-structural)" rule. A user whose asset stops serving is never left to guess why, and the moderation action is itself auditable after the fact.
 

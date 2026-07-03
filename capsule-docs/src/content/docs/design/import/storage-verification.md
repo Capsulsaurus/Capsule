@@ -5,7 +5,7 @@ description: The endpoint a client calls to confirm an asset is durably stored, 
 
 [Upload finalization](/design/import/upload-protocol/#finalization-and-integrity) confirms, **once**, that the bytes the server assembled match the declared hash. That `Completed` acknowledgement is a transfer receipt, not a standing durability guarantee a client can re-check later — and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves *cryptographic* validity and authorization, never that the server still holds the bytes. A client that is about to discard local data therefore has no way, today, to ask the server: *do you actually still have this, indexed and retrievable?*
 
-This doc defines that missing query and the rule that every client follows before any destructive local action. The endpoint lives in `capsule-api-media` (it answers from the blob store plus the Postgres index); the client-side gate is a pure predicate in `capsule-core` invoked from `capsule-sdk`.
+This doc defines that missing query and the rule that every client follows before any destructive local action. The endpoint lives in `capsule-api-media` (planned; it answers from the blob store plus the Postgres index); the client-side gate is a pure predicate in `capsule-core` invoked from `capsule-sdk` (planned — the offline core's `verify_asset` already covers the complementary crypto-validity half of the gate).
 
 ## What "Safely Stored" Means
 
@@ -16,6 +16,8 @@ A blob being content-addressed and hash-matching is necessary but not sufficient
 - **Retrievable** — the blob is in a state the server would actually serve: reference count > 0, **not** marked `collectable_since` (mid-[GC](/design/filesystem/server/#deletion-and-garbage-collection)), **not** quarantined, and not a dangling-reference integrity error.
 
 A `durable` verdict requires all three to hold for every **required** blob of the asset — its original and metadata blobs, plus any derivative the client declares it is relying on.
+
+`durable` attests **this home server's** storage only. It says nothing about replicas, peers, or off-server backups — multi-location redundancy is the [backup artifact](/design/backup-recovery/)'s job — and a deployment running its own replication layer still attests only what this server can itself `stat` and serve.
 
 ## Endpoint
 
@@ -55,7 +57,7 @@ StorageVerification {
 ```
 
 - A hash the client lists that the server does not associate with the asset comes back `stored=false, indexed=false` — surfaced, never silently omitted.
-- **`deep`** (default `false`) asks the server to re-read and re-hash the blob bytes rather than trusting the `stat` + index, catching silent bit-rot at the cost of I/O. It is opt-in because the structural check answers the common case (did finalization actually durably land?) cheaply, while a deep scan is for periodic integrity audits.
+- **`deep`** (default `false`) asks the server to re-read and re-hash the blob bytes rather than trusting the `stat` + index, catching silent bit-rot at the cost of I/O. It is opt-in because the structural check answers the common case (did finalization actually durably land?) cheaply, while a deep scan is for periodic integrity audits. `deep` is a server-priced operation: rate-limited per user and coalesced server-side (a repeated `deep` request against the same blob within a window returns the cached result), so a client cannot turn it into an I/O-amplification attack.
 
 The endpoint is deliberately cheap and idempotent so clients can call it freely on the destructive path below.
 
@@ -77,6 +79,8 @@ The gate **does not** apply to:
 - **Re-fetchable server-origin blobs** — a fetched-but-unpinned original came *from* the server, so the server is already known to hold it; evicting it is safe because it transparently re-fetches.
 
 A non-`durable` verdict never triggers a destructive action: the client retains the local copy, retries verification with backoff, and surfaces the asset as "not yet confirmed on server" rather than silently dropping it.
+
+**The verdict is a point-in-time fact**, so the verify→release window is kept tight on both sides: the client re-verifies if more than a bounded interval (default 60 s) elapses between verdict and release, and on the server a blob that just answered `durable` cannot reach byte deletion faster than the standing [GC grace window](/design/filesystem/server/#deletion-and-garbage-collection) — the verdict plus that grace period is what makes the gate sound without a lease protocol.
 
 ## Relationship to Other Checks
 

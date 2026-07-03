@@ -55,7 +55,7 @@ Embeddings share a common vector space and are stored locally in **SQLite + `sql
 
 Every embedding Capsule stores — in the local SQLite vector index, in an encrypted backup, or inside a [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) for an embedding-class derivative — carries the tuple `(model_id, model_version)` identifying which [inventory](#models-and-algorithms) row produced it. Vector spaces differ across pairs, so embeddings are not comparable across `(model_id, model_version)`. Every `model_id` is declared in exactly one inventory row ([SSoT](/design/principles/#single-source-of-truth)); a swap is a one-row edit that propagates by `model_id` to every consumer. The invariant:
 
-- The vector index **refuses inserts** whose `model_id` is not the current canonical row for its task. A buggy or new client uploading embeddings from an unrecognized model is rejected at the insert API, never silently mixed in.
+- The vector index **refuses inserts** whose `(model_id, model_version)` is **unknown to the inventory** — a buggy or new client producing embeddings from an unrecognized model is rejected at the insert API, never silently mixed in. Entries from a *superseded-but-known* version are admitted as stale-flagged rows (they are the regeneration queue and are excluded from queries) — the refusal targets unknown models, not known-but-old ones.
 - A model swap increments `model_version` for that task. Old embeddings are **flagged stale** and excluded from queries until regenerated from the originals. Cross-version comparison is forbidden — see [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants).
 - Regeneration is a background task that walks the library producing fresh embeddings at the new version; old entries are removed only after new ones persist (per-asset replace, not a global truncate-and-rebuild).
 
@@ -116,7 +116,7 @@ Identifies individuals even when they turn away from the camera during an event:
 
 #### High-Dimensional Vector Search
 
-Exact KNN is too slow at millions of rows: use **HNSW** indexes on the vector columns, and the inner-product operator (`<#>`) for normalized embeddings (cheaper than $L_2$ or cosine at scale).
+Vectors live in `sqlite-vec` `vec0` virtual tables (the [engine declared above](#database-indexing-and-view-generation)) and are queried by **inner-product distance** over normalized embeddings — the cheapest of the metrics. `sqlite-vec`'s SIMD brute-force scan covers libraries into the hundreds of thousands of rows; at millions of rows the designated escalation is its ANN indexing as it matures, or a partitioned scan (by album/date bucket) until then. Server-side vector-database idioms (pgvector's HNSW indexes, the `<#>` operator) do not apply — the index is client-local SQLite by design.
 
 ## Validation
 
