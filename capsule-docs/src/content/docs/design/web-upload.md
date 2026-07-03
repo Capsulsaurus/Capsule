@@ -39,7 +39,7 @@ Out of scope for v1 (deliberate non-goals):
 
 These are **normative** — the security-relevant decisions are committed; only UX presentation remains open.
 
-- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` is a **random 128-bit value** from the CSPRNG — full 128-bit entropy, *not* a UUIDv7 or other structured id (identical rule to the [share-link opaque-id](/design/share-links/#security-contract)); it is fully opaque and carries no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
+- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
 - **Drops never enter the library.** A drop is written only to the provisioning user's **inbox**; it is never an album asset, never appears in any album member's [sync feed](/design/import/download-sync/#discovering-what-changed), and is served only to the provisioning user's own authenticated devices. A drop carries **no `AssetManifest`** — no `device_sig`, no `write_sig`, no `album_id`, no provenance — and therefore never flows through [`verify_asset`](/design/cryptography/keys/#write-authorization). Library state is reachable only through adoption by a trusted client.
 - **Per-link caps are enforced server-side at the no-key layer.** Expiry, cumulative-byte cap, file-count cap, and per-file size cap are checked on every drop-session creation; an over-cap or expired/revoked link is refused. These bound a leaked link to *wasted quota and inbox space*, never to library corruption.
 - **Quota is charged to the provisioning user at drop-session creation.** A drop debits the link owner's quota at session creation — the single hard [enforcement point](/design/quota/#enforcement-points) — using the [`upload_user_id = owner_id` attribution](/design/quota/#accounting-model). A link cannot be used to push the owner past their hard limit.
@@ -52,14 +52,14 @@ These are **normative** — the security-relevant decisions are committed; only 
 
 ### 1. Provision (native client, registered user)
 
-The user's client mints a [Drop Key](/design/cryptography/keys/#non-registered-accounts) (a hybrid X25519 + ML-KEM-768 KEM keypair), wraps the private half under the [account master key](/design/cryptography/keys/#registered-accounts) and re-wraps it to the user's [OGK](/design/cryptography/keys/#owner-group-keys-ogks) so any of the user's enrolled devices can later decapsulate, and registers an upload-link record with the server: `{opaque-id}`, the per-link caps, the pinned `protocol_version` + `crypto_suite_id`, and an optional passphrase wrap. The server stores the record under `{opaque-id}` and never sees `{drop_pubkey}`. The user shares the full URL (including the fragment) with the guest over any out-of-band channel.
+The user's client mints a [Drop Key](/design/cryptography/keys/#non-registered-accounts) (composition owned there), wraps the private half under the [account master key](/design/cryptography/keys/#registered-accounts) and re-wraps it to the user's [OGK](/design/cryptography/keys/#owner-group-keys-ogks) so any of the user's enrolled devices can later decapsulate, and registers an upload-link record with the server: `{opaque-id}`, the per-link caps, the pinned `protocol_version` + `crypto_suite_id`, and an optional passphrase wrap. The server stores the record under `{opaque-id}` and never sees `{drop_pubkey}`. The user shares the full URL (including the fragment) with the guest over any out-of-band channel.
 
 ### 2. Seal and upload (web client, guest)
 
 For each selected asset the web client:
 
 1. Draws a random 32-byte asset key **`K`** from the browser CSPRNG.
-2. Encrypts the asset with **AES-256-GCM-STREAM** under `K`, using the *unchanged* [STREAM construction](/design/cryptography/encryption/#stream-construction) (65,520-byte plaintext chunks, a fresh 7-byte `nonce_prefix`), and computes `ciphertext_hash` incrementally.
+2. Encrypts the asset under `K` with the *unchanged* [STREAM construction](/design/cryptography/encryption/#stream-construction) (chunking and nonce shape owned there), and computes `ciphertext_hash` incrementally.
 3. **Encapsulates `K`** to `{drop_pubkey}` with the link's KEM, producing `kem_ct`.
 4. Emits an unsigned **`DropDescriptor`** and uploads it alongside the ciphertext via the drop upload protocol — the [upload protocol](/design/import/upload-protocol/)'s chunk and finalization mechanics under link-capability auth, with the drop endpoints in the [Contract Skeleton](#contract-skeleton):
 
@@ -67,7 +67,7 @@ For each selected asset the web client:
 DropDescriptor {
   content_type:       enum,          // closed enum for the link's protocol_version (same set as a manifest's)
   plaintext_size:     u64,
-  chunk_size:         u32,           // 65,520
+  chunk_size:         u32,           // the STREAM plaintext chunk size (owned by Encryption)
   nonce_prefix:       [u8; 7],       // the STREAM nonce prefix used above
   ciphertext_hash:    bytes,         // content-address digest of the STREAM ciphertext
   kem_ct:             bytes,         // K encapsulated to {drop_pubkey}; length fixed by crypto_suite_id

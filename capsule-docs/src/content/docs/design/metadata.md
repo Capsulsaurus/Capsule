@@ -65,7 +65,7 @@ SidecarV1 {
 
 ### Closed Enum Value Sets
 
-Two sidecar fields are closed enums whose authoritative value sets live here (the blanket closed-enum rule is [Threat Model — Schema Rules](/design/threat-model/schema-rules/); the code mirror is a closed Rust enum in `capsule-core::domain`, and adding a value bumps `protocol_version`):
+Two sidecar fields are closed enums whose authoritative value sets live here (the blanket closed-enum rule is [Threat Model — Schema Rules](/design/threat-model/schema-rules/); the code mirror is a closed Rust enum in `capsule-core::domain`, and adding a value requires a new, later-dated `protocol_version`):
 
 - **`content_type`** — MIME syntax, exactly **one canonical value per format** (never an alias like `image/jpg`). The v1 set:
   - images: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/tiff`, `image/heic`, `image/avif`, `image/jxl`, `image/x-adobe-dng`

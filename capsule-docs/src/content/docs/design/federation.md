@@ -45,7 +45,7 @@ Cross-server replication of a *single* album (where two users on different home 
 
 ## Federation Capabilities
 
-Sharing an album with `alice@other.tld` requires her server to be *able* to fetch that album's blobs. Capsule issues her server an **album-scoped capability token**: a signed, expiring, revocable grant naming the album, the scope, and an expiry, reusing the [EdDSA-JWT machinery](/design/authentication/#access-token) already built for access tokens — no separate macaroon or ZCAP format is introduced.
+Sharing an album with `alice@other.tld` requires her server to be *able* to fetch that album's blobs. Capsule issues her server an **album-scoped capability token**: a signed, expiring, revocable grant naming the album, the scope, and an expiry, reusing the [EdDSA-JWT machinery](/design/authentication/#access-token) already built for access tokens — no separate macaroon or ZCAP format is introduced. (Terminology note: this server-to-server JWT and the user-facing **link capabilities** — [share links](/design/share-links/) and [upload links](/design/web-upload/), opaque-id + fragment secret — share the *concept* of unforgeable possession granting scoped access, not a format; "capability token" always means this JWT.)
 
 The capability token format is the contract every federated peer parses and that this server signs. Its shape and lifecycle below are normative.
 

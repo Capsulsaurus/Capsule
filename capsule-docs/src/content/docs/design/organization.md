@@ -60,7 +60,7 @@ StackMembership {
 }
 ```
 
-`stack_type` is a closed enum per `protocol_version` — adding a new stack type bumps the version. Old albums never see the new type. The authoritative value set is the closed Rust enum `capsule-core::domain::stack_type`, one variant per type below; the taxonomy prose is descriptive, the enum is normative.
+`stack_type` is a closed enum per `protocol_version` — adding a new stack type requires a new (later-dated) version. Old albums never see the new type. The authoritative value set is the closed Rust enum `capsule-core::domain::stack_type`, one variant per type below; the taxonomy prose is descriptive, the enum is normative.
 
 ### Stack Types
 

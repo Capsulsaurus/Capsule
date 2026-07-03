@@ -19,16 +19,7 @@ Versioning happens on multiple layers, each owned by the doc that defines it:
 
 ## Negotiation Headers
 
-The contract for version compatibility — every API request and response carries these. The full fail-closed rule set is owned by [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation).
-
-| Header                       | Sent by                   | Meaning                                                                                               |
-| ---------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `X-Capsule-Protocol`         | client / peer             | `YYYY-MM-DD` protocol version the request is written against                                          |
-| `X-Capsule-Crypto-Suite`     | client / peer on writes   | `u16` suite id from the [Primitives Inventory](/design/cryptography/primitives/#primitives-inventory) |
-| `X-Capsule-Sidecar-Schema`   | client on metadata-update | `u16` schema version declared at `sidecar_schema` field 0                                             |
-| `X-Capsule-Protocol-Min`     | server on every response  | the lowest protocol version this server accepts                                                       |
-| `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
-| `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
+The negotiation-header set — `X-Capsule-Protocol`, `X-Capsule-Crypto-Suite`, `X-Capsule-Sidecar-Schema`, and the server's `X-Capsule-Protocol-Min`/`-Max` and `X-Capsule-Min-Client-Build` responses — is declared **once**, in the registry at [Threat Model — Universal Headers](/design/threat-model/validation/#universal-headers), together with the fail-closed rules; the cross-transport carriage is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). This doc adds only the versioning semantics: `protocol_version` is **date-based** (`YYYY-MM-DD`, ordered lexicographically = chronologically), a request is written against exactly one version, and the server advertises the closed `[Min, Max]` window it accepts on every response.
 
 ## Compatibility Verification
 

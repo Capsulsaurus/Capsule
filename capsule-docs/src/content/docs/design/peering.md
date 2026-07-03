@@ -27,7 +27,7 @@ Identity-trusted is **not** content-trusted, however. A device can still be bugg
 
 ### Peer-Class Containment
 
-Even two of the same user's devices are separate failure-containment boundaries ([Threat Model — Damage Containment Layers](/design/threat-model/#damage-containment-layers)). A buggy $v_k$ device cannot overwrite a $v_{k+1}$ device's state via a stale-but-valid backup artifact, and a v_{k+1} device's writes are not retroactively applied to a v_k device's view of an older album. Specifically:
+Even two of the same user's devices are separate failure-containment boundaries ([Threat Model — Damage Containment Layers](/design/threat-model/#damage-containment-layers)). A buggy older-version device cannot overwrite a newer device's state via a stale-but-valid backup artifact, and a newer device's writes are not retroactively applied to an older device's view of an older-pinned album. Specifically:
 
 - Every received manifest is checked against the receiver's local `latest_provenance_hash` for that asset (see [Applying Received Data](#applying-received-data)) — a stale manifest is quarantined, not silently applied.
 - Every received structure that announces a `sidecar_schema`, `crypto_suite_id`, or `protocol_version` above the receiver's max known is rejected at decode — the receiver refuses to interpret bytes it cannot validate. This is the client-side counterpart of the [server-side schema lockdown](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar).

@@ -21,7 +21,7 @@ Every lifecycle operation's `action` field is one of the following **closed enum
 | `derivative-replace` | Replace an existing derivative — the only authorized path; a silent overwrite is rejected.                                                         |
 | `trash-restore`      | Recover a soft-deleted asset from trash within its retention window.                                                                               |
 
-Adding a value to this enum bumps `protocol_version` and old albums remain pinned to their original set — a faulty or new client cannot inject an unknown action into a v_k album.
+Adding a value to this enum requires a new (later-dated) `protocol_version`, and old albums remain pinned to their original set — a faulty or new client cannot inject an unknown action into an older-pinned album.
 
 ## Authorizing a Lifecycle Operation
 
@@ -38,7 +38,7 @@ A `delete` or `replace` is therefore authorized by the same proof as the origina
 
 Per the principle of [trusting the server for storage, never for authorization](/design/cryptography/), the server **carries out** a remote delete or replace but is **never** the authority that permits it. A server-asserted lifecycle change with no valid write-tier signature is rejected by every client. This bounds the damage a compromised or buggy server can do: it can refuse to store data, but it cannot forge its destruction.
 
-That said, the server is not *passive*. Even without keys, it enforces the structural envelope of every manifest before persisting it — `action` is in the closed enum, `prior_provenance_hash` matches the stored chain head, `created_by_device` is in the user's published device directory, the device's hybrid signature is structurally well-formed (correct curve, correct key lengths), `crypto_suite_id` and `protocol_version` match the album's pin, and the `timestamp` passes the [sanity bound](/design/threat-model/schema-rules/#timestamp-grammar). The full checklist is owned by [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants). A rejection here means no row is written and no provenance record is appended; the rejection itself is logged.
+That said, the server is not *passive*. Even without keys, it enforces the structural envelope of every manifest before persisting it — `action` is in the closed enum, `prior_provenance_hash` matches the stored chain head, `created_by_device` is in the user's published device directory, the device's hybrid signature is structurally well-formed (correct curve, correct key lengths), `crypto_suite_id` is in the [inventory](/design/cryptography/primitives/#primitives-inventory) and `protocol_version` matches the album's pin (invariants 2 and 6), and the `timestamp` passes the [sanity bound](/design/threat-model/schema-rules/#timestamp-grammar). The full checklist is owned by [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants). A rejection here means no row is written and no provenance record is appended; the rejection itself is logged.
 
 ## Deletes Are Soft First
 

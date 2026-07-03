@@ -78,7 +78,7 @@ Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSi
 | Module                                               | Owning design doc                                                                    | Validation tier                             |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
 | `capsule-api` (routing)                              | [Filesystem — Server](/design/filesystem/server/)                                    | Smoke                                       |
-| `capsule-api-auth::{oidc,session,claims,roles}`      | [Authentication](/design/authentication/), [Authorization](/design/authorization/)   | Unit + Smoke (testcontainer Postgres/Redis) |
+| `capsule-api-auth::{oidc,session,claims,roles}`      | [Authentication](/design/authentication/), [Authorization](/design/authorization/)   | Unit + Smoke (testcontainer Postgres/Valkey) |
 | `capsule-api-auth::devices` (planned for enrollment) | [Device Enrollment](/design/device-enrollment/)                                      | Smoke                                       |
 | `capsule-api-library::schema::*` (legacy, retiring)  | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
 | `capsule-api-library::loaders` (legacy, retiring)    | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |

@@ -16,9 +16,9 @@ Capsule schemas evolve over time, but the rules of evolution are fixed — what 
 
 ### Closed Enums
 
-**Every enum in a signed or validated structure is closed per `protocol_version`** — a value outside the set known at that version is a structural error, never a "future value to ignore." This is a blanket rule, not a curated list, so it cannot rot: adding a value to *any* such enum bumps `protocol_version` (see [Versioning — Album Protocol Version Pinning](/design/versioning/#album-protocol-version-pinning)), and a pinned old album never sees the new value. It is enforced on **both sides** — the server's structural envelope check (invariant 16) and the client's `verify_asset`/decode path (see [Validation](/design/threat-model/validation/)).
+**Every enum in a signed or validated structure is closed per `protocol_version`** — a value outside the set known at that version is a structural error, never a "future value to ignore." This is a blanket rule, not a curated list, so it cannot rot: adding a value to *any* such enum requires a new (later-dated) `protocol_version` (see [Versioning — Album Protocol Version Pinning](/design/versioning/#album-protocol-version-pinning)), and a pinned old album never sees the new value. It is enforced on **both sides** — the server's structural envelope check (invariant 16) and the client's `verify_asset`/decode path (see [Validation](/design/threat-model/validation/)).
 
-The authoritative value set for each enum lives in its owner doc — `AssetManifest.action` in [Authorization](/design/authorization/#the-closed-action-set), `content_type` and `gps.source` in [Metadata](/design/metadata/#sidecar-schema-v1), `DerivativeManifest.role` in [Provenance](/design/cryptography/provenance/#derivative-provenance) — never duplicated here.
+The authoritative value set for each enum lives in its owner doc — `AssetManifest.action` in [Authorization](/design/authorization/#the-closed-action-set), `content_type` and `gps.source` in [Metadata — Closed Enum Value Sets](/design/metadata/#closed-enum-value-sets), `key_mode` and `DerivativeManifest.role`/`format` in [Provenance](/design/cryptography/provenance/#derivative-provenance), `stack_type`/`role` in [Organization](/design/organization/#stack-membership-schema) — never duplicated here.
 
 ### Timestamp Grammar
 
