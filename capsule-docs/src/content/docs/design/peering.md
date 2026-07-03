@@ -49,7 +49,7 @@ This doc covers sync between devices that are **already provisioned** — both a
 
 ## Determining the Delta
 
-Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/import/download-sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the `/sync` feed — peering borrows that definition wholesale.
+Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/import/download-sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the sync feed — peering borrows that definition wholesale.
 
 ## What Moves Over the Wire
 

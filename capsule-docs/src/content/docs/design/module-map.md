@@ -16,7 +16,7 @@ The mapping reflects the *design intent*. Modules not yet implemented are annota
 | `capsule-core-ffi`        | uniffi bindings crate for native Swift/Kotlin consumers (sidecar `Catalog` surface; the `HardwareSigner` foreign trait ships under `capsule-core`'s `ffi` feature) |
 | `capsule-api`             | Server entry-point + routing                                                                                      |
 | `capsule-api-auth`        | Authentication, sessions, OIDC, device directory                                                                  |
-| `capsule-api-library`     | GraphQL API for UI queries (assets, albums, search)                                                               |
+| `capsule-api-library`     | **Legacy** GraphQL API for UI queries — frozen and retiring; rich queries move client-side onto `library.sqlite` (see [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)) |
 | `capsule-api-upload`      | TUS-like resumable upload protocol server                                                                         |
 | `capsule-api-media`       | Media serving (ciphertext blobs, public shares)                                                                   |
 | `capsule-api-sync`        | gRPC sync API + federation                                                                                        |
@@ -80,8 +80,8 @@ Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSi
 | `capsule-api` (routing)                              | [Filesystem — Server](/design/filesystem/server/)                                    | Smoke                                       |
 | `capsule-api-auth::{oidc,session,claims,roles}`      | [Authentication](/design/authentication/), [Authorization](/design/authorization/)   | Unit + Smoke (testcontainer Postgres/Redis) |
 | `capsule-api-auth::devices` (planned for enrollment) | [Device Enrollment](/design/device-enrollment/)                                      | Smoke                                       |
-| `capsule-api-library::schema::*`                     | [Metadata](/design/metadata/), [Organization](/design/organization/)                 | Smoke (GraphQL)                             |
-| `capsule-api-library::loaders`                       | [Filesystem — Server](/design/filesystem/server/)                                    | Unit (DataLoader)                           |
+| `capsule-api-library::schema::*` (legacy, retiring)  | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
+| `capsule-api-library::loaders` (legacy, retiring)    | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
 | `capsule-api-upload`                                 | [Import — Upload Protocol](/design/import/upload-protocol/)                          | Unit + Smoke + 1 E2E                        |
 | `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
 | `capsule-api-media::verify` (planned)                | [Import — Storage Verification](/design/import/storage-verification/) | Unit + Smoke                                |
@@ -159,9 +159,9 @@ Target count: ≤ 13 cases. Each one is named by what it proves — not "test X"
 
 **Status:** none of the 13 cases is runnable today — every one crosses at least one planned surface (the networked server/client wiring, MLS, or ML), even where its `capsule-core` half is implemented and unit/smoke-tested. The bound starts governing with the first implementation slice that makes a case live; until then this list is the contract the slices build toward.
 
-1. **Auth → Library query.** Log in via OIDC → access-token → GraphQL query for own albums returns expected list. Covers `capsule-api-auth::oidc + session` × `capsule-api-library::schema`.
+1. **Auth → sync → client-side library query.** Log in via OIDC → access token → gRPC `Sync` returns the account's album entries → the client applies them and a local `library.sqlite` query lists the expected albums (rich queries are client-side per [API Surfaces](/design/api-surfaces/)). Covers `capsule-api-auth::oidc + session` × `capsule-api-sync` × `capsule-core::library`.
 2. **Full import + upload + finalize.** Local scan → plan → execute → upload session → finalize → blob present at `blobs/{hash}` + index row marked uploaded. Covers `capsule-core::import` × `capsule-sdk::upload` × `capsule-api-upload` × `capsule-api-entity`.
-3. **Sync feed pickup.** Upload from device A → device B's `/sync` advances → device B fetches metadata blob and (per scope) the original. Covers `capsule-api-sync` × `capsule-sdk` download path × `capsule-core::library` write.
+3. **Sync feed pickup.** Upload from device A → device B's sync feed advances → device B fetches metadata blob and (per scope) the original. Covers `capsule-api-sync` × `capsule-sdk` download path × `capsule-core::library` write.
 4. **Federation cross-server pull.** Alice on `home.tld` shares to Bob on `other.tld` → capability token → Bob's server pulls metadata + blobs → Bob's client renders. Covers `capsule-api-sync::federation` (both sides) × `capsule-api-auth` (capability issue).
 5. **LAN peering A→B.** Two devices on the same LAN; mDNS discovery → TLS handshake → delta-scoped artifact → restore on receiver → byte-equal libraries. Covers `capsule-sdk::peering` × `capsule-core::backup` × `capsule-core::library`.
 6. **Backup → restore on a fresh device.** Export full backup → bootstrap new device via passphrase + escrow → import backup → assert every asset present and verifiable. Covers `capsule-core::backup` × `capsule-core::crypto::keys` × `capsule-core::library`.

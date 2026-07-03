@@ -82,7 +82,7 @@ A non-`durable` verdict never triggers a destructive action: the client retains 
 
 - **vs. upload finalization.** Finalization's `Completed` is a one-time receipt for one transfer; `/storage/verify` is the re-checkable, after-the-fact confirmation that the receipt still holds — across app restarts, across devices, and after server-side GC or migration could have changed state.
 - **vs. `verify_asset`.** `verify_asset` is local and key-aware (signatures, provenance chain, write authorization); `/storage/verify` is remote and key-free (does the server physically have and serve these bytes). Neither subsumes the other.
-- **vs. the sync feed.** `/sync` tells a client *what exists*; `/storage/verify` tells it *whether a specific blob is durably serveable right now* — the question that gates destruction.
+- **vs. the sync feed.** The sync feed tells a client *what exists*; `/storage/verify` tells it *whether a specific blob is durably serveable right now* — the question that gates destruction.
 
 ## Validation
 

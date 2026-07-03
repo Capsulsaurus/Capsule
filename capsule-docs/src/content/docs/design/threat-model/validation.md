@@ -51,7 +51,7 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 - **20.** All checks (1)–(18) re-applied — federation does not unlock looser rules.
 - **21.** Per-peer rate budgets unbroken (events/hour, bytes/hour, CPU/hour). Otherwise `429`.
 
-### On the `/sync` feed, directory publish, and federated reports
+### On the sync feed, directory publish, and federated reports
 
 - **22.** The `sync_cursor` carries a server MAC under a server-only key; a forged or mutated cursor is rejected (`400`). This is the authenticity layer; the client independently enforces per-album `sync_seq` monotonicity (client-side invariants below). Owner: [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed).
 - **23.** A published `DeviceDirectory` has `directory_version` **strictly greater** than the version currently stored for that user, and the master signature covers it. A non-advancing or regressing publish is rejected (`409`). Owner: [Cryptography — Device Directory](/design/cryptography/keys/#device-directory).
@@ -96,6 +96,8 @@ Mirror checklist that every client implements before applying any received data 
 ## Protocol and Capability Negotiation
 
 Every versioned API surface — client-to-server uploads, sync feed, federation pull, peering — runs the same compatibility gate. The gate is **fail-closed**: a mismatch is a hard reject before any state is written, never a silent degrade.
+
+The rules are stated once, in REST terms (headers + HTTP statuses). On the gRPC surfaces the same values ride call metadata and the same rejections map onto gRPC status codes per [API Surfaces](/design/api-surfaces/#negotiation-across-transports) — one gate, two carriages.
 
 ### Universal Headers
 

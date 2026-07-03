@@ -103,4 +103,4 @@ What the rest of the system depends on this module for:
 - **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
 - **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.
 
-The cross-module case — pipeline → upload protocol → server finalization → assets visible in `/sync` — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
+The cross-module case — pipeline → upload protocol → server finalization → assets visible in the sync feed — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
