@@ -22,9 +22,10 @@ AssetManifest {
   album_id:               UUID,
   amk_version:            u32,            // identifies the AMK epoch + write-tier key
   ciphertext_hash:        bytes,          // content-address digest; algorithm fixed by crypto_suite_id; reused by upload protocol
-  metadata_blob_hash:     bytes,          // content-address of the asset's encrypted metadata blob (see Encryption);
-                                          //   a ciphertext hash (server-visible, no plaintext leak); set on
-                                          //   create | replace | metadata-update
+  metadata_blob_hash:     Option<bytes>,  // content-address of the asset's encrypted metadata blob (see Encryption);
+                                          //   a ciphertext hash (server-visible, no plaintext leak). PRESENT on
+                                          //   create | replace | metadata-update; ABSENT (key omitted) on
+                                          //   delete | derivative-add | derivative-replace | trash-restore
   plaintext_size:         u64,
   chunk_size:             u32,            // plaintext bytes per chunk (65,520)
   nonce_prefix:           [u8; 7],        // STREAM nonce prefix, random per file
@@ -49,18 +50,16 @@ AssetManifest {
   write_sig:         Hybrid(Ed25519, ML-DSA-65),  // under epoch write-tier key, over all fields above; both halves required
 }
 
-AssetBlob {
-  manifest: AssetManifest,
-  chunks:   [AES-256-GCM-STREAM encrypted chunks],
-}
 ```
+
+**Physical placement.** The manifest is **not** embedded inside the ciphertext blob. Every ciphertext blob — original, derivative, metadata — is an independent, fully opaque content-addressed object ([the upload protocol](/design/import/upload-protocol/) uploads each under its own session), and the signed manifest travels beside them as the asset's **envelope object**: a small, deliberately server-visible signed CBOR object (it contains no plaintext secrets by construction) persisted twice on the server — in the PostgreSQL rows the hot path queries, and as a content-addressed object in the blob store that makes the index [reconstructible without PostgreSQL](/design/filesystem/server/#recovering-the-index-from-blobs-alone). The client persists the same manifests inside its local provenance chain file. Per blob role, the envelope's associations are by hash: the **original** and each **derivative** are named by `ciphertext_hash` in their (Asset/Derivative) manifest, and the **metadata blob** by the manifest's `metadata_blob_hash`. No ciphertext blob carries an embedded header.
 
 The manifest carries **two signatures**, and a client acknowledges the asset only if **both** verify:
 
 1. `device_sig` — hybrid Ed25519 + ML-DSA-65 by the uploading device's [DSK](/design/cryptography/keys/#device-keys). Provides provenance; the device certificate chains to the user IK via the [device directory](/design/cryptography/keys/#device-directory).
 2. `write_sig` — a **hybrid Ed25519 + ML-DSA-65** signature under the epoch's [write-tier key](/design/cryptography/keys/#album-master-keys-amks); both halves must verify. Proves the signer held write authorization at `amk_version` (see [Write Authorization](/design/cryptography/keys/#write-authorization)). The signature being hybrid is what keeps its coverage of `crypto_suite_id` non-downgradable even if one algorithm is later broken.
 
-The signed manifest is stored as the encrypted asset's header and is itself part of the [provenance record](#provenance-of-library-modifications). The same signing approach applies to other surfaces — [metadata blobs](/design/cryptography/encryption/#metadata-encryption) and the [device directory](/design/cryptography/keys/#device-directory) are each hybrid, device-signed, and versioned.
+The signed manifest is stored as its own envelope object (see **Physical placement** above — never as a header inside the ciphertext) and is itself part of the [provenance record](#provenance-of-library-modifications). The same signing approach applies to other surfaces — [metadata blobs](/design/cryptography/encryption/#metadata-encryption) and the [device directory](/design/cryptography/keys/#device-directory) are each hybrid, device-signed, and versioned.
 
 **Streaming is preserved.** STREAM authentication tags verify every chunk *during* the stream. The manifest signature is a one-time provenance check. `ciphertext_hash` is computed incrementally as bytes arrive and confirmed at stream end — no separate pass, no buffering the whole file.
 
@@ -69,6 +68,11 @@ The signed manifest is stored as the encrypted asset's header and is itself part
 **Two ways the file key is delivered.** `key_mode` is a closed enum: `derived` (the default — the file key is recomputed from the AMK and `wrapped_file_key` is absent) or `wrapped` (the file key was chosen externally and is carried in `wrapped_file_key`, sealed under the AMK; see [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation)). Wrapped mode exists only for a [web-upload drop](/design/web-upload/) a client [adopts in place](/design/web-upload/#why-adopt-in-place); it is set at the adopting `create` and never on a `replace`. Both fields are covered by both signatures, so neither the mode nor the wrapped key can be altered without breaking verification, and the mode is [authorization-neutral](/design/cryptography/keys/#write-authorization) — it changes how a reader obtains the decryption key, never who was authorized to write. Like every manifest enum, `key_mode` is closed per [protocol version](/design/threat-model/schema-rules/).
 
 The closed action enum is owned by [Authorization — The Closed Action Set](/design/authorization/#the-closed-action-set).
+
+**Wire presence rules.** Presence is signature-visible in canonical CBOR (a present-`null` key and an absent key produce different signed bytes), so how each optional field encodes is normative, not a serializer detail:
+
+- The two options in v1's original schema — `prior_provenance_hash`, `retention_until` — encode as **present with `null`** when logically absent (the encoding existing signatures were produced over; kept for signature stability).
+- Fields added within v1 after that — `metadata_blob_hash`, `key_mode`, `wrapped_file_key`, and the `DerivativeManifest`'s `amk_version`/`protocol_version` — encode as **absent keys** at their default/absent state, so manifests signed before the fields existed re-verify byte-identically. In particular an absent `key_mode` **means `derived`**; an implementation that writes `key_mode: "derived"` explicitly, or `metadata_blob_hash: null`, emits different signed bytes and breaks verification.
 
 ## Provenance of Library Modifications
 
@@ -80,14 +84,16 @@ Every modification of data or metadata produces a **provenance record** — time
 ProvenanceRecord {
   asset_id:              UUID,
   manifest:              AssetManifest,           // see Asset Manifest above
-  prior_provenance_hash: Option<[u8;32]>,         // SHA-256 over the previous record;
-                                                  // null only for `action = create`
-  // The manifest's own `prior_provenance_hash` mirrors this value, so signature
-  // coverage of the manifest is signature coverage of the chain link itself.
+  prior_provenance_hash: Option<[u8;32]>,         // hash over the previous record;
+                                                  // null only for `action = create`.
+                                                  // MUST equal manifest.prior_provenance_hash —
+                                                  // a checked invariant, not trusted redundancy
 }
 ```
 
-Each non-create record references its predecessor by hash; a rewrite of any past record breaks the chain at that point and is detectable by any client walking forward from `create`.
+The record's `prior_provenance_hash` is a **derived mirror** of the manifest's own field, kept so signature coverage of the manifest is signature coverage of the chain link itself; `verify_asset` and the chain walker **reject a record whose two copies diverge** rather than preferring either. Each non-create record references its predecessor by hash; a rewrite of any past record breaks the chain at that point and is detectable by any client walking forward from `create`.
+
+**Verification cost is bounded by chain length**, and photo lifecycles keep chains short (a create, occasional edits, at most a delete/restore). Clients cache the verified `latest_provenance_hash` per asset, so steady-state verification is O(1) against the cached head — a full forward walk happens only on first fetch, restore, or suspected tamper. v1 defines no checkpoint structure; if edit-heavy assets ever make full walks material, a signed chain checkpoint is the designated v2 extension (a new record kind, not a schema break).
 
 ### What an Attacker With All Current Keys Still Cannot Do
 
@@ -102,7 +108,7 @@ This bounds the blast radius of a credential compromise: history is read-only.
 ### Physical Storage
 
 - **Client.** An append-only CBOR file at `media/{YYYY}/{YYYY-MM}/{uuid}.provenance.cbor`, alongside the asset and its sidecar — a sequence of `ProvenanceRecord` entries; on hard-delete the log persists as a tombstone-with-history. This file is a **non-authoritative local cache**. A faulty or malicious client can corrupt or truncate *its own* copy, but cannot rewrite history: the chain is self-authenticating — each record is signed and carries the prior record's hash, so dropping or altering any record breaks the forward walk from `create` — and the authoritative copy is the server's append-only blob sequence plus the replicas every other album member holds, any of which re-detects the tamper on next sync as a chain-head mismatch. A client that finds its local cache inconsistent with the authoritative chain rebuilds it from the server.
-- **Server.** A content-addressed encrypted blob, distinct from the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so a metadata edit (which mints a new metadata blob) never rewrites history. The server's no-key envelope of every provenance write includes `prior_provenance_hash`, so the server can enforce monotonic chain advance without holding any key — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+- **Server.** The append-only sequence of **envelope objects** (see Physical placement above) — deliberately server-visible, since every field of a manifest is server-visible by construction and the server *must* read `prior_provenance_hash`, `action`, and `retention_until` to enforce its no-key invariants and the purge floor. The chain is distinct from the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so a metadata edit (which mints a new metadata blob) never rewrites history, and the server can enforce monotonic chain advance without holding any key — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
 
 The server is **append-only** for provenance: there is no API path that overwrites or deletes an existing entry. An attempt is rejected at the [server's structural validation layer](/design/threat-model/validation/).
 
@@ -114,6 +120,12 @@ Thumbnails, previews, and embeddings are generated client-side and uploaded as o
 DerivativeManifest {
   version:               "derivative-manifest/v1",
   crypto_suite_id:       u16,
+  protocol_version:      Option<String>,  // YYYY-MM-DD; matches the album pin. Wire-optional (absent key) only for
+                                          //   pre-binding fixtures; REQUIRED on every real write
+  amk_version:           Option<u32>,     // the epoch whose write-tier key produced write_sig — the verifier needs it
+                                          //   to select the verification key. Wire-optional for pre-binding fixtures;
+                                          //   REQUIRED on every real write: a derivative without it cannot be
+                                          //   authorization-verified and is rejected
   source_asset_id:       UUID,
   role:                  enum,            // thumbnail | preview | embedding (LQIP lives in the signed sidecar, not here)
   format:                String,          // e.g. "image/avif", "embedding/mobileclip-b"

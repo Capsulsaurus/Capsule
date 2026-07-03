@@ -52,7 +52,7 @@ For first-device enrollment (a brand new account with no other device), see [Dev
 
 ## History Delivery for New Joiners
 
-The one spot where the wrapper writes real custom code. Two patterns:
+The one spot where the wrapper writes real custom code. AMK delivery — both the steady-state broadcast on an epoch bump and the batch form inside a `Welcome` — rides one application message whose shape this doc owns: `AlbumKeyDistribution { amk_version, amk_bytes }` ([Encryption](/design/cryptography/encryption/#asset-key-derivation) consumes it; the AMK itself is owned by [Keys](/design/cryptography/keys/#album-master-keys-amks)). Two delivery patterns:
 
 **Full history (recommended for shared albums):** Welcome message carries an encrypted blob of `[AMK_v1, AMK_v2, ..., AMK_current]`. The new joiner decrypts all, can now read every photo.
 

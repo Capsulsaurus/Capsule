@@ -46,22 +46,22 @@ Switching profiles is operationally invisible to clients — the [upload protoco
 
 ## Uniform, Opaque Blobs
 
-A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), the encrypted CBOR metadata blob (which carries the LQIP), and the encrypted provenance blob (see [Cryptography — Provenance](/design/cryptography/provenance/)). The blob store does not distinguish them — every blob is just content-addressed ciphertext. The mapping from an asset to its constituent blobs, and the role of each blob, lives entirely in PostgreSQL.
+A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), and the encrypted CBOR metadata blob (which carries the LQIP) — every one of them fully opaque, content-addressed ciphertext the store does not distinguish. Beside them, each write persists its signed **manifest envelope object** (see [Provenance — Physical placement](/design/cryptography/provenance/#asset-manifest)): a small, deliberately server-visible signed CBOR object, stored content-addressed like any blob, whose append-only sequence is the asset's provenance chain. The hot-path mapping from an asset to its blobs and their roles lives in PostgreSQL, with the envelope objects as its durable, key-free backup.
 
 ## Recovering the Index from Blobs Alone
 
-The PostgreSQL index is authoritative but **not the only copy** of what the server knows. Every blob carries enough server-visible structural metadata — the [unencrypted portion](/design/cryptography/provenance/#asset-manifest) of the asset manifest — to rebuild the index row that referenced it. This is the server-side counterpart of the recovery-first principle that lets a client rebuild its index from CBOR sidecars.
+The PostgreSQL index is authoritative but **not the only copy** of what the server knows. Every write persists its signed [manifest envelope object](/design/cryptography/provenance/#asset-manifest) in the blob store beside the opaque ciphertext blobs it names, and those envelopes carry everything needed to rebuild the index rows. This is the server-side counterpart of the recovery-first principle that lets a client rebuild its index from CBOR sidecars.
 
-The server-visible portion of a blob includes:
+The server-visible envelope includes:
 
 - `crypto_suite_id`, `protocol_version`, `amk_version` — what bundle of primitives encrypted this asset and which album epoch
 - the ciphertext hash and declared size — content address and storage attribution
 - `created_by_user`, `created_by_device`, `album_id`, `file_id`, `prior_provenance_hash`, `action` — owner, provenance chain link, and lifecycle action
 - the device's hybrid signature — provenance attribution; verifiable against the public device directory even without any key the server holds
 
-A rebuild walks `blobs/`, reads the manifest envelope of each blob, verifies the device signature against the cached device directory, and writes an index row. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+A rebuild walks the **envelope objects** under `blobs/`, verifies each device signature against the cached device directory, and writes index rows for the blobs each envelope names (original and derivatives by `ciphertext_hash` + role, the metadata blob by `metadata_blob_hash`). A ciphertext blob referenced by no envelope surfaces as an orphan for [GC](#deletion-and-garbage-collection); an envelope naming a missing blob surfaces as a dangling reference. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
 
-A blob whose manifest envelope fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
+An envelope object that fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
 
 Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it.
 

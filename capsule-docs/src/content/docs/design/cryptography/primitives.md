@@ -36,6 +36,8 @@ A faulty, malicious, or version-mismatched client could damage data by writing u
 
 `crypto_suite_id = 0x0001` denotes exactly the [Primitives Inventory](#primitives-inventory) above. Retiring any primitive (a broken SHA-256, a deprecated AEAD) **does not edit the row** — it adds a new row and a new suite id. An old AssetManifest carrying `0x0001` keeps verifying against the original row forever; new writes use the new suite id. This is the single-doc edit the inventory promises, generalized to the bundle.
 
+`crypto_suite_id` values are a **Capsule-owned namespace**, unrelated to the MLS ciphersuite codepoint namespace: `0x0001` (the Capsule bundle) and `0x004D` (the OpenMLS id of the [MLS ciphersuite](#mls-ciphersuite) *inside* that bundle) are identifiers in two different registries, and neither implies the other.
+
 The signatures on every manifest cover `crypto_suite_id` and `protocol_version`, so a downgrade-attempt (re-signing an existing manifest under a weaker suite) cannot be silently produced.
 
 ### Backward Compatibility
