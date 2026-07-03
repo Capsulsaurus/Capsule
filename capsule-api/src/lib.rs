@@ -100,7 +100,7 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                     .push(media::get_drops_router(conn.clone(), &env.server).await?),
             );
     }
-    // TODO: Verify this GRPc route works
+    // The gRPC-over-salvo bridge is exercised end-to-end by slice S-C2 (SLICES.md).
     #[cfg(feature = "sync")]
     {
         // gRPC sync routes

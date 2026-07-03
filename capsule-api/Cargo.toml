@@ -9,7 +9,6 @@ default-run = "capsule-api"
 capsule-api-auth = { path = "./auth", optional = true }
 capsule-api-library = { path = "./library", optional = true }
 capsule-api-media = { path = "./media", optional = true }
-# TODO: Re-enable when upload is production-ready
 capsule-api-upload = { path = "./upload", optional = true }
 capsule-api-sync = { path = "./sync", optional = true }
 capsule-api-environment = { path = "./environment" }

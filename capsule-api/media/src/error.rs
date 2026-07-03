@@ -1,8 +1,8 @@
 use salvo::prelude::*;
 use thiserror::Error;
 
-// TODO: Nothing is using this?
-
+// Currently unconsumed; the key-free media slices (S-C3/S-C5/S-C10 in SLICES.md) adopt
+// this as the crate error type and attach the error.* codes per the i18n contract.
 #[allow(dead_code)]
 #[derive(Debug, Error)]
 pub(crate) enum MediaError {
