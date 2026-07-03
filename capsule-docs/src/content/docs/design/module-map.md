@@ -5,14 +5,15 @@ description: Index of every code module to its owning design doc and validation 
 
 This is the developer's first stop. It maps every Capsule workspace crate and module to the design doc(s) that govern its behavior, and to the validation tier (Unit / Smoke / E2E — see [Validation Tiers](/design/principles/#validation-tiers)) it ships with. The E2E test surface at the bottom is **bounded**: adding a test there means adding the test to the relevant doc's Validation section and justifying why the cross-module surface is irreducible.
 
-The mapping reflects the *design intent*. Some modules listed below are currently planned (annotated `(planned)`) rather than already implemented in the codebase — the doc structure already accounts for them so the boundary is set before code lands.
+The mapping reflects the *design intent*. Modules not yet implemented are annotated `(planned)` — or `(blocked)` where a named upstream dependency gates them — per the [status convention](/design/principles/#implementation-status); every unannotated module exists in the codebase today. The repo-root `SLICES.md` indexes the planned modules as executable implementation slices.
 
 ## Crate Roster
 
 | Crate                     | Purpose                                                                                                           |
 | ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `capsule-core`            | Shared logic across server and clients: cryptography, library layout, import pipeline, metadata, ML orchestration |
-| `capsule-sdk`             | Client SDK: auto-generated OpenAPI client, upload protocol, per-platform hardware-key + peering glue              |
+| `capsule-sdk`             | Client SDK: auto-generated OpenAPI client, upload protocol, LAN-peering glue                                      |
+| `capsule-core-ffi`        | uniffi bindings crate for native Swift/Kotlin consumers (sidecar `Catalog` surface; the `HardwareSigner` foreign trait ships under `capsule-core`'s `ffi` feature) |
 | `capsule-api`             | Server entry-point + routing                                                                                      |
 | `capsule-api-auth`        | Authentication, sessions, OIDC, device directory                                                                  |
 | `capsule-api-library`     | GraphQL API for UI queries (assets, albums, search)                                                               |
@@ -29,6 +30,9 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | `capsule-media`           | Standalone media utility crate                                                                                    |
 | `capsule-i18n`            | Runtime localization (locale negotiation + ICU message formatting) for the server and CLI                         |
 | `capsule-web`             | Browser/WASM web-upload client: guest drop sealing + upload (planned)                                             |
+| `capsule-vision`          | Python research package for on-device ML experimentation (not a cargo crate)                                      |
+
+Native app and harness packages — `capsule-android`, `capsule-swift`, `capsule-core-swift`, `capsule-core-kotlin` — are not cargo crates and carry no design owner of their own; the two harness packages hold the per-platform `HardwareSigner` reference adapters ([Keys — Device Keys](/design/cryptography/keys/#device-keys)).
 
 ## Module → Design Doc
 
@@ -36,15 +40,19 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 
 | Module                                                                  | Owning design doc                                                                                              | Validation tier                               |
 | ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `crypto::primitives` (planned)                                          | [Cryptography — Primitives](/design/cryptography/primitives/)                                                  | Unit (RFC vectors)                            |
-| `crypto::keys` (planned)                                                | [Cryptography — Keys](/design/cryptography/keys/), [Device Enrollment](/design/device-enrollment/)             | Unit + Smoke (hardware per-platform)          |
-| `crypto::mls` (planned)                                                 | [Cryptography — MLS](/design/cryptography/mls/), [MLS Resilience](/design/mls-resilience/)                     | Unit + Smoke (protocol round-trip)            |
-| `crypto::encryption` (planned)                                          | [Cryptography — Encryption](/design/cryptography/encryption/)                                                  | Unit (KAT, round-trip)                        |
-| `crypto::provenance` (planned)                                          | [Cryptography — Provenance](/design/cryptography/provenance/)                                                  | Unit (exhaustive negative cases) + Smoke      |
-| `crypto::verify_asset` (planned)                                        | [Cryptography — Write Authorization](/design/cryptography/keys/#write-authorization)                           | Unit (the single chokepoint; exhaustive)      |
-| `backup` (planned)                                                      | [Backup and Recovery](/design/backup-recovery/)                                                                | Unit + Smoke                                  |
+| `crypto::primitives`                                                    | [Cryptography — Primitives](/design/cryptography/primitives/)                                                  | Unit (RFC vectors)                            |
+| `crypto::keys`                                                          | [Cryptography — Keys](/design/cryptography/keys/), [Device Enrollment](/design/device-enrollment/)             | Unit + Smoke (hardware per-platform)          |
+| `crypto::authority`                                                     | [Cryptography — Keys: Write Authority Interface](/design/cryptography/keys/#write-authority-interface)         | Unit (epoch-ledger round-trip)                |
+| `crypto::mls` (blocked upstream — see the [MLS status note](/design/cryptography/mls/)) | [Cryptography — MLS](/design/cryptography/mls/), [MLS Resilience](/design/mls-resilience/)     | Unit + Smoke (protocol round-trip)            |
+| `crypto::encryption`                                                    | [Cryptography — Encryption](/design/cryptography/encryption/)                                                  | Unit (KAT, round-trip)                        |
+| `crypto::provenance`                                                    | [Cryptography — Provenance](/design/cryptography/provenance/)                                                  | Unit (exhaustive negative cases) + Smoke      |
+| `crypto::verify_asset`                                                  | [Cryptography — Write Authorization](/design/cryptography/keys/#write-authorization)                           | Unit (the single chokepoint; exhaustive)      |
+| `validation`                                                            | [Threat Model — Validation](/design/threat-model/validation/)                                                  | Unit (pure key-free invariants)               |
+| `cbor`                                                                  | [Metadata — Canonical CBOR](/design/metadata/#canonical-cbor-encoding)                                         | Unit (RFC 8949 §4.2 vectors)                  |
+| `lifecycle`                                                             | [Filesystem — Client](/design/filesystem/client/), [Import — Pipeline](/design/import/pipeline/)               | Unit + Smoke (`capsule demo` end-to-end)      |
+| `backup`                                                                | [Backup and Recovery](/design/backup-recovery/)                                                                | Unit + Smoke                                  |
 | `library::{init,open,rebuild,lock,paths,scrub,trash}`                   | [Filesystem — Client](/design/filesystem/client/), [Filesystem — Maintenance](/design/filesystem/maintenance/) | Unit + Smoke                                  |
-| `import::{scanner,planner,executor,plan,upload,group,progress,special}` | [Import — Pipeline](/design/import/pipeline/)                                                                  | Unit (planner determinism) + Smoke (executor) |
+| `import::{scanner,planner,executor,plan,upload,group,progress,special}` (streaming upload loop planned) | [Import — Pipeline](/design/import/pipeline/)                                                  | Unit (planner determinism) + Smoke (executor) |
 | `metadata::{file,filter,types}`                                         | [Metadata](/design/metadata/)                                                                                  | Unit (filtering)                              |
 | `sidecar::*`                                                            | [Metadata — Sidecar Schema](/design/metadata/#sidecar-schema-v1)                                               | Unit (serde determinism)                      |
 | `exif::{extract,timezone}`                                              | [Metadata](/design/metadata/)                                                                                  | Unit                                          |
@@ -60,9 +68,10 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | Module                    | Owning design doc                                                                                  | Validation tier                       |
 | ------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | (auto-generated client)   | [Clients](/design/clients/)                                                                        | Smoke (re-generated; not unit-tested) |
-| `upload`                  | [Import — Upload Protocol](/design/import/upload-protocol/)                                        | Unit + Smoke (client side)            |
+| `upload` (client stub)    | [Import — Upload Protocol](/design/import/upload-protocol/)                                        | Unit + Smoke (client side)            |
 | `peering` (planned)       | [Peering](/design/peering/)                                                                        | Unit + Smoke per platform             |
-| `hardware-keys` (planned) | [Cryptography — Keys](/design/cryptography/keys/), [Device Enrollment](/design/device-enrollment/) | Smoke per platform                    |
+
+Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSigner` seams and the software + TPM reference adapters are in `capsule-core::crypto::keys`, and the Secure Enclave / StrongBox adapters live in the `capsule-core-swift` / `capsule-core-kotlin` harness packages (see [Keys — Device Keys](/design/cryptography/keys/#device-keys)).
 
 ### `capsule-api` (root + sub-crates)
 
@@ -94,7 +103,7 @@ The mapping reflects the *design intent*. Some modules listed below are currentl
 | Crate           | Owning design doc                                                 | Validation tier      |
 | --------------- | ----------------------------------------------------------------- | -------------------- |
 | `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client)              | Smoke                |
-| `capsule-media` | (small utility crate; no specific design owner)                   | Unit                 |
+| `capsule-media` | [Thumbnails and Previews](/design/thumbnails/) (decode/encode utilities; only JPEG decode is implemented today) | Unit                 |
 | `capsule-i18n`  | [Internationalization](/design/i18n/)                             | Unit + Smoke         |
 | `capsule-web`   | [Web Upload](/design/web-upload/), [Clients](/design/clients/)    | Smoke (browser/WASM) |
 
@@ -105,33 +114,34 @@ Navigation from a design doc back to where the code lives.
 | Design doc                                                          | Implementing modules                                                                                                          |
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | [Principles](/design/principles/)                                   | (meta — no specific code module)                                                                                              |
-| [Cryptography — Primitives](/design/cryptography/primitives/)       | `capsule-core::crypto::primitives` (planned)                                                                                  |
-| [Cryptography — Keys](/design/cryptography/keys/)                   | `capsule-core::crypto::keys`, `capsule-sdk::hardware-keys` (both planned)                                                     |
-| [Cryptography — MLS](/design/cryptography/mls/)                     | `capsule-core::crypto::mls` (planned, wraps OpenMLS)                                                                          |
-| [Cryptography — Encryption](/design/cryptography/encryption/)       | `capsule-core::crypto::encryption` (planned)                                                                                  |
-| [Cryptography — Provenance](/design/cryptography/provenance/)       | `capsule-core::crypto::provenance` + `verify_asset` chokepoint (planned)                                                      |
+| [Cryptography — Primitives](/design/cryptography/primitives/)       | `capsule-core::crypto::primitives`                                                                                            |
+| [Cryptography — Keys](/design/cryptography/keys/)                   | `capsule-core::crypto::keys` (`Signer`/`HardwareSigner` seams; software + TPM reference adapters; Secure Enclave / StrongBox adapters in `capsule-core-swift`/`-kotlin`; P-256 hybrid-DSK variant planned) |
+| [Cryptography — Keys: Write Authority Interface](/design/cryptography/keys/#write-authority-interface) | `capsule-core::crypto::authority` (`AlbumAuthority` trait + `ReferenceAuthority` epoch ledger; `OpenMlsAuthority` blocked with MLS) |
+| [Cryptography — MLS](/design/cryptography/mls/)                     | `capsule-core::crypto::mls` (blocked upstream — no usable OpenMLS backend for the `0x004D` ciphersuite; see the [MLS status note](/design/cryptography/mls/)) |
+| [Cryptography — Encryption](/design/cryptography/encryption/)       | `capsule-core::crypto::encryption`                                                                                            |
+| [Cryptography — Provenance](/design/cryptography/provenance/)       | `capsule-core::crypto::provenance` + `verify_asset` chokepoint                                                                |
 | [Cryptography — Failure Modes](/design/cryptography/failure-modes/) | Cross-cutting: `capsule-core::backup`, `capsule-core::library`, `capsule-core::crypto::*`                                     |
-| [MLS Resilience](/design/mls-resilience/)                           | `capsule-core::crypto::mls` (extends main MLS module)                                                                         |
+| [MLS Resilience](/design/mls-resilience/)                           | `capsule-core::crypto::mls` (extends main MLS module; blocked with it)                                                        |
 | [Device Enrollment](/design/device-enrollment/)                     | `capsule-core::crypto::keys`, `capsule-api-auth::devices`                                                                     |
 | [Authentication](/design/authentication/)                           | `capsule-api-auth::{oidc,session,claims}`                                                                                     |
 | [Authorization](/design/authorization/)                             | `capsule-api-auth::roles`, `capsule-core::crypto::provenance` (verify_asset)                                                  |
 | [Clients](/design/clients/)                                         | `capsule-sdk` + per-platform native code                                                                                      |
 | [Internationalization](/design/i18n/)                               | `capsule-i18n` (runtime) + `xtask::i18n` (codegen) + `locales/` source + per-platform generated catalogs                     |
 | [Versioning](/design/versioning/)                                   | Cross-cutting: `capsule-api` (header enforcement), `capsule-core::crypto::mls` (upgrade ceremony), `capsule-api-migration`    |
-| [Backup and Recovery](/design/backup-recovery/)                     | `capsule-core::backup` (planned), `capsule-api-auth` (escrow surface)                                                         |
+| [Backup and Recovery](/design/backup-recovery/)                     | `capsule-core::backup`, `capsule-api-auth` (escrow surface, planned)                                                          |
 | [Metadata](/design/metadata/)                                       | `capsule-core::{metadata,sidecar,exif}`, `capsule-api-library::schema`                                                        |
 | [Filesystem — Server](/design/filesystem/server/)                   | `capsule-api`, `capsule-api-entity`, blob store glue                                                                          |
 | [Filesystem — Client](/design/filesystem/client/)                   | `capsule-core::{library,db}`, per-platform native code                                                                        |
 | [Filesystem — Maintenance](/design/filesystem/maintenance/)         | `capsule-core::library::{scrub,rebuild,trash}`, server-side scrub in `capsule-api-upload`                                     |
-| [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*` (incl. the streaming import-upload loop) + `capsule-core::library::available_bytes` (free-space probe) |
+| [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*`; the streaming import-upload loop and the `capsule-core::library::available_bytes` free-space probe are planned |
 | [Import — Upload Protocol](/design/import/upload-protocol/)         | `capsule-sdk::upload` (client) + `capsule-api-upload` (server)                                                                |
 | [Import — Download & Sync](/design/import/download-sync/)           | `capsule-sdk` (client) + `capsule-api-sync` (server)                                                                          |
 | [Import — Storage Verification](/design/import/storage-verification/) | `capsule-api-media::verify` (route) + `capsule-sdk` (client) + `capsule-core` (verify-before-destroy predicate)              |
 | [Federation](/design/federation/)                                   | `capsule-api-sync::federation`                                                                                                |
 | [Peering](/design/peering/)                                         | `capsule-sdk::peering` (planned) + `capsule-core::backup` (artifact format)                                                   |
 | [Organization](/design/organization/)                               | `capsule-core::domain::stack_type`, `capsule-api-service::{album,stack}`                                                      |
-| [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), model registry + per-platform inference runners                                                 |
-| [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` + serving in `capsule-api-media`                                                             |
+| [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), `capsule-vision` (Python research), model registry + per-platform inference runners             |
+| [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` (planned) over `capsule-media` decode/encode utilities + serving in `capsule-api-media`      |
 | [Share Links](/design/share-links/)                                 | `capsule-core::sharing` (planned), `capsule-api-media::shares` (planned)                                                      |
 | [Web Upload](/design/web-upload/)                                   | `capsule-core::drop` (planned), `capsule-api-media::drops` (planned), `capsule-web` (planned); reuses `capsule-api-upload` for drop chunks |
 | [Moderation](/design/moderation/)                                   | `capsule-api::moderation` (planned)                                                                                           |
@@ -146,6 +156,8 @@ Navigation from a design doc back to where the code lives.
 The bounded global list of cross-module integration tests. Editing this list requires updating the relevant doc's Validation section. **Adding an E2E case past this list is a signal the design has unwanted coupling worth examining** before adding the test.
 
 Target count: ≤ 13 cases. Each one is named by what it proves — not "test X" but "X works through Y and Z."
+
+**Status:** none of the 13 cases is runnable today — every one crosses at least one planned surface (the networked server/client wiring, MLS, or ML), even where its `capsule-core` half is implemented and unit/smoke-tested. The bound starts governing with the first implementation slice that makes a case live; until then this list is the contract the slices build toward.
 
 1. **Auth → Library query.** Log in via OIDC → access-token → GraphQL query for own albums returns expected list. Covers `capsule-api-auth::oidc + session` × `capsule-api-library::schema`.
 2. **Full import + upload + finalize.** Local scan → plan → execute → upload session → finalize → blob present at `blobs/{hash}` + index row marked uploaded. Covers `capsule-core::import` × `capsule-sdk::upload` × `capsule-api-upload` × `capsule-api-entity`.

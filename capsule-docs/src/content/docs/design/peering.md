@@ -11,7 +11,7 @@ Peering exists as an **accelerator, never a replacement** for normal [server syn
 - **Offline operation.** When the server is unreachable, devices on a shared LAN still converge. This satisfies the [offline/online divide](/design/principles/) — peering works fully offline.
 - **Best-effort opportunism.** If no peer is found, peering simply does nothing and the device falls back to server sync. Nothing depends on it succeeding.
 
-Peering is the one module here that lives entirely on the client. It is implemented in `capsule-sdk::peering` (discovery, channel, transfer) over `capsule-core::backup` (the artifact format it ingests). The three contract surfaces — mDNS descriptor, TLS handshake parameters, delta-fetch protocol — are the only new primitives peering introduces; everything else is borrowed.
+Peering is the one module here that lives entirely on the client. It will live in `capsule-sdk::peering` (planned: discovery, channel, transfer) over `capsule-core::backup` (implemented — the artifact format it ingests). The three contract surfaces — mDNS descriptor, TLS handshake parameters, delta-fetch protocol — are the only new primitives peering introduces; everything else is borrowed.
 
 ## Peering Reuses, Not Reinvents
 

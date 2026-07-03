@@ -3,7 +3,9 @@ title: MLS Group Membership
 description: How Capsule binds MLS (RFC 9420) to its identity layer and uses it for album membership
 ---
 
-Capsule's group layer is the [MLS ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) from the inventory. It is implemented in `capsule-core::crypto::mls` as a thin wrapper over OpenMLS — the wrapper is what binds MLS to Capsule's identity layer ([Keys](/design/cryptography/keys/)) and to the in-band AMK distribution.
+Capsule's group layer is the [MLS ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) from the inventory. It will be implemented in `capsule-core::crypto::mls` (planned) as a thin wrapper over OpenMLS — the wrapper is what binds MLS to Capsule's identity layer ([Keys](/design/cryptography/keys/)) and to the in-band AMK distribution.
+
+**Status: blocked upstream.** The chosen ciphersuite (`MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`, `0x004D`) rides a non-final IETF draft with no IANA codepoint, and OpenMLS supports it only through a C (`libcrux`) backend — there is no RustCrypto PQ backend yet (openmls#1940). Until that lands, the epoch-authority role this doc assigns to the MLS commit chain is filled offline by the admin-signed epoch ledger behind the [`AlbumAuthority` interface](/design/cryptography/keys/#write-authority-interface); the membership ceremonies, `Welcome`/history delivery, and the [album upgrade ceremony](/design/versioning/#album-upgrade-ceremony) wait for live MLS. Docs that depend on live MLS link to this note rather than restating it.
 
 The ciphersuite's choice of [ChaCha20-Poly1305](/design/cryptography/primitives/#mls-control-aead) (rather than the [AES-GCM](/design/cryptography/primitives/#bulk-aead) used for user data) is acceptable because:
 

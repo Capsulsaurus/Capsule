@@ -5,7 +5,7 @@ description: How Capsule pins each album to a protocol version, upgrades safely,
 
 Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.
 
-The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning is implemented in the album metadata model (`capsule-api` + `capsule-core`); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI. The min-supported-client window is enforced server-side in `capsule-api`.
+The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-api` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI (blocked with MLS — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-api` (planned).
 
 ## Versioned Surfaces
 

@@ -30,7 +30,7 @@ The server independently enforces a closed-enum `content_type` allow-list at ses
 
 The planner is **pure**: given the scanned files and their extracted metadata, it produces an `ImportPlan { added: [..], skipped: [..], conflicts: [..], total_size }` deterministically. The plan is shown to the user (summary of what will be imported, total size, any issues), and the user confirms or adjusts.
 
-**Free-space probe.** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
+**Free-space probe (planned).** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`, planned) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
 
 - If an asset is already uploaded *locally* in the library, import refuses it — no merge needed.
 - If an asset already exists *remotely* under a different ciphertext (e.g. re-encrypted under a newer album key), import still admits it; the [upload protocol](/design/import/upload-protocol/#deduplication-and-merge) then resolves it as a merge (the existing blob is linked rather than re-uploaded).
@@ -50,7 +50,11 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
+**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The standalone `import::executor` still writes the legacy **unsigned** `AssetSidecar`; unifying it onto the signed path waits on derivative generation (step 3, planned with [Thumbnails](/design/thumbnails/)).
+
 ## Import-Upload Streaming Mode
+
+**Status: planned.** The offline pipeline above (scan → plan → execute) is implemented in `capsule-core::import`; streaming mode, the free-space probe, and the verify-and-release loop are the planned seam over it — a new executor drive mode, with no change to the upload wire protocol.
 
 The default pipeline imports every file into the local library *before* upload, so the device temporarily holds the whole import on disk. That is impossible on a storage-constrained device — a laptop with a near-full SSD importing a library larger than its free space. **Streaming mode** removes the requirement that the full import ever land locally at once.
 
@@ -85,7 +89,7 @@ The pipeline decides which assets to *start*; the [upload protocol](/design/impo
 What the rest of the system depends on this module for:
 
 - `ImportPlan` — the deterministic output of the planner; rendered to the UI for confirmation. Schema fields: `added` (each entry carrying its resolved destination `album_id`), `skipped`, `conflicts`, `total_size`, `import_id` (UUIDv7), and `streaming_recommended` (set at confirmation from the [free-space probe](#plan--confirm), not by the pure planner).
-- `available_bytes() → u64` — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
+- `available_bytes() → u64` (planned) — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
 - `execute(plan, cancel_token) → ImportExecutionReport` — the executor entry-point. Honors the cancel token at every file boundary. Returns per-file status. In [streaming mode](#import-upload-streaming-mode) it drives the per-asset import→upload→verify→release window instead of executing-then-uploading in bulk.
 - A stable progress event stream so the UI can report per-asset state (queued / encrypting / uploading / done / failed).
 

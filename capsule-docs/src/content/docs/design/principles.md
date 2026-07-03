@@ -82,6 +82,16 @@ These are goals, not required headings. Some docs hit all four in a single intro
 
 The [Module Map](/design/module-map/) is the cross-cutting index: every code module → owning design doc → validation tier. It is the developer's first stop.
 
+### Implementation Status
+
+Design intent and shipped code drift apart unless the docs say which is which. Every design doc that names an implementing module states, where that module is introduced, one of three statuses per surface:
+
+- **Implemented** — the named module exists and its validation tier runs in CI.
+- **Planned** — the contract is designed; no code exists yet. Marked `(planned)` in the [Module Map](/design/module-map/).
+- **Blocked** — planned, plus a named external blocker (e.g. an upstream dependency), stated where the surface is declared and marked `(blocked)` in the map.
+
+The repo-root `SLICES.md` (a plain repository file, not part of this site) is the executable index of every planned surface — its slice IDs are the unit of implementation work. A doc describing a planned surface writes the *contract* in normative present tense, but must not claim the code exists.
+
 ## Validation Tiers
 
 The three test tiers a design doc may reference:

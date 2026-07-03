@@ -5,7 +5,7 @@ description: How Capsule servers share albums across users on different home ser
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).
 
-Federation reuses the existing read primitives — `/sync`, `/blob/{hash}`, the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Implemented in `capsule-api-sync::federation`: capability issuance, verification, the pull path, and per-peer rate budgeting.
+Federation reuses the existing read primitives — `/sync`, `/blob/{hash}`, the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Planned to live in `capsule-api-sync::federation` (today a stub crate): capability issuance, verification, the pull path, and per-peer rate budgeting.
 
 ## Threat Model
 

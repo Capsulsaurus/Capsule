@@ -58,6 +58,8 @@ What is eligible for reclamation is exactly the rebuildable-or-refetchable set: 
 
 ### Automatic cache management
 
+Implemented (issue #23): last-access tracking lives in the `cached_representations` table in `capsule-core::db`, and the sweep is `capsule-core::library::cache_sweep`. The connection-class detection that would *drive* the byte budget from `capsule-sdk` is planned — the budget is a plain parameter today.
+
 The reclaimable set is held within a **user-configurable cache budget**. When it grows past budget — typically while browsing a large library on a device that cannot hold everything — Capsule reclaims space itself rather than waiting for the user or letting the OS decide:
 
 - **Recency promotion.** Viewing or opening an asset stamps a last-access time on its fetched representations in `library.sqlite`. Recently-viewed content is therefore the *last* to go, so scrolling back through an album already browsed on a high-latency or metered connection hits local cache instead of the network.
