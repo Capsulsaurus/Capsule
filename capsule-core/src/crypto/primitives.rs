@@ -60,6 +60,11 @@ pub mod info {
     pub const ASSET_FILE_V1: &[u8] = b"asset-file/v1";
     /// Per-metadata-blob key: `HKDF(ikm=AMK, salt=blob_id, info=METADATA_BLOB_V1)`.
     pub const METADATA_BLOB_V1: &[u8] = b"metadata-blob/v1";
+    /// Wrap key for an externally-chosen file key (`key_mode = wrapped`; an adopted
+    /// web-upload drop): `HKDF(ikm=AMK, salt=file_id || wrap_nonce, info=ASSET_KEYWRAP_V1)`.
+    /// The sealing/unsealing functions land with the wrapped-key slice; the label is the
+    /// contract (see <https://docs/design/cryptography/encryption/>).
+    pub const ASSET_KEYWRAP_V1: &[u8] = b"asset-keywrap/v1";
     /// Default-album *identifier* derived from the account master key (an ID, not a key).
     pub const DEFAULT_ALBUM_ID_V1: &[u8] = b"default-album-id/v1";
 }
@@ -163,7 +168,10 @@ mod tests {
         // Distinct labels keep derived keys in separate domains.
         assert_ne!(info::ASSET_FILE_V1, info::METADATA_BLOB_V1);
         assert_ne!(info::ASSET_FILE_V1, info::DEFAULT_ALBUM_ID_V1);
+        assert_ne!(info::ASSET_KEYWRAP_V1, info::ASSET_FILE_V1);
+        assert_ne!(info::ASSET_KEYWRAP_V1, info::METADATA_BLOB_V1);
         assert!(info::ASSET_FILE_V1.ends_with(b"/v1"));
         assert!(info::METADATA_BLOB_V1.ends_with(b"/v1"));
+        assert!(info::ASSET_KEYWRAP_V1.ends_with(b"/v1"));
     }
 }

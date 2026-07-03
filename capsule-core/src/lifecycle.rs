@@ -43,7 +43,7 @@ use crate::crypto::keys::{
 };
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::action::Action;
-use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
+use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
@@ -494,6 +494,9 @@ impl Workspace {
             plaintext_size: enc.plaintext_size,
             chunk_size: enc.chunk_size,
             nonce_prefix: enc.nonce_prefix,
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: None,
             created_by_user: self.account.user_id,
             created_by_device: self.account.device.device_id,
             client_version: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),

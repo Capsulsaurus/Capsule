@@ -151,7 +151,7 @@ mod tests {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
+    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 
     #[test]
     fn hash_length_and_size_and_content_type() {
@@ -222,6 +222,9 @@ mod tests {
             plaintext_size: 10,
             chunk_size: 65_520,
             nonce_prefix: [0; 7],
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: None,
             created_by_user: Uuid::from_u128(3),
             created_by_device: Uuid::from_u128(4),
             client_version: "t".into(),

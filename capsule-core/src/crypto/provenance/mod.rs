@@ -17,6 +17,6 @@ pub mod record;
 pub use action::{Action, DerivativeRole};
 pub use manifest::{
     ASSET_MANIFEST_VERSION, AssetManifest, DERIVATIVE_MANIFEST_VERSION, DerivativeCore,
-    DerivativeManifest, ManifestCore,
+    DerivativeManifest, KeyMode, ManifestCore, WrappedFileKey,
 };
 pub use record::{ChainError, ProvenanceChain, ProvenanceRecord};
