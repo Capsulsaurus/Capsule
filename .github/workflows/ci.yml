@@ -103,7 +103,9 @@ jobs:
       - name: Set up convco (via mise)
         uses: jdx/mise-action@v2
         with:
-          install_args: convco
+          # The fully-qualified backend name matching the mise.toml pin — the bare
+          # short name stopped resolving in the mise 2026.7.0 registry.
+          install_args: cargo:convco
       - name: Check commits follow Conventional Commits
         run: convco check --first-parent --ignore-reverts ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
 
