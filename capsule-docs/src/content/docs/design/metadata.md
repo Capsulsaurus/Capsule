@@ -38,6 +38,11 @@ SidecarV1 {
   // when never written, so stack edits converge like caption/rating.
   stack_membership:      Lww<Option<StackMembership>>,
 
+  // organization — culling + visibility (semantics owned by Asset Organization).
+  // LWW registers, wire-absent when never written (never-flagged / visible).
+  cull:                  Lww<CullFlag>,               // pick | neutral | reject
+  hidden:                Lww<bool>,
+
   // identifiers (see Identifiers below; privacy-on-export rules apply)
   camera_id:             Option<{ model: String, serial: String }>,
   device_id:             UUIDv4,
@@ -154,7 +159,7 @@ Capsule's *own* devices syncing the *same user's* library do **not** trigger thi
 User-editable metadata on a shared album — tags, captions, ratings — can be edited concurrently on different devices, including offline. To make these merges deterministic, such fields are modelled as CRDTs:
 
 - **Tags:** an OR-set (observed-remove set) with explicit [`add_id` binding](#add-id-binding), so a tag added on one device and removed on another converge predictably, and a remove that targets an unknown `add_id` is rejected rather than treated as a no-op.
-- **Single-value fields** (`caption_lww`, `rating_lww`, `stack_membership`): last-writer-wins registers keyed by a signed timestamp and the writing `device_id` as the lexicographic tiebreaker. `stack_membership`'s value domain includes "no membership" (a stamped `None`), so joining, moving between, and leaving stacks are all the same LWW write and converge identically.
+- **Single-value fields** (`caption_lww`, `rating_lww`, `stack_membership`, `cull`, `hidden`): last-writer-wins registers keyed by a signed timestamp and the writing `device_id` as the lexicographic tiebreaker. `stack_membership`'s value domain includes "no membership" (a stamped `None`), so joining, moving between, and leaving stacks are all the same LWW write and converge identically.
 
 ### Surfacing Concurrent Edits
 
@@ -180,7 +185,7 @@ The same encrypted-operation path also carries the per-owner **library-settings 
 | Structure | Mechanism | Why it converges |
 | --- | --- | --- |
 | Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; merges commutative, associative, idempotent |
-| Caption / rating / `stack_membership` | LWW register | Total order on `(ts, device_id)`; replay of any op is a no-op |
+| Caption / rating / `stack_membership` / `cull` / `hidden` | LWW register | Total order on `(ts, device_id)`; replay of any op is a no-op |
 | Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored — membership is a deterministic function of inputs; recomputation is idempotent by definition ([views](/design/organization/#system--smart-albums-views), [AI determinism](/design/ai/#ai-output-containment)) |
 | Container-album membership | Single home + ordered lifecycle ops | Exactly one container per asset; a move is a signed lifecycle action whose replay finds the target state already in place and no-ops ([Organization](/design/organization/#container-albums)); concurrency is resolved by MLS commit order, below |
 

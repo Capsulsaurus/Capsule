@@ -87,6 +87,22 @@ StackMembership {
 - **Chaptered Video:** Action cameras (like GoPro) often split long recordings into 4GB chunks. Files like `GOPR001.mp4` and `GOPR002.mp4` are stacked so they appear as one continuous video.
 - **Dual-System Audio:** Groups video files with high-quality external audio (WAV/AIFF) using timecode or waveform matching.
 
+## Culling
+
+Culling is the review pass photographers make after a shoot: keep, undecided, toss. Capsule models it as a **trinary flag per asset** — `pick | neutral | reject` — stored in the sidecar's `cull` LWW register ([schema](/design/metadata/#sidecar-schema-v1)); `neutral` is the never-flagged default and is wire-absent. The flag is orthogonal to the numeric star `rating` (a reject can carry three stars; tools that conflate them force lossy workflows).
+
+- **Workflow.** Flag during review (single keystroke/swipe per asset), filter the view by flag, then act: batch-move rejects to [trash](#recycling) (the only destructive step, and it is soft-per-retention like any delete), promote picks into albums or shares. Flagging itself never touches bytes and is fully reversible.
+- **Groups.** A stack or burst has no stored flag of its own — a group's cull state is **derived** from its members (all-rejected, any-pick, else mixed), so there is no second source of truth to diverge. Flagging a collapsed stack applies the flag to each member (one `metadata-update` per member, atomically staged like any [stack edit](#asset-stacking)).
+- **Sync.** Like every LWW field, concurrent flags converge under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
+
+The dedicated culling UX (keyboard-driven review mode, reject-sweep) is client work tracked as its own slice in the repo-root `SLICES.md`; the schema and semantics above are frozen now so sidecars written today survive it unchanged.
+
+## Hidden Assets
+
+Every asset carries a `hidden` flag (sidecar LWW register, wire-absent default = visible). A hidden asset is **excluded from default views** — timeline, search results, and system views — and appears only in the dedicated Hidden view, which sits behind the same fresh-local-auth gate as Recently Deleted ([Local Gallery — SR1](/design/local-gallery/)). Hiding is view-layer only: the asset stays in its container album, keeps syncing, and remains reachable from contexts that reference it directly (its stack, a share it was already part of).
+
+Hiding is for "don't surface this" (a document photo, an awkward duplicate that must stay); it is not deletion and not access control. Sidecar-style companion files (the JPEG half of a RAW+JPEG pair, a Live Photo's video) are already suppressed from default views by their stack `role` — collapsed stacks show only the `primary` — so `hidden` is not needed for them; it exists for the cases stacking cannot express.
+
 ## Recycling
 
 When you delete an asset, it defaults to trash (i.e. soft delete). On sync, new items in trash are essentially a metadata update rather than removal. A true "delete" operation is only performed when the user explicitly empties the trash, the asset has been in the trash for its full retention period, or the user requests immediate deletion.

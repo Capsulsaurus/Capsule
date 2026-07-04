@@ -112,6 +112,20 @@ pub struct StackMembership {
     pub member_index: Option<u32>,
 }
 
+/// Trinary culling flag (owner: Asset Organization — Culling). `Neutral` is the
+/// never-flagged state and the wire-absent default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CullFlag {
+    /// Marked as a keeper.
+    Pick,
+    /// Not yet culled either way (default).
+    #[default]
+    Neutral,
+    /// Marked for rejection (filtered out, candidate for batch delete).
+    Reject,
+}
+
 /// The signed CBOR sidecar v1.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SidecarV1 {
@@ -147,6 +161,12 @@ pub struct SidecarV1 {
     /// construction, not convention. Wire-absent default = the never-written
     /// register (distinct from an explicit removal, which is a stamped `None`).
     pub stack_membership: Lww<Option<StackMembership>>,
+    /// Culling flag: LWW register over the trinary [`CullFlag`]. Wire-absent
+    /// default = never flagged (`Neutral`).
+    pub cull: Lww<CullFlag>,
+    /// Hidden flag: LWW register; hidden assets are excluded from default views
+    /// (owner: Asset Organization — Hidden Assets). Wire-absent default = visible.
+    pub hidden: Lww<bool>,
     /// Camera identifier (export-stripped).
     pub camera_id: Option<CameraId>,
     /// Importing device id (UUIDv4; export-stripped).
@@ -215,6 +235,12 @@ impl SidecarV1 {
         // sidecars (and stackless assets) encode byte-identically.
         if self.stack_membership != Lww::default() {
             put!("stack_membership", self.stack_membership);
+        }
+        if self.cull != Lww::default() {
+            put!("cull", self.cull);
+        }
+        if self.hidden != Lww::default() {
+            put!("hidden", self.hidden);
         }
         put_opt!("camera_id", self.camera_id);
         put!("device_id", self.device_id);
@@ -316,6 +342,14 @@ impl SidecarV1 {
             None | Some(Value::Null) => Lww::new(),
             Some(v) => from_value::<Lww<Option<StackMembership>>>(v)?,
         };
+        let cull = match text.remove("cull") {
+            None | Some(Value::Null) => Lww::new(),
+            Some(v) => from_value::<Lww<CullFlag>>(v)?,
+        };
+        let hidden = match text.remove("hidden") {
+            None | Some(Value::Null) => Lww::new(),
+            Some(v) => from_value::<Lww<bool>>(v)?,
+        };
         let camera_id = opt!("camera_id", CameraId);
         let device_id = req!("device_id", Uuid);
         let session_id = req!("session_id", Uuid);
@@ -338,6 +372,8 @@ impl SidecarV1 {
             caption,
             rating,
             stack_membership,
+            cull,
+            hidden,
             camera_id,
             device_id,
             session_id,
@@ -373,6 +409,8 @@ mod tests {
             caption: Lww::new(),
             rating: Lww::new(),
             stack_membership: Lww::new(),
+            cull: Lww::new(),
+            hidden: Lww::new(),
             camera_id: Some(CameraId {
                 model: "iPhone 15 Pro".into(),
                 serial: "ABC123".into(),
@@ -531,5 +569,62 @@ mod tests {
         let mut replay = ab.clone();
         replay.merge(&a);
         assert_eq!(replay.get(), ab.get());
+    }
+
+    #[test]
+    fn absent_cull_and_hidden_are_wire_absent_and_byte_stable() {
+        // Never-flagged assets omit both registers, so pre-existing sidecars
+        // encode byte-identically to before the fields existed.
+        let s = minimal();
+        let bytes = s.to_canonical_vec();
+        for needle in [b"cull".as_slice(), b"hidden".as_slice()] {
+            assert!(
+                !bytes.windows(needle.len()).any(|w| w == needle),
+                "unexpected wire presence"
+            );
+        }
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.cull, Lww::new());
+        assert_eq!(back.hidden, Lww::new());
+    }
+
+    #[test]
+    fn cull_and_hidden_round_trip_and_survive_signing() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.cull.set(
+            CullFlag::Reject,
+            "2026-05-31T12:00:00Z",
+            Uuid::from_u128(0xD1),
+        );
+        s.hidden
+            .set(true, "2026-05-31T12:00:01Z", Uuid::from_u128(0xD1));
+        s.sign(&ik);
+        let back =
+            SidecarV1::from_canonical_slice(&s.to_canonical_vec(), SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(back.cull.get(), Some(&CullFlag::Reject));
+        assert_eq!(back.hidden.get(), Some(&true));
+        assert!(back.verify(&ik.verifying_key()));
+    }
+
+    #[test]
+    fn concurrent_cull_flags_converge() {
+        // Two devices flag the same asset concurrently: pick at 10:00, reject at
+        // 11:00 — both merge orders converge on the later reject.
+        let mut a: Lww<CullFlag> = Lww::new();
+        a.set(CullFlag::Pick, "2026-05-31T10:00:00Z", Uuid::from_u128(0xA));
+        let mut b: Lww<CullFlag> = Lww::new();
+        b.set(
+            CullFlag::Reject,
+            "2026-05-31T11:00:00Z",
+            Uuid::from_u128(0xB),
+        );
+        let mut ab = a.clone();
+        ab.merge(&b);
+        let mut ba = b.clone();
+        ba.merge(&a);
+        assert_eq!(ab.get(), ba.get());
+        assert_eq!(ab.get(), Some(&CullFlag::Reject));
     }
 }
