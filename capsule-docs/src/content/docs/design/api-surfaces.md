@@ -29,7 +29,7 @@ Two consequences worth stating plainly:
 
 ## Why Two Transports
 
-- **REST + OpenAPI** for every request/response surface: the OpenAPI schema is the machine-readable contract that generates `capsule-sdk` (progenitor), and a plain HTTP surface stays debuggable with nothing but `curl` — which matters for a self-hosted product.
+- **REST + OpenAPI** for every request/response surface: the OpenAPI **3.1** schema is the machine-readable contract that generates `capsule-sdk`'s typed REST client via `spargen`, our in-house generator (in development; SLICES.md `S-D8`). Progenitor was dropped because it consumes OpenAPI 3.0 only, forcing a lossy 3.1→3.0 down-conversion — we do not downgrade schemas. A plain HTTP surface stays debuggable with nothing but `curl` — which matters for a self-hosted product.
 - **gRPC** only where a typed, paged feed contract earns it: the sync feed and its federation twin are one proto contract consumed by every client and every peer server, with the signed manifest traveling as opaque canonical CBOR inside it (never re-modeled as proto fields — re-encoding would detach it from its signatures).
 
 ## Legacy: GraphQL (retiring)

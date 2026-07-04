@@ -112,10 +112,10 @@ run = "cargo fmt"
 run = "cargo fmt --check"
 
 [tasks.lint-rust]
-run = "cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty -- $CLIPPY_FLAGS"
+run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
 
 [tasks.lint-check-rust]
-run = "cargo clippy --workspace --exclude capsule-sdk -- $CLIPPY_FLAGS"
+run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.
@@ -123,15 +123,15 @@ run = "cargo clippy --workspace --exclude capsule-sdk -- $CLIPPY_FLAGS"
 # `cargo test --doc` step). CI selects the `ci` profile via NEXTEST_PROFILE=ci.
 [tasks.test-rust]
 run = [
-  "cargo nextest run --workspace --exclude capsule-sdk",
+  "cargo nextest run --workspace",
   "cargo nextest run -p capsule-core --features ffi",
 ]
 
 [tasks.test-coverage-rust]
-run = "cargo llvm-cov nextest --workspace --exclude capsule-sdk --fail-under-lines 0"
+run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 
 [tasks.build-rust]
-run = "cargo build --workspace --exclude capsule-sdk"
+run = "cargo build --workspace"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
 # (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
