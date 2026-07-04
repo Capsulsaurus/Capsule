@@ -1,6 +1,7 @@
 ---
 title: Backup and Recovery
 description: The portable backup artifact, the master-key escrow, and the recovery flows
+status: draft
 ---
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class failure mode. Recovery rests on a single rule: holding the recovery secret must restore every asset, even after every device is lost. This document defines the two artifacts and the mechanisms that uphold it.

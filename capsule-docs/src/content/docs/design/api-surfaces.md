@@ -1,6 +1,7 @@
 ---
 title: API Surfaces
 description: Which server surface speaks which transport, and how negotiation and rejection map across them
+status: draft
 ---
 
 Capsule's server exposes exactly **two** wire transports, chosen per surface: **REST with an OpenAPI schema** for request/response surfaces, and **gRPC** for the sync feed and federation pull. This doc owns the surface ↔ transport map and the cross-transport mapping of the [universal handshake](/design/threat-model/validation/#protocol-and-capability-negotiation) and rejection semantics. The handshake *rules* stay owned by [Threat Model — Validation](/design/threat-model/validation/); error-code identity stays owned by [Internationalization](/design/i18n/#server-error-codes); this doc owns only how both ride each transport.

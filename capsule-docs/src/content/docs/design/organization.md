@@ -1,6 +1,7 @@
 ---
 title: Asset Organization
 description: Albums (container and view), default-album resolution, asset stacks, and trash retention
+status: draft
 ---
 
 **Albums** are Capsule's organizational backbone: [container albums](#container-albums) are the cryptographic unit every asset belongs to, while [view albums](#system--smart-albums-views) are derived, key-free presentations. On top of albums, **stacks** group related files (RAW+JPEG pairs, bursts, live photos) so a library stays tidy, and **trash** stages every destructive operation behind a signed retention window so a buggy or hostile actor cannot silently destroy data. Stacks and trash are metadata-only — they never touch the underlying asset bytes.

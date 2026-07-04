@@ -1,6 +1,7 @@
 ---
 title: Client Filesystem
 description: How clients lay out a library on disk — desktop, mobile, local index, and space recovery
+status: draft
 ---
 
 Clients hold keys, so a client stores plaintext. Desktop clients keep a self-contained library directory; mobile clients use platform-sandboxed storage. The cross-platform logic lives in `capsule-core::library` (paths, init, open) and `capsule-core::db` (SQLite cache); per-platform glue lives in `capsule-sdk` and native client code.

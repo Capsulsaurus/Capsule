@@ -1,6 +1,7 @@
 ---
 title: AI/ML Integrations
 description: AI feature architecture, the canonical model inventory, embedding provenance, and AI/user metadata separation
+status: draft
 ---
 
 Capsule runs a hierarchy of ML models, all **client-side** (the server never holds plaintext). The stable contract is the *structure*: three functional categories, the AI/user namespace separation in [AI Output Containment](#ai-output-containment), the canonical model inventory in [Models and Algorithms](#models-and-algorithms), and the [embedding-provenance](#embedding-provenance) invariant. The specific feature list and per-model choices are current defaults that will evolve with field testing.

@@ -1,6 +1,7 @@
 ---
 title: Core Principles
 description: The core principles that guide the design and development of Capsule
+status: draft
 ---
 
 These principles apply universally to all components of Capsule, from clients to server. The owner-doc rules and structural guidance below apply to every doc in `design/`.
@@ -93,6 +94,15 @@ Design intent and shipped code drift apart unless the docs say which is which. E
 - **Blocked** — planned, plus a named external blocker (e.g. an upstream dependency), stated where the surface is declared and marked `(blocked)` in the map.
 
 The repo-root `SLICES.md` (a plain repository file, not part of this site) is the executable index of every planned surface — its slice IDs are the unit of implementation work. A doc describing a planned surface writes the *contract* in normative present tense, but must not claim the code exists.
+
+### Review Status
+
+Separately from per-surface implementation status, every design doc carries a `status` frontmatter field tracking **human design review**, validated by the site schema:
+
+- `draft` — the doc's current content has not passed a human re-review since the last substantive design change.
+- `stable` — a human reviewed the doc as written and signed off; substantive edits flip it back to `draft`.
+
+The field is review-queue metadata, not publication state (drafts still build and publish).
 
 ## Validation Tiers
 

@@ -1,6 +1,7 @@
 ---
 title: Thumbnails and Previews
 description: Format inventory, LQIP scheme, and derivative provenance for photo and video derivatives
+status: draft
 ---
 
 We generate thumbnails and previews for all photos and videos. This doc is the **single source of truth** for the LQIP scheme and the thumbnail/preview formats — per the [SSoT rule](/design/principles/#single-source-of-truth), other docs reference these by link rather than restating the choice. The format table is itself the contract: every receiver (and every federated peer) compares the `DerivativeManifest.format` value against this list, and an unknown value is a structural rejection.

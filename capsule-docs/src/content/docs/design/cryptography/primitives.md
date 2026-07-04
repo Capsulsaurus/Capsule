@@ -1,6 +1,7 @@
 ---
 title: Cryptographic Primitives
 description: Single-source-of-truth inventory of every cryptographic primitive Capsule uses
+status: draft
 ---
 
 This doc is **the single source of truth** for every cryptographic primitive Capsule uses. Other docs (and the rest of the cryptography sub-docs) reference these by anchor — they never restate the choice. Swapping a primitive is a single-row edit here, plus a new `crypto_suite_id` and the dedicated section below.

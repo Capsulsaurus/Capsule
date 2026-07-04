@@ -1,6 +1,7 @@
 ---
 title: Clients
 description: Native client priorities, what every client must validate, and the sandboxed decoder
+status: draft
 ---
 
 Capsule's clients are native per platform, with as little divergence as possible. The cross-platform logic — including the entire [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint, the [import pipeline](/design/import/pipeline/), and the [library layout](/design/filesystem/client/) — lives in `capsule-core` and is consumed by every native client through `capsule-sdk`. Each native client's job is the surface above that: rendering, input, and platform integration.

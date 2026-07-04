@@ -1,6 +1,7 @@
 ---
 title: Threat Model
 description: How Capsule contains damage from faulty, malicious, or version-mismatched clients
+status: draft
 ---
 
 E2EE shifts most of the trust to the client. The server holds no keys; clients write the canonical state. That makes the question "what damage can a client cause?" load-bearing for the design — a single buggy implementation, a hostile keyholder inside an album, a stranded old build, or a too-new prototype all have to fail safely.

@@ -1,6 +1,7 @@
 ---
 title: Validation Invariants
 description: Server and client refuse-by-default checklists; protocol handshake; idempotency; atomicity
+status: draft
 ---
 
 The cross-cutting refuse-by-default rules every Capsule receiver runs before persisting any incoming write. These are the operational core of the threat model — a server or client that skips one of them silently widens the blast radius for the entire client class taxonomy.

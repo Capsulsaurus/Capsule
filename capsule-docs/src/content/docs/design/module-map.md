@@ -1,6 +1,7 @@
 ---
 title: Module Map
 description: Index of every code module to its owning design doc and validation tier
+status: draft
 ---
 
 This is the developer's first stop. It maps every Capsule workspace crate and module to the design doc(s) that govern its behavior, and to the validation tier (Unit / Smoke / E2E — see [Validation Tiers](/design/principles/#validation-tiers)) it ships with. The E2E test surface at the bottom is **bounded**: adding a test there means adding the test to the relevant doc's Validation section and justifying why the cross-module surface is irreducible.

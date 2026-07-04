@@ -1,6 +1,7 @@
 ---
 title: Moderation
 description: Server moderation policy — reports, suspensions, takedowns, blocklists, federated reporting
+status: draft
 ---
 
 Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no server-side content scanner will be built. (Client-side, opt-in ML over a user's *own* library — [AI/ML](/design/ai/) — is a different thing entirely: it runs where the keys are, under the user's control; its candidate shared-album-flagging classifiers are client-side and user-initiated, never a server scanner.) Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.

@@ -1,6 +1,7 @@
 ---
 title: Import Pipeline
 description: How Capsule scans, plans, and executes a local import on a single device
+status: draft
 ---
 
 The import pipeline is the workflow a client runs to bring assets from an external source (a camera, a filesystem directory) into Capsule's management. It is implemented in `capsule-core::import` and runs entirely client-side — no server is contacted until the [upload protocol](/design/import/upload-protocol/) is invoked at the tail of the pipeline.

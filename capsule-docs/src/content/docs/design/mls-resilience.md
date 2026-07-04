@@ -1,6 +1,7 @@
 ---
 title: MLS Resilience
 description: How Capsule's MLS layer recovers from lost commits, state divergence, and group corruption
+status: draft
 ---
 
 OpenMLS handles MLS (RFC 9420) correctly under normal operation — commits ordered by the group's chain, duplicates rejected, ratchet advanced atomically. But MLS can still hit scenarios the base protocol does not resolve on its own: a commit lost in transit, two devices proposing concurrently with the wrong ordering, a member whose local state has diverged from the server's. This doc owns Capsule's recovery contracts for those edge cases.

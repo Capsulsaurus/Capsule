@@ -1,6 +1,7 @@
 ---
 title: Federation
 description: How Capsule servers share albums across users on different home servers
+status: draft
 ---
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).

@@ -1,6 +1,7 @@
 ---
 title: Versioning
 description: How Capsule pins each album to a protocol version, upgrades safely, and bounds client deprecation
+status: draft
 ---
 
 Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.

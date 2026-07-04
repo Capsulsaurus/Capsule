@@ -1,6 +1,7 @@
 ---
 title: Schema Rules and Open Questions
 description: Schema evolution, forbidden client behaviors, deprecation policy, and unresolved design questions
+status: draft
 ---
 
 Capsule schemas evolve over time, but the rules of evolution are fixed — what fields a writer may add, what a receiver may safely ignore, what fields are closed enums, and what timing/grammar rules apply. Each schema's owner doc defines its fields; this doc defines what evolution is allowed across them. Schema-rule enforcement lives in `capsule-core::crypto` (sidecar/manifest decode) and the validation layers of every API crate.

@@ -1,6 +1,7 @@
 ---
 title: Storage Verification
 description: The endpoint a client calls to confirm an asset is durably stored, indexed, and retrievable before any destructive local action
+status: draft
 ---
 
 [Upload finalization](/design/import/upload-protocol/#finalization-and-integrity) confirms, **once**, that the bytes the server assembled match the declared hash. That `Completed` acknowledgement is a transfer receipt, not a standing durability guarantee a client can re-check later — and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves *cryptographic* validity and authorization, never that the server still holds the bytes. A client that is about to discard local data therefore has no way, today, to ask the server: *do you actually still have this, indexed and retrievable?*

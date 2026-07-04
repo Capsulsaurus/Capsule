@@ -1,6 +1,7 @@
 ---
 title: Key Management
 description: Capsule's key hierarchy, device coordination, and write authorization
+status: draft
 ---
 
 Capsule's keys form a single hierarchy with one backed-up root. The hierarchy is implemented in `capsule-core::crypto::keys`. Every signing site consumes the device signing key through the `Signer` seam there, and hardware-backed keys implement the `HardwareSigner` foreign trait (exported under `capsule-core`'s `ffi` feature), so software and hardware keys are interchangeable. Reference adapters ship for software (`crypto::keys::software`, CI-smoked) and TPM 2.0 (`crypto::keys::tpm`, feature-gated); Secure Enclave and StrongBox adapters live in the `capsule-core-swift` / `capsule-core-kotlin` harness packages. End-to-end hardware composition awaits the planned **P-256 hybrid-DSK variant** — secure elements expose ECDSA-P256, not Ed25519 (see [Device Enrollment](/design/device-enrollment/)).

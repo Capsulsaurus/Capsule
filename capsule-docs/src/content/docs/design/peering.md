@@ -1,6 +1,7 @@
 ---
 title: Peering
 description: Direct LAN device-to-device sync within a single user's own devices
+status: draft
 ---
 
 Peering is **device-to-device** sync within a single user's own devices. It is distinct from [Federation](/design/federation/), which is server-to-server sharing across *different* users.

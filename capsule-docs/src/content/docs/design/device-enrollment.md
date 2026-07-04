@@ -1,6 +1,7 @@
 ---
 title: Device Enrollment
 description: First-device bootstrap and cross-device add ceremonies for Capsule accounts
+status: draft
 ---
 
 A Capsule account has one or more devices, each holding a hardware-bound DSK + DEK cross-signed into the user's [device directory](/design/cryptography/keys/#device-directory). This doc owns the two enrollment ceremonies a device can go through to *get into* that directory:

@@ -1,6 +1,7 @@
 ---
 title: Cryptography
 description: Capsule's cryptographic stack — the entry point to the sub-docs
+status: draft
 ---
 
 Cryptography in Capsule is everything that makes E2EE work over an asset-heavy, sync-heavy workload. The choices and constructions are split across focused sub-docs because each is implementable and testable on its own, but they share one home: every primitive and key-handling routine lives in `capsule-core::crypto`, so every client and the server's no-key envelope-validation path use exactly the same code.

@@ -1,6 +1,7 @@
 ---
 title: Web Upload
 description: Browser-based guest drops — upload-link provisioning, the sealed drop format, and adoption into the library
+status: draft
 ---
 
 Web upload lets a Capsule user accept assets from someone who has **no Capsule account** — a guest with a browser, the *web client*. Unlike a native client, the web client holds no album keys, has no place in any album's MLS group, and (being WASM in a browser) cannot run the full signed-import pipeline. So it does not write into the library directly. Instead the user **provisions an upload link**; the guest's browser **encrypts each asset client-side and seals the asset key to the user's public key**; the sealed bytes land in a **staging inbox** charged to the provisioning user's quota; and nothing becomes a library asset until the user **reviews and adopts it on one of their native (trusted) clients**, where provenance is finally appended. The guest is the [non-registered account](/design/authentication/#account-types) class — no master key, no User IK, no MLS membership.

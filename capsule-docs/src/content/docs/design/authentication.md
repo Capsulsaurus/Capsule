@@ -1,6 +1,7 @@
 ---
 title: Authentication
 description: Identity, account portability, session and access tokens
+status: draft
 ---
 
 Authentication binds a user identity to their master key, which is the root of every encryption and decryption operation in Capsule. The server can prove "this request is from a session it issued" but cannot prove "this user is who they say they are" — the master key, owned client-side, is the actual identity root. Everything below works to keep that binding intact through the lifetime of a session and across server moves.

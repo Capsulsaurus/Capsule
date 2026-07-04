@@ -1,6 +1,7 @@
 ---
 title: Server Filesystem
 description: The server's blob store layout, Postgres index, and deployment profiles
+status: draft
 ---
 
 The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.

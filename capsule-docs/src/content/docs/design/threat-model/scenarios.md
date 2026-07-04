@@ -1,6 +1,7 @@
 ---
 title: Damage Scenarios and Quarantine
 description: The damage-scenario → invariant map, quarantine surface inventory, and provenance immutability rules
+status: draft
 ---
 
 The lookup table for "what damage X is prevented by which invariant Y in which doc Z." Each row names a concrete vector found during the audit and the single owner-doc anchor that defeats it. The table itself is the operational core of the threat model — adding a row obliges declaring the defense in exactly one owner doc.

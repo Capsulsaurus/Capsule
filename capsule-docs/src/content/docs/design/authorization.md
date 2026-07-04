@@ -1,6 +1,7 @@
 ---
 title: Authorization
 description: The closed lifecycle-action set and how every destructive operation is signed and audited
+status: draft
 ---
 
 Authorization in Capsule is **the same proof as a write**: every lifecycle transition — create, replace, delete, metadata-update, derivative add/replace, trash-restore — is an [asset manifest](/design/cryptography/provenance/#asset-manifest) signed under the album's per-epoch write-tier key. There is no weaker path to destroy data than to add it.

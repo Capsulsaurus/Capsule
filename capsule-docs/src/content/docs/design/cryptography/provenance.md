@@ -1,6 +1,7 @@
 ---
 title: Signed Manifests and Provenance
 description: Capsule's signed asset manifest, append-only provenance chains, and derivative provenance
+status: draft
 ---
 
 Every asset Capsule stores has a verifiable trace of *who* produced it. The trace is anchored in a small **signed manifest** — bound to the ciphertext, cheap to verify, streaming-compatible — and extended by an **append-only, hash-chained provenance log per asset**. Together these are what let an operator distinguish a legitimate delete from a malicious or bug-induced one after the fact, and what defeats the [stale-revival attack](/design/threat-model/scenarios/#damage-scenario--invariant-map).

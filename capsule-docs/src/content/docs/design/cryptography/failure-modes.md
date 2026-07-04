@@ -1,6 +1,7 @@
 ---
 title: Failure Modes and Recovery
 description: What can go wrong with Capsule's cryptographic state, and the independent paths that restore it
+status: draft
 ---
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class concern. This doc catalogues what can go wrong, how each failure is detected or contained, and the redundant, independent paths that restore a user's *entire* asset collection — including after catastrophic software bugs, not just key loss.

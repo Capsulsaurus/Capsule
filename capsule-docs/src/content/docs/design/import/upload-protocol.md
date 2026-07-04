@@ -1,6 +1,7 @@
 ---
 title: Upload Protocol
 description: The wire protocol between Capsule clients and the server for resumable, content-addressed uploads
+status: draft
 ---
 
 The upload protocol is a custom resumable-upload protocol modeled on [TUS](https://tus.io/) but trimmed to Capsule's needs: no per-request capability negotiation, no metadata smuggled in headers, ciphertext-only payloads. Compatibility is gated once, up front, via the universal [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).

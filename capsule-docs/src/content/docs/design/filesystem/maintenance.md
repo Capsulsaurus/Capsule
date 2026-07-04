@@ -1,6 +1,7 @@
 ---
 title: Library Maintenance and Atomic Writes
 description: How Capsule keeps client storage consistent, repairs what it can, and writes atomically
+status: draft
 ---
 
 The data-integrity principle treats client storage as *potentially lost* (see [Core Principles](/design/principles/)): unlike the server, a client library sits on consumer hardware, syncs only partially, and is edited by a long-lived process that can be killed mid-write. A client therefore never assumes its library is consistent — it periodically *proves* it is, repairs what it can repair safely, and surfaces what it cannot.

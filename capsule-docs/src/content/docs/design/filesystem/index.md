@@ -1,6 +1,7 @@
 ---
 title: Filesystem
 description: How Capsule structures files on disk — server vs client, and what they share
+status: draft
 ---
 
 Capsule's end-to-end encryption splits the filesystem into two fundamentally different roles. The **server** stores only opaque, content-addressed ciphertext — it never holds a decryption key and cannot interpret a single byte it stores. **Clients** hold the keys, so a client filesystem is a working library of plaintext media, sidecar metadata, and rebuildable caches. The two layouts share a small set of principles but otherwise have little in common.

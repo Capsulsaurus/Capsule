@@ -1,6 +1,7 @@
 ---
 title: MLS Group Membership
 description: How Capsule binds MLS (RFC 9420) to its identity layer and uses it for album membership
+status: draft
 ---
 
 Capsule's group layer is the [MLS ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) from the inventory. It will be implemented in `capsule-core::crypto::mls` (planned) as a thin wrapper over OpenMLS — the wrapper is what binds MLS to Capsule's identity layer ([Keys](/design/cryptography/keys/)) and to the in-band AMK distribution.

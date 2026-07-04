@@ -1,6 +1,7 @@
 ---
 title: Asset and Metadata Encryption
 description: How Capsule encrypts asset bytes and metadata blobs, including streaming and wire formats
+status: draft
 ---
 
 Every asset Capsule stores — original bytes, derivative bytes, metadata blob — is encrypted client-side before it ever crosses a network boundary. The encryption code lives in `capsule-core::crypto::encryption` and is the only place AES-256-GCM is invoked in the codebase. Two constructions live here:
