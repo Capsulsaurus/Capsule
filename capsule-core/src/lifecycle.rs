@@ -48,7 +48,7 @@ use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord
 use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
 use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
 use crate::library::Library;
-use crate::metadata::crdt::{AddId, Counter};
+use crate::metadata::crdt::{AddId, Counter, Lww};
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
@@ -531,7 +531,7 @@ impl Workspace {
             tags_ai: Default::default(),
             caption: Default::default(),
             rating: Default::default(),
-            stack_membership: None,
+            stack_membership: Lww::new(),
             camera_id: None,
             device_id: self.account.device.device_id,
             session_id: Uuid::now_v7(),
@@ -817,7 +817,7 @@ impl Workspace {
             tags_ai: Default::default(),
             caption: Default::default(),
             rating: Default::default(),
-            stack_membership: None,
+            stack_membership: Lww::new(),
             camera_id: None,
             device_id: head.core.created_by_device,
             session_id: Uuid::now_v7(),

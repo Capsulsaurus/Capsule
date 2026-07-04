@@ -33,8 +33,10 @@ SidecarV1 {
   superseded_captions:   Vec<{ value: String, written_by: device_id, ts: RFC3339 }>,  // bounded ≤ 16
   rating_lww:            Option<{ value: u8, ts: RFC3339, by: device_id }>,
 
-  // organization — stack grouping; StackMembership shape owned by Asset Organization
-  stack_membership:      Option<StackMembership>,
+  // organization — stack grouping; StackMembership shape owned by Asset Organization.
+  // An LWW register over Option<StackMembership> (leave = a stamped None), wire-absent
+  // when never written, so stack edits converge like caption/rating.
+  stack_membership:      Lww<Option<StackMembership>>,
 
   // identifiers (see Identifiers below; privacy-on-export rules apply)
   camera_id:             Option<{ model: String, serial: String }>,
@@ -152,7 +154,7 @@ Capsule's *own* devices syncing the *same user's* library do **not** trigger thi
 User-editable metadata on a shared album — tags, captions, ratings — can be edited concurrently on different devices, including offline. To make these merges deterministic, such fields are modelled as CRDTs:
 
 - **Tags:** an OR-set (observed-remove set) with explicit [`add_id` binding](#add-id-binding), so a tag added on one device and removed on another converge predictably, and a remove that targets an unknown `add_id` is rejected rather than treated as a no-op.
-- **Single-value fields** (`caption_lww`, `rating_lww`): last-writer-wins registers keyed by a signed timestamp and the writing `device_id` as the lexicographic tiebreaker.
+- **Single-value fields** (`caption_lww`, `rating_lww`, `stack_membership`): last-writer-wins registers keyed by a signed timestamp and the writing `device_id` as the lexicographic tiebreaker. `stack_membership`'s value domain includes "no membership" (a stamped `None`), so joining, moving between, and leaving stacks are all the same LWW write and converge identically.
 
 ### Surfacing Concurrent Edits
 
@@ -169,9 +171,20 @@ We encrypt the **operations**, not the resulting state. Merges are then commutat
 
 Each operation carries the same `prior_provenance_hash` chain link as any [lifecycle action](/design/authorization/#the-closed-action-set), so a metadata-update is provenance-tracked exactly like a create or delete.
 
-Album *membership* is deliberately **not** a CRDT here — it is driven by MLS proposals and commits (see [Cryptography — MLS](/design/cryptography/mls/)), which already resolve concurrent changes.
-
 The same encrypted-operation path also carries the per-owner **library-settings document** — [smart-album](/design/organization/#system--smart-albums-views) definitions (predicate + display name) and similar client-authored organizational state — synced and merged across devices like any other collaborative metadata, and never legible to the server. (The [default-album](/design/organization/#the-default-album) *designation* is separate: a non-secret server-side owner pointer, not part of this encrypted document.)
+
+### Grouping Convergence (Requirement)
+
+**Every grouping operation — manual or automatic/AI — is idempotent and order-independent.** Applying the same operation twice, or applying a set of operations in any arrival order, yields the same state. This is a requirement satisfied *by construction*, not by convention; each grouping structure names its mechanism:
+
+| Structure | Mechanism | Why it converges |
+| --- | --- | --- |
+| Tags (`tags_user` / `tags_ai`) | OR-set | Add/remove keyed by `add_id`; merges commutative, associative, idempotent |
+| Caption / rating / `stack_membership` | LWW register | Total order on `(ts, device_id)`; replay of any op is a no-op |
+| Smart albums, people clusters, [aggregated federated albums](/design/federation/) | Computed views | Nothing stored — membership is a deterministic function of inputs; recomputation is idempotent by definition ([views](/design/organization/#system--smart-albums-views), [AI determinism](/design/ai/#ai-output-containment)) |
+| Container-album membership | Single home + ordered lifecycle ops | Exactly one container per asset; a move is a signed lifecycle action whose replay finds the target state already in place and no-ops ([Organization](/design/organization/#container-albums)); concurrency is resolved by MLS commit order, below |
+
+Album *membership* is deliberately **not** a CRDT here — it is driven by MLS proposals and commits (see [Cryptography — MLS](/design/cryptography/mls/)), which already resolve concurrent changes into one total order.
 
 This LWW/OR-set approach is intentionally simpler than a full event-graph with state resolution: photo metadata does not need it, and the extra machinery would not be functionally justified.
 

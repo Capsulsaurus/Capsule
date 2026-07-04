@@ -25,6 +25,8 @@ AI inference can be wrong, biased, or hallucinatory. A core rule prevents it fro
 
 A hallucinating model can pollute its own namespace, never user intent. This is the structural defense against the "AI mistake silently overwrites user data" damage class — see [Threat Model — Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors).
 
+**AI grouping is a pure function.** Every automatic grouping output (clusters, similarity groups, scene groupings) is a deterministic function of `(input asset set, model_id, model_version)` — inputs are processed in sorted asset-id order and any stochastic step (cluster seeding, initialization) uses fixed seeds, because most clustering algorithms are otherwise order-sensitive. Re-running a grouping over the same inputs yields byte-identical output; growing the input set and re-running is the only way results change. This is what makes automatic grouping idempotent and order-independent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
+
 ## Semantic Indexing
 
 Semantic search converts an image and a text query into vectors and measures their distance. Because embeddings are generated client-side, every device must run the same canonical model along a deterministic path so vectors are comparable — the constraint and its platform-partition fallback are specified in [Embedding Provenance](#embedding-provenance).
@@ -40,6 +42,8 @@ Face Detection & Matching (clustering) runs the **Face Detection** and **Face Re
 ## Quality Assessment
 
 Deferred to post-v1. The category and its sidecar fields are reserved in the [containment model](#ai-output-containment) so it can land later without a schema change; the Quality candidate models in the [inventory](#models-and-algorithms) are not part of the v1 pipeline.
+
+**Sequencing contract (fixed now so the deferral can't drift):** group-scoped evaluations — best shot, best framing, best exposure within a stack, burst, or similarity group — run strictly **after** grouping, never interleaved with it. Each evaluation result is keyed by `(group_id, membership_hash, model_id, model_version)`, where `membership_hash` is the hash of the group's sorted member ids. Any membership change therefore invalidates the group's evaluations *by key construction* — no invalidation bookkeeping to forget — and the recompute is deterministic (same members, same model → same result; ties broken by asset id). Evaluation outputs are derived, AI-namespaced state: the durable, user-visible outcome remains the [`role = primary` pointer](/design/organization/#asset-stacking) a user or the client sets from them. Implementation is slice `S-H4` (after semantic/face features).
 
 ## Model Batching
 

@@ -81,7 +81,7 @@ mod tests {
             tags_ai: Default::default(),
             caption: Default::default(),
             rating: Default::default(),
-            stack_membership: None,
+            stack_membership: Default::default(),
             camera_id: Some(CameraId {
                 model: "iPhone 15 Pro".into(),
                 serial: "SECRET-SERIAL".into(),
