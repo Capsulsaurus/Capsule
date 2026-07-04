@@ -51,6 +51,326 @@
         }
       }
     },
+    "error.blob.pending_upload": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The original photo hasn't been uploaded from its device yet."
+          }
+        }
+      }
+    },
+    "error.protocol.version_unsupported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This version of Capsule is no longer supported. Please update the app."
+          }
+        }
+      }
+    },
+    "error.quota.exceeded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your storage is full."
+          }
+        }
+      }
+    },
+    "error.upload.album_access_denied": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You don't have permission to add photos to this album."
+          }
+        }
+      }
+    },
+    "error.upload.checksum_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload data was corrupted in transit. Retrying…"
+          }
+        }
+      }
+    },
+    "error.upload.chunk_conflict": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload sent conflicting data and was stopped."
+          }
+        }
+      }
+    },
+    "error.upload.chunk_not_aligned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An upload chunk was incorrectly sized."
+          }
+        }
+      }
+    },
+    "error.upload.chunk_too_large": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An upload chunk exceeded the maximum chunk size."
+          }
+        }
+      }
+    },
+    "error.upload.content_hash_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload failed integrity verification and was discarded."
+          }
+        }
+      }
+    },
+    "error.upload.device_not_authorized": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device isn't authorized to upload. Re-enroll it and try again."
+          }
+        }
+      }
+    },
+    "error.upload.duplicate_blob": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is already stored."
+          }
+        }
+      }
+    },
+    "error.upload.empty_chunk": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An upload chunk cannot be empty."
+          }
+        }
+      }
+    },
+    "error.upload.envelope_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload request contradicts its signed manifest."
+          }
+        }
+      }
+    },
+    "error.upload.envelope_rejected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload's signed manifest failed validation."
+          }
+        }
+      }
+    },
+    "error.upload.file_too_large": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file exceeds the server's size limit."
+          }
+        }
+      }
+    },
+    "error.upload.finalize_in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload is already being finalized."
+          }
+        }
+      }
+    },
+    "error.upload.forbidden": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You don't have access to this upload."
+          }
+        }
+      }
+    },
+    "error.upload.invalid_hash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload's declared content hash is invalid."
+          }
+        }
+      }
+    },
+    "error.upload.invalid_size": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload's declared size is invalid."
+          }
+        }
+      }
+    },
+    "error.upload.malformed_request": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload request was malformed."
+          }
+        }
+      }
+    },
+    "error.upload.missing_checksum": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload request was missing its integrity checksum."
+          }
+        }
+      }
+    },
+    "error.upload.missing_offset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload request was missing its position marker."
+          }
+        }
+      }
+    },
+    "error.upload.offset_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload got out of sync and is realigning."
+          }
+        }
+      }
+    },
+    "error.upload.owner_not_permitted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You can't upload on behalf of this user."
+          }
+        }
+      }
+    },
+    "error.upload.session_not_active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload has already finished."
+          }
+        }
+      }
+    },
+    "error.upload.session_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload session expired. Starting over…"
+          }
+        }
+      }
+    },
+    "error.upload.size_exceeded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload sent more data than it declared."
+          }
+        }
+      }
+    },
+    "error.upload.storage_inconsistent": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The server hit a storage problem. Please try again."
+          }
+        }
+      }
+    },
+    "error.upload.timestamp_out_of_range": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your device's clock appears to be wrong. Check its date and time."
+          }
+        }
+      }
+    },
+    "error.upload.unknown_crypto_suite": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app version uses an encryption suite the server doesn't recognize."
+          }
+        }
+      }
+    },
+    "error.upload.unsupported_content_type": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file type is not supported."
+          }
+        }
+      }
+    },
+    "error.upload.unsupported_media_type": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload data was sent in an unsupported format."
+          }
+        }
+      }
+    },
     "label_artist": {
       "localizations": {
         "en": {

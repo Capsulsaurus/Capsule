@@ -24,4 +24,100 @@ pub mod error_codes {
 
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
+
+    /// `error.blob.pending_upload`
+    pub const BLOB_PENDING_UPLOAD: &str = "error.blob.pending_upload";
+
+    /// `error.protocol.version_unsupported`
+    pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
+
+    /// `error.quota.exceeded`
+    pub const QUOTA_EXCEEDED: &str = "error.quota.exceeded";
+
+    /// `error.upload.album_access_denied`
+    pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
+
+    /// `error.upload.checksum_mismatch`
+    pub const UPLOAD_CHECKSUM_MISMATCH: &str = "error.upload.checksum_mismatch";
+
+    /// `error.upload.chunk_conflict`
+    pub const UPLOAD_CHUNK_CONFLICT: &str = "error.upload.chunk_conflict";
+
+    /// `error.upload.chunk_not_aligned`
+    pub const UPLOAD_CHUNK_NOT_ALIGNED: &str = "error.upload.chunk_not_aligned";
+
+    /// `error.upload.chunk_too_large`
+    pub const UPLOAD_CHUNK_TOO_LARGE: &str = "error.upload.chunk_too_large";
+
+    /// `error.upload.content_hash_mismatch`
+    pub const UPLOAD_CONTENT_HASH_MISMATCH: &str = "error.upload.content_hash_mismatch";
+
+    /// `error.upload.device_not_authorized`
+    pub const UPLOAD_DEVICE_NOT_AUTHORIZED: &str = "error.upload.device_not_authorized";
+
+    /// `error.upload.duplicate_blob`
+    pub const UPLOAD_DUPLICATE_BLOB: &str = "error.upload.duplicate_blob";
+
+    /// `error.upload.empty_chunk`
+    pub const UPLOAD_EMPTY_CHUNK: &str = "error.upload.empty_chunk";
+
+    /// `error.upload.envelope_mismatch`
+    pub const UPLOAD_ENVELOPE_MISMATCH: &str = "error.upload.envelope_mismatch";
+
+    /// `error.upload.envelope_rejected`
+    pub const UPLOAD_ENVELOPE_REJECTED: &str = "error.upload.envelope_rejected";
+
+    /// `error.upload.file_too_large`
+    pub const UPLOAD_FILE_TOO_LARGE: &str = "error.upload.file_too_large";
+
+    /// `error.upload.finalize_in_progress`
+    pub const UPLOAD_FINALIZE_IN_PROGRESS: &str = "error.upload.finalize_in_progress";
+
+    /// `error.upload.forbidden`
+    pub const UPLOAD_FORBIDDEN: &str = "error.upload.forbidden";
+
+    /// `error.upload.invalid_hash`
+    pub const UPLOAD_INVALID_HASH: &str = "error.upload.invalid_hash";
+
+    /// `error.upload.invalid_size`
+    pub const UPLOAD_INVALID_SIZE: &str = "error.upload.invalid_size";
+
+    /// `error.upload.malformed_request`
+    pub const UPLOAD_MALFORMED_REQUEST: &str = "error.upload.malformed_request";
+
+    /// `error.upload.missing_checksum`
+    pub const UPLOAD_MISSING_CHECKSUM: &str = "error.upload.missing_checksum";
+
+    /// `error.upload.missing_offset`
+    pub const UPLOAD_MISSING_OFFSET: &str = "error.upload.missing_offset";
+
+    /// `error.upload.offset_mismatch`
+    pub const UPLOAD_OFFSET_MISMATCH: &str = "error.upload.offset_mismatch";
+
+    /// `error.upload.owner_not_permitted`
+    pub const UPLOAD_OWNER_NOT_PERMITTED: &str = "error.upload.owner_not_permitted";
+
+    /// `error.upload.session_not_active`
+    pub const UPLOAD_SESSION_NOT_ACTIVE: &str = "error.upload.session_not_active";
+
+    /// `error.upload.session_not_found`
+    pub const UPLOAD_SESSION_NOT_FOUND: &str = "error.upload.session_not_found";
+
+    /// `error.upload.size_exceeded`
+    pub const UPLOAD_SIZE_EXCEEDED: &str = "error.upload.size_exceeded";
+
+    /// `error.upload.storage_inconsistent`
+    pub const UPLOAD_STORAGE_INCONSISTENT: &str = "error.upload.storage_inconsistent";
+
+    /// `error.upload.timestamp_out_of_range`
+    pub const UPLOAD_TIMESTAMP_OUT_OF_RANGE: &str = "error.upload.timestamp_out_of_range";
+
+    /// `error.upload.unknown_crypto_suite`
+    pub const UPLOAD_UNKNOWN_CRYPTO_SUITE: &str = "error.upload.unknown_crypto_suite";
+
+    /// `error.upload.unsupported_content_type`
+    pub const UPLOAD_UNSUPPORTED_CONTENT_TYPE: &str = "error.upload.unsupported_content_type";
+
+    /// `error.upload.unsupported_media_type`
+    pub const UPLOAD_UNSUPPORTED_MEDIA_TYPE: &str = "error.upload.unsupported_media_type";
 }

@@ -54,5 +54,133 @@
     "error.auth.rate_limited": {
         "message": "Too many attempts. Please wait and try again.",
         "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
+    },
+    "error.protocol.version_unsupported": {
+        "message": "This version of Capsule is no longer supported. Please update the app.",
+        "context": "HTTP 426 from the universal protocol handshake (invariant 1): the client's X-Capsule-Protocol date falls outside the server's accepted window."
+    },
+    "error.quota.exceeded": {
+        "message": "Your storage is full.",
+        "context": "HTTP 403 at upload-session creation when the declared size would cross the uploader's hard quota limit."
+    },
+    "error.blob.pending_upload": {
+        "message": "The original photo hasn't been uploaded from its device yet.",
+        "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."
+    },
+    "error.upload.malformed_request": {
+        "message": "The upload request was malformed.",
+        "context": "HTTP 400 on POST /upload: unknown or missing JSON fields. The transport JSON is strict (deny unknown fields)."
+    },
+    "error.upload.unknown_crypto_suite": {
+        "message": "This app version uses an encryption suite the server doesn't recognize.",
+        "context": "HTTP 400, invariant 2: crypto_suite_id not in the server's inventory."
+    },
+    "error.upload.invalid_hash": {
+        "message": "The upload's declared content hash is invalid.",
+        "context": "HTTP 400, invariant 3: hash is not lowercase hex or its length doesn't match the suite's digest length."
+    },
+    "error.upload.invalid_size": {
+        "message": "The upload's declared size is invalid.",
+        "context": "HTTP 400, invariant 4: declared size is zero or negative."
+    },
+    "error.upload.file_too_large": {
+        "message": "This file exceeds the server's size limit.",
+        "context": "HTTP 413, invariant 4: declared size (or cumulative bytes) exceeds max_file_size."
+    },
+    "error.upload.unsupported_content_type": {
+        "message": "This file type is not supported.",
+        "context": "HTTP 400, invariant 5: content_type outside the closed enum for the pinned protocol version."
+    },
+    "error.upload.album_access_denied": {
+        "message": "You don't have permission to add photos to this album.",
+        "context": "HTTP 403, invariant 6: album missing, no write capability, or album protocol version drift."
+    },
+    "error.upload.device_not_authorized": {
+        "message": "This device isn't authorized to upload. Re-enroll it and try again.",
+        "context": "HTTP 403, invariant 7: manifest envelope's created_by_device is not in the uploader's device directory."
+    },
+    "error.upload.timestamp_out_of_range": {
+        "message": "Your device's clock appears to be wrong. Check its date and time.",
+        "context": "HTTP 400, invariant 8: envelope timestamp outside the gross-drift sanity window (default ±30 days)."
+    },
+    "error.upload.envelope_mismatch": {
+        "message": "The upload request contradicts its signed manifest.",
+        "context": "HTTP 400: top-level request fields (crypto_suite_id, protocol_version, album_id) disagree with the manifest_envelope. Always a client bug."
+    },
+    "error.upload.owner_not_permitted": {
+        "message": "You can't upload on behalf of this user.",
+        "context": "HTTP 403: owner_id differs from the uploader without a verified relationship."
+    },
+    "error.upload.duplicate_blob": {
+        "message": "This file is already stored.",
+        "context": "HTTP 409 on POST /upload when the content hash is already finalized for this owner+album. Carries the existing asset reference; the client resolves it as a merge, not an error surface."
+    },
+    "error.upload.unsupported_media_type": {
+        "message": "Upload data was sent in an unsupported format.",
+        "context": "HTTP 415, invariant 10: PATCH body Content-Type is not application/octet-stream."
+    },
+    "error.upload.empty_chunk": {
+        "message": "An upload chunk cannot be empty.",
+        "context": "HTTP 400, invariant 10: zero-length PATCH body. Always a client bug; never accepted as a no-op."
+    },
+    "error.upload.chunk_not_aligned": {
+        "message": "An upload chunk was incorrectly sized.",
+        "context": "HTTP 400, invariant 10: non-final chunk not a multiple of 4 KiB."
+    },
+    "error.upload.chunk_too_large": {
+        "message": "An upload chunk exceeded the maximum chunk size.",
+        "context": "HTTP 413, invariant 10: chunk body larger than the 16 MiB protocol maximum."
+    },
+    "error.upload.missing_offset": {
+        "message": "The upload request was missing its position marker.",
+        "context": "HTTP 400, invariant 9 family: X-Capsule-Offset header missing or unparseable on PATCH."
+    },
+    "error.upload.missing_checksum": {
+        "message": "The upload request was missing its integrity checksum.",
+        "context": "HTTP 400, invariant 12: X-Capsule-Checksum header missing or not valid lowercase-hex SHA-256. The checksum is required — the idempotency tuple is undefined without it."
+    },
+    "error.upload.checksum_mismatch": {
+        "message": "Upload data was corrupted in transit. Retrying…",
+        "context": "HTTP 400, invariant 12: SHA-256 of the received body doesn't match X-Capsule-Checksum. Nothing was persisted; the client re-sends the same chunk."
+    },
+    "error.upload.offset_mismatch": {
+        "message": "The upload got out of sync and is realigning.",
+        "context": "HTTP 409, invariant 9: PATCH offset differs from the current received-byte count. Response carries the authoritative X-Capsule-Offset; the client realigns."
+    },
+    "error.upload.chunk_conflict": {
+        "message": "The upload sent conflicting data and was stopped.",
+        "context": "HTTP 409, invariant 12: a PATCH at an already-acknowledged offset with a different chunk hash — the structural defense against a faulty client retrying with garbage."
+    },
+    "error.upload.size_exceeded": {
+        "message": "The upload sent more data than it declared.",
+        "context": "HTTP 400, invariant 11: cumulative received bytes would exceed the declared size. Session moves to FailedProcessing."
+    },
+    "error.upload.session_not_found": {
+        "message": "The upload session expired. Starting over…",
+        "context": "HTTP 404: unknown, expired, or pressure-discarded session — deliberately indistinguishable. The client re-creates the session and re-uploads that blob."
+    },
+    "error.upload.session_not_active": {
+        "message": "This upload has already finished.",
+        "context": "HTTP 409: PATCH/DELETE against a session that is finalizing or terminal. The outcome is read via HEAD."
+    },
+    "error.upload.finalize_in_progress": {
+        "message": "This upload is already being finalized.",
+        "context": "HTTP 409: a concurrent finalization attempt lost the atomic status compare-and-set."
+    },
+    "error.upload.content_hash_mismatch": {
+        "message": "The upload failed integrity verification and was discarded.",
+        "context": "HTTP 400 at finalization, invariant 14: recomputed ciphertext hash differs from the declared hash. Treated as corruption/tampering; blob and pending row are deleted."
+    },
+    "error.upload.envelope_rejected": {
+        "message": "The upload's signed manifest failed validation.",
+        "context": "HTTP 400 at finalization, invariant 15: envelope re-validation (rerun of invariants 1–8) failed inside the finalization transaction."
+    },
+    "error.upload.forbidden": {
+        "message": "You don't have access to this upload.",
+        "context": "HTTP 403: caller is neither the session's uploader nor the asset owner."
+    },
+    "error.upload.storage_inconsistent": {
+        "message": "The server hit a storage problem. Please try again.",
+        "context": "HTTP 500: the upload file's on-disk length diverged from the session's expected offset. Server-side inconsistency, never the client's fault."
     }
 }
