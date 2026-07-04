@@ -30,7 +30,6 @@ Switching profiles is operationally invisible to clients — the [upload protoco
 ```text
 {blob_root}/
 ├── incoming/
-│   ├── {upload_id}_{n}.part        # in-flight chunk
 │   └── {upload_id}.bin             # assembled blob, pre-verification
 ├── blobs/
 │   └── {hash[0:2]}/{hash[2:4]}/
@@ -41,7 +40,7 @@ Switching profiles is operationally invisible to clients — the [upload protoco
 ```
 
 - **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
-- **`incoming/`**: live uploads. Chunks land as `{upload_id}_{n}.part`; on finalization they are concatenated into `{upload_id}.bin`. The 4 KiB chunk alignment is what allows each chunk to be reflinked into place on copy-on-write filesystems, turning assembly into a near-instant metadata operation. See the upload protocol in [Import — Upload Protocol](/design/import/upload-protocol/).
+- **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
 - **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/); the two-level hex-prefix shard keeps directory sizes bounded for multi-million-blob stores. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
 
@@ -90,7 +89,7 @@ The server index records only what can be known without a key:
 
 No plaintext capture date, dimensions, EXIF, tags, or filename ever reaches the server. Those live inside the encrypted metadata blob (see [Metadata Encryption](/design/cryptography/encryption/#metadata-encryption)) and are readable only by authorized clients.
 
-Session creation writes a *pending* asset row (`uploaded = false`) that reserves the asset ID the bundle's blobs reference; finalization flips it. See the [session lifecycle](/design/import/upload-protocol/#session-lifecycle).
+Session creation writes a *pending* asset row (`uploaded = false`) that reserves the asset ID the bundle's blobs reference; finalization flips it. See the [session state machine](/design/import/upload-protocol/#session-state-machine).
 
 ## Ownership, Partitioning, and Quota
 

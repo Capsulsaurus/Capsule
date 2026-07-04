@@ -30,9 +30,11 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 ### On each `PATCH /upload/{id}` chunk
 
 - **9.** Offset is exactly the current received-byte count. Otherwise `409`, with `X-Capsule-Offset` returned.
-- **10.** Non-final chunk size is a multiple of 4 KiB. Otherwise `400`.
+- **10.** The chunk body is well-shaped: `Content-Type: application/octet-stream` (otherwise `415`), non-empty (otherwise `400`), a non-final chunk is a multiple of 4 KiB (otherwise `400`), and no chunk exceeds the 16 MiB protocol maximum (otherwise `413`).
 - **11.** Cumulative received ≤ declared `size`. Otherwise `400` / `413`, session moves to `FailedProcessing`.
-- **12.** The `(upload_id, offset, chunk_hash)` idempotency tuple is new OR matches an exact prior PATCH. Otherwise (same offset, different hash) `409` + corruption error.
+- **12.** The `(upload_id, offset, chunk_hash)` idempotency tuple is new OR matches an exact prior PATCH, where `chunk_hash` is the SHA-256 of the chunk bytes carried in the **required** `X-Capsule-Checksum` header (missing/malformed → `400`; header-vs-body mismatch → `400` with nothing persisted). Otherwise (same offset, different hash) `409` + corruption error.
+
+Session TTL, the ≥ 1-hour survival floor, and pressure-discard semantics are server lifecycle behavior, not refuse-by-default write checks — they are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard).
 
 ### At finalization
 
@@ -111,7 +113,7 @@ The rules are stated once, in REST terms (headers + HTTP statuses). On the gRPC 
 | `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
 | `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
 
-This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Checksum`, and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift.
+This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Upload-Status` (server → client on `HEAD /upload/{id}`), `X-Capsule-Checksum` (**required** on `PATCH /upload/{id}`), and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift.
 
 ### Fail-Closed Rules
 
@@ -130,7 +132,7 @@ Every write surface has a single idempotency key. Duplicates are no-ops; conflic
 | Surface                             | Idempotency key                                                                    | Duplicate behavior                                |
 | ----------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
 | Upload chunk (`PATCH /upload/{id}`) | `(upload_id, offset, chunk_hash)`                                                  | Returns current offset; no double-write           |
-| Session creation (`POST /upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Returns the existing session; no second session   |
+| Session creation (`POST /upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Active session: returned as-is, no second session. Hash already finalized: `409 error.upload.duplicate_blob` + the existing asset reference (the client's merge trigger) |
 | Lifecycle manifest write            | `(asset_id, prior_provenance_hash, manifest_hash)`                                 | No-op append; chain advances exactly once         |
 | Metadata-update operation           | Operation id (UUIDv7) + `(asset_id, prior_provenance_hash)`                        | Re-applying the same op is structurally identical |
 | Federation capability proof         | `(peer_id, jti)`                                                                   | Refresh with same `jti` returns the same response |

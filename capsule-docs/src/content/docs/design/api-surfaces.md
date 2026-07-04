@@ -69,6 +69,7 @@ REST rejections are HTTP statuses; gRPC rejections are gRPC status codes. The ma
 | Not found (and indistinguishable-404 surfaces) | `404` | `NOT_FOUND`           |
 | Stale state (chain/cursor/directory regress)   | `409` | `FAILED_PRECONDITION` |
 | Payload too large                              | `413` | `RESOURCE_EXHAUSTED`  |
+| Unsupported media type (chunk body)            | `415` | `INVALID_ARGUMENT`    |
 | Protocol version outside `[Min, Max]`          | `426` | `FAILED_PRECONDITION` |
 | Rate limited                                   | `429` | `RESOURCE_EXHAUSTED`  |
 

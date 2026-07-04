@@ -62,7 +62,7 @@ For each selected asset the web client:
 1. Draws a random 32-byte asset key **`K`** from the browser CSPRNG.
 2. Encrypts the asset under `K` with the *unchanged* [STREAM construction](/design/cryptography/encryption/#stream-construction) (chunking and nonce shape owned there), and computes `ciphertext_hash` incrementally.
 3. **Encapsulates `K`** to `{drop_pubkey}` with the link's KEM, producing `kem_ct`.
-4. Emits an unsigned **`DropDescriptor`** and uploads it alongside the ciphertext via the drop upload protocol — the [upload protocol](/design/import/upload-protocol/)'s chunk and finalization mechanics under link-capability auth, with the drop endpoints in the [Contract Skeleton](#contract-skeleton):
+4. Emits an unsigned **`DropDescriptor`** and uploads it alongside the ciphertext via the drop upload protocol — the [upload protocol](/design/import/upload-protocol/)'s chunk and finalization mechanics under link-capability auth, with the drop endpoints in the [Contract Skeleton](#contract-skeleton). Its [session-lifetime and discard policy](/design/import/upload-protocol/#session-lifetime-and-discard) applies to drop sessions unchanged — a discarded drop session is a uniform `404`, which is also exactly what link probing must see:
 
 ```rust
 DropDescriptor {
@@ -131,7 +131,8 @@ fn seal_drop(plaintext: impl Read, drop_pubkey: KemPublicKey, crypto_suite_id: u
 
 // in capsule-api-media::drops
 //   POST   /u/{opaque-id}/drop            → open a drop session (link-capability auth; quota + caps checked here)
-//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (reuses upload-protocol chunk rules)
+//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (upload-protocol chunk rules verbatim:
+//                                            required X-Capsule-Checksum, application/octet-stream, alignment)
 //   GET    /drops                         → provisioning user's inbox (session-token auth)
 //   POST   /drops/{id}/adopt              → create-manifest write referencing the inbox blob; atomic promotion
 //   DELETE /drops/{id}                    → discard a pending drop

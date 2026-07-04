@@ -25,7 +25,7 @@ These follow directly from [Core Principles](/design/principles/):
 - **Recovery-first.** No database is required to interpret canonical data. On the client, sidecar files are the source of truth and the index is a rebuildable cache. On the server, PostgreSQL is the authoritative index, but it holds only key-free facts.
 - **Atomic writes.** Every write that must not tear uses temp-file + atomic rename on the same filesystem. Direct overwrites risk corruption on power loss. The full per-granularity rules live in [Maintenance — Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery).
 - **Ephemeral derived data.** Only originals and their canonical metadata are irreplaceable. Thumbnails, transcodes, parsed-metadata caches, and the query index can all be regenerated and are treated as such.
-- **4 KiB alignment.** Data is processed and written block-aligned to 4 KiB, which matches memory and disks and enables the [reflink assembly path](/design/import/upload-protocol/#server-side-storage-and-assembly).
+- **4 KiB alignment.** Data is processed and written block-aligned to 4 KiB, which matches memory and disks and keeps the [append-only upload path](/design/import/upload-protocol/#append-only-storage) page-aligned.
 - **Content-addressing.** Stored blobs are named by their ciphertext content hash — the same hash everywhere a content address is needed (see [Cryptography — Primitives](/design/cryptography/primitives/)).
 
 ## Server vs Client at a Glance

@@ -65,7 +65,7 @@ On mobile clients, auto syncing keeps new assets backed up (not to be confused w
 
 ### Synchronization Criteria
 
-Sync is checked conservatively. When a check fires, the client reconciles everything that needs syncing — uploads and downloads — and proceeds as long as the criteria below hold throughout the transfer. If conditions change mid-transfer (e.g. the connection becomes metered), it re-evaluates and pauses gracefully; the server never assumes a transfer runs to completion in one session (see [Upload Protocol — Robustness](/design/import/upload-protocol/#robustness)).
+Sync is checked conservatively. When a check fires, the client reconciles everything that needs syncing — uploads and downloads — and proceeds as long as the criteria below hold throughout the transfer. If conditions change mid-transfer (e.g. the connection becomes metered), it re-evaluates and pauses gracefully; the server never assumes a transfer runs to completion in one session (see [Upload Protocol — Idempotency and Resumption](/design/import/upload-protocol/#idempotency-and-resumption)).
 
 The actual synchronization criteria are strict and scale with the reconciliation amount (i.e. total upload + download transfer):
 
