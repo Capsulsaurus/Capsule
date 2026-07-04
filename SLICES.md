@@ -220,7 +220,8 @@ graph LR
 ### S-B1 — Thumbnail/LQIP generation
 
 - **Contract:** [Thumbnails](capsule-docs/src/content/docs/design/thumbnails.md).
-- **Deliverable:** thumbnail/preview generation over `capsule-media` (which today decodes
+- **Deliverable:** thumbnail/preview generation over `capsule_core::media` (the folded
+  former `capsule-media` crate, behind the non-default `media` feature; today it decodes
   JPEG only — format decoders grow as needed), chromahash LQIP + `dominant_color` into
   the sidecar `lqip` field, `DerivativeManifest`-signed outputs.
 - **Done when:** generation produces the committed formats with signed derivative

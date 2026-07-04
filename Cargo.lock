@@ -1263,13 +1263,12 @@ dependencies = [
  "capsule-api-model",
  "capsule-api-service",
  "capsule-core",
- "capsule-media",
+ "capsule-i18n",
  "chrono",
  "eyre",
  "futures-util",
  "indexmap 2.14.0",
  "jsonwebtoken",
- "libc",
  "nanoid",
  "ring",
  "salvo",
@@ -1338,9 +1337,11 @@ dependencies = [
  "aead",
  "aes-gcm",
  "argon2",
+ "base64 0.22.1",
  "chrono",
  "ciborium",
  "ed25519-dalek",
+ "file-format",
  "getrandom 0.3.4",
  "globset",
  "half",
@@ -1348,10 +1349,13 @@ dependencies = [
  "hkdf",
  "hmac",
  "indexmap 2.14.0",
+ "jpeg-encoder",
  "kamadak-exif",
  "log",
+ "memmap2",
  "ml-dsa",
  "ml-kem",
+ "num-rational",
  "rusqlite",
  "serde",
  "serde_bytes",
@@ -1362,12 +1366,17 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.18",
+ "thumbhash",
+ "tokio",
+ "tracing",
  "tss-esapi",
  "tzf-rs",
  "uniffi 0.31.1",
  "uuid",
  "walkdir",
  "x25519-dalek",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]
@@ -1392,26 +1401,6 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "tracing",
-]
-
-[[package]]
-name = "capsule-media"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "chrono",
- "file-format",
- "indexmap 2.14.0",
- "jpeg-encoder",
- "memmap2",
- "num-rational",
- "serde",
- "thiserror 2.0.18",
- "thumbhash",
- "tokio",
- "tracing",
- "zune-core",
- "zune-jpeg",
 ]
 
 [[package]]

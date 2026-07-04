@@ -28,7 +28,6 @@ The mapping reflects the *design intent*. Modules not yet implemented are annota
 | `capsule-api-environment` | Configuration, env vars, feature flags                                                                            |
 | `capsule-api-testing`     | Shared test utilities (testcontainer setup, schema fixtures)                                                      |
 | `capsule-cli`             | Command-line client                                                                                               |
-| `capsule-media`           | Standalone media utility crate                                                                                    |
 | `capsule-i18n`            | Runtime localization (locale negotiation + ICU message formatting) for the server and CLI                         |
 | `capsule-web`             | Browser/WASM web-upload client: guest drop sealing + upload (planned)                                             |
 | `capsule-vision`          | Python research package for on-device ML experimentation (not a cargo crate)                                      |
@@ -99,12 +98,12 @@ Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSi
 | `capsule-api-environment`                            | (configuration; no design owner)                                                     | Unit                                        |
 | `capsule-api-testing`                                | (test utilities; no design owner)                                                    | n/a                                         |
 
-### `capsule-cli`, `capsule-media`, `capsule-i18n`, `capsule-web`
+### `capsule-cli`, `capsule-i18n`, `capsule-web`
 
 | Crate           | Owning design doc                                                 | Validation tier      |
 | --------------- | ----------------------------------------------------------------- | -------------------- |
 | `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client)              | Smoke                |
-| `capsule-media` | [Thumbnails and Previews](/design/thumbnails/) (decode/encode utilities; only JPEG decode is implemented today) | Unit                 |
+| `capsule-core::media` (behind the non-default `media` feature) | [Thumbnails and Previews](/design/thumbnails/) (decode/encode utilities; only JPEG decode is implemented today) | Unit                 |
 | `capsule-i18n`  | [Internationalization](/design/i18n/)                             | Unit + Smoke         |
 | `capsule-web`   | [Web Upload](/design/web-upload/), [Clients](/design/clients/)    | Smoke (browser/WASM) |
 
@@ -142,7 +141,7 @@ Navigation from a design doc back to where the code lives.
 | [Peering](/design/peering/)                                         | `capsule-sdk::peering` (planned) + `capsule-core::backup` (artifact format)                                                   |
 | [Organization](/design/organization/)                               | `capsule-core::domain::stack_type`, `capsule-api-service::{album,stack}`                                                      |
 | [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), `capsule-vision` (Python research), model registry + per-platform inference runners             |
-| [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` (planned) over `capsule-media` decode/encode utilities + serving in `capsule-api-media`      |
+| [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` (planned) over `capsule_core::media` decode/encode utilities + serving in `capsule-api-media`      |
 | [Share Links](/design/share-links/)                                 | `capsule-core::sharing` (planned), `capsule-api-media::shares` (planned)                                                      |
 | [Web Upload](/design/web-upload/)                                   | `capsule-core::drop` (planned), `capsule-api-media::drops` (planned), `capsule-web` (planned); reuses `capsule-api-upload` for drop chunks |
 | [Moderation](/design/moderation/)                                   | `capsule-api::moderation` (planned)                                                                                           |

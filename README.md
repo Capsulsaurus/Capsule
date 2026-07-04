@@ -71,7 +71,7 @@ Components:
 - [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client
 - [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
 - [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS
-- [Capsule Media](capsule-media/README.md) (Beta): C++ library for certain offloading
+- Capsule Media: media decode/encode utilities, folded into `capsule-core` as the `media` module (behind the `media` feature)
 - [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)
 
 <!-- TODO: ensure readme links work ^^ -->
@@ -96,7 +96,7 @@ Considering all the technologies used, you may have to switch between IDEs to de
 - `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
 - `capsule-desktop`: VS Code or similar
 - `capsule-docs`: VS Code or similar
-- `capsule-media`: VS Code or similar
+- `capsule-core` (media module): VS Code or similar
 - `capsule-swift`: Xcode
 - `capsule-web`: VS Code or similar
 

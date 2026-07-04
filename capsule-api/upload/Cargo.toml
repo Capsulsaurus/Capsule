@@ -14,9 +14,8 @@ capsule-api-entity = { path = "../entity" }
 capsule-api-environment = { path = "../environment", features = ["upload"] }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service" }
-capsule-core = { path = "../../capsule-core" }
+capsule-core = { path = "../../capsule-core", features = ["media"] }
 capsule-i18n = { path = "../../capsule-i18n" }
-capsule-media = { path = "../../capsule-media" }
 bb8-redis = { workspace = true }
 eyre = { workspace = true }
 futures-util = { workspace = true }
