@@ -10,6 +10,8 @@ What a client keeps locally depends on its sync setting — *metadata only*, *me
 
 The directory layout below is itself a contract — the recovery-first rebuild assumes exactly these filenames and sharding rules.
 
+This doc owns the on-disk mechanisms; the offline-first requirement contract they serve (FRs/NFRs, gated views, at-rest posture) is owned by [Local Gallery](/design/local-gallery/).
+
 ## Desktop Library Layout
 
 ```text

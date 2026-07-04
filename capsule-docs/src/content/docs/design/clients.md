@@ -8,6 +8,8 @@ Capsule's clients are native per platform, with as little divergence as possible
 
 The boundary this doc owns is **what every client must do** — the client-class duties that, if skipped, put the client in the *faulty* class (see [Threat Model — Client Class Taxonomy](/design/threat-model/#client-class-taxonomy)). Plus the sandboxed-decoder pattern, which is the largest remaining attack surface on the client.
 
+The offline-first requirement set every native client must satisfy — the local-gallery FRs/NFRs, the gated Recently-Deleted/Hidden views, and the at-rest posture matrix — is owned by [Local Gallery](/design/local-gallery/).
+
 ## Design Priorities
 
 - **Native.** Native implementations per platform ensure familiar usability and enable platform-specific optimizations.
