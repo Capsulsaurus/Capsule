@@ -8,6 +8,37 @@ use std::{
 
 use crate::import::ImportExecutionPlan;
 
+/// Per-device upload policy (contract type for slice `S-B4`, staged uploads;
+/// SSoT: download-sync design doc, "Upload Tiering (Staged Uploads)").
+///
+/// The policy is client-side **session ordering only** — the server has zero
+/// mode branches. Under [`UploadPolicy::Staged`] the scheduler opens each
+/// asset's sessions in [`UploadTier`] order, gating each tier on the sync
+/// connection criteria; under [`UploadPolicy::Full`] all sessions open eagerly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UploadPolicy {
+    /// Every session of an asset's bundle opens eagerly (default).
+    #[default]
+    Full,
+    /// Sessions open in tier order (index → preview → original), each tier
+    /// gated by connection class. Mutually exclusive with streaming import.
+    Staged,
+}
+
+/// The upload tier ladder, mirroring the download ladder. Tiers map onto
+/// existing blob roles — no new blob kind exists for staging.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UploadTier {
+    /// T0: signed manifest + metadata blob (embedded LQIP) — the index that
+    /// makes the asset visible (`awaiting-original`) on other devices.
+    Index,
+    /// T1: thumbnail + preview derivative blobs.
+    Preview,
+    /// T2: the original blob; its finalization flips `original_held` on the
+    /// sync feed and unlocks every release path (verify-before-destroy).
+    Original,
+}
+
 pub struct UploadExecutionPlan(pub Vec<PathBuf>);
 
 pub struct UploadPriorityConfig {

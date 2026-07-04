@@ -48,6 +48,8 @@ The owner docs are:
 | Backup artifact container + escrow + recovery mechanisms              | [Backup and Recovery](/design/backup-recovery/)                     |
 | CRDT scheme, identifiers, geolocation, sidecar schema                 | [Metadata](/design/metadata/)                                       |
 | Import pipeline (scan, plan, execute)                                 | [Import — Pipeline](/design/import/pipeline/)                       |
+| Connection classes + retry policy classes + adverse-network posture   | [Network Resilience](/design/networking/)                           |
+| Offline-first requirement contract (local-gallery FRs/NFRs)           | [Local Gallery](/design/local-gallery/)                             |
 | Upload protocol (wire, sessions, finalization)                        | [Import — Upload Protocol](/design/import/upload-protocol/)         |
 | Download, sync feed, tiered fetch, auto-sync                          | [Import — Download & Sync](/design/import/download-sync/)           |
 | Federation trust model, capability tokens, soft-fail                  | [Federation](/design/federation/)                                   |

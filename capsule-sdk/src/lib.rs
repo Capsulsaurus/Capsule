@@ -11,6 +11,7 @@
 //! surfaces below (the adaptive upload strategy in [`upload`]) stand alone, and
 //! the generated-client wrapper is parked below.
 
+pub mod net;
 pub mod upload;
 
 // ─── Parked until spargen (S-D8) ────────────────────────────────────────────

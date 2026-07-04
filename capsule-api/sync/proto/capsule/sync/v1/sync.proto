@@ -64,6 +64,12 @@ message SyncEntry {
   bytes metadata_blob = 7;
   // Content addresses of the asset's blobs by role — never blob bytes.
   BlobManifest blobs = 8;
+  // Whether the original blob is finalized on the server (S-B4, staged uploads:
+  // visibility flips on manifest+metadata, so an entry can precede its original —
+  // the derived `awaiting-original` state; download-sync design doc). proto3
+  // absent-default is false, so clients read this only at/after the protocol
+  // date that introduces it.
+  bool original_held = 9;
 }
 
 message BlobManifest {

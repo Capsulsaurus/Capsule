@@ -59,7 +59,7 @@ Step 1–3 can be parallelized across files. The executor is cancellation-aware:
 
 The default pipeline imports every file into the local library *before* upload, so the device temporarily holds the whole import on disk. That is impossible on a storage-constrained device — a laptop with a near-full SSD importing a library larger than its free space. **Streaming mode** removes the requirement that the full import ever land locally at once.
 
-It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
+It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Streaming is **mutually exclusive with a [staged upload policy](/design/import/download-sync/#upload-tiering-staged-uploads)** for the same import — streaming exists to release local bytes quickly, staged defers exactly the upload that release depends on — and the planner rejects the combination at confirmation. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
 
 1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
 2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).

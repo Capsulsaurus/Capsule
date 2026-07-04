@@ -46,6 +46,7 @@ Where the quota check actually runs:
 - **At [`POST /upload`](/design/import/upload-protocol/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
 - **At session cancellation.** When a session is cancelled or expires, the reserved-but-uncommitted bytes are released; the next quota check sees the new (lower) usage.
 - **At [finalization](/design/import/upload-protocol/#finalization-and-integrity).** Cumulative size is bounded by the declared size at chunk acceptance; no separate quota check at finalization is needed because the declared size was already approved at session creation.
+- **[Staged uploads](/design/import/download-sync/#upload-tiering-staged-uploads) need no special case.** Each tier's session is charged at its own creation — the same single enforcement point, just later in time for the original's session.
 - **At metadata-update writes.** A metadata-update creates a new encrypted metadata blob; the size delta is checked against quota. Tiny but non-zero.
 
 ## Scope Decisions
