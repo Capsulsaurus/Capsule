@@ -20,6 +20,11 @@ const CHUNK_SIZE_16MB: u64 = 16 * 1024 * KB;
 
 /// All chunks MUST be multiples of 4KB (4096 bytes)
 const ALIGNMENT: u64 = 4096;
+/// Protocol-surface chunk bounds (upload-protocol doc, §Chunk Rules and
+/// Strictness). Every adaptive tier range sits inside these; the server rejects
+/// outside them (400 / 413).
+pub const PROTOCOL_MIN_CHUNK: u64 = 4096;
+pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
 /// Window size for throughput measurements
 const THROUGHPUT_WINDOW_SECS: f64 = 30.0;
 /// Minimum bytes before scaling chunk size
@@ -145,7 +150,12 @@ impl AdaptiveChunkSizeStrategy {
         }
     }
 
-    /// Get the next chunk size to use
+    /// Get the next chunk size to use.
+    ///
+    /// Alignment is a hard guarantee by construction: every candidate size is a
+    /// doubling/halving of a 4 KiB-aligned tier bound, so this can never return
+    /// an unaligned size — the debug_assert is a tripwire for future edits, not
+    /// a runtime dependency.
     pub fn next_chunk_size(&self) -> u64 {
         debug_assert!(
             self.current_size.is_multiple_of(ALIGNMENT),
@@ -171,7 +181,6 @@ impl UploadClient {
     ///
     /// # Arguments
     /// * `file_path` - Path to the file to upload
-    /// * `filename` - Optional filename to use (defaults to file name from path)
     /// * `content_type` - Optional content type (defaults to auto-detection)
     ///
     /// # Returns
@@ -179,27 +188,26 @@ impl UploadClient {
     pub async fn upload_file(
         &self,
         _file_path: &Path,
-        _filename: Option<&str>,
         _content_type: Option<&str>,
     ) -> Result<String, UploadError> {
-        // TODO: Implement file upload
-        // 1. Get file size and metadata
-        // 2. Create upload session via API
-        // 3. Create AdaptiveChunkSizeStrategy based on file size
-        // 4. Upload chunks with adaptive sizing
-        // 5. Return session ID on completion
-        todo!("Upload file not yet implemented - waiting for API client generation")
+        // S-D1: 1. size + ciphertext hash; 2. create session (JSON body per the
+        // upload-protocol doc — size/hash/content_type/crypto_suite_id/
+        // protocol_version/blob_role/manifest_envelope); 3. adaptive strategy;
+        // 4. chunk loop with the code-driven recovery matrix; 5. session id.
+        // No filename on the wire: plaintext metadata rides the encrypted
+        // metadata blob.
+        todo!("S-D1: upload driver — see SLICES.md")
     }
 
     /// Create an upload session
     pub async fn create_session(
         &self,
         _total_size: u64,
-        _filename: Option<&str>,
         _content_type: Option<&str>,
     ) -> Result<CreateSessionResponse, UploadError> {
-        // TODO: Call POST /upload with X-Capsule-Content-Length header
-        todo!("Create session not yet implemented")
+        // S-D1: POST /upload with the JSON body from the upload-protocol doc's
+        // endpoint table (size is the `size` body field, NOT a header).
+        todo!("S-D1: create session — see SLICES.md")
     }
 
     /// Upload a single chunk
@@ -209,9 +217,10 @@ impl UploadClient {
         _data: &[u8],
         _offset: u64,
     ) -> Result<u64, UploadError> {
-        // TODO: Call PATCH /upload/{id} with X-Capsule-Offset header
-        // Returns the new offset on success
-        todo!("Upload chunk not yet implemented")
+        // S-D1: PATCH /upload/{id} with Content-Type: application/octet-stream,
+        // X-Capsule-Offset, and the REQUIRED X-Capsule-Checksum (lowercase-hex
+        // SHA-256 of the chunk bytes). Returns the new offset on success.
+        todo!("S-D1: upload chunk — see SLICES.md")
     }
 }
 

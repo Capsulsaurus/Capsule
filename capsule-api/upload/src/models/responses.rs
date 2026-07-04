@@ -4,6 +4,7 @@ use salvo::oapi::{EndpointOutRegister, ToSchema};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::error::UploadError;
 use crate::models::session::{UploadSession, UploadSessionStatus};
 
 /// Response for a successful upload creation
@@ -41,6 +42,8 @@ pub(crate) enum CreateUploadResponses {
     Unauthorized(String),
     Forbidden,
     BadRequest(String),
+    /// A typed upload rejection: renders with its taxonomy status + error.* code.
+    Error(UploadError),
     InternalServerError(InternalServerError),
 }
 
@@ -69,6 +72,9 @@ impl Writer for CreateUploadResponses {
             Self::BadRequest(msg) => {
                 res.status_code(StatusCode::BAD_REQUEST);
                 res.render(Text::Plain(msg));
+            }
+            Self::Error(e) => {
+                e.write(req, depot, res).await;
             }
             Self::InternalServerError(e) => {
                 e.write(req, depot, res).await;
@@ -99,6 +105,16 @@ impl EndpointOutRegister for CreateUploadResponses {
             salvo::oapi::Response::new("Forbidden - insufficient permissions"),
         );
         operation.responses.insert(
+            String::from("409"),
+            salvo::oapi::Response::new(
+                "Conflict - content hash already finalized (error.upload.duplicate_blob; merge trigger)",
+            ),
+        );
+        operation.responses.insert(
+            String::from("413"),
+            salvo::oapi::Response::new("Payload too large - declared size exceeds the limit"),
+        );
+        operation.responses.insert(
             String::from("500"),
             salvo::oapi::Response::new("Internal server error"),
         );
@@ -119,6 +135,8 @@ impl Writer for HeadUploadResponses {
     async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
             Self::Success(response) => {
+                // A HEAD response carries no body; progress and state ride headers
+                // (X-Capsule-Upload-Status is census-registered).
                 res.status_code(StatusCode::OK);
                 res.add_header("X-Capsule-Offset", response.offset.to_string(), true)
                     .ok();
@@ -126,8 +144,13 @@ impl Writer for HeadUploadResponses {
                     res.add_header("X-Capsule-Content-Length", total.to_string(), true)
                         .ok();
                 }
+                res.add_header(
+                    "X-Capsule-Upload-Status",
+                    response.status.as_header_value(),
+                    true,
+                )
+                .ok();
                 res.add_header("Cache-Control", "no-store", true).ok();
-                res.render(Json(response));
             }
             Self::Unauthorized(msg) => {
                 res.status_code(StatusCode::UNAUTHORIZED);
@@ -148,11 +171,11 @@ impl Writer for HeadUploadResponses {
 
 impl EndpointOutRegister for HeadUploadResponses {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
+        let _ = components;
         operation.responses.insert(
             String::from("200"),
-            salvo::oapi::Response::new("Upload status").add_content(
-                "application/json",
-                salvo::oapi::Content::new(HeadUploadResponse::to_schema(components)),
+            salvo::oapi::Response::new(
+                "Upload progress and state via X-Capsule-Offset / X-Capsule-Content-Length / X-Capsule-Upload-Status headers (no body)",
             ),
         );
         operation.responses.insert(
@@ -176,12 +199,14 @@ impl EndpointOutRegister for HeadUploadResponses {
 
 /// Responses for patch upload (append chunk) endpoint
 pub(crate) enum PatchUploadResponses {
-    Success { new_offset: u64 },
+    Success {
+        new_offset: u64,
+    },
     BadRequest(String),
     Unauthorized(String),
     Forbidden,
-    NotFound,
-    Conflict(String),
+    /// A typed upload rejection: renders with its taxonomy status + error.* code.
+    Error(UploadError),
     InternalServerError(InternalServerError),
 }
 
@@ -205,12 +230,8 @@ impl Writer for PatchUploadResponses {
             Self::Forbidden => {
                 res.status_code(StatusCode::FORBIDDEN);
             }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-            }
-            Self::Conflict(msg) => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Text::Plain(msg));
+            Self::Error(e) => {
+                e.write(req, depot, res).await;
             }
             Self::InternalServerError(e) => {
                 e.write(req, depot, res).await;
@@ -243,7 +264,19 @@ impl EndpointOutRegister for PatchUploadResponses {
         );
         operation.responses.insert(
             String::from("409"),
-            salvo::oapi::Response::new("Conflict - offset mismatch"),
+            salvo::oapi::Response::new(
+                "Conflict - offset mismatch / chunk conflict / session not active",
+            ),
+        );
+        operation.responses.insert(
+            String::from("413"),
+            salvo::oapi::Response::new("Payload too large - chunk exceeds the 16 MiB maximum"),
+        );
+        operation.responses.insert(
+            String::from("415"),
+            salvo::oapi::Response::new(
+                "Unsupported media type - chunk body must be application/octet-stream",
+            ),
         );
         operation.responses.insert(
             String::from("500"),
@@ -258,6 +291,8 @@ pub(crate) enum DeleteUploadResponses {
     Unauthorized(String),
     Forbidden,
     NotFound,
+    /// A typed upload rejection: renders with its taxonomy status + error.* code.
+    Error(UploadError),
     InternalServerError(InternalServerError),
 }
 
@@ -277,6 +312,9 @@ impl Writer for DeleteUploadResponses {
             }
             Self::NotFound => {
                 res.status_code(StatusCode::NOT_FOUND);
+            }
+            Self::Error(e) => {
+                e.write(req, depot, res).await;
             }
             Self::InternalServerError(e) => {
                 e.write(req, depot, res).await;
@@ -302,6 +340,10 @@ impl EndpointOutRegister for DeleteUploadResponses {
         operation.responses.insert(
             String::from("404"),
             salvo::oapi::Response::new("Upload session not found"),
+        );
+        operation.responses.insert(
+            String::from("409"),
+            salvo::oapi::Response::new("Conflict - finalization in progress is not interruptible"),
         );
         operation.responses.insert(
             String::from("500"),

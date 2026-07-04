@@ -7,8 +7,9 @@
 //! `capsule_core::validation` — [`protocol_gate`] and [`check_manifest_envelope`] are
 //! ready to consume. What this middleware adds when `S-C1` lands is the transport glue:
 //! read the `X-Capsule-*` negotiation headers, run the gate before any state is written,
-//! and map each rejection to its HTTP status plus `error.*` code (see the design docs'
-//! API-surfaces rejection mapping). Until then it is an unmounted stub.
+//! and map each rejection to its HTTP status plus `error.*` code — the upload doc's
+//! Error Taxonomy table is the SSoT for that mapping (`UploadError::code()` already
+//! carries the catalog constants). Until then it is an unmounted stub.
 //!
 //! [`protocol_gate`]: capsule_core::validation::protocol_gate
 //! [`check_manifest_envelope`]: capsule_core::validation::check_manifest_envelope

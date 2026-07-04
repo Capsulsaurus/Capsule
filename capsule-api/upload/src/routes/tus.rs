@@ -1,7 +1,9 @@
 use auth::utils::headers::validate_user_from_headers;
+use capsule_core::utils::hash::hash_bytes;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 
+use crate::error::UploadError;
 use crate::models::requests::CreateUploadRequest;
 use crate::models::responses::{
     CreateUploadResponse, CreateUploadResponses, DeleteUploadResponses, HeadUploadResponse,
@@ -10,15 +12,17 @@ use crate::models::responses::{
 use crate::models::session::UploadSessionStatus;
 use crate::state::AppState;
 
-// TODO: Thoroughly review and test this module.
-
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
 const CHUNK_SIZE_256KB: u64 = 256 * KB;
 const CHUNK_SIZE_1MB: u64 = 1024 * KB;
 const CHUNK_SIZE_4MB: u64 = 4 * 1024 * KB;
+/// Protocol-surface maximum chunk size (upload-protocol doc, §Chunk Rules).
+const MAX_CHUNK_SIZE: u64 = 16 * 1024 * KB;
 
-/// Calculate suggested chunk size based on total file size
+/// Calculate suggested chunk size based on total file size.
+/// A starting point only — adaptation is the client's concern; these tiers are
+/// server-tunable and not protocol surface.
 fn get_suggested_chunk_size(total_size: Option<u64>) -> u64 {
     match total_size {
         Some(size) if size < 10 * 1024 * KB => CHUNK_SIZE_256KB, // < 10MB
@@ -51,7 +55,7 @@ pub async fn create_upload(
         };
 
     // Use user_id as owner_id if not specified
-    let owner_id = request.owner_id.unwrap_or_else(|| user_id.clone());
+    let owner_id = request.owner_id.clone().unwrap_or_else(|| user_id.clone());
 
     // Permission check if owner is different
     if owner_id != user_id {
@@ -69,15 +73,7 @@ pub async fn create_upload(
 
     match state
         .upload_service
-        .create_session(
-            &owner_id,
-            &user_id,
-            Some(request.content_type),
-            request.size,
-            request.hash,
-            request.album_id,
-            request.filename,
-        )
+        .create_session(&request, &owner_id, &user_id)
         .await
     {
         Ok(session) => {
@@ -88,7 +84,9 @@ pub async fn create_upload(
                 suggested_chunk_size,
             })
         }
-        Err(e) => CreateUploadResponses::InternalServerError(eyre::eyre!(e).into()), // TODO: It swallows all UploadError including duplicate.
+        // Typed rejections (duplicate_blob 409, malformed 400, …) render with
+        // their taxonomy status + error.* code instead of collapsing to 500.
+        Err(e) => CreateUploadResponses::Error(e),
     }
 }
 
@@ -159,15 +157,24 @@ pub async fn patch_upload(
             Err(e) => return PatchUploadResponses::Unauthorized(e.to_string()),
         };
 
-    // Verify ownership - only the uploader can append chunks
-    match state.upload_service.get_session(&id).await {
+    // Fetch the session once: ownership check + final-chunk alignment exemption.
+    let session = match state.upload_service.get_session(&id).await {
         Ok(Some(session)) => {
             if session.upload_user_id != user_id {
                 return PatchUploadResponses::Forbidden;
             }
+            session
         }
-        Ok(None) => return PatchUploadResponses::NotFound,
+        Ok(None) => return PatchUploadResponses::Error(UploadError::SessionNotFound),
         Err(e) => return PatchUploadResponses::InternalServerError(eyre::eyre!(e).into()),
+    };
+
+    // Strict media type: the body is opaque ciphertext bytes (415 otherwise).
+    let is_octet_stream = req
+        .content_type()
+        .is_some_and(|mime| mime.essence_str() == "application/octet-stream");
+    if !is_octet_stream {
+        return PatchUploadResponses::Error(UploadError::UnsupportedMediaType);
     }
 
     // Parse X-Capsule-Offset header
@@ -181,8 +188,19 @@ pub async fn patch_upload(
         }
     };
 
-    // Parse optional X-Capsule-Checksum header for verification
-    let _checksum: Option<String> = req.header::<String>("X-Capsule-Checksum");
+    // X-Capsule-Checksum is REQUIRED: bare lowercase-hex SHA-256 of the chunk
+    // bytes. The (upload_id, offset, chunk_hash) idempotency tuple (invariant 12)
+    // is undefined without it.
+    let checksum = match req.header::<String>("X-Capsule-Checksum") {
+        Some(c)
+            if c.len() == 64
+                && c.bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
+        {
+            c
+        }
+        _ => return PatchUploadResponses::Error(UploadError::MissingChecksum),
+    };
 
     let body = match req.payload().await {
         Ok(b) => b,
@@ -192,34 +210,31 @@ pub async fn patch_upload(
     };
     let bytes = body.clone();
 
-    // Validate 4KB alignment
+    // Strictness: empty chunks are a client bug, never a silent no-op.
     if bytes.is_empty() {
-        // Empty chunk - nothing to do, just return current offset
-        return match state.upload_service.get_session(&id).await {
-            Ok(Some(session)) => PatchUploadResponses::Success {
-                new_offset: session.received_bytes,
-            },
-            Ok(None) => PatchUploadResponses::NotFound,
-            Err(e) => PatchUploadResponses::InternalServerError(eyre::eyre!(e).into()),
-        };
+        return PatchUploadResponses::Error(UploadError::EmptyChunk);
     }
 
-    if bytes.len() % 4096 != 0 {
-        // Allow non-aligned chunks only if it's the final chunk
-        let session = match state.upload_service.get_session(&id).await {
-            Ok(Some(s)) => s,
-            Ok(None) => return PatchUploadResponses::NotFound,
-            Err(e) => return PatchUploadResponses::InternalServerError(eyre::eyre!(e).into()),
-        };
+    // Protocol-surface chunk ceiling.
+    if bytes.len() as u64 > MAX_CHUNK_SIZE {
+        return PatchUploadResponses::Error(UploadError::ChunkTooLarge);
+    }
 
-        if session.total_size > 0 {
-            let total = session.total_size;
-            let new_offset = session.received_bytes + bytes.len() as u64;
-            if new_offset != total {
-                return PatchUploadResponses::BadRequest(
-                    "Chunk size must be 4KB aligned (except for final chunk)".to_string(),
-                );
-            }
+    // Verify the checksum against the received bytes BEFORE any write: a
+    // mismatch persists nothing (transit-corruption defense, invariant 12).
+    let body_hash = hash_bytes(&bytes);
+    if body_hash != checksum {
+        return PatchUploadResponses::Error(UploadError::ChunkChecksumMismatch {
+            header: checksum,
+            body: body_hash,
+        });
+    }
+
+    // 4 KiB alignment for non-final chunks (invariant 10).
+    if bytes.len() % 4096 != 0 && session.total_size > 0 {
+        let new_offset = session.received_bytes + bytes.len() as u64;
+        if new_offset != session.total_size {
+            return PatchUploadResponses::Error(UploadError::ChunkNotAligned);
         }
     }
 
@@ -229,26 +244,15 @@ pub async fn patch_upload(
             // Check for completion
             if session.total_size > 0 && session.received_bytes == session.total_size {
                 // Attempt finalize
-                match state.upload_service.finalize_upload(&id).await {
-                    Ok(_) => {
-                        // Finalized successfully
-                    }
-                    Err(e) => {
-                        return PatchUploadResponses::InternalServerError(eyre::eyre!(e).into());
-                    }
+                if let Err(e) = state.upload_service.finalize_upload(&id).await {
+                    return PatchUploadResponses::Error(e);
                 }
             }
             PatchUploadResponses::Success {
                 new_offset: session.received_bytes,
             }
         }
-        Err(e) => {
-            if e.to_string().contains("Invalid offset") {
-                PatchUploadResponses::Conflict(e.to_string())
-            } else {
-                PatchUploadResponses::InternalServerError(eyre::eyre!(e).into())
-            }
-        }
+        Err(e) => PatchUploadResponses::Error(e),
     }
 }
 
@@ -288,13 +292,12 @@ pub async fn delete_upload(
 
     match state.upload_service.cancel_upload(&id).await {
         Ok(()) => DeleteUploadResponses::Success,
-        Err(e) => {
-            if matches!(e, crate::error::UploadError::SessionNotFound) {
-                DeleteUploadResponses::NotFound
-            } else {
-                DeleteUploadResponses::InternalServerError(eyre::eyre!(e).into())
-            }
-        }
+        Err(e) => match e {
+            UploadError::SessionNotFound => DeleteUploadResponses::NotFound,
+            // Finalization is not interruptible (409).
+            UploadError::SessionNotActive => DeleteUploadResponses::Error(e),
+            _ => DeleteUploadResponses::InternalServerError(eyre::eyre!(e).into()),
+        },
     }
 }
 
