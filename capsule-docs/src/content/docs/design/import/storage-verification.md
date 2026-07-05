@@ -4,7 +4,7 @@ description: The endpoint a client calls to confirm an asset is durably stored, 
 status: draft
 ---
 
-[Upload finalization](/design/import/upload-protocol/#finalization-and-integrity) confirms, **once**, that the bytes the server assembled match the declared hash. That `Completed` acknowledgement is a transfer receipt, not a standing durability guarantee a client can re-check later — and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves *cryptographic* validity and authorization, never that the server still holds the bytes. A client that is about to discard local data therefore has no way, today, to ask the server: *do you actually still have this, indexed and retrievable?*
+[Upload finalization](/design/import/upload-protocol/#finalization-and-integrity) confirms, **once**, that the bytes the server stored match the declared hash. That `Completed` acknowledgement is a transfer receipt, not a standing durability guarantee a client can re-check later — and [`verify_asset`](/design/cryptography/keys/#write-authorization) proves *cryptographic* validity and authorization, never that the server still holds the bytes. A client that is about to discard local data therefore has no way, today, to ask the server: *do you actually still have this, indexed and retrievable?*
 
 This doc defines that missing query and the rule that every client follows before any destructive local action. The endpoint lives in `capsule-api-media` (planned; it answers from the blob store plus the Postgres index); the client-side gate is a pure predicate in `capsule-core` invoked from `capsule-sdk` (planned — the offline core's `verify_asset` already covers the complementary crypto-validity half of the gate).
 

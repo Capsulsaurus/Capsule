@@ -87,7 +87,7 @@ Mobile OSes do not let an app sync whenever it likes; the scheduler is written a
 
 ### Notifications
 
-When the auto sync criteria have not been met for a prolonged period — **two weeks** specifically — the library falls silently out of date, which defeats the purpose of a backup. The client surfaces this rather than letting it pass unnoticed:
+When the auto sync criteria have not been met for a prolonged period — **two weeks** specifically — the library falls silently out of date, which defeats the point of keeping every device's content safe elsewhere. The client surfaces this rather than letting it pass unnoticed:
 
 - After two weeks without a completed sync *while changes remain un-synced* — including originals still pending under a [staged upload policy](#upload-tiering-staged-uploads) — the user is notified that the library is behind and offered a one-tap **force sync now**, which proceeds regardless of the metered/Wi-Fi criteria with their explicit consent. (A device idle long enough to trigger this may also be approaching the session's [sliding inactivity expiry](/design/authentication/#sliding-inactivity-expiry); the force-sync flow routes through re-authentication when the session has lapsed rather than failing the sync.)
 - The notification can be **snoozed** until a later date (e.g. another two weeks) or **disabled** outright. Snoozing only suppresses the warning; disabling opts out of the warning entirely and does not affect auto sync itself.
