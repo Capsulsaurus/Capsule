@@ -28,8 +28,17 @@ const badge =
 <style>
   .title-with-status {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     flex-wrap: wrap;
     gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  /* Default's h1 carries its own margin-top: 1rem, which would inflate
+     this flex item's box asymmetrically and throw off align-items: center
+     relative to the actual heading glyphs. Move that spacing to the
+     wrapper above instead. */
+  .title-with-status :global(h1) {
+    margin-top: 0;
   }
 </style>
