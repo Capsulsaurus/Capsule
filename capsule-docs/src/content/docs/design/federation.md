@@ -42,7 +42,45 @@ For v1, **each album has exactly one home server** — the server that issued th
 
 This rule keeps the v1 federation API surface small (no replication, no cross-server commit ordering) and forecloses several damage classes — split-brain ownership, two-server delete races, conflicting AMK-epoch advances — that would otherwise need explicit cross-server consensus to prevent.
 
-Cross-server replication of a *single* album (where two users on different home servers each want to write the same album) is **out of scope for v1** and deferred to v2. v1 supports cross-server sharing in the read direction (Alice on `home.tld` shares an album to Bob on `other.tld`; Bob reads via federation; Bob's writes either remain on `home.tld` via a registered or sponsored account, or are out of scope). The v2 design space is flagged in [Threat Model — Open Questions](/design/threat-model/schema-rules/#open-questions).
+Cross-server replication of a *single* album (where two users on different home servers each want to write the same album) is **out of scope for v1** and deferred to v2. v1 supports cross-server sharing in the read direction (Alice on `home.tld` shares an album to Bob on `other.tld`; Bob reads via federation; Bob's writes either remain on `home.tld` via a registered or sponsored account, or are out of scope). The v2 design space is flagged in [Threat Model — Open Questions](/design/threat-model/schema-rules/#open-questions). What ships *before* v2 is the aggregated album, next — multi-party sharing without multi-writer albums.
+
+## Federated Shared Albums (Aggregated Albums)
+
+The thing people actually want from federated sharing — "everyone on the trip puts their photos in the album, whichever server their account lives on" — does not require a multi-writer album. It requires the *view* of one. An **aggregated album** is N ordinary container albums, one per contributor, each homed on its contributor's own server and single-writer-domain as always, presented by clients as **one logical album**. Every rule above stays intact: one home server per constituent, pull-only replication, no cross-server commit ordering. There is **zero new server surface** — servers never learn that a group exists.
+
+### The Album-Group Assertion
+
+The group is client-side metadata, asserted per constituent:
+
+- The creator mints a `group_id` (UUIDv7) and shares it in the invite.
+- Each contributor's client writes an **album-group assertion** into *their own* container album's encrypted collaborative-metadata stream (the [operation path](/design/metadata/#how-operations-travel); this doc owns the assertion's schema):
+
+```rust
+AlbumGroupAssertion {
+  group_id:    UUIDv7,
+  group_name:  Lww<String>,          // converges across participants like caption_lww
+  member_hint: Vec<(album_id, home_server)>,  // advisory discovery only, never trusted
+}
+```
+
+There is deliberately **no shared mutable group object** — that would be exactly the multi-writer cross-server state v1 defers. A union of per-album assertions needs no cross-server consensus: each assertion lives in its author's own single-writer album and travels to readers through the existing feed/pull machinery.
+
+### Membership and Rendering
+
+- **Everyone writes their own, reads the others.** A participant contributes by writing to their own constituent (ordinary album writes on their home server) and reads the other constituents via ordinary per-album invites — same-server membership or [federation capabilities](#federation-capabilities) — with blobs pulled from each origin.
+- **Inclusion is injection-proof by construction.** A constituent appears in the local aggregate only if the local user is a *member* of that album (holds its AMK) **and** it asserts the `group_id`. A stranger's album cannot inject itself into anyone's view: without an invite, its assertion is never even decryptable. `member_hint` only tells the client where to *ask*; membership does the admitting.
+- **The aggregate is a computed view.** Merged ordering is `capture_timestamp` with `asset_id` as the tiebreak — computed at render, nothing stored, so it is idempotent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) by definition. It holds no keys and is no access-control boundary, exactly like every [view album](/design/organization/#system--smart-albums-views). Group name converges by LWW across assertions; the cover is a per-viewer preference in the library-settings document (falling back to newest asset) — deliberately not shared state.
+- **Partial views degrade visibly.** One origin unreachable → that constituent's entries render from the local index with the existing per-origin [degraded state](#robustness-against-connectivity-loss) ("photos from `other.tld` currently unavailable"); nothing is removed. [Search](#federated-breadcrumb-index) spans constituents through the breadcrumb index unchanged.
+
+### Leaving, Revocation, and Moderation
+
+- **Leaving** = removing your assertion — your constituent drops out of every participant's aggregate on their next sync. Optionally also unshare your container (AMK epoch bump + capability revocation) to cut read access to the historical photos.
+- **There is no group-level kick.** Each contributor is sovereign over their own constituent; you can stop someone from seeing *your* photos (unshare), but nobody can remove someone else's constituent from the group for other viewers. Stated as an honest limitation of the aggregation model rather than papered over — a true shared-governance album is precisely the v2 problem.
+- **Moderation is per-origin.** Blocking a server or user ([Moderation](/design/moderation/)) drops their constituent from your aggregate; the per-peer containment rules above apply to each origin independently.
+
+### Relationship to v2 Multi-Writer
+
+The aggregate neither depends on nor precludes true multi-writer albums. Nothing server-side encodes the group, so there is nothing to migrate: if v2 ships a genuinely co-written album, it joins a group as one more constituent and the group collapses to it when participants consolidate. [Open question #1](/design/threat-model/schema-rules/#open-questions) stays open; aggregated albums are the shipping answer until it closes.
 
 ## Federation Capabilities
 

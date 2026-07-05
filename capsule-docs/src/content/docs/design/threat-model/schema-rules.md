@@ -62,7 +62,7 @@ The deprecation surface is **never** retroactive against historical state. Old a
 
 One design question remains open — and it is **deliberately deferred to v2**, not a v1 blocker:
 
-1. **Cross-server album replication (v2).** v1 pins each album to a single home server; v2 will need a story for cross-server MLS state and federated commit ordering.
+1. **Cross-server album replication (v2).** v1 pins each album to a single home server; v2 will need a story for cross-server MLS state and federated commit ordering. The interim shipping answer is the [aggregated album](/design/federation/#federated-shared-albums-aggregated-albums) — client-side aggregation of per-contributor single-writer albums — which neither depends on nor precludes the v2 design.
 
 The following questions have since been **resolved** and now live in their owner docs, not here:
 

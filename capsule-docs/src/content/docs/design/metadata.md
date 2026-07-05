@@ -176,7 +176,7 @@ We encrypt the **operations**, not the resulting state. Merges are then commutat
 
 Each operation carries the same `prior_provenance_hash` chain link as any [lifecycle action](/design/authorization/#the-closed-action-set), so a metadata-update is provenance-tracked exactly like a create or delete.
 
-The same encrypted-operation path also carries the per-owner **library-settings document** — [smart-album](/design/organization/#system--smart-albums-views) definitions (predicate + display name) and similar client-authored organizational state — synced and merged across devices like any other collaborative metadata, and never legible to the server. (The [default-album](/design/organization/#the-default-album) *designation* is separate: a non-secret server-side owner pointer, not part of this encrypted document.)
+The same encrypted-operation path also carries each album's [album-group assertion](/design/federation/#the-album-group-assertion) (schema owned by Federation) and the per-owner **library-settings document** — [smart-album](/design/organization/#system--smart-albums-views) definitions (predicate + display name) and similar client-authored organizational state — synced and merged across devices like any other collaborative metadata, and never legible to the server. (The [default-album](/design/organization/#the-default-album) *designation* is separate: a non-secret server-side owner pointer, not part of this encrypted document.)
 
 ### Grouping Convergence (Requirement)
 
