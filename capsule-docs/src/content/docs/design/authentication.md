@@ -99,6 +99,47 @@ The asymmetric authentication on (3) addresses a damage scenario that pure sessi
 
 Note: the server can theoretically just kick off sessions because session tokens are stored server-side and the server holds the encrypted data. But this should not ever be implemented and an attempt to do so would be a bug — it bypasses the audit trail of a user-initiated revoke.
 
+## Device Cohorts
+
+The session ledger has a legibility problem: reinstalling the app re-enrolls with a **new** `device_id` by design (device keys are hardware-bound and non-exportable — [Metadata, Add-id Binding](/design/metadata/#add-id-binding)), so one physical phone accumulates several ledger entries over its life and the user cannot tell them apart. The **device cohort hash** groups sessions from the same physical device. It is a grouping aid, nothing more.
+
+### Per-Platform Primary Identifier
+
+One primary identifier per platform — fewer, better-chosen inputs beat a concatenated fingerprint that splits whenever any component shifts:
+
+| Platform | Primary identifier | Survives app reinstall | OS reinstall | Factory reset |
+| --- | --- | --- | --- | --- |
+| iOS | Keychain-persisted random 128-bit cohort seed (`ThisDeviceOnly`, **non-synchronized** — iCloud sync would merge distinct physical devices) | yes in practice (not Apple-guaranteed) | no | no |
+| Android | SSAID (app-signing-key-scoped `ANDROID_ID`) | yes | no | no |
+| macOS | `IOPlatformUUID` | yes | yes | **yes** |
+| Windows | `MachineGuid` | yes | no | no |
+| Linux | `/etc/machine-id` (never used raw — hashed below, per systemd guidance) | yes | no | no |
+
+(IDFV was rejected for iOS: it resets on reinstall when no sibling app remains — precisely the case cohorts exist for.)
+
+**Honest scope.** "The same device even after a factory reset" is technically impossible on iOS and Android: a reset destroys every app-accessible identifier by OS design, and post-reset attestation (DeviceCheck, Play Integrity) yields verdicts, not identifiers. The promise is therefore: **reinstall-stable everywhere; reset-stable only where the OS allows (macOS)**. A factory-reset phone starts a new cohort, and the doc says so rather than pretending otherwise — the same honesty rule as [platform limitations](/design/import/download-sync/#platform-limitations). (DeviceCheck's per-device bits may later corroborate a boolean "this hardware enrolled before"; deliberately out of scope for v1.)
+
+### Encoding
+
+```text
+cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, platform_tag, primary_id ]) )
+```
+
+Domain-separated, [canonical CBOR](/design/metadata/#canonical-cbor-encoding) (never naive string concatenation), with a closed `platform_tag` enum. **`user_id` is folded in** so the same physical device under two accounts yields unlinkable hashes — the cross-account correlation surface is removed at the source. The pure function lives in `capsule-core` (`cohort` module) so every platform computes it identically.
+
+### Privacy and Scope
+
+- Sent **only** in the session-creation request body during the auth ceremony; **never** in signed artifacts (manifests, sidecars, the device directory), never to federated peers, never in `.well-known`. It is registered in the [`X-Capsule-*` header census](/design/threat-model/validation/#universal-headers) by pointer as a body field so no header variant drifts into existence.
+- **Advisory-only, structurally:** the value is client-asserted and unverifiable, so **no authorization or capability decision may read it** — otherwise it becomes spoofable attack surface. It never substitutes for `device_id` (random UUIDv4, security-bearing) or the DSK. A server that receives an absent or garbage cohort value behaves identically to one that receives a valid one.
+
+### Server Storage and Surfacing
+
+The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort.
+
+### UX and Support Contract
+
+The client **asserts, it does not litigate**: "a device you've used before (last seen *date*)" — there is deliberately no "this isn't my device" toggle, because the user cannot adjudicate a hash and the value is advisory anyway. The dispute path is a **support report**: one tap bundles `{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}` — the exact hash and device-id map — for a bug report.
+
 ## Validation
 
 - **Token issuance round-trip (unit).** Generate a session token; issue an access JWT from it; verify the JWT under the server's Ed25519 key. Repeat with rotated keys; assert old JWTs verify under the old key for their grace window.
@@ -106,6 +147,9 @@ Note: the server can theoretically just kick off sessions because session tokens
 - **Revoke-all master-key proof (unit).** Issue a revoke-all without master-key proof; assert rejection. With proof; assert success and invalidation of every other session.
 - **Login flow (smoke).** Full OIDC handshake against a testcontainer IdP; assert session token issued, persisted, and usable for an immediate access-token request. Re-run after a server restart; assert resilience.
 - **Account portability (smoke).** Issue a moved certificate from server A; assert server B can register the same IK; assert federated peers honor the move after fetching A's well-known.
+- **Cohort hash vectors (unit).** Known-answer vectors for `cohort_hash` through the cross-language canonical-CBOR conformance gate; same `primary_id` under two `user_id`s → distinct hashes.
+- **Cohort is advisory (unit).** Session creation with an absent, malformed, or colliding cohort value behaves identically to a valid one; a tripwire test asserts no signed-structure schema contains a cohort field.
+- **Cohort grouping (smoke).** Two sessions with one cohort group together in the session listing; a reinstall (new `device_id`, same cohort) groups with "previously used"; the durable map outlives session expiry.
 
 The cross-module case — auth → query library schema — is one bounded E2E test listed in [Module Map](/design/module-map/#e2e-test-surface).
 

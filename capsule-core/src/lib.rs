@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod cbor;
+pub mod cohort;
 pub mod constants;
 pub mod crypto;
 pub mod db;
