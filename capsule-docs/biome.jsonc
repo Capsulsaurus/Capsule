@@ -10,5 +10,20 @@
         "enabled": true,
         "clientKind": "git",
         "useIgnoreFile": true
-    }
+    },
+    "overrides": [
+        {
+            // Biome parses only the frontmatter of .astro files, so values used
+            // exclusively in the template read as unused. Per Biome's Astro guidance.
+            "includes": ["**/*.astro"],
+            "linter": {
+                "rules": {
+                    "correctness": {
+                        "noUnusedImports": "off",
+                        "noUnusedVariables": "off"
+                    }
+                }
+            }
+        }
+    ]
 }

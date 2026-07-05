@@ -27,6 +27,10 @@ export default defineConfig({
                 baseUrl:
                     'https://github.com/justin13888/Capsule/tree/master/capsule-docs',
             },
+            components: {
+                // Renders the `status` frontmatter (draft/stable) as a title badge.
+                PageTitle: './src/components/PageTitle.astro',
+            },
             sidebar: [
                 {
                     label: 'Guides',
