@@ -167,6 +167,10 @@
         "message": "This upload is already being finalized.",
         "context": "HTTP 409: a concurrent finalization attempt lost the atomic status compare-and-set."
     },
+    "error.upload.receipt_not_available": {
+        "message": "The upload hasn't finished, so its storage receipt isn't available yet.",
+        "context": "HTTP 409, invariant 33: GET /upload/{id}/receipt before the session reached Completed. The receipt is signed inside the finalization transaction; the client retries after Completed."
+    },
     "error.upload.content_hash_mismatch": {
         "message": "The upload failed integrity verification and was discarded.",
         "context": "HTTP 400 at finalization, invariant 14: recomputed ciphertext hash differs from the declared hash. Treated as corruption/tampering; blob and pending row are deleted."

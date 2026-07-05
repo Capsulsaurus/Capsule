@@ -85,9 +85,9 @@ The salt is always a 32-byte CSPRNG draw. The tier chosen at *wrap* time is reco
 
 ### Signature Scheme
 
-**Hybrid Ed25519 + ML-DSA-65** for all long-lived **identity** signatures: the user IK, device keys, asset manifests, and write-tier keys. Both halves must verify before a peer is accepted, so neither algorithm being broken alone compromises authentication.
+**Hybrid Ed25519 + ML-DSA-65** for all long-lived **identity** signatures: the user IK, device keys, asset manifests, write-tier keys — and the server's [custody receipts and storage attestations](/design/import/storage-verification/#custody-receipts). Both halves must verify before a peer is accepted, so neither algorithm being broken alone compromises authentication.
 
-**Short-lived operational signatures are classical Ed25519 only** — server-to-server federation, [federation capability tokens](/design/federation/#federation-capabilities), and [access-token JWTs](/design/authentication/#access-token). These live minutes to hours and rotate cheaply, so PQ hybridization buys no meaningful margin (a harvest-now-decrypt-later adversary gains nothing from a long-expired signature) and is not worth the wire-size and verification cost. This carve-out is owned here; consumers link to it rather than restating the choice.
+**Short-lived operational signatures are classical Ed25519 only** — server-to-server federation, [federation capability tokens](/design/federation/#federation-capabilities), and [access-token JWTs](/design/authentication/#access-token). These live minutes to hours and rotate cheaply, so PQ hybridization buys no meaningful margin (a harvest-now-decrypt-later adversary gains nothing from a long-expired signature) and is not worth the wire-size and verification cost. This carve-out is owned here; consumers link to it rather than restating the choice. The boundary is signature **lifetime**, not who signs: a custody receipt is server-signed but is evidence for the life of the asset, so it is hybrid, outside the carve-out.
 
 MLS LeafNode signatures stay Ed25519-only (pinned by the ciphersuite); the ML-DSA half of a device's identity lives at the identity layer — see [MLS](/design/cryptography/mls/).
 

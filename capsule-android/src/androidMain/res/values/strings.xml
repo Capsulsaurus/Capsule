@@ -29,6 +29,7 @@
     <string name="error_upload_missing_offset">The upload request was missing its position marker.</string>
     <string name="error_upload_offset_mismatch">The upload got out of sync and is realigning.</string>
     <string name="error_upload_owner_not_permitted">You can\'t upload on behalf of this user.</string>
+    <string name="error_upload_receipt_not_available">The upload hasn\'t finished, so its storage receipt isn\'t available yet.</string>
     <string name="error_upload_session_not_active">This upload has already finished.</string>
     <string name="error_upload_session_not_found">The upload session expired. Starting over…</string>
     <string name="error_upload_size_exceeded">The upload sent more data than it declared.</string>

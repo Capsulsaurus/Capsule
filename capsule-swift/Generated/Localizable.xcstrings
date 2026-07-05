@@ -291,6 +291,16 @@
         }
       }
     },
+    "error.upload.receipt_not_available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload hasn't finished, so its storage receipt isn't available yet."
+          }
+        }
+      }
+    },
     "error.upload.session_not_active": {
       "localizations": {
         "en": {

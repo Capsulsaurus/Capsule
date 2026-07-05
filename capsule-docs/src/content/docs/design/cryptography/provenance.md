@@ -6,7 +6,7 @@ status: draft
 
 Every asset Capsule stores has a verifiable trace of *who* produced it. The trace is anchored in a small **signed manifest** — bound to the ciphertext, cheap to verify, streaming-compatible — and extended by an **append-only, hash-chained provenance log per asset**. Together these are what let an operator distinguish a legitimate delete from a malicious or bug-induced one after the fact, and what defeats the [stale-revival attack](/design/threat-model/scenarios/#damage-scenario--invariant-map).
 
-The schemas live here and are the **single source of truth** for `AssetManifest`, `ProvenanceRecord`, and `DerivativeManifest`. They are implemented in `capsule-core::crypto::provenance`; verification flows through the single `verify_asset` chokepoint in `capsule-core::crypto` ([Write Authorization](/design/cryptography/keys/#write-authorization)).
+The schemas live here and are the **single source of truth** for `AssetManifest`, `ProvenanceRecord`, and `DerivativeManifest`. They are implemented in `capsule-core::crypto::provenance`; verification flows through the single `verify_asset` chokepoint in `capsule-core::crypto` ([Write Authorization](/design/cryptography/keys/#write-authorization)). Everything here is **client-signed** — the server-signed complement, the custody receipt that makes server-side loss provable in both directions, is owned by [Storage Verification — Custody Receipts](/design/import/storage-verification/#custody-receipts).
 
 ## Asset Manifest
 

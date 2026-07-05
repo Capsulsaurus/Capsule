@@ -84,10 +84,11 @@ its slice.
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
+| S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | ready   |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | ready   |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
-| S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3             | M    | ready   |
+| S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | ready   |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | ready   |
@@ -144,6 +145,10 @@ graph LR
   C9[S-C9 directory] --> C7[S-C7 enrollment] --> E3[S-E3 peering]
   C9 --> D2 --> D6[S-D6 web gateway] --> G1[S-G1 graphql retire] --> G3[S-G3 entity retire]
   C3[S-C3 storage verify] --> D4[S-D4 verify-destroy] --> B3[S-B3 streaming import]
+  C1 --> C15[S-C15 custody receipts]
+  C3 --> C15
+  C15 --> D4
+  C1 --> C14[S-C14 integrity scrub]
   D1 --> B3
   D1 --> D5
   D2 --> E3
@@ -342,6 +347,8 @@ pass until the gate lifts.
   counter-increment, and between rename and commit, recovers per the atomicity
   invariants.
 - **Tier:** Unit + Smoke + E2E case 2/11. **Blocks:** S-C2, S-C5, S-C11, S-D1, S-B4.
+  (The custody-receipt insert that joins this finalization transaction is owned by
+  S-C15 — no scope change here.)
 
 ### S-C2 — Key-free sync feed
 
@@ -366,8 +373,10 @@ pass until the gate lifts.
 - **Deliverable:** `POST /storage/verify` computing stored/indexed/retrievable from the
   blob store + Postgres, the `deep` re-hash (rate-limited, coalesced), and the
   GC-grace interaction that keeps a just-verified blob out of byte deletion.
-- **Done when:** the storage-verification doc's six Validation bullets pass; the stub's
-  `todo!()` is gone. **Tier:** Unit + Smoke. **Blocks:** S-D4.
+- **Done when:** the storage-verification doc's six unsigned-verdict Validation
+  bullets pass; the stub's `todo!()` is gone. (The signed `StorageAttestation`
+  extension of this endpoint is owned by S-C15.) **Tier:** Unit + Smoke.
+  **Blocks:** S-D4, S-C15.
 
 ### S-C4 — Share-link serving
 
@@ -547,9 +556,15 @@ SDK; they never hand-roll network flows.
   the implemented pure predicate `capsule_core::library::release_is_safe`.
 - **Deliverable:** the SDK call to `POST /storage/verify` + the 60-second re-verify
   window, wired into the three destructive paths (device-owned-original release,
-  Move-import source deletion, streaming release) via `release_is_safe`.
-- **Depends on:** S-C3. **Blocks:** S-B3. **Done when:** `storage_verify.rs`'s
-  `#[ignore]`d wiring test flips; the client.md verify-before-release smoke passes.
+  Move-import source deletion, streaming release) via `release_is_safe`; plus the
+  **receipt half of the gate** — fetch, verify (pinned attestation key, field match),
+  and persist the `CustodyReceipt` (`{uuid}.receipts.cbor`, included in the backup
+  artifact) for every finalized upload, with release refused when the receipt is
+  missing or unverified.
+- **Depends on:** S-C3; S-C15 (receipt endpoints + attestation key). **Blocks:** S-B3.
+  **Done when:** `storage_verify.rs`'s `#[ignore]`d wiring test flips; the client.md
+  verify-before-release smoke passes; the receipt-gated-release smoke
+  (storage-verification doc) passes.
 - **Tier:** Unit + Smoke.
 
 ### S-D5 — CLI auth/sync/list
@@ -664,6 +679,25 @@ SDK; they never hand-roll network flows.
 - **Done when:** the local-gallery doc's unit Validation bullets pass; the NFR1
   no-network-on-read-paths smoke runs with a socket-refusing harness.
 - **Tier:** Unit + Smoke; the airplane-mode E2E case rides the Module Map surface.
+
+### S-C15 — Custody receipts + signed storage attestation
+
+- **Contract:** [Storage Verification — Custody Receipts / Signed Storage Attestation /
+  Proof of Loss](capsule-docs/src/content/docs/design/import/storage-verification.md),
+  [Validation invariants 33–34](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Deliverable:** the server **attestation keypair** (hybrid Ed25519+ML-DSA-65,
+  distinct from the operational key) with well-known publication + append-only key
+  history (federation doc); `CustodyReceipt` signing hooked into S-C1's finalization
+  transaction (receipt + `uploaded` flip commit together) with the per-server
+  `receipt_seq` chain; `GET /upload/{id}/receipt` + `GET /assets/{asset_id}/receipts`
+  (`error.upload.receipt_not_available` before Completed — key already in `locales/`);
+  `signed`/`nonce` on `POST /storage/verify` returning `StorageAttestation`,
+  rate-limited like `deep`.
+- **Depends on:** S-C1 (finalization transaction), S-C3 (verify endpoint).
+- **Done when:** the storage-verification doc's receipt/attestation/proof-of-loss
+  Validation bullets pass (issuance atomicity, log monotonicity, nonce echo,
+  loss-proof composition, delete rebuttal, cross-server replay, rotation continuity).
+- **Tier:** Unit + Smoke. **Blocks:** the receipt half of S-D4's release gate.
 
 ### S-D15 — Exact client build identification
 
