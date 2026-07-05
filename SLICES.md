@@ -48,7 +48,13 @@ everything else networked is skeleton or legacy (below).
 `streaming_recommended` and `release_is_safe` predicates implemented);
 `capsule-api-media::{verify, drops}` + `capsule-api-auth::devices` route stubs;
 `capsule-api-upload::envelope` gate stub; the `capsule.sync.v1` proto + `SyncFeedService`
-stub. Each names its slice.
+stub. The design-review pass added: the upload server's contract-complete session/
+request types + append-only store + `error.upload.*` taxonomy (enforcement = S-C1);
+sidecar `stack_membership: Lww<Option<…>>`, `cull`, and `hidden` (implemented +
+tested); `capsule_core::cohort` and `capsule_core::backup::verify_recovery_secret`
+(implemented + tested); `UploadPolicy`/`UploadTier`, `capsule-sdk::net`
+(`ConnectionClass`/`RetryClass`), and `original_held` on the sync proto. Each names
+its slice.
 
 ## Slice index
 
@@ -63,6 +69,7 @@ stub. Each names its slice.
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | ready   |
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
+| S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | ready   |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | ready   |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
@@ -75,15 +82,25 @@ stub. Each names its slice.
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | ready   |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
-| S-D1  | SDK upload client (+ OpenAPI regen)                  | sdk/clients     | S-C1             | M    | ready   |
+| S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
+| S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | ready   |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3             | M    | ready   |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
+| S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | ready   |
+| S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
+| S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
+| S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | ready   |
+| S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
+| S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
+| S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | ready   |
+| S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
+| S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | ready   |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | ready   |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | ready   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
@@ -96,6 +113,7 @@ stub. Each names its slice.
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | ready   |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | ready   |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
+| S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
@@ -131,7 +149,33 @@ graph LR
   H1[S-H1 embeddings] --> H2[S-H2 registry]
   H1 --> H3[S-H3 semantic/face] --> G3
   X1[S-X1 openmls] --> X2[S-X2 membership] --> X3[S-X3 upgrade ceremony]
+  C1 --> B4[S-B4 staged uploads]
+  C2 --> B4
+  D1 --> B4
+  D1 --> D10[S-D10 adverse-net]
+  D2 --> D10
+  C13[S-C13 cohort store] --> D11[S-D11 cohort client]
+  D7[S-D7 sdk auth] --> D11
+  D7 --> D9[S-D9 sdk ffi]
+  F1 --> D9
+  C12[S-C12 escrow] --> D12[S-D12 recovery cadence]
+  E2 --> E4[S-E4 aggregated albums]
+  D2 --> E4
+  H3 --> H4[S-H4 group evaluations]
 ```
+
+## In-House and External Library Gates
+
+Some slices depend on libraries that are ours but not yet stable, or on upstream
+projects. A gated slice can start its non-gated parts; its "Done when" cannot fully
+pass until the gate lifts.
+
+| Library | Status | Gates |
+| --- | --- | --- |
+| `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
+| `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
+| `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display and S-H3 geo features. Until it lands, WGS-84 storage is unaffected (conversion is display-only). |
+| `openmls` ciphersuite `0x004D` | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
 
 ## Lane A — core crypto
 
@@ -252,6 +296,23 @@ graph LR
   probe test flips.
 - **Tier:** Unit (auto-detect) + Smoke (release gating, halt-on-disconnect).
 
+### S-B4 — Staged uploads (low-data tier ladder)
+
+- **Contract:** [Download & Sync — Upload Tiering (Staged Uploads)](capsule-docs/src/content/docs/design/import/download-sync.md);
+  seams: `UploadPolicy`/`UploadTier` in `capsule-core::import::upload`, `original_held`
+  on the sync proto.
+- **Deliverable:** the client-side staged scheduler — sessions open T0 (manifest +
+  metadata w/ LQIP) → T1 (thumb + preview) → T2 (original) per asset, T2 gated on the
+  large-reconciliation criteria; the `awaiting-original` derived state end-to-end
+  (badge UX, `error.blob.pending_upload` handling, GC carve-out server-side); tier
+  queue re-derived from server truth on resume. Zero server mode branches by
+  construction — the policy is session ordering only.
+- **Depends on:** S-C1 (visibility gate + `original_held` derivation), S-C2 (feed
+  field), S-D1 (upload client). **Done when:** the download-sync doc's staged
+  Validation bullets pass (ladder order, awaiting-original semantics, release gate,
+  resume-from-server-truth, staged×streaming exclusion).
+- **Tier:** Unit + Smoke.
+
 ## Lane C — server (key-free surfaces)
 
 ### S-C1 — Upload-server hardening
@@ -260,13 +321,25 @@ graph LR
   [Validation invariants 1–15](capsule-docs/src/content/docs/design/threat-model/validation.md).
 - **Deliverable:** the `EnvelopeGate` (skeleton in `capsule-api-upload/src/envelope.rs`)
   wired ahead of every write with `capsule_core::validation::protocol_gate` +
-  `check_manifest_envelope` (already implemented and unit-tested in core), the
-  idempotency tuples, the finalization transaction ordering, the startup scrub, and
-  `error.*` codes on every rejection.
-- **Done when:** invariants 1–15 each have a rejecting test against the real server
-  (testcontainer Postgres); the upload doc's session-lifecycle smoke passes; crash
-  injection between rename and commit recovers per the atomicity invariants.
-- **Tier:** Unit + Smoke + E2E case 2/11. **Blocks:** S-C2, S-C5, S-C11, S-D1.
+  `check_manifest_envelope` (already implemented and unit-tested in core) plus the
+  top-level↔envelope consistency check (`error.upload.envelope_mismatch`); the
+  idempotency machinery (tuple replay store returning byte-identical duplicate
+  responses; create-dedup returning the active session / `409 duplicate_blob` per the
+  doc's Idempotency and Resumption section, in one `SELECT…FOR UPDATE` transaction);
+  the atomic status CAS on finalization + the finalization transaction ordering; the
+  visibility gate on **manifest + metadata** finalization with `original_held`
+  derivation (staged-uploads contract); the discard machinery (≥1 h progress floor,
+  pressure eviction least-recently-progressed-first, startup scrub of orphan
+  `incoming/*.bin` + length-diverged sessions); the uploader-scoped session index; and
+  the `error.upload.*` code on every rejection (constants already generated).
+- **Done when:** invariants 1–15 (as amended) each have a rejecting test against the
+  real server (testcontainer Postgres + Valkey) asserting status **and** `error.*`
+  code; every row of the upload doc's Strictness Table has a test; the
+  session-lifecycle smoke passes; the discard-floor test passes (progress within 1 h
+  is never evicted under injected pressure); crash injection between append and
+  counter-increment, and between rename and commit, recovers per the atomicity
+  invariants.
+- **Tier:** Unit + Smoke + E2E case 2/11. **Blocks:** S-C2, S-C5, S-C11, S-D1, S-B4.
 
 ### S-C2 — Key-free sync feed
 
@@ -275,8 +348,10 @@ graph LR
   [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md).
 - **Deliverable:** `SyncFeedService` implemented — per-album `sync_seq` minted in the
   finalization transaction, the HMAC'd opaque cursor (invariant 22), entries carrying
-  the manifest as opaque CBOR + metadata blob + blob refs; gRPC metadata negotiation
-  per the api-surfaces mapping; the salvo↔tonic bridge verified end-to-end.
+  the manifest as opaque CBOR + metadata blob + blob refs + the `original_held`
+  completeness fact (proto field in-tree; staged-uploads contract); gRPC metadata
+  negotiation per the api-surfaces mapping; the salvo↔tonic bridge verified
+  end-to-end.
 - **Depends on:** S-C1. **Blocks:** S-C8, S-D2, S-E2, S-G1, S-G2.
 - **Done when:** the download-sync doc's sync-feed Validation bullets (monotonicity,
   forward-version rejection, rewind rejection, cursor authenticity) pass server-side.
@@ -380,23 +455,52 @@ graph LR
 ### S-C12 — Backup escrow server surface
 
 - **Contract:** [Backup — Master-Key Escrow](capsule-docs/src/content/docs/design/backup-recovery.md).
-- **Deliverable:** store/fetch of the wrapped master-key escrow blob (opaque to the
-  server; the wrap format is implemented in core), with the ≥128-bit recovery-secret
-  rule surfaced client-side.
+- **Deliverable:** store/fetch/**replace** of the wrapped master-key escrow blob
+  (opaque to the server; the wrap format is implemented in core) — replace is
+  single-active-escrow: the old blob is deleted in the same transaction, per the
+  guided re-wrap contract in the backup doc — with the ≥128-bit recovery-secret rule
+  surfaced client-side.
 - **Done when:** escrow round-trips through the server and unwraps with the passphrase
-  path already tested in core. **Tier:** Smoke.
+  path already tested in core; after a replace, the prior blob is gone and unwraps
+  nothing. **Tier:** Smoke. **Blocks:** S-D12.
+
+### S-C13 — Session device-cohort storage + grouping
+
+- **Contract:** [Authentication — Device Cohorts](capsule-docs/src/content/docs/design/authentication.md);
+  pure hash in `capsule_core::cohort` (implemented + tested).
+- **Deliverable:** accept the advisory `cohort_hash` in the session-creation body,
+  store it on the session record + the durable `device_cohorts(user_id, cohort_hash,
+  first_seen, last_seen)` map, and surface both through the session listing.
+  Advisory-only invariant enforced structurally: no authorization path reads it.
+- **Done when:** the authentication doc's cohort Validation bullets pass (advisory
+  behavior under absent/garbage values; grouping; durable map outlives sessions).
+- **Tier:** Unit + Smoke. **Blocks:** S-D11.
 
 ## Lane D — SDK / clients
+
+`capsule-sdk` is the **sanctioned network path**: it owns the session/token store and
+auto refresh (S-D7), the complete user-flow primitives (login → upload → status →
+sync), and their FFI exposure to Swift/Kotlin/Linux (S-D9). Native apps consume the
+SDK; they never hand-roll network flows.
 
 ### S-D1 — SDK upload client
 
 - **Contract:** [Import — Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md);
   the `todo!()` stubs in `capsule-sdk/src/upload.rs`.
-- **Deliverable:** regenerate `openapi.json` against the hardened server (S-C1) and
-  implement the chunked, resumable, adaptive upload client (the `X-Capsule-*` headers
-  are registered in the validation doc's header census).
-- **Depends on:** S-C1. **Blocks:** S-B3, S-D5. **Done when:** the upload doc's
-  client-side Validation bullets pass against a real server; E2E case 2 lives.
+- **Deliverable:** the hand-written chunked, resumable, adaptive upload client — the
+  protocol is too stateful for codegen; the spargen-generated REST client (S-D8)
+  covers the plain request/response surfaces instead. Implements create/PATCH/HEAD/
+  DELETE/list with `application/octet-stream`, the **required** `X-Capsule-Checksum`
+  (lowercase-hex SHA-256), `X-Capsule-Offset`, and the handshake headers; the
+  adaptive algorithm per the doc (normative), clamped to the protocol bounds
+  `[PROTOCOL_MIN_CHUNK, PROTOCOL_MAX_CHUNK]` with alignment guaranteed by
+  construction; and the code-driven recovery matrix (`offset_mismatch` → HEAD
+  re-align; `session_not_found` → re-create; `duplicate_blob` → merge; `426` →
+  abort-with-upgrade; `checksum_mismatch` → re-send) — clients switch on `error.*`
+  codes, never bare statuses.
+- **Depends on:** S-C1. **Blocks:** S-B3, S-B4, S-D5. **Done when:** the upload doc's
+  client-side Validation bullets pass against a real server; the recovery matrix has
+  a mocked-HTTP test per code; E2E case 2 lives.
 - **Tier:** Unit + Smoke.
 
 ### S-D2 — SDK sync/download client
@@ -405,7 +509,10 @@ graph LR
 - **Deliverable:** the gRPC sync consumer (cursor high-water marks, per-album
   `sync_seq` anti-rewind, forward-version rejection), tiered on-demand fetch with the
   degrade ladder (403-as-authorization-change), resumable ranged blob fetch, and the
-  connection-class detection that feeds the cache-eviction byte budget.
+  connection-class detection (taxonomy owned by
+  [Networking](capsule-docs/src/content/docs/design/networking.md); `ConnectionClass`
+  seam in `capsule-sdk::net`) that feeds the cache-eviction byte budget and the
+  staged-upload tier gates.
 - **Depends on:** S-C2, S-C9. **Blocks:** S-D5, S-D6, S-E3, S-G1, S-G2.
 - **Done when:** the download-sync doc's client Validation bullets pass; E2E case 3
   lives. **Tier:** Unit + Smoke.
@@ -435,7 +542,7 @@ graph LR
 - **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md) (the CLI is a client).
 - **Deliverable:** the `todo!()` CLI commands (`auth login/logout`, `sync`, `list`)
   over the SDK clients.
-- **Depends on:** S-D1, S-D2. **Done when:** `capsule auth login && capsule sync &&
+- **Depends on:** S-D1, S-D2, S-D7 (the token store — the CLI never hand-rolls auth). **Done when:** `capsule auth login && capsule sync &&
   capsule list` round-trips against a dev server. **Tier:** Smoke.
 
 ### S-D6 — Web server gateway
@@ -449,6 +556,99 @@ graph LR
 - **Depends on:** S-D2 (the feed contract). **Blocks:** S-G1 (query parity is the
   retirement precondition). **Done when:** the gateway methods run against a dev server
   with the mock gateway deleted. **Tier:** Smoke (`mise run check-web` + bun tests).
+
+### S-D7 — SDK auth/session foundation + auto token refresh
+
+- **Contract:** [Authentication — Session and Access Tokens](capsule-docs/src/content/docs/design/authentication.md);
+  the parked `AuthenticatedClient` shape in `capsule-sdk/src/lib.rs`.
+- **Deliverable:** the SDK-owned session/token store and refresh engine — a quick
+  asynchronous pre-flight check on token expiry before each request, single-flight
+  refresh, 401-retry-once — hand-rolled `reqwest` against the real `capsule-api-auth`
+  endpoints (no spargen dependency), exposing the login → authenticated-call → logout
+  primitives. This is the "SDK owns the complete user flow" foundation: native apps
+  never juggle raw tokens.
+- **Done when:** login/refresh/expiry flows round-trip against a dev server; a mocked
+  clock exercises pre-flight refresh + single-flight; `capsule-sdk` stays in every
+  Rust gate. **Tier:** Unit + Smoke. **Blocks:** S-D9, S-D11; S-D5 consumes it.
+
+### S-D8 — spargen REST client integration
+
+- **Contract:** [API Surfaces — Why Two Transports](capsule-docs/src/content/docs/design/api-surfaces.md);
+  the parked wrapper in `capsule-sdk/src/lib.rs`.
+- **Blocked on:** in-house `spargen` (OpenAPI 3.1 client generator) reaching usable
+  stability **and** the server's OpenAPI schema stabilizing post-S-C1. Unblock check:
+  spargen repo milestones; re-evaluate monthly.
+- **Deliverable:** generate the typed REST client from the OpenAPI 3.1 schema (no 3.0
+  downgrade, ever), revive `AuthenticatedClient` over it (composing S-D7's token
+  store), and delete the parked comment blocks.
+
+### S-D9 — capsule-sdk uniffi FFI bindings
+
+- **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md),
+  [Module Map](capsule-docs/src/content/docs/design/module-map.md) (`capsule-sdk` row).
+- **Deliverable:** the uniffi surface over `capsule-sdk`'s user-flow primitives
+  (login, upload file, upload/sync status, sync) so iOS/macOS (Swift), Android
+  (Kotlin), and Linux consumers call one SDK instead of reimplementing flows —
+  async-capable bindings, sharing the single-uniffi-version strategy S-F1 lands;
+  binding generation joins `gen-bindings`/`verify-examples`.
+- **Depends on:** S-F1, S-D7. **Done when:** Swift + Kotlin harnesses drive a
+  login→upload→status round-trip against a dev server through the bindings.
+- **Tier:** Smoke per platform.
+
+### S-D10 — Adverse-network hardening
+
+- **Contract:** [Networking — Adverse-Network Posture](capsule-docs/src/content/docs/design/networking.md);
+  `ConnectionClass`/`RetryClass` seams in `capsule-sdk::net`.
+- **Deliverable:** behavioral `adverse` promotion/demotion (reset/stall counters over
+  a sliding window), stall-detection cuts (no-bytes-for-T) with offset/Range resume,
+  bounded transfer windows under `adverse`, chunk-size floor coupling, Happy Eyeballs
+  at dial, and the three retry policy classes as a shared engine the sync/upload/fetch
+  paths instantiate.
+- **Depends on:** S-D1, S-D2. **Done when:** the networking doc's four Validation
+  bullets pass (mocked-signal class matrix; promotion/demotion; stall-cut-resume with
+  zero duplicate bytes; backoff discipline). **Tier:** Unit + Smoke.
+
+### S-D11 — Client cohort emission + devices grouping UI
+
+- **Contract:** [Authentication — Device Cohorts](capsule-docs/src/content/docs/design/authentication.md).
+- **Deliverable:** per-platform primary-identifier readers (Keychain seed / SSAID /
+  IOPlatformUUID / MachineGuid / hashed machine-id), `cohort_hash` emission at session
+  creation, the grouped devices view with assert-don't-litigate copy, and the one-tap
+  support bundle (`cohort_hash` + device-id/session map).
+- **Depends on:** S-C13, S-D7. **Done when:** a reinstall groups with "previously
+  used" in the devices view; the support bundle round-trips. **Tier:** Unit + Smoke.
+
+### S-D12 — Recovery verification cadence + guided re-wrap
+
+- **Contract:** [Backup — Recovery Verification Cadence](capsule-docs/src/content/docs/design/backup-recovery.md);
+  `capsule_core::backup::verify_recovery_secret` (implemented + tested).
+- **Deliverable:** the escrow-blob cache + refresh, the cadence scheduler
+  (7 d → 90 d → 180 d, re-arm triggers, snooze caps, never-blocking), the
+  verification prompt UX, and the guided re-wrap flow (new secret, same master key,
+  escrow replace via S-C12, Shamir re-issue, old-artifact guidance).
+- **Depends on:** S-C12. **Done when:** the backup doc's cadence Validation bullets
+  pass (mocked clock; stale-cache rule; re-wrap smoke with unchanged blob hashes).
+- **Tier:** Unit + Smoke.
+
+### S-D13 — Culling workflow client UX
+
+- **Contract:** [Organization — Culling](capsule-docs/src/content/docs/design/organization.md)
+  (schema landed: sidecar `cull` LWW register).
+- **Deliverable:** the keyboard/swipe-driven review mode writing `cull` flags,
+  flag-filtered views, derived group cull state, and the reject-sweep (batch-move to
+  trash — the only destructive step, soft per retention).
+- **Done when:** the flag → filter → sweep loop round-trips on a fixture library;
+  concurrent flags from two devices converge. **Tier:** Unit + Smoke.
+
+### S-D14 — Local-gallery security gates
+
+- **Contract:** [Local Gallery — Security Requirements](capsule-docs/src/content/docs/design/local-gallery.md).
+- **Deliverable:** the fresh-local-auth gate (biometric → credential fallback, per-view
+  5-minute grace) on the Recently Deleted and Hidden views, and the cache/temp
+  placement audit asserting no plaintext lands outside the library root.
+- **Done when:** the local-gallery doc's unit Validation bullets pass; the NFR1
+  no-network-on-read-paths smoke runs with a socket-refusing harness.
+- **Tier:** Unit + Smoke; the airplane-mode E2E case rides the Module Map surface.
 
 ## Lane E — federation / sharing
 
@@ -481,6 +681,23 @@ graph LR
 - **Depends on:** S-D2 (cursor model + transport plumbing), S-C7 (enrolled same-user
   devices). **Done when:** the peering doc's six Validation bullets pass; E2E case 5
   lives. **Tier:** Unit + Smoke per platform.
+
+### S-E4 — Aggregated federated albums (album-group view)
+
+- **Contract:** [Federation — Federated Shared Albums](capsule-docs/src/content/docs/design/federation.md)
+  (assertion schema), [Organization — views](capsule-docs/src/content/docs/design/organization.md).
+- **Deliverable:** the `AlbumGroupAssertion` write/merge on the collaborative-metadata
+  op path, group-aware invites (group_id + sibling hints riding the existing album
+  invite), the aggregate view renderer (member-of ∧ asserts-group inclusion rule,
+  capture-time ordering, per-origin partial-view indicator), leave = assertion
+  removal (+ optional unshare), per-origin moderation drop. Zero new server surface —
+  buildable against `ReferenceAuthority` fixtures while MLS membership (S-X2) is
+  blocked; user-facing multi-user invites ride S-X2 (same caveat as organization's
+  invitation surface).
+- **Depends on:** S-E2 (cross-server read path), S-D2 (feed consumer). **Done when:**
+  the federation doc's aggregated-album Validation bullets pass (composition,
+  injection-refusal, partial view, leave propagation, LWW rename convergence).
+- **Tier:** Unit + Smoke.
 
 ## Lane F — platform / FFI
 
@@ -588,6 +805,18 @@ its design here.
   InsightFace-AdaFace) on the deterministic execution path with the platform-partition
   fallback; `tags_ai` population. **Depends on:** S-H1. **Blocks:** S-G3.
 
+### S-H4 — Group-scoped evaluations (post-v1)
+
+- **Contract:** [AI — Quality Assessment](capsule-docs/src/content/docs/design/ai.md)
+  (sequencing contract fixed now; category deferred post-v1).
+- **Deliverable:** best-shot/framing/exposure scoring over stacks, bursts, and
+  similarity groups — strictly **after** grouping, keyed
+  `(group_id, membership_hash, model_id, model_version)` so any regroup invalidates
+  by key construction; deterministic recompute (ties broken by asset id); results as
+  AI-namespaced derived state feeding the `role = primary` suggestion.
+- **Depends on:** S-H3 (and the stacking surfaces). **Status: post-v1** — indexed now
+  so the sequencing contract has an owner; not part of the v1 cut.
+
 ## Lane X — blocked on upstream
 
 ### S-X1 — OpenMLS backend → `OpenMlsAuthority`
@@ -620,5 +849,7 @@ its design here.
 - **Contract:** [Metadata — How Operations Travel](capsule-docs/src/content/docs/design/metadata.md),
   [Organization — views](capsule-docs/src/content/docs/design/organization.md).
 - **Deliverable:** the concrete schema for the per-owner E2E-encrypted library-settings
-  document (smart-album definitions, scope-override map) as a design-doc addition —
-  the docs declare the surface but not its fields.
+  document (smart-album definitions; per-viewer aggregated-album cover preferences) as
+  a design-doc addition. The scope-override map's rows and grammar are now specified
+  in [Organization — Scope Grammar](capsule-docs/src/content/docs/design/organization.md);
+  what remains is the smart-album predicate schema and the document's envelope/versioning.
