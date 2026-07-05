@@ -41,7 +41,7 @@ The owner docs are:
 | Device enrollment + cross-device add ceremony                         | [Device Enrollment](/design/device-enrollment/)                     |
 | ML model identities + embedding provenance                            | [AI/ML Integrations](/design/ai/)                                   |
 | LQIP scheme + thumbnail/preview formats                               | [Thumbnails and Previews](/design/thumbnails/)                      |
-| Server filesystem (blob store, Postgres index, deployment profiles)   | [Filesystem — Server](/design/filesystem/server/)                   |
+| Server filesystem (blob store, Postgres index, required services)     | [Filesystem — Server](/design/filesystem/server/)                   |
 | Client filesystem (library layout, local index, space recovery)       | [Filesystem — Client](/design/filesystem/client/)                   |
 | Library self-maintenance + atomic-write granularity                   | [Filesystem — Maintenance](/design/filesystem/maintenance/)         |
 | Session/access tokens + identity binding + auth flow                  | [Authentication](/design/authentication/)                           |

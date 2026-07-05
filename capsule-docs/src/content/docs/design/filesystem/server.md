@@ -1,29 +1,22 @@
 ---
 title: Server Filesystem
-description: The server's blob store layout, Postgres index, and deployment profiles
+description: The server's blob store layout, Postgres index, and required services
 status: draft
 ---
 
 The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.
 
-Implemented in `capsule-api` (blob storage, Postgres index, manifest envelope validation). The session-state store is a [deployment choice](#deployment-profiles), not a versioned API surface.
+Implemented in `capsule-api` (blob storage, Postgres index, manifest envelope validation). Volatile session state lives in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
 
-## Deployment Profiles
+## Required Services
 
-The server's durable state is always split across **two required systems** plus an **optional third** for high-concurrency deployments:
+The server's state is split across **three required systems** — one code path, no optional profiles:
 
-- **Blob store** (filesystem) — the encrypted bytes of every asset. *Required.*
-- **PostgreSQL** — the authoritative index: ownership, album references, blob references, lifecycle state, and (in the default profile) upload-session state. *Required.*
-- **Valkey** — volatile upload-session state (offsets, status); the store's 24-hour TTL is the lifetime **cap** (the ≥1-hour survival floor and pressure-discard semantics are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard)). *Optional.* Recommended only for deployments where upload-session hot-path contention on PostgreSQL becomes measurable.
+- **Blob store** (filesystem) — the encrypted bytes of every asset.
+- **PostgreSQL** — the authoritative durable index: ownership, album references, blob references, lifecycle state, and the pending-asset rows uploads create.
+- **Valkey** — volatile session state: upload-session records (offsets, status) keyed `upload:session:{id}`, with the store's native 24-hour TTL as the lifetime **cap** (the ≥1-hour survival floor and pressure-discard semantics are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard)); [auth session records](/design/authentication/) ride the same store.
 
-This gives two concrete deployment profiles:
-
-| Profile                     | Session state lives in                                                                                             | When to choose it                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| **Default (Postgres-only)** | `upload_sessions` table with `expires_at` TTL column and a periodic sweep                                          | Self-hosted, small-to-medium servers, single-node deployments. Reduces ops surface.    |
-| **High-concurrency**        | Valkey (keyed `upload:session:{id}`) with native 24-hour TTL; PostgreSQL still holds the durable pending-asset row | Large multi-tenant deployments where session-table contention is a measured bottleneck |
-
-Switching profiles is operationally invisible to clients — the [upload protocol](/design/import/upload-protocol/) does not change, only where the server stores volatile session counters. The protocol is written to be store-agnostic.
+The durable/volatile split is design, not a tuning knob: the hot upload path — offset increments and status transitions — never touches the durable Postgres asset row, which is written exactly twice per upload (pending row at session creation, `uploaded` flip at finalization). A Postgres-resident session table would be a second implementation of the same contract; Capsule ships exactly one.
 
 ## Blob Store Layout
 
@@ -115,7 +108,6 @@ Clients need to confirm an asset is *safely stored* before they discard their on
 - **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash[0:2]}/{hash[2:4]}/{hash}` on disk. Recompute the hash from disk; assert match.
 - **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
 - **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
-- **Deployment-profile parity (smoke).** Run the upload-server smoke suite against the Postgres-only profile and the Postgres+Valkey profile; assert byte-identical client-observable behavior.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
 - **Dangling-reference safety (unit).** Point a committed row at a blob hash absent from `blobs/`; run the integrity check; assert the row is surfaced/quarantined and **never** auto-deleted, and that the missing blob is not treated as collectable.
 - **Storage-verification verdict (unit).** Compose the no-key verdict for a finalized asset (stored + indexed + retrievable → `durable`); then mark a referenced blob `collectable_since` and assert it reports non-retrievable, and remove a blob from `blobs/` and assert non-stored. Owner: [Import — Storage Verification](/design/import/storage-verification/).

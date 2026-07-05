@@ -12,7 +12,7 @@ The on-disk layout is itself part of the contract — the filenames, directory s
 
 | Sub-doc                                         | Concern                                                                           | Primary crate(s)                                                     |
 | ----------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, deployment profiles, ownership, deletion       | `capsule-api` + storage glue                                         |
+| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, ownership, deletion         | `capsule-api` + storage glue                                         |
 | [Client Filesystem](/design/filesystem/client/) | Desktop / mobile library layout, local SQLite index, space recovery               | `capsule-core::{library,db}` + per-platform glue                     |
 | [Maintenance](/design/filesystem/maintenance/)  | Self-validation, scrubbing, repair, intra-library dedup, atomic-write granularity | `capsule-core::library` (client) + `capsule-api` (server-side scrub) |
 

@@ -16,7 +16,7 @@ Versioning happens on multiple layers, each owned by the doc that defines it:
 - **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/primitives/#versioning-identifiers)).
 - **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) for the universal handshake.
 - **Client cache** — internal and rebuildable; cache schema changes drop and rebuild rather than migrate.
-- **Server data structures** — PostgreSQL schema migrations forward-only. The session-state store is a deployment choice, not a versioned API surface (see [Filesystem — Server: Deployment Profiles](/design/filesystem/server/#deployment-profiles)).
+- **Server data structures** — PostgreSQL schema migrations forward-only. Volatile session state in Valkey is not a versioned API surface (see [Filesystem — Server: Required Services](/design/filesystem/server/#required-services)).
 
 ## Negotiation Headers
 
