@@ -19,7 +19,7 @@ The primitive identities themselves live in `capsule-core::crypto::primitives` a
 | [MLS control AEAD](#mls-control-aead)                               | ChaCha20-Poly1305                                                               | Inherited from the [MLS ciphersuite](#mls-ciphersuite) |
 | [Signature scheme](#signature-scheme)                               | Hybrid Ed25519 + ML-DSA-65                                                      | Identity, device, asset manifest, write tier           |
 | [KEM](#kem)                                                         | X-Wing (X25519 + ML-KEM-768)                                                    | MLS HPKE                                               |
-| [MLS ciphersuite](#mls-ciphersuite)                                 | `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (0x004D)                        | Group key management                                   |
+| [MLS ciphersuite](#mls-ciphersuite)                                 | `MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519` (codepoint pending)             | Group key management                                   |
 | [Randomness](#randomness)                                           | OS CSPRNG (`getrandom`)                                                         | All keys, salts, nonces                                |
 | [Transport](/design/cryptography/failure-modes/#transport-security) | TLS 1.3 with hybrid X25519+ML-KEM                                               | Client-server, server-server                           |
 
@@ -37,7 +37,7 @@ A faulty, malicious, or version-mismatched client could damage data by writing u
 
 `crypto_suite_id = 0x0001` denotes exactly the [Primitives Inventory](#primitives-inventory) above. Retiring any primitive (a broken SHA-256, a deprecated AEAD) **does not edit the row** — it adds a new row and a new suite id. An old AssetManifest carrying `0x0001` keeps verifying against the original row forever; new writes use the new suite id. This is the single-doc edit the inventory promises, generalized to the bundle.
 
-`crypto_suite_id` values are a **Capsule-owned namespace**, unrelated to the MLS ciphersuite codepoint namespace: `0x0001` (the Capsule bundle) and `0x004D` (the OpenMLS id of the [MLS ciphersuite](#mls-ciphersuite) *inside* that bundle) are identifiers in two different registries, and neither implies the other.
+`crypto_suite_id` values are a **Capsule-owned namespace**, unrelated to the MLS ciphersuite codepoint namespace: `0x0001` (the Capsule bundle) and the eventual IANA codepoint of the [MLS ciphersuite](#mls-ciphersuite) *inside* that bundle are identifiers in two different registries, and neither implies the other.
 
 The signatures on every manifest cover `crypto_suite_id` and `protocol_version`, so a downgrade-attempt (re-signing an existing manifest under a weaker suite) cannot be silently produced.
 
@@ -97,7 +97,7 @@ MLS LeafNode signatures stay Ed25519-only (pinned by the ciphersuite); the ML-DS
 
 ### MLS Ciphersuite
 
-**`MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`** (OpenMLS ciphersuite 0x004D) — MLS (RFC 9420) with the PQ ciphersuites from `draft-ietf-mls-pq-ciphersuites`. See [MLS](/design/cryptography/mls/) for how the ciphersuite's choices (X-Wing KEM, ChaCha20-Poly1305 control AEAD, SHA-256 hash, Ed25519 leaf sigs) interact with the identity layer.
+**`MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519`** (codepoint pending — the X-Wing suite the upstream ecosystem is converging on; adoption gating owned by the [status note in MLS](/design/cryptography/mls/)) — MLS (RFC 9420) with the PQ ciphersuites from `draft-ietf-mls-pq-ciphersuites`. The suite's SHA-512 is MLS-internal (transcript and tree hashing); Capsule's [content-address hash](#cryptographic-hash) is a separate primitive and unaffected. See [MLS](/design/cryptography/mls/) for how the ciphersuite's choices (X-Wing KEM, ChaCha20-Poly1305 control AEAD, Ed25519 leaf sigs) interact with the identity layer.
 
 ### Randomness
 

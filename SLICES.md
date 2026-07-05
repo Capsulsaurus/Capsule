@@ -175,7 +175,7 @@ pass until the gate lifts.
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
 | `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
 | `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display and S-H3 geo features. Until it lands, WGS-84 storage is unaffected (conversion is display-only). |
-| `openmls` ciphersuite `0x004D` | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
+| `openmls` X-Wing/SHA-512 ciphersuite (codepoint pending) | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
 
 ## Lane A — core crypto
 
@@ -823,9 +823,12 @@ its design here.
 
 - **Contract:** [Cryptography — MLS](capsule-docs/src/content/docs/design/cryptography/mls.md)
   (status note), [Keys — Write Authority Interface](capsule-docs/src/content/docs/design/cryptography/keys.md).
-- **Blocked on:** an OpenMLS RustCrypto backend for ciphersuite `0x004D`
-  (openmls#1940) or IETF finalization of the PQ ciphersuites draft. **Unblock check:**
-  openmls release notes; re-evaluate quarterly.
+- **Blocked on:** the deliberate hold in the MLS status note — the target suite
+  `MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519` has no IANA codepoint (non-final
+  `draft-ietf-mls-pq-ciphersuites`) and no shipping OpenMLS backend (openmls#1940 is
+  open with no PR; today's libcrux provider ships only the superseded SHA-256
+  variant). **Unblock check:** openmls release notes + draft status; re-evaluate the
+  suite pin itself, not just backend availability; quarterly.
 - **Deliverable:** `OpenMlsAuthority` behind `&dyn AlbumAuthority` — drops in without
   touching `verify_asset`; the `ReferenceAuthority` epoch ledger stays as the offline
   and test authority.

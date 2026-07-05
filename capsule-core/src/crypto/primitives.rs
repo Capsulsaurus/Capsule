@@ -21,7 +21,7 @@ pub const PROTOCOL_VERSION: &str = "2026-05-31";
 #[non_exhaustive]
 pub enum SuiteId {
     /// `0x0001`: SHA-256 · HKDF-SHA512 · Argon2id · AES-256-GCM(+STREAM) ·
-    /// Ed25519+ML-DSA-65 · X-Wing · MLS `0x004D`.
+    /// Ed25519+ML-DSA-65 · X-Wing · MLS X-Wing/SHA-512 suite (codepoint pending).
     V1,
 }
 
