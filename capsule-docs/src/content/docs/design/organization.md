@@ -33,8 +33,34 @@ A container album must be explicitly created, but a brand-new account has none �
 - **De facto and nameless.** It is an ordinary container album in every cryptographic and lifecycle respect — its own MLS group, random per-epoch AMK, `history_policy`, `protocol_version` pin, retention — but carries no user-assigned name; a client typically surfaces it as the library's primary view.
 - **Specially identified.** Its album ID is **derived deterministically from the account master key** (the master key derives the *identifier*, not any key — see [Keys — Key Chain](/design/cryptography/keys/#key-chain)). The ID is therefore unique per user, unguessable before creation, and recomputable on any of the user's devices and after recovery — so a device can locate the default album from the master key alone, without waiting on a synced pointer.
 - **Designation is a server-side owner pointer.** Which container is *currently* the default is a non-secret `default_album_id` on the owner record ([Filesystem — Server](/design/filesystem/server/#ownership-partitioning-and-quota)), defaulting to the derived de facto album. The pointer is not security-bearing — a write still requires real album write capability ([server-side invariants](/design/threat-model/validation/#server-side-validation-invariants), invariant 6).
-- **One or more defaults, context-driven.** A client may register **scope overrides** — `(scope → album)` mappings that re-point the default for a context (a per-source auto-import mapping; "while viewing album X, new photos default to X"). The resolution rule, `resolve_default_album(context)`, returns the active scope's override if set, else the owner pointer, else the derived de facto album. It **always** resolves to a container — a [view](#system--smart-albums-views) can never be an import destination. The [import planner](/design/import/pipeline/#plan--confirm) consumes this when the user picks no album.
+- **One or more defaults, context-driven.** A client may register **scope overrides** — `(scope → album)` mappings that re-point the default for a context (a per-source auto-import mapping; "while viewing album X, new photos default to X"). The resolution rule, `resolve_default_album(context)`, returns the active scope's override if set, else the owner pointer, else the derived de facto album. It **always** resolves to a container — a [view](#system--smart-albums-views) can never be an import destination. The [import planner](/design/import/pipeline/#plan--confirm) consumes this when the user picks no album. The scope grammar is formalized below.
 - **Stable.** Re-designating the default just moves the pointer. The current default **cannot be deleted while designated** — the user must repoint first, or the client recreates the derived de facto album — so import always has a home.
+
+#### Scope Grammar (Local Source → Album Mapping)
+
+How a local folder, camera roll, or watched directory on each platform maps to a remote album is a formal contract, not per-client improvisation. A **scope** is the canonical identity of an import source:
+
+```rust
+Scope {
+  platform:    PlatformTag,     // closed enum (shared with device cohorts)
+  source_kind: SourceKind,      // closed enum: camera_roll | screenshots | app_collection | folder | watched_dir | removable_volume
+  locator:     String,          // canonical, per the platform table below
+}
+// scope_id = SHA-256( canonical-CBOR([ "capsule-import-scope/v1", platform, source_kind, locator ]) )
+```
+
+`scope_id` is deterministic (domain-separated canonical CBOR — the same discipline as every derived identifier), so two devices of the same platform looking at the same source compute the same scope, and the mapping table needs no coordination protocol. Per-platform canonical locators, chosen for stability across reinstall:
+
+| Platform | Source | Canonical locator | Notes |
+| --- | --- | --- | --- |
+| iOS | camera roll / screenshots / user collection | the smart-album subtype name, or the user collection's title-independent `localIdentifier` | `localIdentifier` survives reinstall on the same device; cross-device it maps only via the override table |
+| Android | MediaStore bucket | **relative path** (`DCIM/Camera`, `Pictures/Screenshots`) | never `BUCKET_ID` — it is a hash of the display name that differs across devices and OS versions |
+| Desktop | folder / watched dir | library-relative or absolute canonicalized path (symlinks resolved) | |
+| Any | removable volume | volume UUID + relative path | the volume UUID makes a re-mounted card the same scope regardless of mount point |
+
+- **The mapping table lives in the [library-settings document](/design/metadata/#how-operations-travel)** (`scope_id → album_id` rows) — per-owner, E2E-encrypted, synced across devices with the same CRDT semantics as other collaborative metadata (each row an LWW register keyed by `scope_id`). The server never learns what a scope means.
+- **Resolution order** (first match wins): explicit user pick at import time → `scope_id` override row → per-source-kind default row (e.g. "all screenshots → Screenshots") → the owner's `default_album_id` pointer → the derived de facto album. Deterministic by construction; the planner records which rule fired so a surprising destination is explainable after the fact.
+- **Unmapped sources ask once.** The first import from a new scope surfaces a "where should photos from *X* go?" choice, whose answer is written as the scope's override row — automated imports never silently invent destinations.
 
 ### System & Smart Albums (Views)
 
