@@ -50,6 +50,7 @@ The server-visible envelope includes:
 - `crypto_suite_id`, `protocol_version`, `amk_version` — what bundle of primitives encrypted this asset and which album epoch
 - the ciphertext hash and declared size — content address and storage attribution
 - `created_by_user`, `created_by_device`, `album_id`, `file_id`, `prior_provenance_hash`, `action` — owner, provenance chain link, and lifecycle action
+- `client_version` — the [exact client build](/design/cryptography/provenance/#client-build-identification) that produced the write, down to the commit hash — what scopes a defective-build incident to the assets it touched
 - the device's hybrid signature — provenance attribution; verifiable against the public device directory even without any key the server holds
 
 A rebuild walks the **envelope objects** under `blobs/`, verifies each device signature against the cached device directory, and writes index rows for the blobs each envelope names (original and derivatives by `ciphertext_hash` + role, the metadata blob by `metadata_blob_hash`). A ciphertext blob referenced by no envelope surfaces as an orphan for [GC](#deletion-and-garbage-collection); an envelope naming a missing blob surfaces as a dangling reference — **except** a missing *original* on an asset whose feed state is [`awaiting-original`](/design/import/download-sync/#upload-tiering-staged-uploads), which is expected staged-upload state, not corruption. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
@@ -78,6 +79,7 @@ The server index records only what can be known without a key:
 - declared ciphertext size and `content_type`
 - the `uploaded` flag and server-visible lifecycle state
 - the server's own trusted `received_at` per write — the authoritative clock for time-based policy (retention, rate limits) — alongside the client's self-asserted, audit-only `timestamp`
+- `client_version` — the [exact producing client build](/design/cryptography/provenance/#client-build-identification), audit-only, kept queryable so one defective build's writes can be enumerated
 - provenance records (see [Cryptography — Provenance](/design/cryptography/provenance/#provenance-of-library-modifications))
 
 No plaintext capture date, dimensions, EXIF, tags, or filename ever reaches the server. Those live inside the encrypted metadata blob (see [Metadata Encryption](/design/cryptography/encryption/#metadata-encryption)) and are readable only by authorized clients.

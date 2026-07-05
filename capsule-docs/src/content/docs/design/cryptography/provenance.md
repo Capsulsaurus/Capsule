@@ -37,7 +37,7 @@ AssetManifest {
                                           //   AMK (see Encryption — Asset Key Derivation). Opaque to the server.
   created_by_user:        UUID,
   created_by_device:      UUID,
-  client_version:         String,
+  client_version:         String,         // exact producing build; grammar owned by Client Build Identification below
   timestamp:              RFC3339,        // self-asserted capture/write time; audit-only (see Keys — Write Authorization)
   action:                 enum,           // create | replace | delete | metadata-update
                                           //   | derivative-add | derivative-replace | trash-restore
@@ -74,6 +74,23 @@ The closed action enum is owned by [Authorization — The Closed Action Set](/de
 
 - The two options in v1's original schema — `prior_provenance_hash`, `retention_until` — encode as **present with `null`** when logically absent (the encoding existing signatures were produced over; kept for signature stability).
 - Fields added within v1 after that — `metadata_blob_hash`, `key_mode`, `wrapped_file_key`, and the `DerivativeManifest`'s `amk_version`/`protocol_version` — encode as **absent keys** at their default/absent state, so manifests signed before the fields existed re-verify byte-identically. In particular an absent `key_mode` **means `derived`**; an implementation that writes `key_mode: "derived"` explicitly, or `metadata_blob_hash: null`, emits different signed bytes and breaks verification.
+
+## Client Build Identification
+
+`client_version` (and the `DerivativeManifest`'s `generated_by_client`) pins a write to the **exact client build** that produced it, so a defect in one shipped build — of any client, in-repo or not — is traceable across every asset it touched. The grammar is normative for every real producer:
+
+```text
+client_version = client_id "/" semver "+" commit [".dirty"]
+
+client_id      the client product, which also names the platform:
+               capsule-ios | capsule-android | capsule-desktop | capsule-cli
+               | capsule-web | an out-of-repo client's own stable id
+commit         git commit hash of the client's own source tree
+               (full, or a prefix of ≥ 12 hex chars)
+".dirty"       appended when built from a modified tree
+```
+
+Example: `capsule-ios/1.4.2+9f3a1c7d2b4e`. The field deliberately carries **nothing else** — OS version, device model, and locale do not identify the code that encrypted the bytes, and `created_by_device` already identifies the device. Like `timestamp`, the value is audit-only and never load-bearing for authorization; the server enforces only the [bounded-size rule](/design/threat-model/schema-rules/), not the grammar, so a nonconforming value is a producer bug surfaced in audit, not a rejected write. The grammar constrains the *content* of an existing required string field — no wire or signature impact.
 
 ## Provenance of Library Modifications
 
@@ -132,7 +149,7 @@ DerivativeManifest {
   format:                String,          // e.g. "image/avif", "embedding/mobileclip-b"
   ciphertext_hash:       bytes,
   generated_by_device:   UUID,
-  generated_by_client:   String,
+  generated_by_client:   String,          // exact producing build; see Client Build Identification
   model_id:              Option<String>,  // for embeddings; see AI/ML Integrations
   model_version:         Option<String>,  // for embeddings
   generated_at:          RFC3339,
@@ -154,6 +171,7 @@ This is the cryptography sub-doc most directly responsible for the `verify_asset
 - **Chain advance enforcement** — unit test that appending a record whose `prior_provenance_hash` does not match the current head is rejected. Both client-side (`verify_asset`) and server-side (no-key envelope check) reject the same way.
 - **Append-only enforcement (cryptographic, not just storage).** The guarantee is the signature chain, not the file mode. A unit test drops or rewrites a record in a serialized chain and asserts the forward walk from `create` detects the break (a non-matching prior hash, or a signature that no longer verifies). A companion test confirms the server rejects any overwrite or delete of an existing provenance entry at its structural validation layer (invariant 17), and that a client whose local `.provenance.cbor` has been tampered re-derives the authoritative chain from the server rather than trusting the local bytes.
 - **Derivative poisoning rejection** — unit test that a `derivative-replace` whose `prior_provenance_hash` does not chain to the current head for `(asset_id, role)` is rejected; the existing derivative is preserved.
+- **Client build identification (unit).** The in-repo producers emit `client_id/semver+commit` with a real embedded commit hash (`.dirty` when the tree is modified); a grammar round-trip parses the emitted value. Manifests carrying arbitrary strings still verify — the grammar is producer discipline, not a `verify_asset` gate.
 - **What-an-attacker-with-all-current-keys-still-cannot-do** — scenario test that holds every *current* key, attempts to rewrite a past record, and confirms the chain walker detects the break.
 
 The cross-module case (a manifest moving through upload → server envelope validation → finalization → client `verify_asset` on download) is bounded E2E surface, listed in [Module Map](/design/module-map/#e2e-test-surface).

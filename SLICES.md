@@ -97,6 +97,7 @@ its slice.
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | ready   |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
+| S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | ready   |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
@@ -649,6 +650,21 @@ SDK; they never hand-roll network flows.
 - **Done when:** the local-gallery doc's unit Validation bullets pass; the NFR1
   no-network-on-read-paths smoke runs with a socket-refusing harness.
 - **Tier:** Unit + Smoke; the airplane-mode E2E case rides the Module Map surface.
+
+### S-D15 — Exact client build identification
+
+- **Contract:** [Provenance — Client Build Identification](capsule-docs/src/content/docs/design/cryptography/provenance.md).
+- **Deliverable:** build-time git-commit embedding (`build.rs` `git rev-parse` + dirty
+  detection — no vergen-class dependency needed) feeding the manifest producer in
+  `capsule-core::lifecycle`, which today writes `capsule-core/{CARGO_PKG_VERSION}`;
+  a `client_id` injection point through the SDK/FFI surface so each app reports
+  itself (`capsule-ios`, `capsule-cli`, …) rather than `capsule-core`; the same value
+  on `generated_by_client`.
+- **Done when:** the provenance doc's client-build-identification Validation bullet
+  passes; a locally built CLI writes `capsule-cli/{semver}+{commit}` (`.dirty` on a
+  modified tree). Test fixtures may keep arbitrary strings — the grammar is producer
+  discipline, not a verify gate.
+- **Tier:** Unit.
 
 ## Lane E — federation / sharing
 
