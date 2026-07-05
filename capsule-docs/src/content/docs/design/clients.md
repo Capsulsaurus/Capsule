@@ -33,6 +33,7 @@ Clients are not trusted to enforce their own correctness — but they **are** re
 - **Honor the [forbidden behaviors checklist](/design/threat-model/schema-rules/#forbidden-client-behaviors).** A client that backdates timestamps, strips unknown sidecar fields, overwrites provenance, signs for an epoch it does not hold, or invokes `revoke_all_sessions` without master-key proof is *buggy by definition*.
 
 Centralizing the validation logic in `capsule-core` ensures each native client gets the same enforcement; the wrapper layer that issues UI surfaces for quarantine and protocol-mismatch errors is the platform-specific portion.
+- **Run the [recovery verification cadence](/design/backup-recovery/#recovery-verification-cadence)** — and never persist the passphrase (or any derivative able to satisfy the check) to auto-pass it: a client that does so is buggy by definition, because the check exists to verify the *user* still holds the secret.
 
 ## Reading State From a Newer Client
 

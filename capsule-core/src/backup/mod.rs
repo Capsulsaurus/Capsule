@@ -21,7 +21,7 @@ use thiserror::Error;
 
 use crate::crypto::primitives::DeviceTier;
 use crate::crypto::pwkdf::{self, WrappedSecret};
-use crate::crypto::{CryptoError, rng};
+use crate::crypto::{CryptoError, kdf, rng};
 
 /// The backup artifact format version.
 pub const ARTIFACT_FORMAT_VERSION: u16 = 1;
@@ -69,6 +69,47 @@ pub fn recover_master_key(
         .map_err(|_| BackupError::Auth("escrowed master key wrong length"))
 }
 
+// ── Recovery verification cadence (S-D12) ───────────────────────────────────
+
+/// Domain-separation label for the recovery-verification derived-tag compare
+/// (SSoT: [Backup — Recovery Verification Cadence]).
+///
+/// [Backup — Recovery Verification Cadence]: https://docs/design/backup-recovery/#recovery-verification-cadence
+pub const RECOVERY_VERIFY_V1: &[u8] = b"capsule-recovery-verify/v1";
+
+/// Outcome of a local recovery-secret verification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyOutcome {
+    /// The entered secret unwraps the (cached) escrow to the device-held master key.
+    Verified,
+    /// The entered secret does not open the blob — wrong secret, or the cached
+    /// blob is stale after a rotation. Per the stale-cache rule the caller
+    /// refreshes the blob and retries once before recording a failure.
+    NotVerified,
+}
+
+/// Local-only verification that the user still holds the recovery secret:
+/// unwrap the cached escrow blob, then compare an HKDF-derived tag against the
+/// tag derived from the device-held master key (derived-tag compare — raw key
+/// bytes are never compared or surfaced). Zero network I/O by construction; the
+/// cadence, snooze, and refresh-before-fail policy live in the client (S-D12).
+pub fn verify_recovery_secret(
+    cached_escrow: &WrappedSecret,
+    passphrase: &[u8],
+    device_master: &[u8; 32],
+) -> VerifyOutcome {
+    let Ok(unwrapped) = recover_master_key(cached_escrow, passphrase) else {
+        return VerifyOutcome::NotVerified;
+    };
+    let tag_a = kdf::hkdf_sha512(&unwrapped, b"", RECOVERY_VERIFY_V1, 32);
+    let tag_b = kdf::hkdf_sha512(device_master, b"", RECOVERY_VERIFY_V1, 32);
+    if tag_a == tag_b {
+        VerifyOutcome::Verified
+    } else {
+        VerifyOutcome::NotVerified
+    }
+}
+
 // ── Opt-in Shamir 2-of-3 social recovery ────────────────────────────────────
 
 /// Split a 32-byte recovery seed into 3 Shamir shares; any 2 reconstruct it, 1 reveals
@@ -102,6 +143,37 @@ pub fn new_recovery_seed() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_verification_tag_compare() {
+        let master = [0x42u8; 32];
+        // Fast params for the test.
+        let blob = pwkdf::wrap_with(
+            &master,
+            b"correct horse battery staple",
+            crate::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        // Correct secret against the matching device master → Verified.
+        assert_eq!(
+            verify_recovery_secret(&blob, b"correct horse battery staple", &master),
+            VerifyOutcome::Verified
+        );
+        // Wrong secret → NotVerified (caller applies the refresh-then-retry rule).
+        assert_eq!(
+            verify_recovery_secret(&blob, b"wrong", &master),
+            VerifyOutcome::NotVerified
+        );
+        // Right secret, different device master (rotated elsewhere) → NotVerified.
+        assert_eq!(
+            verify_recovery_secret(&blob, b"correct horse battery staple", &[0x43u8; 32]),
+            VerifyOutcome::NotVerified
+        );
+    }
 
     #[test]
     fn master_key_escrow_round_trip() {

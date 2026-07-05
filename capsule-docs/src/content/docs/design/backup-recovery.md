@@ -61,6 +61,14 @@ The account master key is the single backed-up root of the key hierarchy (see [C
 - Derive the wrapping key with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). Store the wrapped blob server-side.
 - If you can run enclaves (SGX/Nitro/SEV-SNP), Signal's SVR pattern is the *only* sanctioned way to soften that floor: rate-limit unwrap attempts inside the enclave so a shorter, human-friendly PIN is still safe. Without an attested enclave, the ≥128-bit floor is mandatory — never a 4-digit PIN, never a short numeric code.
 
+## Single-Root Invariant
+
+**Every recovery path terminates at the one account master key, and the recovery secret (or a quorum of its Shamir shares) is the only user-held secret class. No feature may introduce a second escrowed secret class or a recovery path that bypasses the master key.**
+
+This is already true; the invariant fixes it against drift. The audit, stated so nobody has to re-derive it: the server **escrow** is the master key wrapped by the recovery secret (above); the **backup artifact's** wrap key derives from that same recovery passphrase; **Shamir** splits that same seed; the [OGK](/design/cryptography/keys/#owner-group-keys-ogks) and Drop-Key escrows are wraps *reachable from* the master key, not additional roots; [sponsored accounts](/design/authentication/#account-types) deliberately hold no root of their own — every path routes through the sponsor's, which is why the verification cadence below never prompts a sponsoree. These are **wraps, not roots** — holding the recovery secret reaches all of them; losing everything but the recovery secret loses nothing.
+
+One versioning seam to know about, not remove: an already-exported backup artifact stays bound to the passphrase in force at export. Rotating the recovery secret (below) therefore ends with "re-export or destroy old artifacts" guidance — a property of offline artifacts, not a second secret class.
+
 ## Recovery Mechanisms
 
 Two recovery mechanisms ship by default; a third is available opt-in for users who want extra redundancy without compromising the default's simplicity. These complement the [seven independent recovery paths](/design/cryptography/failure-modes/#redundant-recovery-paths); this section names the mechanisms a user actually invokes.
@@ -82,6 +90,28 @@ Users who want to spread recovery across trusted parties or storage locations ca
 - Custom `m`-of-`n` (e.g. 3-of-5 for users who want broader distribution) is supported but not the default.
 
 This is the social-recovery escape hatch — useful for users who would otherwise lose access from a single forgotten passphrase plus a single dead device.
+
+## Recovery Verification Cadence
+
+A recovery secret that was written on a napkin thirteen months ago is a recovery secret the user *believes* they have. The client therefore occasionally asks the user to **verify** it — and the check is designed so it can never itself become a lock-out or a guessing oracle.
+
+### Local Verification
+
+Verification is **local-only**: the client keeps a cached copy of the escrow blob (fetched at enrollment, refreshed opportunistically via sync); the user enters the passphrase; the client runs the [password KDF](/design/cryptography/primitives/#password-based-kdf), unwraps the cached blob (`capsule_core::backup::verify_recovery_secret`), and compares an HKDF-derived tag (`capsule-recovery-verify/v1`) against the same tag derived from the device-held master key — a derived-tag compare, never raw key bytes. No server round-trip: it works offline, creates no server-side guessing surface, and a failure can't lock anything.
+
+**Stale-cache rule:** before recording a failure, the client refreshes the escrow blob from the server (it may have been rotated from another device) and retries once — otherwise every rotation would manufacture false failures on the user's other devices.
+
+### Schedule and Triggers
+
+- **7 days** after setup (catches the lost-napkin case while re-setup is cheap), then **90 days**, backing off to a **180-day cap** after two consecutive successes.
+- **Re-arm triggers** (reset to the 7-day step): a new device enrolls (the prompt lands on the *new* device — it has never seen the passphrase); the recovery secret rotates; a restore-from-escrow completes.
+- Snooze: 24 h or 7 d, at most 3 consecutive snoozes, then a persistent non-blocking badge. The check **never blocks** sync, unlock, or any critical flow — it is advisory by design.
+
+### On Repeated Failure: Guided Re-Wrap
+
+After 3 failures across ≥ 2 app sessions — or an explicit "I lost it" — the client runs the guided rotation flow: mint a fresh ≥128-bit recovery secret, **re-wrap the same master key**, replace the server escrow (a single active escrow; the old blob is deleted, so the lost secret unwraps nothing), re-run the setup-style type-back gate, re-issue Shamir shares if enrolled (old shares explicitly invalidated and surfaced as such), and surface the old-backup-artifact guidance from the [single-root invariant](#single-root-invariant).
+
+**This is wrap rotation, not key rotation**: an O(1) escrow-blob replacement with no data re-encryption and no blob-hash changes. Rotating the master key itself remains the separate compromise procedure owned by [Cryptography — Keys](/design/cryptography/keys/).
 
 ## Backup Verification
 
@@ -105,6 +135,10 @@ The MANIFEST.cbor carries the exporter's device id, the export timestamp, the so
 
 ## Validation
 
+- **Local verify round-trip (unit).** Offline: the correct passphrase verifies with zero network I/O; a wrong one fails without side effects. Rotate the escrow out-of-band; assert the stale-cache rule refreshes before recording a failure and then passes with the new passphrase.
+- **Cadence schedule (unit).** Under a mocked clock: 7 d → 90 d → 180 d backoff; re-arm on device-add, rotation, and restore; snooze caps; never blocks a critical flow.
+- **Guided re-wrap (smoke).** After the failure threshold: a new escrow wraps the *same* master key (fixture assets still decrypt; blob hashes unchanged), the old escrow is rejected everywhere, Shamir re-issue is prompted where enrolled, and the old-artifact guidance is surfaced.
+- **Single-root audit (unit).** A doc-driven test walks the seven recovery paths and asserts each terminates at the master key; a tripwire asserts no second escrowed secret class exists in the schema.
 - **Artifact round-trip (unit).** Export → import a small library; assert byte-equal blob set, sidecars, and provenance chains. Determinism check: re-export the same library twice; assert byte-identical archives.
 - **MANIFEST verification (unit).** Tamper individual entries; assert HMAC mismatch detected. Tamper MANIFEST itself and re-HMAC; assert exporter-signature mismatch detected. Strip the exporter from the device directory; assert restore refusal.
 - **AMK-completeness check (unit).** Build an artifact whose `keys/amk-ledger.cbor` is deliberately missing an `amk_version` that an included asset references; assert detection at dry-run, before any commit. Build a self-sufficient artifact; assert every included asset decrypts from the artifact's own ledger with no server contact.
