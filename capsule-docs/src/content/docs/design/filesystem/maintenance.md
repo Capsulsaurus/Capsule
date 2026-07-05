@@ -1,12 +1,12 @@
 ---
 title: Library Maintenance and Atomic Writes
-description: How Capsule keeps client storage consistent, repairs what it can, and writes atomically
+description: How Capsule keeps client and server storage consistent, repairs what it can, and writes atomically
 status: draft
 ---
 
 The data-integrity principle treats client storage as *potentially lost* (see [Core Principles](/design/principles/)): unlike the server, a client library sits on consumer hardware, syncs only partially, and is edited by a long-lived process that can be killed mid-write. A client therefore never assumes its library is consistent — it periodically *proves* it is, repairs what it can repair safely, and surfaces what it cannot.
 
-The maintenance routines live in `capsule-core::library`: [`scrub`](#scrubbing), [self-validation](#self-validation), [repair](#repair), and [`dedup`](#deduplication). The server runs an equivalent scrub of stale upload files under `incoming/`. All routines are **conservative** — consistent with "we can NEVER delete data unexpectedly," irreplaceable data is never removed without explicit user confirmation.
+The maintenance routines live in `capsule-core::library`: [`scrub`](#scrubbing), [self-validation](#self-validation), [repair](#repair), and [`dedup`](#deduplication). The server runs an equivalent scrub of stale upload files under `incoming/` and the [integrity scrub](#server-side-integrity-scrub) over its index and blob store. All routines are **conservative** — consistent with "we can NEVER delete data unexpectedly," irreplaceable data is never removed without explicit user confirmation.
 
 This doc also owns the granularity rules for [atomic writes](#atomic-writes-and-crash-recovery), which other docs reference but should not restate.
 
@@ -33,6 +33,23 @@ A directory walk that checks the invariants of the [client layout](/design/files
 Recomputes the [content hash](/design/cryptography/primitives/) of each locally present original and compares it against the sidecar's `hash` field (the algorithm-tagged form declared in [Metadata — Sidecar Schema v1](/design/metadata/#sidecar-schema-v1); the algorithm itself follows whatever `crypto_suite_id` the sidecar carries — one suite id governs *both* digests Capsule computes, this plaintext `hash` and the ciphertext content hash, as a single algorithm choice that changes in lockstep, never independently). The original is the only irreplaceable thing on a client, so silent bit rot is the worst failure a client can suffer and nothing else detects it.
 
 Because hashing every original is heavy I/O, content validation is **not** run at startup: it is scheduled opportunistically (device idle, on power, unmetered) and throttled, can be triggered on demand, and re-verifies each original on a slow rolling cadence rather than all at once.
+
+## Server-Side Integrity Scrub
+
+The client proves its library consistent with the tiers above; the server has the same obligation over its two stores. PostgreSQL is the [authoritative index](/design/filesystem/server/#postgresql-what-the-server-knows) and the blob store holds the bytes plus the [manifest envelopes](/design/cryptography/provenance/#asset-manifest) — but *authoritative* is a statement about which copy wins, not a guarantee that an implementation bug cannot let the two drift. The **integrity scrub** is the external code path that verifies a frozen (or live-quiesced) Postgres + blob-store pair against corruption — deliberately separate from the write path, so a hot-path bug cannot also be a bug in the check that would catch it.
+
+Implemented in `capsule-api` as an operator-invoked command, schedulable as a job. It is **read-only by design**: it classifies and reports, and never repairs. Repair stays with the paths that own it — the [reference-count GC](/design/filesystem/server/#deletion-and-garbage-collection) for orphans, the [index rebuild](/design/filesystem/server/#recovering-the-index-from-blobs-alone) for a lost index, operator action for quarantines — so the scrub can never itself become the deletion bug it exists to catch.
+
+What it validates, exactly:
+
+1. **Row → blob presence.** Every committed blob-referencing row (original, derivative, metadata blob, envelope object) resolves to a file at its content-addressed path under `blobs/`. A miss is a **dangling reference** — the loud integrity error [Server Filesystem owns](/design/filesystem/server/#deletion-and-garbage-collection), never auto-resolved — except a missing *original* on an [`awaiting-original`](/design/import/download-sync/#upload-tiering-staged-uploads) asset, which is expected staged-upload state.
+2. **Blob → row presence.** Every file under `blobs/` is referenced by at least one committed row. A miss is an **orphan**, reported for the GC path — never removed by the scrub.
+3. **Byte integrity (deep mode).** Blob bytes re-hash to their content-addressed name — the server-side bit-rot check, sharing semantics with [storage verification's `deep` flag](/design/import/storage-verification/). Heavy I/O, so rolling and throttled, like client content validation.
+4. **Envelope chain ⇄ index agreement.** Per asset, the append-only envelope sequence in the blob store and the Postgres provenance rows carry the same records with the same chain head, and the chain walks forward from `create` with every `prior_provenance_hash` matching its predecessor.
+5. **Mirrored-fact agreement.** The server-visible facts Postgres mirrors out of envelopes — declared sizes, `amk_version`, `action`, `retention_until`, `client_version` — match the envelope copies.
+6. **Debris and quarantine inventory.** `incoming/*.bin` files with no live session, and everything under `quarantine/`, are enumerated in the report, so debris and unresolved forensics cannot silently accumulate.
+
+A discrepancy is **classified, never adjudicated**: the report names the failed check and both sides' evidence, and deliberately does not assume whether the index or the blob store is at fault — misassigned fault is how a "repair" deletes the last good copy. Every finding is logged structured per the [traceability principle](/design/principles/); the run emits per-class counts (zero on a clean store), and a non-zero finding count is the exit signal operators alert on.
 
 ## Repair
 
@@ -91,5 +108,8 @@ A backup is an export artifact — encrypted, self-describing, and kept outside 
 - **Repair safety (unit).** Each row of the repair table is a unit test: trigger the finding, run repair, assert the *exact* action (delete vs quarantine vs re-fetch) was taken.
 - **Intra-library dedup correctness (unit).** Two assets with identical plaintext hash; assert dedup proposes the right survivor (union albums, max rating, earliest timestamps), records a soft-delete provenance for the loser, and is reversible.
 - **Atomic-write crash simulation (smoke).** Programmatically interrupt a bundle write between each pair of staged steps; assert no on-disk state reflects a partial bundle on next startup.
+- **Server scrub seeded-corruption matrix (smoke).** Against a real testcontainer Postgres + populated `blobs/` tree, seed each corruption class — delete a referenced blob, flip one byte of a blob, orphan a blob, truncate an asset's envelope sequence, alter a mirrored fact — and assert the scrub reports exactly that class, exits non-zero, and mutates nothing (store and index byte-identical after the run).
+- **Server scrub clean-store idempotency (unit).** A consistent store yields zero findings; re-running yields an identical report.
+- **Server scrub staged-upload carve-out (unit).** An `awaiting-original` asset with no original blob produces no finding; the same gap on a fully-uploaded asset does.
 
 Cross-module case (server crash mid-finalization → recovery on restart) is bounded E2E surface in [Module Map](/design/module-map/#e2e-test-surface).

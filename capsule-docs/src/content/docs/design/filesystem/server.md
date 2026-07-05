@@ -57,7 +57,7 @@ A rebuild walks the **envelope objects** under `blobs/`, verifies each device si
 
 An envelope object that fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
 
-Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it.
+Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it. Recovery is also not *verification*: the proactive, read-only check that a frozen Postgres + blob-store pair is mutually consistent — the path that detects the drift before anyone needs a rebuild — is the [server-side integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub).
 
 ## Manifest Envelope Validation
 

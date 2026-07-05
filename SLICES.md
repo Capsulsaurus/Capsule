@@ -83,6 +83,7 @@ its slice.
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | ready   |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
+| S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | ready   |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
@@ -476,6 +477,19 @@ pass until the gate lifts.
 - **Done when:** the authentication doc's cohort Validation bullets pass (advisory
   behavior under absent/garbage values; grouping; durable map outlives sessions).
 - **Tier:** Unit + Smoke. **Blocks:** S-D11.
+
+### S-C14 — Server integrity scrub
+
+- **Contract:** [Maintenance — Server-Side Integrity Scrub](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Deliverable:** the operator-invoked, read-only scrub command in `capsule-api` —
+  row→blob presence (with the `awaiting-original` carve-out), blob→row orphan
+  detection, deep re-hash, envelope⇄index chain agreement, mirrored-fact agreement,
+  debris/quarantine inventory — classified structured findings, per-class counts,
+  non-zero exit on any finding, and **no mutation of any kind**.
+- **Depends on:** S-C1 (the envelope persistence and finalization semantics it
+  audits). **Done when:** the maintenance doc's seeded-corruption matrix passes
+  against testcontainer Postgres + a real blob tree; clean-store idempotency holds.
+- **Tier:** Unit + Smoke.
 
 ## Lane D — SDK / clients
 
