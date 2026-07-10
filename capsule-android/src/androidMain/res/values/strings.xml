@@ -8,6 +8,11 @@
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
     <string name="error_directory_malformed">The device list could not be read.</string>
     <string name="error_directory_version_conflict">This device list is out of date. Capsule will refresh it before continuing.</string>
+    <string name="error_drop_cap_exceeded">This upload link is full.</string>
+    <string name="error_drop_malformed_descriptor">This upload couldn\'t be accepted.</string>
+    <string name="error_drop_not_in_inbox">This drop is no longer available to adopt.</string>
+    <string name="error_drop_passphrase_required">This upload link needs its passphrase.</string>
+    <string name="error_drop_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_protocol_version_unsupported">This version of Capsule is no longer supported. Please update the app.</string>
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>

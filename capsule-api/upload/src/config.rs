@@ -8,7 +8,7 @@ use service::quota::{DEFAULT_PER_PEER_BUDGET_RATIO, QuotaLimits, UNLIMITED};
 /// The closed `content_type` enum for the current protocol version (invariant 5).
 /// Server-tunable, but frozen for a given `protocol_version`. Metadata/provenance/
 /// backup blobs are opaque CBOR/ciphertext and declare `application/octet-stream`.
-pub(crate) const DEFAULT_CONTENT_TYPES: &[&str] = &[
+pub const DEFAULT_CONTENT_TYPES: &[&str] = &[
     "image/jpeg",
     "image/png",
     "image/heic",
@@ -24,19 +24,19 @@ pub(crate) const DEFAULT_CONTENT_TYPES: &[&str] = &[
 ];
 
 /// Lowest protocol date this server accepts (`X-Capsule-Protocol-Min`).
-pub(crate) const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
+pub const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
 /// Highest protocol date this server accepts (`X-Capsule-Protocol-Max`).
-pub(crate) const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
+pub const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
 /// Gross-drift sanity bound for the envelope timestamp, in days (invariant 8).
-pub(crate) const DEFAULT_DRIFT_DAYS: i64 = 30;
+pub const DEFAULT_DRIFT_DAYS: i64 = 30;
 
 /// Default soft-warning quota threshold in bytes. Unlimited by default — a self-hosted
 /// deployment runs with no quota; a hosted service overrides per tier (Quota design doc).
-pub(crate) const DEFAULT_QUOTA_SOFT_LIMIT: u64 = UNLIMITED;
+pub const DEFAULT_QUOTA_SOFT_LIMIT: u64 = UNLIMITED;
 /// Default hard quota threshold in bytes (unlimited by default).
-pub(crate) const DEFAULT_QUOTA_HARD_LIMIT: u64 = UNLIMITED;
+pub const DEFAULT_QUOTA_HARD_LIMIT: u64 = UNLIMITED;
 /// Default grace window, in days, before the Grace-expired state engages.
-pub(crate) const DEFAULT_QUOTA_GRACE_DAYS: i64 = 14;
+pub const DEFAULT_QUOTA_GRACE_DAYS: i64 = 14;
 
 #[derive(Clone)]
 pub struct UploadServerConfig {

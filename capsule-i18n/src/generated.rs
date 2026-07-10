@@ -34,6 +34,21 @@ pub mod error_codes {
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 
+    /// `error.drop.cap_exceeded`
+    pub const DROP_CAP_EXCEEDED: &str = "error.drop.cap_exceeded";
+
+    /// `error.drop.malformed_descriptor`
+    pub const DROP_MALFORMED_DESCRIPTOR: &str = "error.drop.malformed_descriptor";
+
+    /// `error.drop.not_in_inbox`
+    pub const DROP_NOT_IN_INBOX: &str = "error.drop.not_in_inbox";
+
+    /// `error.drop.passphrase_required`
+    pub const DROP_PASSPHRASE_REQUIRED: &str = "error.drop.passphrase_required";
+
+    /// `error.drop.rate_limited`
+    pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 

@@ -1,5 +1,6 @@
 use salvo::prelude::*;
 
+use crate::drop_state::DropState;
 use crate::state::AppState;
 
 mod assets;
@@ -38,22 +39,23 @@ pub fn get_storage_router(state: AppState) -> Router {
         .push(Router::with_path("verify").post(verify::storage_verify))
 }
 
-/// Guest drop-session router (mounted at /u; link-capability auth). Skeleton — `S-C5`.
-/// Drop chunks reuse the upload protocol's `PATCH` mechanics under the session this
-/// opens.
-pub fn get_drop_link_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("<opaque_id>/drop").post(drops::create_drop_session))
+/// Guest drop-session router (mounted at /u; link-capability auth). `POST` opens a session and
+/// `PATCH` appends a chunk, reusing the S-C1 upload chunk mechanics (slice `S-C5`).
+pub fn get_drop_link_router(state: DropState) -> Router {
+    Router::new().hoop(affix_state::inject(state)).push(
+        Router::with_path("{opaque_id}/drop")
+            .post(drops::create_drop_session)
+            .push(Router::with_path("{drop_id}").patch(drops::append_drop_chunk)),
+    )
 }
 
-/// Owner-facing drop inbox router (mounted at /drops; session auth). Skeleton — `S-C5`.
-pub fn get_drops_router(state: AppState) -> Router {
+/// Owner-facing drop inbox router (mounted at /drops; session auth). Slice `S-C5`.
+pub fn get_drops_router(state: DropState) -> Router {
     Router::new()
         .hoop(affix_state::inject(state))
         .get(drops::list_drop_inbox)
         .push(
-            Router::with_path("<drop_id>")
+            Router::with_path("{drop_id}")
                 .delete(drops::discard_drop)
                 .push(Router::with_path("adopt").post(drops::adopt_drop)),
         )

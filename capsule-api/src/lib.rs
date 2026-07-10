@@ -90,7 +90,7 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                 Router::with_path("storage")
                     .push(media::get_storage_router(conn.clone(), &env.server).await?),
             )
-            // Guest drop sessions + owner inbox (skeleton — slice S-C5 in SLICES.md).
+            // Guest drop sessions + owner inbox (slice S-C5 in SLICES.md).
             .push(
                 Router::with_path("u")
                     .push(media::get_drop_link_router(conn.clone(), &env.server).await?),

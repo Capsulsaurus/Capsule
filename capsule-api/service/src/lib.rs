@@ -2,6 +2,7 @@ pub mod album;
 pub mod asset;
 pub mod blob_store;
 pub mod directory;
+pub mod drop;
 pub mod friendship;
 pub mod gc;
 pub mod quota;

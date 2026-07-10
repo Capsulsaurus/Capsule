@@ -81,6 +81,56 @@
         }
       }
     },
+    "error.drop.cap_exceeded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload link is full."
+          }
+        }
+      }
+    },
+    "error.drop.malformed_descriptor": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload couldn't be accepted."
+          }
+        }
+      }
+    },
+    "error.drop.not_in_inbox": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This drop is no longer available to adopt."
+          }
+        }
+      }
+    },
+    "error.drop.passphrase_required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload link needs its passphrase."
+          }
+        }
+      }
+    },
+    "error.drop.rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Please wait and try again."
+          }
+        }
+      }
+    },
     "error.protocol.version_unsupported": {
       "localizations": {
         "en": {

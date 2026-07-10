@@ -10,7 +10,7 @@ use thiserror::Error;
 /// exist now so the taxonomy is frozen.
 #[allow(dead_code)]
 #[derive(Debug, Error)]
-pub(crate) enum UploadError {
+pub enum UploadError {
     #[error("File exceeds size limit")]
     FileTooLarge,
     #[error("File system error: {0}")]
@@ -111,7 +111,7 @@ impl UploadError {
     /// The stable `error.*` catalog code for this rejection, when one applies.
     /// Constants come from `capsule_i18n::error_codes` so a typo is a compile
     /// error and the code stays in sync with the canonical catalog.
-    pub(crate) fn code(&self) -> Option<&'static str> {
+    pub fn code(&self) -> Option<&'static str> {
         match self {
             UploadError::FileTooLarge => Some(error_codes::UPLOAD_FILE_TOO_LARGE),
             UploadError::SessionNotFound => Some(error_codes::UPLOAD_SESSION_NOT_FOUND),

@@ -218,5 +218,25 @@
     "error.upload.storage_inconsistent": {
         "message": "The server hit a storage problem. Please try again.",
         "context": "HTTP 500: the upload file's on-disk length diverged from the session's expected offset. Server-side inconsistency, never the client's fault."
+    },
+    "error.drop.cap_exceeded": {
+        "message": "This upload link is full.",
+        "context": "HTTP 409 on POST /u/{opaque-id}/drop (web-upload, invariant 26): a cumulative per-link cap (total bytes or file count) is already exhausted for an otherwise-live link."
+    },
+    "error.drop.malformed_descriptor": {
+        "message": "This upload couldn't be accepted.",
+        "context": "HTTP 400 on POST /u/{opaque-id}/drop (web-upload, invariant 30): the DropDescriptor is structurally malformed, its kem_ct length is wrong for the link's crypto suite, or the request carried an album/manifest/provenance field a drop must never carry."
+    },
+    "error.drop.rate_limited": {
+        "message": "Too many attempts. Please wait and try again.",
+        "context": "HTTP 429 on POST /u/{opaque-id}/drop (web-upload, invariant 31): the per-{opaque-id} or per-source-IP drop-session rate limit engaged."
+    },
+    "error.drop.passphrase_required": {
+        "message": "This upload link needs its passphrase.",
+        "context": "HTTP 403 on POST /u/{opaque-id}/drop (web-upload): the link carries an Argon2id abuse-gate verifier and the guest supplied no proof, or a proof that did not verify."
+    },
+    "error.drop.not_in_inbox": {
+        "message": "This drop is no longer available to adopt.",
+        "context": "HTTP 409 on POST /drops/{id}/adopt (web-upload, invariant 32): the manifest's ciphertext_hash does not reference a pending drop in the caller's own inbox."
     }
 }

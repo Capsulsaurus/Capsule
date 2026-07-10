@@ -7,6 +7,7 @@ mod m20260710_000000_sync_feed;
 mod m20260710_000001_device_directory;
 mod m20260710_000002_quota;
 mod m20260710_000003_blob_gc;
+mod m20260710_000004_drops;
 
 pub struct Migrator;
 
@@ -21,6 +22,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_000001_device_directory::Migration),
             Box::new(m20260710_000002_quota::Migration),
             Box::new(m20260710_000003_blob_gc::Migration),
+            Box::new(m20260710_000004_drops::Migration),
         ]
     }
 }

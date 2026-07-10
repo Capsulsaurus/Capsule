@@ -21,8 +21,14 @@
 //!   `MockClock` window.
 //! - `durable_blob_survives_release_window_via_gc_grace` — the GC-grace seam S-C11 consumes.
 
+//!
+//! The `drops` module (slice `S-C5`) carries its own harness (`MediaTestCtx`,
+//! `drop_setup`) below — invariants 26–32, the seal→stage→adopt happy path, and the
+//! adoption-atomicity rollback smoke.
+
 #![allow(clippy::unwrap_used)]
 
+mod drops;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -40,17 +46,30 @@ use sea_orm::{ActiveModelTrait, Database, DatabaseConnection, Set};
 use sea_orm_migration::MigratorTrait;
 use service::sync::{ChangeKind, FeedBlobManifest, FeedBlobRef, FeedEntryInput};
 use testcontainers::runners::AsyncRunner;
-use testcontainers::{ContainerAsync, ImageExt};
+use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::Notify;
 
+use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::CRYPTO_SUITE_ID;
+use capsule_core::crypto::hash::{Hash32, hash_bytes as hash32_bytes};
+use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
+use capsule_core::crypto::provenance::action::Action;
+use capsule_core::crypto::provenance::manifest::{
+    ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+};
+use capsule_core::drop::{PassphraseVerifier, SealedDrop, seal_drop};
+use service::drop::{Mutation as DropMutation, NewLink};
+use service::quota::QuotaLimits;
+
 use crate::config::MediaServerConfig;
+use crate::drop_state::DropState;
 use crate::service::verify::{BlobHasher, Clock, VerificationService};
 
 static TRACING: Once = Once::new();
 
 /// The protocol version the seeded feed entries pin (inside the default window).
-const PROTOCOL: &str = "2026-05-31";
+pub(crate) const PROTOCOL: &str = "2026-05-31";
 
 /// A base64 Ed25519 pkcs8 keypair (mirrors the auth/upload/sync harness) so tests mint
 /// access tokens the media server accepts.
@@ -88,6 +107,17 @@ impl TestCtx {
         let config = MediaServerConfig {
             upload_dir: self.upload_dir.clone(),
             jwt_eddsa_decoding_key: self.decoding_key.clone(),
+            // The verify router never opens drop sessions; these mirror drop_setup's
+            // defaults so one config type serves both harnesses.
+            valkey_url: String::new(),
+            max_file_size: 8 * 1024 * 1024,
+            protocol_min: "2026-01-01".to_string(),
+            protocol_max: "2026-12-31".to_string(),
+            allowed_content_types: vec!["image/jpeg".to_string()],
+            timestamp_drift_days: 30,
+            quota_limits: QuotaLimits::unlimited(),
+            drop_rate_limit_max: 60,
+            drop_rate_limit_window_secs: 60,
         };
         let router =
             crate::routes::get_storage_router(crate::state::AppState::new(self.db.clone(), config));
@@ -296,4 +326,354 @@ impl BlobHasher for GatedHasher {
             .map(str::to_string);
         Ok(stem)
     }
+}
+
+// ── S-C5 drop-store harness ─────────────────────────────────────────────────
+
+pub(crate) struct MediaTestCtx {
+    _postgres: Option<ContainerAsync<Postgres>>,
+    _valkey: Option<ContainerAsync<GenericImage>>,
+    pub db: DatabaseConnection,
+    pub config: MediaServerConfig,
+    pub state: DropState,
+    encoding_key: EncodingKey,
+    /// The provisioning owner (the album owner; the quota-charged user).
+    pub owner_id: String,
+    pub album_id: String,
+}
+
+impl MediaTestCtx {
+    /// Build a salvo service over the real drop routers, mounted like the app (`/u`, `/drops`).
+    pub(crate) fn service(&self) -> Service {
+        let link_router = crate::routes::get_drop_link_router(self.state.clone());
+        let inbox_router = crate::routes::get_drops_router(self.state.clone());
+        let router = salvo::Router::new()
+            .push(salvo::Router::with_path("u").push(link_router))
+            .push(salvo::Router::with_path("drops").push(inbox_router));
+        Service::new(router)
+    }
+
+    /// A bearer access token for the provisioning owner.
+    pub(crate) fn token(&self) -> String {
+        Claims::new_access_token(self.owner_id.clone(), None)
+            .encode(&self.encoding_key)
+            .expect("encode token")
+    }
+
+    /// Register an upload link owned by the test owner, returning `(link_id, opaque_id)`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn create_link(
+        &self,
+        expires_at: Option<Timestamp>,
+        max_total_bytes: Option<u64>,
+        max_file_count: Option<u32>,
+        max_file_size: Option<u64>,
+        single_use: bool,
+        passphrase_verifier: Option<serde_json::Value>,
+    ) -> (String, String) {
+        let opaque_id = hex_encode(&capsule_core::drop::generate_opaque_id());
+        let link_id = DropMutation::create_link(
+            &self.db,
+            NewLink {
+                owner_id: self.owner_id.clone(),
+                opaque_id: opaque_id.clone(),
+                album_hint: None,
+                protocol_version: PROTOCOL.to_string(),
+                crypto_suite_id: CRYPTO_SUITE_ID,
+                expires_at,
+                max_total_bytes,
+                max_file_count,
+                max_file_size,
+                single_use,
+                passphrase_verifier,
+            },
+        )
+        .await
+        .expect("create link");
+        (link_id, opaque_id)
+    }
+
+    /// Revoke a link by id.
+    pub(crate) async fn revoke_link(&self, link_id: &str) {
+        DropMutation::revoke_link(&self.db, &self.owner_id, link_id)
+            .await
+            .expect("revoke link");
+    }
+
+    /// Seed an `assets` row attributed to the owner carrying `hash`/`size` (to pre-load quota).
+    pub(crate) async fn seed_asset(&self, hash: &str, size: i64) {
+        entity::asset::ActiveModel {
+            id: Set(nanoid!()),
+            owner_id: Set(self.owner_id.clone()),
+            album_id: Set(Some(self.album_id.clone())),
+            width: Set(0),
+            height: Set(0),
+            asset_type: Set(entity::asset::AssetType::Photo),
+            original_filename: Set(nanoid!()),
+            file_size: Set(size),
+            file_hash: Set(hash.to_string()),
+            content_type: Set("image/jpeg".to_string()),
+            is_favorite: Set(false),
+            is_stack_hidden: Set(false),
+            uploaded: Set(true),
+            upload_user_id: Set(self.owner_id.clone()),
+            uploaded_at: Set(entity::time::now_entity()),
+            modified_at: Set(entity::time::now_entity().into()),
+            deleted_at: Set(None),
+            ..Default::default()
+        }
+        .insert(&self.db)
+        .await
+        .expect("seed asset");
+    }
+
+    /// Set finite quota limits on the shared drop state's config for a quota test.
+    pub(crate) async fn set_quota_limits(&mut self, soft: u64, hard: u64) {
+        self.config.quota_limits = QuotaLimits {
+            soft_limit: soft,
+            hard_limit: hard,
+            grace_window: SignedDuration::from_hours(24 * 14),
+            per_peer_budget_ratio: 0.25,
+        };
+        self.rebuild_state().await;
+    }
+
+    /// Set a low drop-session rate limit for the invariant-31 test.
+    pub(crate) async fn set_rate_limit(&mut self, max: u32) {
+        self.config.drop_rate_limit_max = max;
+        self.rebuild_state().await;
+    }
+
+    async fn rebuild_state(&mut self) {
+        self.state = DropState::new(self.db.clone(), self.config.clone())
+            .await
+            .expect("rebuild drop state");
+    }
+}
+
+pub(crate) async fn drop_setup() -> MediaTestCtx {
+    TRACING.call_once(|| {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("info,sqlx=error,sea_orm=error")
+            .with_test_writer()
+            .try_init();
+    });
+
+    let (postgres_container, connection_string) =
+        if let Ok(url) = std::env::var("TEST_DATABASE_URL") {
+            (None, url)
+        } else {
+            let container = Postgres::default()
+                .with_tag("17")
+                .start()
+                .await
+                .expect("pg");
+            let port = container.get_host_port_ipv4(5432).await.expect("pg port");
+            (
+                Some(container),
+                format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres"),
+            )
+        };
+
+    let db = Database::connect(&connection_string)
+        .await
+        .expect("connect");
+    Migrator::refresh(&db).await.expect("migrate");
+
+    let (valkey_container, valkey_url) = if let Ok(url) = std::env::var("TEST_VALKEY_URL") {
+        (None, url)
+    } else {
+        let container = GenericImage::new("valkey/valkey", "8.0.1")
+            .with_exposed_port(testcontainers::core::ContainerPort::Tcp(6379))
+            .with_wait_for(testcontainers::core::WaitFor::message_on_stdout(
+                "Ready to accept connections",
+            ))
+            .start()
+            .await
+            .expect("valkey");
+        let port = container
+            .get_host_port_ipv4(6379)
+            .await
+            .expect("valkey port");
+        (Some(container), format!("redis://127.0.0.1:{port}"))
+    };
+
+    let (encoding_key, decoding_key) = decode_keys();
+
+    let upload_dir = std::env::temp_dir().join(format!("capsule-drop-test-{}", nanoid!()));
+    std::fs::create_dir_all(&upload_dir).expect("mkdir");
+
+    let config = MediaServerConfig {
+        upload_dir,
+        jwt_eddsa_decoding_key: decoding_key,
+        valkey_url,
+        max_file_size: 8 * 1024 * 1024,
+        protocol_min: "2026-01-01".to_string(),
+        protocol_max: "2026-12-31".to_string(),
+        allowed_content_types: vec![
+            "image/jpeg".to_string(),
+            "image/png".to_string(),
+            "application/octet-stream".to_string(),
+        ],
+        timestamp_drift_days: 30,
+        quota_limits: QuotaLimits::unlimited(),
+        drop_rate_limit_max: 60,
+        drop_rate_limit_window_secs: 60,
+    };
+
+    // Seed owner U, owner group id=U, member U∈U, album A owned by U.
+    let owner_id = nanoid!();
+    let created = Timestamp::now() - SignedDuration::from_hours(24);
+    entity::user::ActiveModel {
+        id: Set(owner_id.clone()),
+        username: Set(format!("u{}", nanoid!(8))),
+        name: Set(format!("Test {}", nanoid!(8))),
+        email: Set(format!("{}@example.com", nanoid!(8))),
+        account_verified: Set(true),
+        needs_onboarding: Set(false),
+        password_hash: Set(format!("hash-{}", nanoid!(12))),
+        is_admin: Set(false),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        modified_at: Set(entity::time::ts_to_entity(created)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert user");
+    entity::owner::ActiveModel {
+        id: Set(owner_id.clone()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+    }
+    .insert(&db)
+    .await
+    .expect("insert owner");
+    entity::owner_member::ActiveModel {
+        owner_id: Set(owner_id.clone()),
+        user_id: Set(owner_id.clone()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert owner_member");
+    let album_id = nanoid!();
+    entity::album::ActiveModel {
+        id: Set(album_id.clone()),
+        owner_id: Set(owner_id.clone()),
+        name: Set(format!("Album {}", nanoid!(6))),
+        description: Set(String::new()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        modified_at: Set(entity::time::ts_to_entity(created)),
+        deleted_at: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("insert album");
+
+    let state = DropState::new(db.clone(), config.clone())
+        .await
+        .expect("drop state");
+
+    MediaTestCtx {
+        _postgres: postgres_container,
+        _valkey: valkey_container,
+        db,
+        config,
+        state,
+        encoding_key,
+        owner_id,
+        album_id,
+    }
+}
+
+/// Seal a drop under a fresh Drop Key and return the sealed bytes plus the JSON create body.
+pub(crate) fn seal_and_body(
+    content_type: &str,
+    plaintext: &[u8],
+) -> (SealedDrop, serde_json::Value) {
+    let drop_key = capsule_core::crypto::keys::DekKeypair::generate();
+    let sealed = seal_drop(plaintext, &drop_key.public_bytes(), content_type).unwrap();
+    let body = create_body_from(&sealed);
+    (sealed, body)
+}
+
+/// Build a valid `CreateDropRequest` JSON body from a sealed drop.
+pub(crate) fn create_body_from(sealed: &SealedDrop) -> serde_json::Value {
+    let d = &sealed.descriptor;
+    serde_json::json!({
+        "size": sealed.ciphertext.len(),
+        "passphrase_proof": serde_json::Value::Null,
+        "descriptor": {
+            "content_type": d.content_type,
+            "plaintext_size": d.plaintext_size,
+            "chunk_size": d.chunk_size,
+            "nonce_prefix": hex_encode(&d.nonce_prefix),
+            "ciphertext_hash": d.ciphertext_hash.to_hex(),
+            "kem_ct": BASE64.encode(&d.kem_ct),
+            "suggested_filename": d.suggested_filename,
+        }
+    })
+}
+
+/// SHA-256 of `bytes` as bare lowercase hex — the wire checksum / content-hash format.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    capsule_core::utils::hash::hash_bytes(bytes)
+}
+
+/// The `error.*` code carried in a rejection's JSON body.
+pub(crate) fn error_code(body: &serde_json::Value) -> Option<&str> {
+    body.get("code").and_then(serde_json::Value::as_str)
+}
+
+/// Lowercase-hex encode.
+pub(crate) fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Build an Argon2id passphrase verifier (fast test params) and its wire proof (hex).
+pub(crate) fn passphrase_verifier(pw: &str) -> (serde_json::Value, String) {
+    let params = capsule_core::crypto::primitives::Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    let v = PassphraseVerifier::derive(pw, params).unwrap();
+    let proof = hex_encode(&v.verifier);
+    (serde_json::to_value(&v).unwrap(), proof)
+}
+
+/// Build a base64 signed `create` manifest for adoption referencing `ciphertext_hash`, binding
+/// `metadata_blob`. The server never verifies the signatures (no keys); it needs a structurally
+/// valid, decodable, envelope-passing manifest.
+pub(crate) fn adopt_manifest_cbor(
+    _ctx: &MediaTestCtx,
+    ciphertext_hash: &Hash32,
+    metadata_blob: &[u8],
+) -> String {
+    let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+    let write = HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32]);
+    let core = ManifestCore {
+        version: ASSET_MANIFEST_VERSION.into(),
+        crypto_suite_id: CRYPTO_SUITE_ID,
+        protocol_version: PROTOCOL.into(),
+        file_id: uuid::Uuid::now_v7(),
+        album_id: uuid::Uuid::now_v7(),
+        amk_version: AmkVersion(1),
+        ciphertext_hash: *ciphertext_hash,
+        plaintext_size: 64,
+        chunk_size: 65536,
+        nonce_prefix: [0u8; 7],
+        key_mode: KeyMode::Wrapped,
+        wrapped_file_key: Some(WrappedFileKey(vec![0u8; 48])),
+        metadata_blob_hash: Some(hash32_bytes(metadata_blob)),
+        created_by_user: uuid::Uuid::now_v7(),
+        created_by_device: uuid::Uuid::now_v7(),
+        client_version: "capsule-test/1.0".into(),
+        timestamp: Timestamp::now().to_string(),
+        action: Action::Create,
+        prior_provenance_hash: None,
+        retention_until: None,
+    };
+    let manifest = core.sign(&device, &write).unwrap();
+    BASE64.encode(capsule_core::cbor::to_canonical_vec(&manifest).unwrap())
 }

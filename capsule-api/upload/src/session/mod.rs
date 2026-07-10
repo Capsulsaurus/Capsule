@@ -15,13 +15,13 @@ use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
 const PROGRESS_INDEX_KEY: &str = "upload:progress_index";
 
 #[derive(Clone)]
-pub(crate) struct UploadSessionManager {
+pub struct UploadSessionManager {
     pool: Pool<RedisConnectionManager>,
     expiration: Duration,
 }
 
 impl UploadSessionManager {
-    pub(crate) async fn new(valkey_url: &str) -> Result<Self, UploadError> {
+    pub async fn new(valkey_url: &str) -> Result<Self, UploadError> {
         let manager = RedisConnectionManager::new(valkey_url)?;
         let pool = Pool::builder().build(manager).await?;
         Ok(Self {
@@ -48,7 +48,7 @@ impl UploadSessionManager {
 
     /// Create a new upload session in Redis using HSET.
     /// This sets all fields at once during session creation.
-    pub(crate) async fn create(&self, session: &UploadSession) -> Result<(), UploadError> {
+    pub async fn create(&self, session: &UploadSession) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(&session.id);
 
@@ -142,7 +142,7 @@ impl UploadSessionManager {
 
     /// Atomically increment received_bytes using HINCRBY.
     /// Returns the new value of received_bytes.
-    pub(crate) async fn increment_received_bytes(
+    pub async fn increment_received_bytes(
         &self,
         upload_id: &str,
         bytes: u64,
@@ -171,7 +171,7 @@ impl UploadSessionManager {
 
     /// Record chunk progress: refreshes `last_progress_at` (the anchor of the ≥1-hour
     /// survival floor) on the session hash **and** its score in the progress index.
-    pub(crate) async fn touch_progress(&self, upload_id: &str) -> Result<(), UploadError> {
+    pub async fn touch_progress(&self, upload_id: &str) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
         let now = Timestamp::now();
@@ -183,7 +183,7 @@ impl UploadSessionManager {
     }
 
     /// Atomically update the upload status.
-    pub(crate) async fn update_status(
+    pub async fn update_status(
         &self,
         upload_id: &str,
         status: UploadSessionStatus,
@@ -208,7 +208,7 @@ impl UploadSessionManager {
     /// both win. Returns `true` for the winner, `false` for a loser (which returns
     /// `finalize_in_progress`). Removes the winner from the progress index — a finalizing
     /// session is never evicted out from under the finalizer.
-    pub(crate) async fn begin_finalize_cas(&self, upload_id: &str) -> Result<bool, UploadError> {
+    pub async fn begin_finalize_cas(&self, upload_id: &str) -> Result<bool, UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
         let script = Script::new(
@@ -234,7 +234,7 @@ impl UploadSessionManager {
 
     /// Record an accepted chunk in the replay store, keyed by its offset. TTL-bounded with
     /// the session. `next_offset` is the received-byte count after this chunk.
-    pub(crate) async fn record_chunk(
+    pub async fn record_chunk(
         &self,
         upload_id: &str,
         offset: u64,
@@ -261,7 +261,7 @@ impl UploadSessionManager {
 
     /// Look up a recorded chunk at `offset`, returning `(chunk_hash, next_offset)` if this
     /// offset was previously accepted.
-    pub(crate) async fn get_chunk(
+    pub async fn get_chunk(
         &self,
         upload_id: &str,
         offset: u64,
@@ -276,7 +276,7 @@ impl UploadSessionManager {
     }
 
     /// Get a session by ID using HGETALL.
-    pub(crate) async fn get(&self, upload_id: &str) -> Result<Option<UploadSession>, UploadError> {
+    pub async fn get(&self, upload_id: &str) -> Result<Option<UploadSession>, UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
 
@@ -329,7 +329,7 @@ impl UploadSessionManager {
 
     /// Delete a session from Redis if it exists.
     /// Does not return error if it does not exist.
-    pub(crate) async fn delete(&self, upload_id: &str) -> Result<(), UploadError> {
+    pub async fn delete(&self, upload_id: &str) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
 

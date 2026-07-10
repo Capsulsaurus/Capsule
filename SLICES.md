@@ -80,7 +80,7 @@ its slice.
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | done    |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | done    |
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
-| S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | ready   |
+| S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | done    |
 | S-C6  | Quota service                                        | server          | —                | M    | done    |
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | ready   |
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
@@ -543,6 +543,15 @@ pass until the gate lifts.
 - **Depends on:** S-A6, S-C1, S-C6 (drops charge the owner's quota at creation).
 - **Done when:** invariants 26–32 each have a rejecting test; the adoption-atomicity
   crash-injection smoke passes. **Tier:** Unit + Smoke + E2E case 13. **Blocks:** S-D3.
+- **Landed:** invariants 26–32 tested (status + code); adoption is one transaction
+  (`service::drop::Mutation::adopt_in_txn`: inbox `FOR UPDATE` → quota handover →
+  asset insert → `sync_seq` mint + feed entry → inbox delete; rollback smoke proves
+  no half-state; re-adopt is `AlreadyPromoted`). Owner quota charged at drop
+  creation via txn-scoped `quota::reserve`. Upload transport (`UploadSessionManager`
+  + `StorageService`) re-exported, not forked. Notes: in-process rate limiter
+  (shared-Valkey limiter is future hardening); drop endpoints use `#[handler]` so
+  they're absent from the OpenAPI doc; drops migration renumbered to `000004` at
+  landing (S-C3's `blob_gc` holds `000003`).
 
 ### S-C6 — Quota service
 

@@ -14,10 +14,14 @@ capsule-api-entity = { path = "../entity" }
 capsule-api-environment = { path = "../environment", features = ["media"] }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service" }
-# Content-address (SHA-256 hex) re-hashing for the deep storage scan; the WASM-safe
-# crypto surface only (no on-device SQLite/native stack).
+capsule-api-upload = { path = "../upload" }
+# Deep-scan re-hashing (S-C3) + drop descriptor/verifier types (S-C5): the WASM-safe
+# crypto/drop surface only — no on-device SQLite/native stack needed here (the upload
+# crate's own capsule-core dependency unifies features in the workspace build anyway).
 capsule-core = { path = "../../capsule-core", default-features = false }
 capsule-i18n = { path = "../../capsule-i18n" }
+base64 = { workspace = true }
+bytes = { workspace = true }
 derive_more = { workspace = true, features = ["from"] }
 eyre = { workspace = true }
 jiff = { workspace = true }
@@ -28,6 +32,7 @@ sea-orm = { workspace = true, features = [
     "runtime-tokio-rustls",
 ] }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

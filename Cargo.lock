@@ -1152,12 +1152,14 @@ name = "capsule-api-media"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "bytes",
  "capsule-api-auth",
  "capsule-api-entity",
  "capsule-api-environment",
  "capsule-api-migration",
  "capsule-api-model",
  "capsule-api-service",
+ "capsule-api-upload",
  "capsule-core",
  "capsule-i18n",
  "derive_more",

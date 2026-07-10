@@ -1,8 +1,8 @@
 use entity::quota_ledger;
 use jiff::Timestamp;
 use sea_orm::{
-    ActiveModelTrait, ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbErr, EntityTrait,
-    QuerySelect, Set, Statement, TransactionTrait,
+    ActiveModelTrait, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QuerySelect, Set,
+    Statement, TransactionTrait,
 };
 
 use super::query::Query;
@@ -160,14 +160,31 @@ impl Mutation {
         kind: BlobKind,
     ) -> Result<ChargeOutcome, QuotaError> {
         let txn = db.begin().await?;
-        let outcome = if let Some(existing) = Self::locked_row(&txn, content_hash).await? {
-            Self::merge(&txn, existing).await?
-        } else {
-            Self::insert_row(&txn, user_id, content_hash, byte_size, kind, None).await?;
-            ChargeOutcome::Charged { byte_size }
-        };
+        let outcome = Self::reserve(&txn, user_id, content_hash, byte_size, kind).await?;
         txn.commit().await?;
         Ok(outcome)
+    }
+
+    /// The transaction-scoped core of [`charge_aux`]: reserve `byte_size` bytes for
+    /// `content_hash` under the caller's transaction, content-addressed deduped (a hash already
+    /// present is a [merge](ChargeOutcome::Merged)). Runs no transaction of its own so a caller
+    /// can join it into a larger single transaction — the drop path (S-C5) reserves an
+    /// [`BlobKind::Original`] drop blob at session creation and, on adoption, releases that
+    /// reservation and creates the `assets` row in one transaction (charge unchanged).
+    #[tracing::instrument(skip(db), fields(user_id = %user_id, content_hash = %content_hash, byte_size, kind = kind.as_str()))]
+    pub async fn reserve<C: ConnectionTrait>(
+        db: &C,
+        user_id: &str,
+        content_hash: &str,
+        byte_size: u64,
+        kind: BlobKind,
+    ) -> Result<ChargeOutcome, QuotaError> {
+        if let Some(existing) = Self::locked_row(db, content_hash).await? {
+            Ok(Self::merge(db, existing).await?)
+        } else {
+            Self::insert_row(db, user_id, content_hash, byte_size, kind, None).await?;
+            Ok(ChargeOutcome::Charged { byte_size })
+        }
     }
 
     /// Charge a blob cached from a federated `source_peer` to the **receiving** `user_id`.
@@ -231,30 +248,42 @@ impl Mutation {
         content_hash: &str,
     ) -> Result<ReleaseOutcome, DbErr> {
         let txn = db.begin().await?;
-        let outcome = match Self::locked_row(&txn, content_hash).await? {
-            None => ReleaseOutcome::Absent,
+        let outcome = Self::release(&txn, content_hash).await?;
+        txn.commit().await?;
+        Ok(outcome)
+    }
+
+    /// The transaction-scoped core of [`release_hash`]: drop one reference to `content_hash`
+    /// under the caller's transaction (GC'ing the row and crediting the bytes back when the
+    /// last reference drops). Runs no transaction of its own so the drop-adoption path (S-C5)
+    /// can release the original reservation inside the single promotion transaction.
+    #[tracing::instrument(skip(db), fields(content_hash = %content_hash))]
+    pub async fn release<C: ConnectionTrait>(
+        db: &C,
+        content_hash: &str,
+    ) -> Result<ReleaseOutcome, DbErr> {
+        match Self::locked_row(db, content_hash).await? {
+            None => Ok(ReleaseOutcome::Absent),
             Some(existing) if existing.refcount > 1 => {
                 let refcount = existing.refcount - 1;
                 let mut am: quota_ledger::ActiveModel = existing.into();
                 am.refcount = Set(refcount);
-                am.update(&txn).await?;
-                ReleaseOutcome::Retained { refcount }
+                am.update(db).await?;
+                Ok(ReleaseOutcome::Retained { refcount })
             }
             Some(existing) => {
                 let freed_bytes = u64::try_from(existing.byte_size).unwrap_or(0);
                 let attributed_user_id = existing.attributed_user_id.clone();
                 quota_ledger::Entity::delete_by_id(existing.content_hash.clone())
-                    .exec(&txn)
+                    .exec(db)
                     .await?;
                 tracing::debug!(freed_bytes, %attributed_user_id, "quota ledger blob GC'd");
-                ReleaseOutcome::GarbageCollected {
+                Ok(ReleaseOutcome::GarbageCollected {
                     freed_bytes,
                     attributed_user_id,
-                }
+                })
             }
-        };
-        txn.commit().await?;
-        Ok(outcome)
+        }
     }
 
     /// Set (or clear) the moderation suspension flag for `user_id`. Enforcement of suspension
@@ -278,31 +307,31 @@ impl Mutation {
 
     /// Fetch a ledger row under an exclusive row lock (`SELECT … FOR UPDATE`), serialising
     /// concurrent charges/releases against the same content address.
-    async fn locked_row(
-        txn: &DatabaseTransaction,
+    async fn locked_row<C: ConnectionTrait>(
+        db: &C,
         content_hash: &str,
     ) -> Result<Option<quota_ledger::Model>, DbErr> {
         quota_ledger::Entity::find_by_id(content_hash)
             .lock_exclusive()
-            .one(txn)
+            .one(db)
             .await
     }
 
     /// Increment an existing row's refcount (a dedup merge).
-    async fn merge(
-        txn: &DatabaseTransaction,
+    async fn merge<C: ConnectionTrait>(
+        db: &C,
         existing: quota_ledger::Model,
     ) -> Result<ChargeOutcome, DbErr> {
         let refcount = existing.refcount + 1;
         let mut am: quota_ledger::ActiveModel = existing.into();
         am.refcount = Set(refcount);
-        am.update(txn).await?;
+        am.update(db).await?;
         Ok(ChargeOutcome::Merged { refcount })
     }
 
     /// Insert a fresh ledger row at refcount 1.
-    async fn insert_row(
-        txn: &DatabaseTransaction,
+    async fn insert_row<C: ConnectionTrait>(
+        db: &C,
         user_id: &str,
         content_hash: &str,
         byte_size: u64,
@@ -318,7 +347,7 @@ impl Mutation {
             refcount: Set(1),
             created_at: Set(entity::time::now_entity()),
         }
-        .insert(txn)
+        .insert(db)
         .await?;
         Ok(())
     }

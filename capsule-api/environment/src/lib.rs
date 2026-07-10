@@ -10,10 +10,12 @@ use thiserror::Error;
 use tracing::level_filters::LevelFilter;
 use wrapper::SecretKeyWrapper;
 
+#[cfg(feature = "upload")]
+use crate::constants::MAX_CACHE_SIZE;
+#[cfg(any(feature = "upload", feature = "media"))]
+use crate::constants::MAX_FILE_SIZE;
 #[cfg(feature = "auth")]
 use crate::constants::{ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY, TOTP_ISSUER};
-#[cfg(feature = "upload")]
-use crate::constants::{MAX_CACHE_SIZE, MAX_FILE_SIZE};
 use crate::jwt::convert_ed25519_der_to_jwt_keys;
 
 pub mod constants;
@@ -63,7 +65,7 @@ pub struct ServerConfig {
     #[cfg(any(feature = "upload", feature = "media", feature = "sync"))]
     /// Upload directory
     pub upload_dir: PathBuf,
-    #[cfg(feature = "upload")]
+    #[cfg(any(feature = "upload", feature = "media"))]
     /// Maximum file size in bytes
     pub max_file_size: usize,
     #[cfg(feature = "upload")]
@@ -73,7 +75,7 @@ pub struct ServerConfig {
     /// Sled database directory
     pub sled_db_dir: PathBuf,
 
-    #[cfg(any(feature = "auth", feature = "upload"))]
+    #[cfg(any(feature = "auth", feature = "upload", feature = "media"))]
     /// Valkey URL (e.g. "redis://127.0.0.1:6379")
     pub valkey_url: String,
 
@@ -173,7 +175,7 @@ impl Environment {
                 upload_dir: load_env("UPLOAD_DIR")
                     .unwrap_or(String::from("./uploads"))
                     .into(),
-                #[cfg(feature = "upload")]
+                #[cfg(any(feature = "upload", feature = "media"))]
                 max_file_size: load_env_usize("MAX_FILE_SIZE").unwrap_or(MAX_FILE_SIZE),
                 #[cfg(feature = "upload")]
                 max_cache_size: load_env_usize("MAX_CACHE_SIZE").unwrap_or(MAX_CACHE_SIZE),
@@ -181,7 +183,7 @@ impl Environment {
                 sled_db_dir: load_env("SLED_DB_DIR")
                     .unwrap_or(String::from("./.metadata"))
                     .into(), // TODO: If this is still used
-                #[cfg(any(feature = "auth", feature = "upload"))]
+                #[cfg(any(feature = "auth", feature = "upload", feature = "media"))]
                 valkey_url: load_env("VALKEY_URL")?,
                 #[cfg(any(feature = "auth", feature = "upload"))]
                 allowed_origins: load_env("ALLOWED_ORIGINS").map_or_else(

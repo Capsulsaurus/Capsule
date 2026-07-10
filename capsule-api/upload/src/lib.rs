@@ -22,6 +22,25 @@ mod visibility;
 #[cfg(test)]
 mod tests;
 
+/// Reusable upload-transport primitives shared with the media drop server (slice `S-C5`).
+///
+/// A web-upload **drop** reuses S-C1's chunk mechanics verbatim: the drop server drives its
+/// own Valkey [`UploadSessionManager`] session and content-addressed [`StorageService`] blob
+/// through these, then stages the finalized blob into the owner's drop **inbox** (never the
+/// `assets` index — a drop is not a library asset until adoption). Exposing the transport
+/// here keeps the chunk state machine single-sourced in the upload crate; the drop-specific
+/// store, inbox, and atomic adoption live in `capsule-api-media::drops`.
+pub mod transport {
+    pub use crate::config::{
+        DEFAULT_CONTENT_TYPES, DEFAULT_DRIFT_DAYS, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+        DEFAULT_QUOTA_GRACE_DAYS, DEFAULT_QUOTA_HARD_LIMIT, DEFAULT_QUOTA_SOFT_LIMIT,
+    };
+    pub use crate::error::UploadError;
+    pub use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
+    pub use crate::service::storage::StorageService;
+    pub use crate::session::UploadSessionManager;
+}
+
 pub async fn get_router<C: Into<UploadServerConfig>>(
     conn: DatabaseConnection,
     config: C,

@@ -3,9 +3,11 @@ use eyre::Result;
 use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
+use crate::drop_state::DropState;
 use crate::state::AppState;
 
 mod config;
+mod drop_state;
 mod error;
 pub mod routes; // Expose routes module if needed or just functions
 mod service;
@@ -43,20 +45,20 @@ pub async fn get_storage_router<C: Into<MediaServerConfig>>(
     Ok(routes::get_storage_router(state))
 }
 
-/// Guest drop-session router (`/u/{opaque-id}/drop`). Skeleton — slice `S-C5`.
+/// Guest drop-session router (`/u/{opaque-id}/drop`) — slice `S-C5`.
 pub async fn get_drop_link_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,
     config: C,
 ) -> Result<Router> {
-    let state = AppState::new(conn, config.into());
+    let state = DropState::new(conn, config.into()).await?;
     Ok(routes::get_drop_link_router(state))
 }
 
-/// Owner drop-inbox router (`/drops`). Skeleton — slice `S-C5`.
+/// Owner drop-inbox router (`/drops`) — slice `S-C5`.
 pub async fn get_drops_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,
     config: C,
 ) -> Result<Router> {
-    let state = AppState::new(conn, config.into());
+    let state = DropState::new(conn, config.into()).await?;
     Ok(routes::get_drops_router(state))
 }
