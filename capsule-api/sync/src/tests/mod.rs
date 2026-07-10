@@ -13,6 +13,8 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod sdk_client;
+
 use std::sync::Once;
 
 use auth::claims::Claims;

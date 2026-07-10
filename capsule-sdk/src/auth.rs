@@ -492,6 +492,17 @@ impl Session {
         }
     }
 
+    /// A currently-valid **bearer access token** for injecting into a request the
+    /// SDK does not build with [`Session::execute`] — notably the sync feed's gRPC
+    /// call metadata, where the token rides `authorization` metadata rather than a
+    /// `reqwest` header. Pre-flight-refreshes exactly like [`Session::execute`];
+    /// callers that get an `Unauthenticated`/`401` back re-[`refresh`](Session::refresh)
+    /// and read a fresh token once.
+    #[instrument(skip_all)]
+    pub async fn bearer(&self) -> Result<SecretString, AuthError> {
+        self.valid_access_token().await
+    }
+
     /// Return a currently-valid access token, pre-flight-refreshing if the stored
     /// one is within the refresh skew of expiry. The fast path is a shared read; the
     /// refresh path single-flights.

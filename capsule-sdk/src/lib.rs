@@ -12,8 +12,26 @@
 //! the generated-client wrapper is parked below.
 
 pub mod auth;
+pub mod fetch;
 pub mod net;
+pub mod sync;
 pub mod upload;
+
+/// Generated gRPC client stubs for the key-free sync feed
+/// (`capsule.sync.v1.SyncService`). The proto is single-sourced from the sync
+/// server crate (slice `S-C2`) and compiled client-only by `build.rs`; the
+/// ergonomic consumer over this stub lives in [`sync`].
+pub mod proto {
+    /// `capsule.sync.v1` — the key-free sync feed contract (slice `S-C2`).
+    pub mod capsule {
+        pub mod sync {
+            pub mod v1 {
+                #![allow(clippy::pedantic, unreachable_pub)]
+                tonic::include_proto!("capsule.sync.v1");
+            }
+        }
+    }
+}
 
 // ─── Parked until spargen (S-D8) ────────────────────────────────────────────
 // `AuthenticatedClient` wraps the generated `Client` type, which does not exist

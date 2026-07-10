@@ -31,6 +31,17 @@ reqwest = { version = "0.12", default-features = false, features = [
     "multipart",
 ] }
 
+# The key-free sync feed is gRPC (`capsule.sync.v1.SyncService`); the SDK compiles
+# the same in-tree proto (build.rs) into a client-only stub. rustls only — the
+# tonic transport's TLS rides `tls-ring` when a caller dials `https`.
+tonic = { workspace = true, features = ["transport"] }
+tonic-prost = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+
+[build-dependencies]
+tonic-prost-build = { workspace = true }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.23.3", features = ["v7"] }

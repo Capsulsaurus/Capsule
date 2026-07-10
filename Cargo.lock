@@ -1226,6 +1226,7 @@ dependencies = [
  "capsule-api-service",
  "capsule-core",
  "capsule-i18n",
+ "capsule-sdk",
  "eyre",
  "futures-util",
  "http-body-util",
@@ -1437,10 +1438,12 @@ dependencies = [
 name = "capsule-sdk"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "capsule-i18n",
  "hex",
  "jiff",
  "log",
+ "prost 0.14.4",
  "reqwest",
  "secrecy",
  "serde",
@@ -1448,6 +1451,9 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "tonic",
+ "tonic-prost",
+ "tonic-prost-build",
  "tracing",
  "uuid",
 ]

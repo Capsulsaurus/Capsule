@@ -46,6 +46,11 @@ tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 migration = { path = "../migration", package = "capsule-api-migration" }
+# The real `capsule-sdk` sync consumer driving THIS crate's served feed over a
+# real tonic channel — the S-D2 cross-module integration (mirrors upload's
+# `tests/sdk_client.rs`). The SDK is a dev-dep so the client and the server it
+# consumes are exercised together end-to-end.
+capsule-sdk = { path = "../../capsule-sdk" }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sea-orm-migration = { workspace = true }

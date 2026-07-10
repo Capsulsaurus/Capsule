@@ -93,7 +93,7 @@ its slice.
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | ready   |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | ready   |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
-| S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
+| S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | ready   |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
@@ -708,6 +708,13 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-C2, S-C9. **Blocks:** S-D5, S-D6, S-E3, S-G1, S-G2.
 - **Done when:** the download-sync doc's client Validation bullets pass; E2E case 3
   lives. **Tier:** Unit + Smoke.
+- **Landed:** validate-then-apply `SyncState` (no partial apply; per-album
+  high-water anti-rewind proven against the real server via an authentic replayed
+  cursor); tiered fetch + degrade ladder + ranged resume over a mocked `BlobSource`
+  (`HttpBlobSource` is the production impl — live wiring rides S-C10's blob
+  serving); `ConnectionClass` detection + tier/reconciliation gates + eviction
+  byte budget in `capsule-sdk::net`. Client-only proto codegen from the S-C2
+  `.proto`; real-server tests live in `capsule-api/sync` (dev-dep on the SDK).
 
 ### S-D3 — Web guest drop client
 
