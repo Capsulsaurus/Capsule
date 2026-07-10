@@ -123,7 +123,7 @@ its slice.
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | blocked |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
-| S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | ready   |
+| S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | done    |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
@@ -1304,6 +1304,13 @@ its design here.
 
 - **Deliverable:** the canonical inventory rows in code; version-bump stale-flagging +
   background per-asset regeneration; E2E case 10. **Depends on:** S-H1.
+- **Landed:** inventory enriched with function/fallback per ai.md's committed
+  slots; `bump_version` swap primitive; `regenerate_stale` orchestration —
+  cursor-free, budget-chunked, resumable by re-deriving the work-list (proven);
+  E2E case 10 deterministic via a seeded embedder double. Mined the
+  feat/ml-orchestration loop shape; deliberately did NOT regress S-H1's
+  admit-stale semantics the branch predated. Full `Workspace`/runner coupling is
+  S-H3 territory.
 
 ### S-H3 — Semantic/face features
 

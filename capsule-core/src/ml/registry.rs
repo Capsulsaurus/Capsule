@@ -15,9 +15,12 @@
 //! - cross-`(model_id, model_version)` comparison is forbidden — vector spaces differ.
 //!
 //! Every `model_id` is declared in **exactly one** row, so swapping a model is a one-row edit
-//! that propagates by `model_id` to every consumer. The *canonical inventory rows* and the
-//! version-bump **regeneration orchestration** are slice `S-H2`; this module carries the seam the
-//! [vector index](crate::db::vector) needs (the provenance gate, staleness, and a swap primitive).
+//! that propagates by `model_id` to every consumer. This module owns the *canonical inventory
+//! rows* (the v1-committed slots, enriched with the function and fallback the contract names) and
+//! the version-bump **swap primitive** ([`Registry::bump_version`]); the background per-asset
+//! **regeneration orchestration** that consumes the resulting staleness lives in
+//! [`crate::ml::regen`], and the provenance gate the [vector index](crate::db::vector) calls is
+//! [`Registry::check_insert`].
 //!
 //! [AI/ML — Models and Algorithms]: https://docs/design/ai/#models-and-algorithms
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
@@ -144,7 +147,10 @@ pub enum TaskOutput {
     Detection,
 }
 
-/// One inventory row: the canonical model for a [`TaskKind`].
+/// One inventory row: the canonical model for a [`TaskKind`] — a v1-committed slot from
+/// [AI/ML — v1-Committed Slots], carrying the model, its function, and its named fallback.
+///
+/// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelRow {
     /// The task this row serves.
@@ -157,6 +163,12 @@ pub struct ModelRow {
     pub output: TaskOutput,
     /// Human-readable label (logging / demo only).
     pub display_name: &'static str,
+    /// The slot's function — the contract's Function column for this row.
+    pub function: &'static str,
+    /// The named fallback model the contract keeps for this slot if the canonical choice proves
+    /// insufficient in field testing (`None` where the contract names none). Not a second live
+    /// model: swapping to it is a [version bump](Registry::bump_version) like any other.
+    pub fallback: Option<&'static str>,
 }
 
 impl ModelRow {
@@ -202,9 +214,11 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The v1-committed known models: MobileCLIP-B, YOLOv10, SCRFD, AdaFace. This is the seam the
-    /// vector index gates against; slice `S-H2` owns the canonical inventory rows and their
-    /// datasets, taking ownership of (or extending) this list.
+    /// The v1-committed inventory — the four launch slots of [AI/ML — v1-Committed Slots]:
+    /// MobileCLIP-B, YOLOv10, SCRFD, AdaFace, each with the contract's function and named
+    /// fallback. This is the seam the vector index gates against and the regeneration loop walks.
+    ///
+    /// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
     pub fn canonical() -> Self {
         let rows = vec![
             ModelRow {
@@ -216,6 +230,9 @@ impl Registry {
                     metric: DistanceMetric::Cosine,
                 },
                 display_name: "MobileCLIP-B",
+                function: "Global image embedding for natural-language + similarity search; \
+                           sized for the lowest-end device.",
+                fallback: Some("quantized SigLIP-tiny"),
             },
             ModelRow {
                 task: TaskKind::ObjectDetection,
@@ -223,6 +240,9 @@ impl Registry {
                 canonical_version: ModelVersion("1".into()),
                 output: TaskOutput::Detection,
                 display_name: "YOLOv10",
+                function: "Object/background detection feeding dense tagging; the backbone is \
+                           reused for person detection.",
+                fallback: None,
             },
             ModelRow {
                 task: TaskKind::FaceDetection,
@@ -230,6 +250,8 @@ impl Registry {
                 canonical_version: ModelVersion("1".into()),
                 output: TaskOutput::Detection,
                 display_name: "SCRFD",
+                function: "Efficient face bounding-box + landmark detection.",
+                fallback: None,
             },
             ModelRow {
                 task: TaskKind::FaceRecognition,
@@ -240,6 +262,8 @@ impl Registry {
                     metric: DistanceMetric::Cosine,
                 },
                 display_name: "InsightFace (AdaFace)",
+                function: "Face embeddings; AdaFace handles low-quality/dark images well.",
+                fallback: None,
             },
         ];
         // SSoT invariant: every model_id appears in exactly one row, and every task has a row.
@@ -273,11 +297,31 @@ impl Registry {
 
     /// Record a model swap for `task` — a one-row edit setting its canonical version. Embeddings
     /// stored at the prior version become [stale](Self::is_stale) and are excluded from queries
-    /// until regenerated from the originals. (The regeneration orchestration is slice `S-H2`.)
+    /// until [regenerated](crate::ml::regen::regenerate_stale) from the originals.
     pub fn set_canonical_version(&mut self, task: TaskKind, version: ModelVersion) {
         if let Some(row) = self.rows.iter_mut().find(|r| r.task == task) {
             row.canonical_version = version;
         }
+    }
+
+    /// Swap the model for `task` by **incrementing** its canonical `model_version` — the contract's
+    /// "a model swap increments `model_version` for that task" ([AI/ML — Embedding Provenance]).
+    /// A numeric version is treated as an integer generation and advanced by one; a non-numeric
+    /// version gets a `+1` suffix so the tuple still changes. Returns the new canonical version, or
+    /// `None` if `task` has no row. This is the swap half of the version-bump regeneration loop —
+    /// its regeneration half is [`regen::regenerate_stale`](crate::ml::regen::regenerate_stale),
+    /// which walks the now-stale entries [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets)
+    /// reports and replaces each per-asset.
+    ///
+    /// [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
+    pub fn bump_version(&mut self, task: TaskKind) -> Option<ModelVersion> {
+        let row = self.rows.iter_mut().find(|r| r.task == task)?;
+        let next = match row.canonical_version.as_str().parse::<u64>() {
+            Ok(n) => (n.wrapping_add(1)).to_string(),
+            Err(_) => format!("{}+1", row.canonical_version),
+        };
+        row.canonical_version = ModelVersion::from(next);
+        Some(row.canonical_version.clone())
     }
 
     /// The row a `model_id` belongs to, if any (each id is in at most one row).
@@ -486,5 +530,100 @@ mod tests {
         let reg = Registry::canonical();
         let row = reg.canonical_for(TaskKind::SemanticSearch).unwrap();
         assert_eq!(row.embedding_format(), "embedding/mobileclip-b");
+    }
+
+    #[test]
+    fn canonical_rows_match_the_docs_committed_slots() {
+        // The four v1-committed slots, verbatim from ai.md § v1-Committed Slots: the model id, its
+        // display label, output kind, and the named fallback the contract keeps for the slot.
+        let reg = Registry::canonical();
+        // Exactly the four committed slots — no more.
+        assert_eq!(reg.rows().len(), 4);
+
+        let sem = reg.canonical_for(TaskKind::SemanticSearch).unwrap();
+        assert_eq!(sem.model_id, ModelId::from("mobileclip-b"));
+        assert_eq!(sem.display_name, "MobileCLIP-B");
+        assert_eq!(
+            sem.output,
+            TaskOutput::Embedding {
+                dim: EmbeddingDim(512),
+                metric: DistanceMetric::Cosine,
+            }
+        );
+        // Semantic Search is the only slot the contract gives a fallback (quantized SigLIP-tiny).
+        assert_eq!(sem.fallback, Some("quantized SigLIP-tiny"));
+        assert!(sem.function.contains("natural-language"));
+
+        let obj = reg.canonical_for(TaskKind::ObjectDetection).unwrap();
+        assert_eq!(obj.model_id, ModelId::from("yolov10"));
+        assert_eq!(obj.display_name, "YOLOv10");
+        assert_eq!(obj.output, TaskOutput::Detection);
+        assert_eq!(obj.fallback, None);
+        assert!(obj.function.contains("person detection"));
+
+        let fdet = reg.canonical_for(TaskKind::FaceDetection).unwrap();
+        assert_eq!(fdet.model_id, ModelId::from("scrfd"));
+        assert_eq!(fdet.display_name, "SCRFD");
+        assert_eq!(fdet.output, TaskOutput::Detection);
+        assert_eq!(fdet.fallback, None);
+
+        let frec = reg.canonical_for(TaskKind::FaceRecognition).unwrap();
+        assert_eq!(frec.model_id, ModelId::from("adaface"));
+        assert_eq!(frec.display_name, "InsightFace (AdaFace)");
+        assert_eq!(
+            frec.output,
+            TaskOutput::Embedding {
+                dim: EmbeddingDim(512),
+                metric: DistanceMetric::Cosine,
+            }
+        );
+        assert_eq!(frec.fallback, None);
+
+        // Only the two embedding slots declare a stored-vector spec.
+        let embedding_slots = reg
+            .rows()
+            .iter()
+            .filter(|r| r.embedding_spec().is_some())
+            .count();
+        assert_eq!(embedding_slots, 2);
+    }
+
+    #[test]
+    fn bump_version_increments_the_canonical_generation_and_flags_prior_stale() {
+        let mut reg = Registry::canonical();
+        let id = ModelId::from("mobileclip-b");
+        assert_eq!(
+            reg.canonical_for(TaskKind::SemanticSearch)
+                .unwrap()
+                .canonical_version,
+            ModelVersion::from("1")
+        );
+        // A swap increments the generation "1" → "2".
+        let next = reg.bump_version(TaskKind::SemanticSearch).unwrap();
+        assert_eq!(next, ModelVersion::from("2"));
+        assert!(reg.is_current(TaskKind::SemanticSearch, &id, &ModelVersion::from("2")));
+        // Everything at the prior generation is now stale.
+        assert!(reg.is_stale(TaskKind::SemanticSearch, &id, &ModelVersion::from("1")));
+        // Bumping again advances monotonically; each other slot bumps independently.
+        assert_eq!(
+            reg.bump_version(TaskKind::SemanticSearch).unwrap(),
+            ModelVersion::from("3")
+        );
+        assert_eq!(
+            reg.canonical_for(TaskKind::ObjectDetection)
+                .unwrap()
+                .canonical_version,
+            ModelVersion::from("1"),
+            "a bump on one slot must not touch another"
+        );
+    }
+
+    #[test]
+    fn bump_version_suffixes_a_non_numeric_generation() {
+        let mut reg = Registry::canonical();
+        reg.set_canonical_version(TaskKind::SemanticSearch, ModelVersion::from("2024-06"));
+        // A non-integer version still changes on a swap (the tuple must differ).
+        let next = reg.bump_version(TaskKind::SemanticSearch).unwrap();
+        assert_eq!(next, ModelVersion::from("2024-06+1"));
     }
 }
