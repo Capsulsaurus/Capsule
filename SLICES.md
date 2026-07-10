@@ -92,7 +92,7 @@ its slice.
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | ready   |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | ready   |
-| S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | ready   |
+| S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | ready   |
@@ -675,6 +675,12 @@ SDK; they never hand-roll network flows.
   a mocked-HTTP test per code; E2E case 2 lives.
 - **Tier:** Unit + Smoke + E2E case 9 (the cross-version protocol gate — this slice's
   `426` abort-with-upgrade path against the real handshake).
+- **Landed:** full client + recovery matrix (mocked-HTTP test per code) + four
+  real-server integration tests (`capsule-api/upload/src/tests/sdk_client.rs`,
+  real router over TCP + testcontainers) covering round-trip, duplicate-blob merge,
+  session resume, and the live 426 gate. Uploads compose with S-D7's `Session`
+  (`UploadTransport::with_session`). Follow-up noted: `duplicate_blob`'s asset ref
+  rides only the English detail message — a structured field is an S-C1 follow-up.
 
 ### S-D2 — SDK sync/download client
 

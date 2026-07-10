@@ -4,13 +4,20 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# capsule-i18n gives the SDK the canonical `error.*` code constants it switches
+# on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
+capsule-i18n = { path = "../capsule-i18n" }
 log = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
 jiff = { workspace = true }
 secrecy = { workspace = true }
 tracing = { workspace = true }
-capsule-i18n = { path = "../capsule-i18n" }
+# SHA-256 lowercase-hex per-chunk checksum (`X-Capsule-Checksum`); byte-identical
+# to the server's `capsule_core::utils::hash::hash_bytes`, so no capsule-core dep.
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Single-flight refresh coordination (Mutex / RwLock / Notify). The async runtime
 # itself is supplied by the caller; the SDK only needs the sync primitives here.

@@ -14,6 +14,7 @@
 
 mod invariants;
 mod lifecycle;
+mod sdk_client;
 mod sync_feed;
 
 use std::path::PathBuf;

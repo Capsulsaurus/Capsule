@@ -41,6 +41,14 @@ bytes = { workspace = true }
 jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
+# The S-D1 cross-module case: the real SDK upload client driving this server.
+capsule-sdk = { path = "../../capsule-sdk" }
+# The SDK client is a genuine reqwest client; the integration test hands it a
+# plain rustls-only Client (mirrors capsule-sdk's own pin).
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 migration = { path = "../migration", package = "capsule-api-migration" }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
