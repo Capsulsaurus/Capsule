@@ -20,6 +20,16 @@ pub mod sync;
 pub mod upload;
 pub mod verify;
 
+/// uniffi surface over the SDK's user-flow primitives (login → upload → status →
+/// sync) for Swift/Kotlin/Linux consumers (`ffi` feature, slice `S-D9`). A thin,
+/// async-capable wrapper over [`auth`], [`upload`], and [`sync`]; tokens never
+/// cross the boundary (the session-handle pattern). See [`ffi`].
+#[cfg(feature = "ffi")]
+pub mod ffi;
+
+#[cfg(feature = "ffi")]
+uniffi::setup_scaffolding!();
+
 /// Generated gRPC client stubs for the key-free sync feed
 /// (`capsule.sync.v1.SyncService`). The proto is single-sourced from the sync
 /// server crate (slice `S-C2`) and compiled client-only by `build.rs`; the

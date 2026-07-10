@@ -16,4 +16,12 @@ for f in \
 done
 # The software-signer smoke: the simplest backend (no uniffi foreign trait, no hardware).
 cargo nextest run -p capsule-core --features ffi --lib crypto::keys::software
-echo "HardwareSigner examples present; software-signer smoke passed"
+
+# S-D9: the SDK's FFI surface must exist and its host-verifiable smoke must pass —
+# the FFI-exposed user flow (login → upload → status) driven from Rust against the
+# established mock-HTTP-server pattern. The native (Swift + Kotlin) harnesses drive
+# the same flow through the generated bindings against a dev server (platform CI's
+# half; the Kotlin toolchain is unavailable on this host — see SLICES.md S-D9).
+test -f capsule-sdk/src/ffi.rs || { echo "missing SDK FFI surface: capsule-sdk/src/ffi.rs" >&2; exit 1; }
+cargo nextest run -p capsule-sdk --features ffi --lib ffi::tests
+echo "HardwareSigner examples present; software-signer + SDK FFI-flow smokes passed"

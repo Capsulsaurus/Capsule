@@ -3,6 +3,30 @@ name = "capsule-sdk"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+# `lib` (rlib) keeps the rest of the workspace linking capsule-sdk unchanged.
+# `cdylib` is the Android `.so` and `staticlib` the iOS/macOS input for the uniffi
+# bindings (see the `ffi` feature); library-mode `uniffi-bindgen` reads its metadata
+# from the compiled cdylib. Cargo cannot gate crate-type by feature, so host builds
+# also emit these — an accepted, cheap cost, mirroring `capsule-core`.
+crate-type = ["lib", "cdylib", "staticlib"]
+
+# Generates the Kotlin/Swift bindings from the compiled cdylib (library mode). Built
+# only with `--features ffi-bindgen`, so the SDK's network deps never enter the
+# generator's compile in a way the mobile artifact would carry.
+[[bin]]
+name = "uniffi-bindgen"
+required-features = ["ffi-bindgen"]
+
+[features]
+# `ffi` exposes the uniffi-annotated surface (FfiCapsuleClient / FfiSession over the
+# user-flow primitives — login → upload → status → sync). Off by default so the
+# workspace/CLI/server builds never compile it. Async-capable: the exported flows are
+# `async fn` driven on a tokio runtime (uniffi's `tokio` feature). `ffi-bindgen`
+# additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
+ffi = ["dep:uniffi"]
+ffi-bindgen = ["ffi", "uniffi/cli"]
+
 [dependencies]
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
 # on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
@@ -46,6 +70,13 @@ tonic = { workspace = true, features = ["transport"] }
 tonic-prost = { workspace = true }
 prost = { workspace = true }
 bytes = { workspace = true }
+
+# ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
+# uniffi proc-macro bindings for Swift/Kotlin/Linux over the SDK's user-flow
+# primitives. Single pinned uniffi (0.31.1 — the S-F1 consolidation; do not add a
+# second). The `tokio` feature lets `#[uniffi::export(async_runtime = "tokio")]`
+# drive the async login/upload/sync flows on the tokio runtime reqwest/tonic need.
+uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }

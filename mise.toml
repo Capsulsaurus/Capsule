@@ -125,6 +125,7 @@ run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 run = [
   "cargo nextest run --workspace",
   "cargo nextest run -p capsule-core --features ffi",
+  "cargo nextest run -p capsule-sdk --features ffi",
 ]
 
 [tasks.test-coverage-rust]
@@ -145,15 +146,23 @@ description = "Verify generated i18n is in sync with locales/"
 run = "cargo run -q -p xtask -- i18n --check"
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
-# capsule-core exposes a minimal `FfiWorkspace` over uniffi behind the `ffi`
-# feature; `gen-bindings` (a file task) emits the Kotlin/Swift sources from the
-# compiled cdylib. The `ffi-bindgen` feature adds uniffi's CLI for that generator.
+# Two uniffi surfaces behind their crates' `ffi` feature (one pinned uniffi 0.31.1
+# — the S-F1 consolidation): capsule-core's `FfiWorkspace` (offline lifecycle) and
+# capsule-sdk's `FfiCapsuleClient`/`FfiSession` (the S-D9 user-flow primitives:
+# login → upload → status → sync). `gen-bindings` emits the Kotlin/Swift sources for
+# both from the compiled cdylibs. The `ffi-bindgen` feature adds uniffi's CLI.
 
 [tasks.build-ffi]
-run = "cargo build -p capsule-core --features ffi"
+run = [
+  "cargo build -p capsule-core --features ffi",
+  "cargo build -p capsule-sdk --features ffi",
+]
 
 [tasks.lint-check-ffi]
-run = "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS"
+run = [
+  "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS",
+  "cargo clippy -p capsule-sdk --features ffi -- $CLIPPY_FLAGS",
+]
 
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
 

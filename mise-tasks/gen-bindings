@@ -1,16 +1,29 @@
 #!/usr/bin/env bash
-#MISE description="Generate uniffi Kotlin/Swift bindings from the compiled cdylib"
+#MISE description="Generate uniffi Kotlin/Swift bindings from the compiled cdylibs"
 set -euo pipefail
-cargo build -p capsule-core --features ffi
 ext="so"; [ "$(uname)" = "Darwin" ] && ext="dylib"
-lib="target/debug/libcapsule_core.${ext}"
 out="target/bindings"
 rm -rf "$out"
-for lang in kotlin swift; do
-    cargo run -q -p capsule-core --features ffi-bindgen --bin uniffi-bindgen -- \
-        generate --library "$lib" --language "$lang" --out-dir "$out/$lang"
-done
-# Smoke: both languages must have produced non-empty sources.
+
+# Two uniffi surfaces, one pinned uniffi (0.31.1 — the S-F1 consolidation), one
+# out dir (distinct per-namespace filenames coexist): capsule-core's offline
+# `FfiWorkspace` and capsule-sdk's `FfiCapsuleClient`/`FfiSession` user-flow
+# primitives (S-D9). Each is generated library-mode from its own compiled cdylib.
+#   crate  package        cdylib basename       generator bin (package-scoped)
+gen() {  # $1=package  $2=cdylib_stem
+    cargo build -p "$1" --features ffi
+    local lib="target/debug/${2}.${ext}"
+    for lang in kotlin swift; do
+        cargo run -q -p "$1" --features ffi-bindgen --bin uniffi-bindgen -- \
+            generate --library "$lib" --language "$lang" --out-dir "$out/$lang"
+    done
+}
+gen capsule-core libcapsule_core
+gen capsule-sdk  libcapsule_sdk
+
+# Smoke: both surfaces must have produced non-empty sources in both languages.
 test -s "$out/kotlin/uniffi/capsule_core/capsule_core.kt"
 test -s "$out/swift/capsule_core.swift"
-echo "uniffi bindings written to $out"
+test -s "$out/kotlin/uniffi/capsule_sdk/capsule_sdk.kt"
+test -s "$out/swift/capsule_sdk.swift"
+echo "uniffi bindings written to $out (capsule_core + capsule_sdk, kotlin + swift)"

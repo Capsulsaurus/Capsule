@@ -100,7 +100,7 @@ its slice.
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
 | S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
-| S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
+| S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | done*   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | done*   |
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | done    |
@@ -938,6 +938,14 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-F1, S-D7. **Done when:** Swift + Kotlin harnesses drive a
   login→upload→status round-trip against a dev server through the bindings.
 - **Tier:** Smoke per platform.
+- **Landed (done\* — native harness runs owed):** `FfiCapsuleClient`/`FfiSession`
+  async surface (tokio runtime; tokens never cross the FFI — opaque session
+  handle); both binding sets generate non-empty (Kotlin suspend fns, Swift async
+  throws verified in output); `gen-bindings`/`verify-examples`/`build-ffi`/
+  `lint-check-ffi` extended to cover the SDK namespace; Rust-side flow smoke 4/4
+  vs the mock server. Owed: the Swift/Kotlin harness round-trips on platform CI
+  (Kotlin toolchain broken on this host); `sync_pull` behaviorally driven only by
+  the native harness.
 
 ### S-D10 — Adverse-network hardening
 
