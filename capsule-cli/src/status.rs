@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use colored::*;
 use eyre::{Result, eyre};
 use humansize::{BINARY, format_size};
@@ -25,7 +25,7 @@ pub(crate) struct AuthStatus {
     /// Whether token is valid according to server
     pub token_valid: bool,
     /// Expiry time of the authentication token
-    pub token_expires_at: Option<DateTime<Utc>>,
+    pub token_expires_at: Option<Timestamp>,
 }
 
 pub(crate) struct LocalEnvStatus {
@@ -119,7 +119,7 @@ impl AuthStatus {
         let username = config.user_id.clone(); // TODO: Fetch from server, otherwise use cache
         let token_valid = config.auth_token.is_some(); // Assume token is valid if it exists
         let token_expires_at = if token_valid {
-            Some(Utc::now() + chrono::Duration::days(30)) // Mock expiry 30 days from now
+            Some(Timestamp::now() + jiff::SignedDuration::from_hours(30 * 24)) // Mock expiry 30 days from now
         } else {
             None
         };
@@ -148,7 +148,7 @@ impl AuthStatus {
                 println!(
                     "  {} {}",
                     "Expires:".dimmed(),
-                    expires.to_rfc3339().dimmed()
+                    expires.to_string().dimmed()
                 );
             }
         } else {
