@@ -49,6 +49,9 @@ pub mod error_codes {
     /// `error.drop.rate_limited`
     pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
 
+    /// `error.escrow.malformed`
+    pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 

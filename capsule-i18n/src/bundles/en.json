@@ -12,6 +12,7 @@
   "error.drop.not_in_inbox": "This drop is no longer available to adopt.",
   "error.drop.passphrase_required": "This upload link needs its passphrase.",
   "error.drop.rate_limited": "Too many attempts. Please wait and try again.",
+  "error.escrow.malformed": "The recovery backup could not be saved.",
   "error.protocol.version_unsupported": "This version of Capsule is no longer supported. Please update the app.",
   "error.quota.exceeded": "Your storage is full.",
   "error.quota.grace_locked": "Your storage has been full past the grace period, so edits are paused until you free space.",

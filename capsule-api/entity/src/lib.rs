@@ -3,6 +3,7 @@ pub mod album_share;
 pub mod asset;
 pub mod asset_smart_tag;
 pub mod asset_stack;
+pub mod backup_escrow;
 pub mod blob_gc;
 pub mod custody_receipt;
 pub mod device_cohort;

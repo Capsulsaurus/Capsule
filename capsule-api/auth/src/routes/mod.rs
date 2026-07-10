@@ -1,6 +1,7 @@
 mod auth;
 mod devices;
 mod directory;
+mod escrow;
 mod passkey;
 mod password;
 mod profile;
@@ -49,6 +50,16 @@ pub(super) fn get_router(state: AppState) -> Router {
                             Router::with_path("{user_id}").get(directory::fetch_device_directory),
                         ),
                 ),
+        )
+        // Master-key escrow store/fetch/replace (slice S-C12); strictly owner-scoped —
+        // store-or-replace and fetch both act on the caller's own escrow (single active
+        // escrow: a store overwrites any prior blob in the same transaction).
+        .push(
+            Router::with_path("backup").push(
+                Router::with_path("escrow")
+                    .put(escrow::store_backup_escrow)
+                    .get(escrow::fetch_backup_escrow),
+            ),
         )
         .push(Router::with_path("logout").post(auth::logout))
         // Password routes

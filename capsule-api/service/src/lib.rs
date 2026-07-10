@@ -5,6 +5,7 @@ pub mod blob_store;
 pub mod cohort;
 pub mod directory;
 pub mod drop;
+pub mod escrow;
 pub mod friendship;
 pub mod gc;
 pub mod quota;

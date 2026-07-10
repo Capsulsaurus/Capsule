@@ -87,7 +87,7 @@ its slice.
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
-| S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
+| S-C12 | Backup escrow server surface                         | server          | —                | S    | done    |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | done    |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | done    |
@@ -664,6 +664,10 @@ pass until the gate lifts.
   nothing. **Tier:** Smoke + E2E case 6 (backup → restore on a fresh device: this
   slice's escrow fetch bootstraps the passphrase path over the implemented core
   restore). **Blocks:** S-D12.
+- **Landed:** `PUT`/`GET /backup/escrow`, strictly owner-scoped (no target param);
+  single-active-escrow via the primary-key upsert (replace overwrites in one
+  statement — prior ciphertext unretrievable, proven by unwrap-fails test); blob
+  fully opaque (4 KiB size sanity only; the ≥128-bit rule stays client-side).
 
 ### S-C13 — Session device-cohort storage + grouping
 

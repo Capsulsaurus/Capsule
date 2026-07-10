@@ -131,6 +131,16 @@
         }
       }
     },
+    "error.escrow.malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The recovery backup could not be saved."
+          }
+        }
+      }
+    },
     "error.protocol.version_unsupported": {
       "localizations": {
         "en": {
