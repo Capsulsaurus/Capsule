@@ -123,6 +123,34 @@
         "message": "Too many reports from this source. Please wait and try again.",
         "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
     },
+    "error.federation.capability_invalid": {
+        "message": "This shared album's access could not be verified.",
+        "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling. The token never establishes access; the peer must obtain a fresh, well-formed one."
+    },
+    "error.federation.capability_expired": {
+        "message": "This shared album's access has expired.",
+        "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the capability token is past its exp. Tokens live at most 24h; the peer must refresh before continuing."
+    },
+    "error.federation.capability_revoked": {
+        "message": "Access to this shared album has been revoked.",
+        "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's jti is on the issuer's revocation list, OR the verifier is relying on a cached revocation list it can no longer refresh past the 15-minute staleness bound and therefore cannot confirm the jti — the fail-closed rule. Revocation is never outlived by making the list unreachable."
+    },
+    "error.federation.audience_mismatch": {
+        "message": "This access grant is for a different album.",
+        "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's aud (an urn:capsule:album:UUID) does not match the album the peer is pulling. The aud is matched against the album, never against the verifying server (a deliberate RFC 7519 deviation)."
+    },
+    "error.federation.scope_insufficient": {
+        "message": "This access grant does not cover the requested content.",
+        "context": "HTTP 403 on a federation blob fetch (slice S-E2, threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
+    },
+    "error.federation.rate_budget_exceeded": {
+        "message": "This source has reached its request limit. Please wait and try again.",
+        "context": "HTTP 429 on a federation pull (slice S-E2, threat-model invariant 21): the peer exceeded one of its per-peer transfer budgets — events/hour, bytes/hour, or CPU/hour. Each peer is its own blast-radius boundary; a busy or hostile peer cannot starve good ones."
+    },
+    "error.federation.circuit_open": {
+        "message": "This source is temporarily backed off after repeated errors.",
+        "context": "HTTP 429 on a federation pull (slice S-E2): the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
+    },
     "error.storage.invalid_request": {
         "message": "The storage-verification request was malformed.",
         "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."

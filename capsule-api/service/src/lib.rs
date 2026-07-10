@@ -6,6 +6,7 @@ pub mod cohort;
 pub mod directory;
 pub mod drop;
 pub mod escrow;
+pub mod federation;
 pub mod friendship;
 pub mod gc;
 pub mod moderation;

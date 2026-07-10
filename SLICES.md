@@ -108,7 +108,7 @@ its slice.
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | done    |
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
-| S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
+| S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | done    |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | ready   |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
@@ -1118,6 +1118,14 @@ SDK; they never hand-roll network flows.
   enforcement by blob role.
 - **Depends on:** S-C2, S-A3. **Done when:** the federation doc's seven Validation
   bullets pass; E2E case 4 lives. **Tier:** Unit + Smoke + E2E case 4.
+- **Landed:** all seven bullets + invariants 19–21 tested; EdDSA-JWT capabilities
+  (RFC-3339 temporals via jiff, 24h exp clamp, UUIDv7 jti); `federation_peers`
+  (S-C8's) stays the sole peer-identity store — only the durable revocation list
+  is new state; E2E case 4 = two service instances over two Postgres containers,
+  byte-identical cross-peer manifest + tamper→soft-fail proven. Note: the pull
+  path ships as authority objects + pure gates exercised in-process on the feed
+  query — the capability metadata riding the real gRPC method is thin follow-up
+  wiring (S-E4/S-E3 consume these same gates).
 
 ### S-E3 — LAN peering
 

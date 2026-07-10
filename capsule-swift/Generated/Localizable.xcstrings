@@ -431,6 +431,76 @@
         }
       }
     },
+    "error.federation.audience_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This access grant is for a different album."
+          }
+        }
+      }
+    },
+    "error.federation.capability_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This shared album's access has expired."
+          }
+        }
+      }
+    },
+    "error.federation.capability_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This shared album's access could not be verified."
+          }
+        }
+      }
+    },
+    "error.federation.capability_revoked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Access to this shared album has been revoked."
+          }
+        }
+      }
+    },
+    "error.federation.circuit_open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source is temporarily backed off after repeated errors."
+          }
+        }
+      }
+    },
+    "error.federation.rate_budget_exceeded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source has reached its request limit. Please wait and try again."
+          }
+        }
+      }
+    },
+    "error.federation.scope_insufficient": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This access grant does not cover the requested content."
+          }
+        }
+      }
+    },
     "error.moderation.account_suspended": {
       "localizations": {
         "en": {

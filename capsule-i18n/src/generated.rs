@@ -67,6 +67,27 @@ pub mod error_codes {
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 
+    /// `error.federation.audience_mismatch`
+    pub const FEDERATION_AUDIENCE_MISMATCH: &str = "error.federation.audience_mismatch";
+
+    /// `error.federation.capability_expired`
+    pub const FEDERATION_CAPABILITY_EXPIRED: &str = "error.federation.capability_expired";
+
+    /// `error.federation.capability_invalid`
+    pub const FEDERATION_CAPABILITY_INVALID: &str = "error.federation.capability_invalid";
+
+    /// `error.federation.capability_revoked`
+    pub const FEDERATION_CAPABILITY_REVOKED: &str = "error.federation.capability_revoked";
+
+    /// `error.federation.circuit_open`
+    pub const FEDERATION_CIRCUIT_OPEN: &str = "error.federation.circuit_open";
+
+    /// `error.federation.rate_budget_exceeded`
+    pub const FEDERATION_RATE_BUDGET_EXCEEDED: &str = "error.federation.rate_budget_exceeded";
+
+    /// `error.federation.scope_insufficient`
+    pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
+
     /// `error.moderation.account_suspended`
     pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
 

@@ -11,6 +11,7 @@ pub mod device_directory;
 pub mod drop_inbox;
 pub mod face;
 pub mod federation_peer;
+pub mod federation_revoked_jti;
 pub mod friendship;
 pub mod lifecycle_op_replay;
 pub mod memory;

@@ -43,6 +43,13 @@
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
+    <string name="error_federation_audience_mismatch">This access grant is for a different album.</string>
+    <string name="error_federation_capability_expired">This shared album\'s access has expired.</string>
+    <string name="error_federation_capability_invalid">This shared album\'s access could not be verified.</string>
+    <string name="error_federation_capability_revoked">Access to this shared album has been revoked.</string>
+    <string name="error_federation_circuit_open">This source is temporarily backed off after repeated errors.</string>
+    <string name="error_federation_rate_budget_exceeded">This source has reached its request limit. Please wait and try again.</string>
+    <string name="error_federation_scope_insufficient">This access grant does not cover the requested content.</string>
     <string name="error_moderation_account_suspended">Your account is suspended. You can\'t upload or share until it\'s reinstated.</string>
     <string name="error_moderation_report_rate_limited">Too many reports from this source. Please wait and try again.</string>
     <string name="error_moderation_report_unsigned">The moderation report could not be verified.</string>

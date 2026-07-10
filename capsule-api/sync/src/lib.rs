@@ -26,6 +26,7 @@ use tower::Service;
 
 pub mod config;
 pub mod cursor;
+pub mod federation;
 pub mod feed;
 
 #[cfg(test)]

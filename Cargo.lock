@@ -1221,6 +1221,7 @@ dependencies = [
  "eyre",
  "futures-util",
  "http-body-util",
+ "indexmap 2.14.0",
  "jiff",
  "jsonwebtoken",
  "nanoid",
@@ -1248,6 +1249,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

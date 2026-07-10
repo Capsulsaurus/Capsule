@@ -14,6 +14,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod cli_round_trip;
+mod federation;
 mod sdk_client;
 
 use std::sync::Once;

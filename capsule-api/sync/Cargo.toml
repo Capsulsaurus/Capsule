@@ -40,6 +40,9 @@ sync_wrapper = "1.0"
 tokio-stream = "0.1"
 jsonwebtoken = { workspace = true }
 tower = "0.5.3"
+jiff = { workspace = true }
+uuid = { workspace = true, features = ["v7"] }
+indexmap = { workspace = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
