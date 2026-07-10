@@ -71,6 +71,9 @@ its slice.
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
+| S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | ready   |
+| S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
+| S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | ready   |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | ready   |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
@@ -124,6 +127,7 @@ its slice.
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | ready   |
+| S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | ready   |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only ordering.
 `blocked` = a dependency (or an upstream project) gates the start, not review priority.
@@ -157,6 +161,9 @@ graph LR
   D1 --> D5
   D2 --> E3
   B1[S-B1 thumbnails] --> B2[S-B2 executor rewrite] --> G4[S-G4 executor retire]
+  B2 --> B6[S-B6 takeout] --> B7[S-B7 icloud]
+  B6 --> B8[S-B8 immich]
+  B6 --> Z2[S-Z2 migration guides]
   H1[S-H1 embeddings] --> H2[S-H2 registry]
   H1 --> H3[S-H3 semantic/face] --> G3
   X1[S-X1 openmls] --> X2[S-X2 membership] --> X3[S-X3 upgrade ceremony]
@@ -338,6 +345,37 @@ pass until the gate lifts.
   field), S-D1 (upload client). **Done when:** the download-sync doc's staged
   Validation bullets pass (ladder order, awaiting-original semantics, release gate,
   resume-from-server-truth, staged×streaming exclusion).
+- **Tier:** Unit + Smoke.
+
+### S-B6 — Google Takeout importer
+
+- **Contract:** [Import — Third-Party Importers](capsule-docs/src/content/docs/design/import/pipeline.md).
+- **Deliverable:** the Takeout source adapter in
+  `capsule-core::import::importers::takeout` (and the adapter trait it defines,
+  shared by S-B7/S-B8/S-B9): archive walk, JSON-sidecar pairing (taken-time, GPS,
+  description, favorites, album JSONs), the EXIF-over-exporter precedence fold at
+  extraction, and the known Takeout quirks (truncated filenames, `(1)` duplicates,
+  edited/original pairs, split archives) as fixture-covered adapter concerns. The
+  planner and executor are untouched.
+- **Depends on:** S-B2 (imports must land on the signed path). **Blocks:** S-B7,
+  S-B8, S-Z2.
+- **Done when:** the pipeline doc's Takeout mapping-table Validation bullet passes;
+  a fixture-archive import is deterministic across runs and skips completed work on
+  re-run.
+- **Tier:** Unit (mapping table, determinism) + Smoke (end-to-end archive import).
+
+### S-B7 — iCloud export importer (post-v1)
+
+- **Contract:** [Import — Third-Party Importers](capsule-docs/src/content/docs/design/import/pipeline.md).
+- **Deliverable:** the iCloud Photos export adapter (originals + CSV metadata) on the
+  S-B6 adapter trait. **Depends on:** S-B6. **Status: post-v1** — indexed so the
+  contract has an owner. **Tier:** Unit + Smoke.
+
+### S-B8 — Immich importer (post-v1)
+
+- **Contract:** [Import — Third-Party Importers](capsule-docs/src/content/docs/design/import/pipeline.md).
+- **Deliverable:** the Immich adapter (export/API surface fixed when the slice
+  starts) on the S-B6 adapter trait. **Depends on:** S-B6. **Status: post-v1**.
 - **Tier:** Unit + Smoke.
 
 ## Lane C — server (key-free surfaces)
@@ -973,3 +1011,19 @@ its design here.
   a design-doc addition. The scope-override map's rows and grammar are now specified
   in [Organization — Scope Grammar](capsule-docs/src/content/docs/design/organization.md);
   what remains is the smart-album predicate schema and the document's envelope/versioning.
+
+### S-Z2 — Provider migration user guides
+
+- **Contract:** [Import — Third-Party Importers](capsule-docs/src/content/docs/design/import/pipeline.md)
+  (the guides describe shipped importer behavior only); issue #296's requirements.
+- **Deliverable:** user-facing migration guides under
+  `capsule-docs/src/content/docs/guides/` — **outside `design/`**, non-normative —
+  one per provider as its importer lands (Google Photos first, with S-B6): export
+  walkthrough, import steps, an end-to-end verification checklist (counts, spot
+  hashes, metadata sampling), and the robustness disclaimer (transfer, verify
+  everything end-to-end, run both systems in parallel for a period, follow
+  deployment best practices).
+- **Depends on:** S-B6 (guides ship only for stabilized importers).
+- **Done when:** the Google Photos guide is published and its steps round-trip
+  against a real Takeout archive; `mise run check-docs` green.
+- **Tier:** docs build.

@@ -75,6 +75,20 @@ Peak local disk is therefore bounded to the in-flight window, not the whole impo
 
 **Quota.** Streaming creates one upload session per asset, so server [quota](/design/quota/#enforcement-points) is enforced exactly as for any upload — at session creation, no new enforcement point. If quota is exhausted mid-stream the next session creation is refused; the pipeline pauses and surfaces the remediable state rather than failing the whole import, and no local original is released for an asset that did not upload.
 
+## Third-Party Importers
+
+**Status: planned** (slices `S-B6` v1, `S-B7`/`S-B8` post-v1). Migration from another photo service is an import, not a new pipeline: an importer is a **source adapter** implementing the same contract as the filesystem scanner — it yields `(bytes-source, extracted-metadata)` entries into [Scan & Extract](#scan--extract), and the pure planner and executor are unchanged. Third-party migration adds no new pipeline stage and no new server surface.
+
+What an adapter owns is **structure awareness**: metadata the exporting service carries out-of-band is folded into the extracted metadata *before* planning, under a fixed precedence — **embedded EXIF wins over exporter-side records, except for constructs the exporter is authoritative for** (its album membership, favorites/rating flags, and user-typed descriptions that the file bytes never carried). The fold happens at extraction, so the planner's determinism contract holds: a given archive yields the same `ImportPlan` on every run, and re-running an importer over the same archive skips completed work exactly like a [resumed import](#validation).
+
+The committed adapters:
+
+- **Google Takeout (`S-B6`, v1).** Walks a Takeout archive; pairs each media file with its JSON sidecar (photo-taken time, GPS, description, favorites, album JSONs); folds per the precedence rule. Takeout's known quirks — truncated filenames, `(1)` duplicates, edited/original pairs, JSON files split across archive parts — are adapter concerns with fixture coverage, never planner special cases.
+- **iCloud Photos export (`S-B7`, post-v1).** The iCloud export layout (originals + CSV metadata).
+- **Immich (`S-B8`, post-v1).** Immich's export/API surface; format fixed when the slice starts.
+
+Tethered cameras plug into this same adapter seam — see [Import — Camera Import](/design/import/camera-import/). User-facing migration guides (per-provider export walkthroughs, verification checklists, robustness disclaimers) live in the docs site outside `design/` and ship gated on each importer stabilizing (slice `S-Z2`).
+
 ## Upload Prioritization
 
 When many files are processed simultaneously, the order they are *started* is decided by these heuristics:
@@ -105,5 +119,6 @@ What the rest of the system depends on this module for:
 - **Streaming auto-detect (unit).** With `available_bytes()` mocked below and above `total_size + headroom`, assert `streaming_recommended` is set in the constrained case and clear otherwise.
 - **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
 - **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.
+- **Takeout mapping table (unit).** A fixture Takeout archive → expected plan, one row per metadata-mapping rule (taken-time vs EXIF precedence, GPS fold, description, favorites, album membership, truncated-filename pairing, duplicate suffixes). Re-running over the same fixture yields a plan that skips completed work.
 
 The cross-module case — pipeline → upload protocol → server finalization → assets visible in the sync feed — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
