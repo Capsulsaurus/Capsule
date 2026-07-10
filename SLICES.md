@@ -66,7 +66,7 @@ its slice.
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | done    |
-| S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | ready |
+| S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | done* |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | done    |
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | done    |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
@@ -329,6 +329,13 @@ pass until the gate lifts.
   (GCJ-02 round-trips unconverted; BD-09 folds exactly; WGS-84 stays wire-absent and
   byte-identical); `mise run check-rust` green.
 - **Tier:** Unit.
+- **Landed (done\* — fold gated):** closed `GpsDatum` enum + wire-absent-default
+  `datum` key (byte-identity KAT kept, populated vector added, signed round-trip);
+  BD-09 is a distinct input-edge type (never a storable datum) and
+  `fold_bd09_to_gcj02` REFUSES with `DatumFoldError::FoldGated` until
+  `geocoordinates-rs` ships the exact closed-form fold — refusal, never an
+  approximation, per the metadata doc. The seam's body swaps in the real fold with
+  no signature change; flip `done*` → `done` when the gate lifts.
 
 ## Lane B — media / import
 

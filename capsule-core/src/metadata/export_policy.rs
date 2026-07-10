@@ -94,6 +94,7 @@ mod tests {
                 lat: 40.712812,
                 lon: -74.006015,
                 source: GpsSource::Exif,
+                datum: crate::domain::GpsDatum::Wgs84,
             }),
             provenance_chain_hash: Some(Hash32([0; 32])),
             unknown: BTreeMap::new(),

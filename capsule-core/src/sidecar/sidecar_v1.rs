@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::cbor;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
-use crate::domain::StackType;
+use crate::domain::{GpsDatum, StackType};
 use crate::metadata::crdt::{Lww, OrSet};
 
 /// The current sidecar schema version.
@@ -65,15 +65,26 @@ pub enum GpsSource {
     Derived,
 }
 
-/// WGS-84 geolocation.
+/// Geolocation, stored **verbatim in the datum the source supplied** (SSoT:
+/// [Metadata — Geolocation]). Never converted at rest; datum-tagged by [`datum`](Gps::datum).
+///
+/// [Metadata — Geolocation]: https://docs/design/metadata/#geolocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Gps {
-    /// Latitude (WGS-84).
+    /// Latitude, in [`datum`](Gps::datum).
     pub lat: f64,
-    /// Longitude (WGS-84).
+    /// Longitude, in [`datum`](Gps::datum).
     pub lon: f64,
     /// Provenance of the fix.
     pub source: GpsSource,
+    /// The coordinate datum `lat`/`lon` are expressed in. **Wire-absent when
+    /// [`Wgs84`](GpsDatum::Wgs84)** (the default): a `Wgs84` fix omits this key so every
+    /// pre-`datum` sidecar and known-answer vector stays byte-identical, and a `gps` value
+    /// with no `datum` key decodes back to `Wgs84`. Additive optional key within sidecar
+    /// schema v1 — no `sidecar_schema` bump. `datum` travels with `lat`/`lon` in one
+    /// atomic `gps` write, so no CRDT merge rule changes.
+    #[serde(default, skip_serializing_if = "GpsDatum::is_wgs84")]
+    pub datum: GpsDatum,
 }
 
 /// An AI-suggested tag (kept in a structurally separate OR-set from user tags).
@@ -429,6 +440,7 @@ mod tests {
                 lat: 40.7128,
                 lon: -74.0060,
                 source: GpsSource::Exif,
+                datum: GpsDatum::Wgs84,
             }),
             provenance_chain_hash: Some(Hash32([0xCC; 32])),
             unknown: BTreeMap::new(),
@@ -687,5 +699,84 @@ mod tests {
         ba.merge(&a);
         assert_eq!(ab.get(), ba.get());
         assert_eq!(ab.get(), Some(&CullFlag::Reject));
+    }
+
+    /// S-A7 datum-verbatim-storage (WGS-84 arm): a `Wgs84` fix omits the `datum` key, so
+    /// the encoded `gps` value is byte-identical to the pre-`datum` known-answer shape
+    /// (`{lat, lon, source}`), and the whole sidecar carries no `datum` byte on the wire.
+    #[test]
+    fn wgs84_datum_is_wire_absent_and_byte_identical() {
+        // The pre-`datum` known-answer wire shape of a fix: exactly `{lat, lon, source}`.
+        #[derive(Serialize)]
+        struct LegacyGps {
+            lat: f64,
+            lon: f64,
+            source: GpsSource,
+        }
+        let legacy = LegacyGps {
+            lat: 40.7128,
+            lon: -74.0060,
+            source: GpsSource::Exif,
+        };
+        let current = Gps {
+            lat: 40.7128,
+            lon: -74.0060,
+            source: GpsSource::Exif,
+            datum: GpsDatum::Wgs84,
+        };
+        let mut legacy_bytes = Vec::new();
+        ciborium::ser::into_writer(&legacy, &mut legacy_bytes).unwrap();
+        let mut current_bytes = Vec::new();
+        ciborium::ser::into_writer(&current, &mut current_bytes).unwrap();
+        assert_eq!(
+            legacy_bytes, current_bytes,
+            "a wgs84 datum must be wire-absent → byte-identical to the pre-datum vector"
+        );
+
+        // Whole-sidecar: the `datum` key never appears, and the fix decodes back to wgs84.
+        let s = minimal();
+        let bytes = s.to_canonical_vec();
+        let needle = b"datum";
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "an absent (wgs84) datum must not appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(back.gps.as_ref().unwrap().datum, GpsDatum::Wgs84);
+    }
+
+    /// S-A7 datum-verbatim-storage (GCJ-02 arm): a populated-`datum` vector. A `gcj02` fix
+    /// round-trips **unconverted** (lat/lon byte-for-byte unchanged), carries the `datum`
+    /// key on the wire, and survives signing.
+    #[test]
+    fn gcj02_datum_round_trips_unconverted_and_survives_signing() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        // A user-entered coordinate that arrived already in China's GCJ-02 datum.
+        s.gps = Some(Gps {
+            lat: 39.90869,
+            lon: 116.39745,
+            source: GpsSource::Manual,
+            datum: GpsDatum::Gcj02,
+        });
+        s.sign(&ik);
+        assert!(s.verify(&ik.verifying_key()));
+
+        let bytes = s.to_canonical_vec();
+        // Populated datum is present on the wire.
+        let needle = b"datum";
+        assert!(
+            bytes.windows(needle.len()).any(|w| w == needle),
+            "a gcj02 datum must appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        let gps = back.gps.as_ref().unwrap();
+        // Stored verbatim — never converted at rest.
+        assert_eq!(gps.datum, GpsDatum::Gcj02);
+        assert_eq!(gps.lat, 39.90869);
+        assert_eq!(gps.lon, 116.39745);
+        assert!(back.verify(&ik.verifying_key()));
     }
 }

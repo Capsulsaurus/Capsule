@@ -721,10 +721,13 @@ impl Workspace {
         let capture_utc = tz
             .capture_utc
             .unwrap_or_else(|| Timestamp::now().as_second());
+        // EXIF GPS is the near-universal WGS-84 camera datum (metadata doc, Geolocation);
+        // stored verbatim, so the wire-absent default datum applies.
         let gps = exif.gps_lat.zip(exif.gps_lon).map(|(lat, lon)| Gps {
             lat,
             lon,
             source: GpsSource::Exif,
+            datum: crate::domain::GpsDatum::Wgs84,
         });
 
         // Still-derived sidecar metadata (dimensions + LQIP) and the derivatives to persist
