@@ -29,6 +29,10 @@ Two derivative tiers per photo asset and one preview tier for video assets:
 - **WebP** is the last-resort fallback for the rare client lacking AVIF. We deliberately do not fall back to JPEG — WebP covers everything JPEG would.
 - **H.264 baseline** for video previews — universally decodable, cheap to decode on every platform. AV1 was considered but mobile encode cost is still high in 2026.
 
+### Video Previews
+
+The table above stays the SSoT for the video formats; this section only names the implementation seam. Video derivative generation — the first-frame still and the H.264 baseline preview transcode — is its own implementation slice (`S-B5` in the repo-root `SLICES.md`), split from still-image generation (`S-B1`) because transcode brings a distinct toolchain (demux, video decode, H.264/AAC encode) the still path never touches. Both slices sign their outputs identically through the [`DerivativeManifest`](#derivative-provenance) path.
+
 If an original asset is lower-resolution than the highest thumbnail tier, that tier references the original instead of generating a redundant derivative. This is **distinct** from a missing derivative (an unintentional generation failure): the tier's [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) carries the recognized sentinel `format = "original"` — an explicit, signed marker the receiver trusts — whereas a simply-absent derivative is treated as rebuildable from the original (recovery-first).
 
 ## LQIP

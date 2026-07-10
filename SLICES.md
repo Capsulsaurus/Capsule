@@ -71,6 +71,7 @@ its slice.
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
+| S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | ready   |
 | S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | ready   |
 | S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
@@ -166,6 +167,7 @@ graph LR
   D1 --> D5
   D2 --> E3
   B1[S-B1 thumbnails] --> B2[S-B2 executor rewrite] --> G4[S-G4 executor retire]
+  B1 --> B5[S-B5 video derivatives]
   B2 --> B6[S-B6 takeout] --> B7[S-B7 icloud]
   B6 --> B8[S-B8 immich]
   B6 --> Z2[S-Z2 migration guides]
@@ -306,13 +308,15 @@ pass until the gate lifts.
 ### S-B1 — Thumbnail/LQIP generation
 
 - **Contract:** [Thumbnails](capsule-docs/src/content/docs/design/thumbnails.md).
-- **Deliverable:** thumbnail/preview generation over `capsule_core::media` (the folded
-  former `capsule-media` crate, behind the non-default `media` feature; today it decodes
-  JPEG only — format decoders grow as needed), chromahash LQIP + `dominant_color` into
-  the sidecar `lqip` field, `DerivativeManifest`-signed outputs.
-- **Done when:** generation produces the committed formats with signed derivative
-  manifests; LQIP lands in the sidecar and renders as the fallback tier.
-- **Tier:** Unit + Smoke. **Blocks:** S-B2.
+- **Deliverable:** **still-image** thumbnail/preview generation over
+  `capsule_core::media` (the folded former `capsule-media` crate, behind the
+  non-default `media` feature; today it decodes JPEG only — format decoders grow as
+  needed), chromahash LQIP + `dominant_color` into the sidecar `lqip` field,
+  `DerivativeManifest`-signed outputs. Video tiers are split to S-B5 (distinct
+  transcode toolchain).
+- **Done when:** generation produces the committed still formats with signed
+  derivative manifests; LQIP lands in the sidecar and renders as the fallback tier.
+- **Tier:** Unit + Smoke. **Blocks:** S-B2, S-B5.
 
 ### S-B2 — Signed-path import-executor rewrite
 
@@ -353,6 +357,19 @@ pass until the gate lifts.
   field), S-D1 (upload client). **Done when:** the download-sync doc's staged
   Validation bullets pass (ladder order, awaiting-original semantics, release gate,
   resume-from-server-truth, staged×streaming exclusion).
+- **Tier:** Unit + Smoke.
+
+### S-B5 — Video derivatives
+
+- **Contract:** [Thumbnails — Video Previews](capsule-docs/src/content/docs/design/thumbnails.md)
+  (formats fixed by the tier table).
+- **Deliverable:** the video derivative path behind the `media` feature — first-frame
+  JXL/AVIF still for the thumbnail tier, H.264 baseline preview transcode (original
+  resolution capped to 1080p, CRF 23, 30 fps cap, AAC audio) for the preview tier —
+  signed through the same `DerivativeManifest` path as S-B1's stills.
+- **Depends on:** S-B1 (derivative plumbing + signing path).
+- **Done when:** a fixture video yields both tiers with signed manifests; the
+  closed-format rejection covers the video rows of the tier table.
 - **Tier:** Unit + Smoke.
 
 ### S-B6 — Google Takeout importer
@@ -553,7 +570,9 @@ pass until the gate lifts.
   surfaced client-side.
 - **Done when:** escrow round-trips through the server and unwraps with the passphrase
   path already tested in core; after a replace, the prior blob is gone and unwraps
-  nothing. **Tier:** Smoke. **Blocks:** S-D12.
+  nothing. **Tier:** Smoke + E2E case 6 (backup → restore on a fresh device: this
+  slice's escrow fetch bootstraps the passphrase path over the implemented core
+  restore). **Blocks:** S-D12.
 
 ### S-C13 — Session device-cohort storage + grouping
 
@@ -625,7 +644,8 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-C1. **Blocks:** S-B3, S-B4, S-D5. **Done when:** the upload doc's
   client-side Validation bullets pass against a real server; the recovery matrix has
   a mocked-HTTP test per code; E2E case 2 lives.
-- **Tier:** Unit + Smoke.
+- **Tier:** Unit + Smoke + E2E case 9 (the cross-version protocol gate — this slice's
+  `426` abort-with-upgrade path against the real handshake).
 
 ### S-D2 — SDK sync/download client
 
@@ -672,8 +692,10 @@ SDK; they never hand-roll network flows.
 - **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md) (the CLI is a client).
 - **Deliverable:** the `todo!()` CLI commands (`auth login/logout`, `sync`, `list`)
   over the SDK clients.
-- **Depends on:** S-D1, S-D2, S-D7 (the token store — the CLI never hand-rolls auth). **Done when:** `capsule auth login && capsule sync &&
-  capsule list` round-trips against a dev server. **Tier:** Smoke.
+- **Depends on:** S-D1, S-D2, S-D7 (the token store — the CLI never hand-rolls auth).
+  **Done when:** `capsule auth login && capsule sync && capsule list` round-trips
+  against a dev server. **Tier:** Smoke + E2E case 1 (auth → sync → client-side
+  library query — the CLI round-trip *is* the case).
 
 ### S-D6 — Web server gateway
 
@@ -1074,6 +1096,9 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
 
 ### S-X3 — Album upgrade ceremony + MLS resilience
 
+- **Contract:** [MLS Resilience](capsule-docs/src/content/docs/design/mls-resilience.md)
+  (state divergence, lost commits, the re-keying ceremony, `ReconcileOutcome`),
+  [Versioning](capsule-docs/src/content/docs/design/versioning.md) (upgrade ceremony).
 - **Deliverable:** the tombstone-plus-fork ceremony, re-keying, reconciliation
   (`ReconcileOutcome`). **Depends on:** S-X2; E2E case 8.
 
