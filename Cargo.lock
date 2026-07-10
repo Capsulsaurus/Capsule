@@ -1382,6 +1382,7 @@ dependencies = [
  "ml-dsa",
  "ml-kem",
  "num-rational",
+ "p256",
  "rusqlite",
  "serde",
  "serde_bytes",

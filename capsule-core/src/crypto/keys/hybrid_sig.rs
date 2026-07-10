@@ -1,4 +1,4 @@
-//! Hybrid Ed25519 + ML-DSA-65 signatures — the long-lived identity signature used for
+//! Hybrid classical + ML-DSA-65 signatures — the long-lived identity signature used for
 //! the user IK, device keys (DSK), asset manifests, write-tier keys, sidecars, the device
 //! directory, and backup manifests (SSoT: [Cryptography — Primitives § Signature Scheme]).
 //!
@@ -7,8 +7,16 @@
 //! (including `crypto_suite_id`), the construction is downgrade-resistant even if one
 //! algorithm is later broken.
 //!
-//! Keys are deterministic from 32-byte seeds (Ed25519 secret scalar / ML-DSA `ξ`), so a
-//! signing key serializes as 64 seed bytes and can be wrapped and restored verbatim.
+//! The classical half is **algorithm-tagged** over [`ClassicalAlgorithm`]: software keys use
+//! **Ed25519** (the end-to-end default), while the hardware-backed device key pairs the
+//! ML-DSA-65 half with a **hardware ECDSA-P256** classical half — because shipping secure
+//! elements (Secure Enclave, StrongBox, TPM 2.0) expose P-256, not Ed25519 (see
+//! [`crypto::keys::p256`](super::p256)). The tag is carried by the key/signature themselves
+//! (recovered from the classical-half length on the wire), so the Ed25519 serialization is
+//! **byte-for-byte identical** to before the P-256 variant existed.
+//!
+//! Ed25519 keys are deterministic from 32-byte seeds (Ed25519 secret scalar / ML-DSA `ξ`), so
+//! a software signing key serializes as 64 seed bytes and can be wrapped and restored verbatim.
 //!
 //! [Cryptography — Primitives § Signature Scheme]: https://docs/design/cryptography/primitives/#signature-scheme
 
@@ -20,6 +28,7 @@ use ml_dsa::{
     B32, EncodedSignature, EncodedVerifyingKey, Keypair as _, MlDsa65, Signature as MlSignature,
     Signer as _, SigningKey as MlSigningKey, Verifier as _, VerifyingKey as MlVerifyingKey,
 };
+use p256::ecdsa::{Signature as P256Signature, VerifyingKey as P256VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::crypto::{CryptoError, rng};
@@ -30,8 +39,40 @@ const SEED_LEN: usize = 32;
 const ED_PK_LEN: usize = 32;
 /// Ed25519 signature length.
 const ED_SIG_LEN: usize = 64;
+/// ML-DSA-65 public key length (FIPS-204 level-3).
+const ML_PK_LEN: usize = 1952;
+/// Compressed SEC1 NIST P-256 public key length (`0x02|0x03` prefix + 32-byte x).
+const P256_PK_LEN: usize = 33;
 
-/// A hybrid signing keypair (private). Holds both algorithm halves.
+/// The classical half of a hybrid device-key composition. Ed25519 is the software default;
+/// ECDSA-P256 is what shipping secure elements provide (Secure Enclave / StrongBox / TPM 2.0).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassicalAlgorithm {
+    /// Software (or future hardware) Ed25519 — today's end-to-end software composition.
+    Ed25519,
+    /// Hardware ECDSA-P256 with DER-encoded signatures over `SHA-256(msg)`.
+    EcdsaP256,
+}
+
+/// The classical half of a [`HybridVerifyingKey`], tagged by algorithm.
+#[derive(Clone)]
+enum ClassicalVerifyingKey {
+    Ed25519(EdVerifyingKey),
+    EcdsaP256(P256VerifyingKey),
+}
+
+/// The classical half of a [`HybridSignature`], tagged by algorithm. The Ed25519 half is a
+/// fixed 64-byte signature; the P-256 half is a DER-encoded ECDSA signature.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ClassicalSignature {
+    Ed25519([u8; ED_SIG_LEN]),
+    EcdsaP256(Vec<u8>),
+}
+
+/// A hybrid signing keypair (private) — the **software** composition, both halves in memory.
+/// The hardware-backed composition lives in [`HardwareBackedSigner`](super::HardwareBackedSigner)
+/// (Ed25519 hardware half) and [`P256HybridSigningKey`](super::p256::P256HybridSigningKey)
+/// (P-256 hardware half); both drive the same [`HybridSignature`]/[`HybridVerifyingKey`] types.
 #[derive(Clone)]
 pub struct HybridSigningKey {
     ed: EdSigningKey,
@@ -41,29 +82,61 @@ pub struct HybridSigningKey {
 /// A hybrid public verifying key. Published in the device directory.
 #[derive(Clone)]
 pub struct HybridVerifyingKey {
-    ed: EdVerifyingKey,
+    classical: ClassicalVerifyingKey,
     ml: MlVerifyingKey<MlDsa65>,
 }
 
-/// A hybrid signature: an Ed25519 half and an ML-DSA-65 half over the same message.
+/// A hybrid signature: a classical half (Ed25519 or ECDSA-P256) and an ML-DSA-65 half over the
+/// same message.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HybridSignature {
-    ed: [u8; ED_SIG_LEN],
+    classical: ClassicalSignature,
     ml: Vec<u8>,
 }
 
 impl HybridSignature {
-    /// Assemble a signature from its two halves. Used by the hardware-backed signer, which
-    /// produces the Ed25519 half inside a secure element and the ML-DSA-65 half in software.
-    /// The halves are not validated here — verification happens in
+    /// Assemble an **Ed25519** hybrid signature from its two halves. Used by the hardware-backed
+    /// signer, which produces the Ed25519 half inside a secure element and the ML-DSA-65 half in
+    /// software. The halves are not validated here — verification happens in
     /// [`HybridVerifyingKey::verify`].
     pub(crate) fn from_halves(ed: [u8; ED_SIG_LEN], ml: Vec<u8>) -> Self {
-        Self { ed, ml }
+        Self {
+            classical: ClassicalSignature::Ed25519(ed),
+            ml,
+        }
+    }
+
+    /// Assemble an **ECDSA-P256** hybrid signature from a DER-encoded classical half and the
+    /// software ML-DSA-65 half. Used by [`P256HybridSigningKey`](super::p256::P256HybridSigningKey),
+    /// whose hardware element emits DER ECDSA over `SHA-256(msg)`.
+    pub(crate) fn from_p256_halves(der: Vec<u8>, ml: Vec<u8>) -> Self {
+        Self {
+            classical: ClassicalSignature::EcdsaP256(der),
+            ml,
+        }
+    }
+
+    /// The classical algorithm this signature's classical half is encoded for.
+    pub fn classical_algorithm(&self) -> ClassicalAlgorithm {
+        match self.classical {
+            ClassicalSignature::Ed25519(_) => ClassicalAlgorithm::Ed25519,
+            ClassicalSignature::EcdsaP256(_) => ClassicalAlgorithm::EcdsaP256,
+        }
     }
 }
 
 fn to_ml_seed(bytes: &[u8; SEED_LEN]) -> B32 {
     B32::try_from(&bytes[..]).expect("32-byte ML-DSA seed")
+}
+
+/// Verify a DER-encoded ECDSA-P256 signature over `msg`. RustCrypto's `p256` verifier hashes
+/// `msg` with SHA-256 internally (matching what a secure element signs) and accepts both
+/// low-S and high-S DER encodings, so a signature is never rejected for S-normalization alone.
+fn p256_verify(vk: &P256VerifyingKey, msg: &[u8], der: &[u8]) -> bool {
+    match P256Signature::from_der(der) {
+        Ok(sig) => vk.verify(msg, &sig).is_ok(),
+        Err(_) => false,
+    }
 }
 
 impl HybridSigningKey {
@@ -105,7 +178,7 @@ impl HybridSigningKey {
     /// The public verifying key.
     pub fn verifying_key(&self) -> HybridVerifyingKey {
         HybridVerifyingKey {
-            ed: self.ed.verifying_key(),
+            classical: ClassicalVerifyingKey::Ed25519(self.ed.verifying_key()),
             ml: self.ml.verifying_key(),
         }
     }
@@ -114,17 +187,47 @@ impl HybridSigningKey {
     pub fn sign(&self, msg: &[u8]) -> HybridSignature {
         let ed = self.ed.sign(msg).to_bytes();
         let ml = self.ml.sign(msg).encode().to_vec();
-        HybridSignature { ed, ml }
+        HybridSignature {
+            classical: ClassicalSignature::Ed25519(ed),
+            ml,
+        }
     }
 }
 
 impl HybridVerifyingKey {
-    /// Verify `sig` over `msg`. Returns `true` only if **both** halves verify.
+    /// Assemble an **ECDSA-P256** hybrid verifying key from a hardware P-256 public key and the
+    /// software ML-DSA-65 public half. Used by
+    /// [`P256HybridSigningKey`](super::p256::P256HybridSigningKey) at enrollment.
+    pub(crate) fn from_p256_parts(vk: P256VerifyingKey, ml: MlVerifyingKey<MlDsa65>) -> Self {
+        Self {
+            classical: ClassicalVerifyingKey::EcdsaP256(vk),
+            ml,
+        }
+    }
+
+    /// The classical algorithm this key's classical half is encoded for.
+    pub fn classical_algorithm(&self) -> ClassicalAlgorithm {
+        match self.classical {
+            ClassicalVerifyingKey::Ed25519(_) => ClassicalAlgorithm::Ed25519,
+            ClassicalVerifyingKey::EcdsaP256(_) => ClassicalAlgorithm::EcdsaP256,
+        }
+    }
+
+    /// Verify `sig` over `msg`. Returns `true` only if **both** halves verify. The classical
+    /// half dispatches on this key's declared algorithm: a signature whose classical half is a
+    /// *different* algorithm than the key (an Ed25519 sig against a P-256 key, or vice versa)
+    /// never verifies.
     pub fn verify(&self, msg: &[u8], sig: &HybridSignature) -> bool {
-        let ed_ok = self
-            .ed
-            .verify(msg, &EdSignature::from_bytes(&sig.ed))
-            .is_ok();
+        let classical_ok = match (&self.classical, &sig.classical) {
+            (ClassicalVerifyingKey::Ed25519(vk), ClassicalSignature::Ed25519(s)) => {
+                vk.verify(msg, &EdSignature::from_bytes(s)).is_ok()
+            }
+            (ClassicalVerifyingKey::EcdsaP256(vk), ClassicalSignature::EcdsaP256(der)) => {
+                p256_verify(vk, msg, der)
+            }
+            // Algorithm mismatch between key and signature — never accept.
+            _ => false,
+        };
         // Short-circuit only matters for cost; correctness requires both.
         let ml_ok = match EncodedSignature::<MlDsa65>::try_from(sig.ml.as_slice()) {
             Ok(enc) => match MlSignature::<MlDsa65>::decode(&enc) {
@@ -133,32 +236,57 @@ impl HybridVerifyingKey {
             },
             Err(_) => false,
         };
-        ed_ok && ml_ok
+        classical_ok && ml_ok
     }
 
-    /// Raw bytes: Ed25519 public key (32) followed by ML-DSA-65 public key (1952).
+    /// The classical half's raw bytes: Ed25519 public key (32) or compressed SEC1 P-256 public
+    /// key (33).
+    fn classical_bytes(&self) -> Vec<u8> {
+        match &self.classical {
+            ClassicalVerifyingKey::Ed25519(vk) => vk.to_bytes().to_vec(),
+            ClassicalVerifyingKey::EcdsaP256(vk) => vk.to_encoded_point(true).as_bytes().to_vec(),
+        }
+    }
+
+    /// Raw bytes: the classical public key (Ed25519 = 32, P-256 = 33) followed by the ML-DSA-65
+    /// public key (1952). The classical-half length is what distinguishes the two algorithms on
+    /// decode, so an Ed25519 key round-trips to the exact same bytes it always has.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(ED_PK_LEN + 1952);
-        out.extend_from_slice(&self.ed.to_bytes());
+        let classical = self.classical_bytes();
+        let mut out = Vec::with_capacity(classical.len() + ML_PK_LEN);
+        out.extend_from_slice(&classical);
         out.extend_from_slice(self.ml.encode().as_slice());
         out
     }
 
-    /// Reconstruct from the `ed (32) ‖ ml` byte layout produced by [`to_bytes`](Self::to_bytes).
+    /// Reconstruct from the `classical ‖ ml` byte layout produced by [`to_bytes`](Self::to_bytes).
+    /// The ML-DSA-65 half is the fixed-length 1952-byte suffix; the classical prefix is 32 bytes
+    /// (Ed25519) or 33 bytes (compressed SEC1 P-256), which selects the algorithm.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
-        if bytes.len() <= ED_PK_LEN {
+        if bytes.len() <= ML_PK_LEN {
             return Err(CryptoError::Malformed("hybrid verifying key too short"));
         }
-        let (ed_b, ml_b) = bytes.split_at(ED_PK_LEN);
-        let ed_arr: [u8; ED_PK_LEN] = ed_b
-            .try_into()
-            .map_err(|_| CryptoError::Malformed("bad Ed25519 public key length"))?;
-        let ed = EdVerifyingKey::from_bytes(&ed_arr)
-            .map_err(|_| CryptoError::Key("invalid Ed25519 public key"))?;
+        let (classical_b, ml_b) = bytes.split_at(bytes.len() - ML_PK_LEN);
+        let classical = match classical_b.len() {
+            ED_PK_LEN => {
+                let arr: [u8; ED_PK_LEN] = classical_b
+                    .try_into()
+                    .map_err(|_| CryptoError::Malformed("bad Ed25519 public key length"))?;
+                let ed = EdVerifyingKey::from_bytes(&arr)
+                    .map_err(|_| CryptoError::Key("invalid Ed25519 public key"))?;
+                ClassicalVerifyingKey::Ed25519(ed)
+            }
+            P256_PK_LEN => {
+                let vk = P256VerifyingKey::from_sec1_bytes(classical_b)
+                    .map_err(|_| CryptoError::Key("invalid P-256 public key"))?;
+                ClassicalVerifyingKey::EcdsaP256(vk)
+            }
+            _ => return Err(CryptoError::Malformed("bad classical public key length")),
+        };
         let enc = EncodedVerifyingKey::<MlDsa65>::try_from(ml_b)
             .map_err(|_| CryptoError::Malformed("bad ML-DSA public key length"))?;
         let ml = MlVerifyingKey::<MlDsa65>::decode(&enc);
-        Ok(Self { ed, ml })
+        Ok(Self { classical, ml })
     }
 }
 
@@ -171,11 +299,20 @@ impl Eq for HybridVerifyingKey {}
 
 impl std::fmt::Debug for HybridVerifyingKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "HybridVerifyingKey(ed={})",
-            hex::encode(self.ed.to_bytes())
-        )
+        match &self.classical {
+            ClassicalVerifyingKey::Ed25519(vk) => {
+                write!(
+                    f,
+                    "HybridVerifyingKey(ed25519={})",
+                    hex::encode(vk.to_bytes())
+                )
+            }
+            ClassicalVerifyingKey::EcdsaP256(vk) => write!(
+                f,
+                "HybridVerifyingKey(p256={})",
+                hex::encode(vk.to_encoded_point(true).as_bytes())
+            ),
+        }
     }
 }
 
@@ -191,8 +328,12 @@ struct SigWire {
 
 impl Serialize for HybridSignature {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let classical = match &self.classical {
+            ClassicalSignature::Ed25519(sig) => sig.to_vec(),
+            ClassicalSignature::EcdsaP256(der) => der.clone(),
+        };
         SigWire {
-            ed: self.ed.to_vec(),
+            ed: classical,
             ml: self.ml.clone(),
         }
         .serialize(s)
@@ -201,20 +342,30 @@ impl Serialize for HybridSignature {
 
 impl<'de> Deserialize<'de> for HybridSignature {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
         let w = SigWire::deserialize(d)?;
-        let ed: [u8; ED_SIG_LEN] =
-            w.ed.as_slice()
-                .try_into()
-                .map_err(|_| D::Error::custom("Ed25519 signature must be 64 bytes"))?;
-        Ok(HybridSignature { ed, ml: w.ml })
+        // The classical half is either a 64-byte Ed25519 signature or a variable-length DER
+        // ECDSA-P256 signature (never 64 bytes for a real P-256 signature). Verification is
+        // key-driven, so a misclassified half can only fail verification, never falsely accept.
+        let classical = if w.ed.len() == ED_SIG_LEN {
+            let ed: [u8; ED_SIG_LEN] =
+                w.ed.as_slice()
+                    .try_into()
+                    .expect("length checked to equal ED_SIG_LEN");
+            ClassicalSignature::Ed25519(ed)
+        } else {
+            ClassicalSignature::EcdsaP256(w.ed)
+        };
+        Ok(HybridSignature {
+            classical,
+            ml: w.ml,
+        })
     }
 }
 
 impl Serialize for HybridVerifyingKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         SigWire {
-            ed: self.ed.to_bytes().to_vec(),
+            ed: self.classical_bytes(),
             ml: self.ml.encode().to_vec(),
         }
         .serialize(s)
@@ -249,6 +400,19 @@ mod tests {
     }
 
     #[test]
+    fn software_key_is_ed25519_tagged() {
+        let sk = fixed_key();
+        assert_eq!(
+            sk.verifying_key().classical_algorithm(),
+            ClassicalAlgorithm::Ed25519
+        );
+        assert_eq!(
+            sk.sign(b"msg").classical_algorithm(),
+            ClassicalAlgorithm::Ed25519
+        );
+    }
+
+    #[test]
     fn rejects_wrong_message() {
         let sk = fixed_key();
         let sig = sk.sign(b"original");
@@ -268,7 +432,10 @@ mod tests {
     fn corrupting_only_the_ed25519_half_is_rejected() {
         let sk = fixed_key();
         let mut sig = sk.sign(b"msg");
-        sig.ed[0] ^= 0x01; // ML-DSA half still valid
+        match &mut sig.classical {
+            ClassicalSignature::Ed25519(ed) => ed[0] ^= 0x01, // ML-DSA half still valid
+            ClassicalSignature::EcdsaP256(_) => unreachable!("software key is Ed25519"),
+        }
         assert!(
             !sk.verifying_key().verify(b"msg", &sig),
             "a valid ML-DSA half must not rescue a broken Ed25519 half"
@@ -295,7 +462,7 @@ mod tests {
         let sig_b = sk.sign(b"message B");
         // Graft A's Ed25519 half onto B's ML-DSA half: neither message verifies.
         let frankenstein = HybridSignature {
-            ed: sig_a.ed,
+            classical: sig_a.classical,
             ml: sig_b.ml,
         };
         assert!(!vk.verify(b"message A", &frankenstein));

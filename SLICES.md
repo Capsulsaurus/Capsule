@@ -63,7 +63,7 @@ its slice.
 | S-A1  | Wrapped file-key mode (seal/unseal + verify)         | core-crypto     | —                | M    | done    |
 | S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | done    |
 | S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | done    |
-| S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
+| S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | done    |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | done    |
 | S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | done* |
@@ -279,6 +279,14 @@ pass until the gate lifts.
 - **Done when:** `p256_hybrid_round_trip_and_directory_dispatch` un-ignored and green
   against a mock P-256 element; existing Ed25519 vectors untouched.
 - **Tier:** Unit + Smoke (mock element). **Blocks:** S-F2, S-F4.
+- **Landed:** algorithm tag carried by the tagged classical half and recovered
+  from wire lengths (Ed25519 wire byte-identical — serde vectors untouched);
+  DER ECDSA verbatim from the `HardwareSigner` seam, verified via
+  `p256::ecdsa` (low/high-S both accepted per the doc); public-key ingestion
+  normalizes compressed/uncompressed SEC1 + bare x‖y (TPM) to compressed;
+  `verify_asset` dispatches on the directory entry's key with a cross-algorithm
+  reject. `p256` reuses the version already in-tree via jsonwebtoken
+  (default-features off — WASM build stays lean); no `DeviceEntry` schema change.
 
 ### S-A5 — Share-link crypto
 

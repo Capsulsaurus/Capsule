@@ -141,8 +141,15 @@ pub fn verify_asset(
         Some(false) => return Reject(DeviceAddedAfter),
         Some(true) => {}
     }
-    // 8. The device signature must verify (provenance).
+    // 8. The device signature must verify under the entry's **declared classical algorithm**.
+    //    The directory entry's `dsk_public` is algorithm-tagged — Ed25519 (software) or
+    //    ECDSA-P256 (hardware secure elements) — so verification dispatches on that tag. A
+    //    signature whose classical half is a *different* algorithm than the entry declares is a
+    //    cross-algorithm forgery and is rejected before the (algorithm-specific) verify.
     let signing_bytes = manifest.signing_bytes();
+    if manifest.device_sig.classical_algorithm() != entry.dsk_public.classical_algorithm() {
+        return Reject(BadDeviceSig);
+    }
     if !entry
         .dsk_public
         .verify(&signing_bytes, &manifest.device_sig)
@@ -518,6 +525,61 @@ mod tests {
         m.device_sig = HybridSigningKey::from_seed_bytes(&[99; 32], &[99; 32]).sign(b"garbage");
         assert_eq!(
             f.verify(&m, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+    }
+
+    // ── Directory dispatch on the declared classical algorithm (S-A4) ────────────
+
+    /// The chokepoint accepts a manifest whose signing device is a **hardware P-256** hybrid
+    /// key: the directory entry declares `EcdsaP256`, and `verify_asset` dispatches to the
+    /// P-256 verify path. Proves the Ed25519-only assumption is gone from the chokepoint.
+    #[test]
+    fn accept_valid_create_from_p256_device() {
+        use std::sync::Arc;
+
+        use crate::crypto::keys::p256::MockP256Element;
+        use crate::crypto::keys::{P256HybridSigningKey, Signer as _};
+
+        let f = Fixture::new();
+        let ik = HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]);
+        let device = P256HybridSigningKey::enroll(
+            Arc::new(MockP256Element::new([7; 32], false)),
+            "device-dsk".into(),
+            &[2; 32],
+        )
+        .unwrap();
+        let directory = DirectoryCore {
+            user_id: Uuid::from_u128(USER),
+            directory_version: 1,
+            updated_at: "2026-05-30T00:00:00Z".into(),
+            devices: vec![DeviceEntry {
+                device_id: Uuid::from_u128(DEVICE),
+                dsk_public: device.verifying_key(),
+                added_at: "2026-05-30T00:00:00Z".into(),
+                revoked_at: None,
+            }],
+        }
+        .sign(&ik);
+
+        // Sign the manifest with the P-256 device (device_sig) and the epoch-1 write key.
+        let m = f
+            .core(Action::Create, None)
+            .sign(&device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_asset(&m, CIPHERTEXT, &directory, &f.authority, None),
+            VerifyOutcome::Accept
+        );
+
+        // Cross-algorithm forgery: an Ed25519 device signature against the P-256 directory entry
+        // is rejected at the algorithm-dispatch guard (declared EcdsaP256 ≠ signature Ed25519).
+        let ed_signed = f
+            .core(Action::Create, None)
+            .sign(&f.device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_asset(&ed_signed, CIPHERTEXT, &directory, &f.authority, None),
             VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
         );
     }
