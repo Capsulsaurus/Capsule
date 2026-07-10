@@ -65,7 +65,7 @@ its slice.
 | S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | done    |
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
-| S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | ready   |
+| S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | done    |
 | S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | ready |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | ready   |
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
@@ -299,6 +299,13 @@ pass until the gate lifts.
 - **Done when:** the module's three `#[ignore]`d tests flip; the web-upload doc's unit
   Validation bullets pass; the sealing path compiles to `wasm32-unknown-unknown`.
 - **Tier:** Unit (seal round-trip + adoption rewrap).
+- **Landed:** all three tests flipped; WASM sealing surface builds via
+  `cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features`
+  (new default `native` feature gates SQLite/lifecycle; `ffi`/`media` imply it;
+  `.cargo/config.toml` pins the wasm getrandom backend). Drop Key private half is
+  escrowed under the account master key — the multi-device OGK re-wrap rides the
+  escrow seam once MLS membership (Lane X) exists. Note for S-E1: `sharing` sits
+  behind `native`; move it to the always-on set when the browser unwrap needs it.
 
 ### S-A7 — `gps.datum` sidecar field + BD-09 input fold
 

@@ -24,7 +24,7 @@ pub use album::{Amk, AmkVersion};
 pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
 pub use hardware::{HardwareBackedSigner, HardwareSigner, HardwareSignerError};
 pub use hybrid_sig::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
-pub use kem::DekKeypair;
+pub use kem::{DEK_CIPHERTEXT_LEN, DEK_PUBLIC_LEN, DekKeypair, encapsulate_to_public};
 pub use keystore::{Account, AccountFile, DeviceKeys};
 pub use master::MasterKey;
 pub use p256::{ClassicalAlgorithm, P256HybridSigningKey};

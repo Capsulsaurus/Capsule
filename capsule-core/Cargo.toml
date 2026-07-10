@@ -18,15 +18,24 @@ name = "uniffi-bindgen"
 required-features = ["ffi-bindgen"]
 
 [features]
-# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). `ffi-bindgen`
-# additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
-ffi = ["dep:uniffi"]
+# `native` (default) is the on-device library/import/lifecycle surface: it links SQLite,
+# the filesystem, and the media stack. Turning it OFF (`--no-default-features`) leaves only
+# the WASM sealing surface (`cbor` + `crypto` + `drop`), which targets
+# `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
+#   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
+default = ["native"]
+native = ["dep:rusqlite"]
+# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
+# native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
+# uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
+ffi = ["native", "dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
 # `media` exposes the decode/encode + media-metadata utilities (the former standalone
 # `capsule-media` crate) as `capsule_core::media`. Non-default so the default library
 # build (crypto data plane, CLI, FFI, future WASM) never compiles the media stack;
 # `capsule-api-upload` opts in.
 media = [
+    "native",
     "dep:base64",
     "dep:file-format",
     "dep:jpeg-encoder",
@@ -52,7 +61,9 @@ indexmap = { workspace = true }
 jiff = { workspace = true }
 kamadak-exif = "0.5"
 log = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
+# Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
+# cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
@@ -101,6 +112,19 @@ uniffi = { version = "0.31", optional = true }
 # `libtss2`). Optional + off by default so neither the default nor the mobile FFI
 # build pulls in the TPM stack. See `crypto::keys::tpm`.
 tss-esapi = { version = "7", optional = true }
+
+# On wasm32 the OS CSPRNG has no default backend. `crypto::rng` uses getrandom 0.3 directly
+# (Web Crypto via the `wasm_js` feature + `--cfg getrandom_backend="wasm_js"`, set for this
+# target in `.cargo/config.toml`). The crypto stack (via `rand_core 0.6`) also pulls
+# getrandom 0.2 transitively, whose wasm backend is its `js` feature — enabled here so the
+# whole graph links. Neither is used on any other target.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# `uuid` also needs an explicit wasm randomness source; route it through getrandom (whose
+# wasm backend is configured above) so the drop id / file-id draws work in the browser.
+uuid = { workspace = true, features = ["rng-getrandom"] }
 
 [[example]]
 name = "extract_metadata"
