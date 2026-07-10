@@ -32,6 +32,10 @@ type ExecError = Box<dyn std::error::Error + Send + Sync>;
 /// decisions are reported verbatim. Assets are written into the album resolved from
 /// `config.target_album_id` (a UUID string) or, when unset, the workspace's default album — which
 /// must already exist in the workspace.
+#[tracing::instrument(
+    skip_all,
+    fields(candidates = plan.actions.len(), mode = ?config.import_mode)
+)]
 pub fn execute(
     plan: &ImportActionPlan,
     workspace: &mut Workspace,
@@ -102,6 +106,12 @@ pub fn execute(
         },
     });
 
+    tracing::info!(
+        imported = summary.imported_count(),
+        duplicates = summary.duplicate_count(),
+        errors = summary.error_count(),
+        "import: execution complete"
+    );
     Ok(summary)
 }
 

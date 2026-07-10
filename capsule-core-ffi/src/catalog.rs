@@ -37,7 +37,7 @@ impl Catalog {
     /// Open (creating and migrating if necessary) the catalog at `path`.
     #[uniffi::constructor]
     pub fn open(path: String) -> Result<Arc<Self>, CatalogError> {
-        log::info!("catalog: opening at {path}");
+        tracing::info!(%path, "catalog: opening");
         let driver = DatabaseDriver::open(Path::new(&path))?;
         Ok(Arc::new(Self {
             inner: Mutex::new(driver),
@@ -47,7 +47,7 @@ impl Catalog {
     /// Open an ephemeral in-memory catalog (used by tests and SwiftUI previews).
     #[uniffi::constructor]
     pub fn open_in_memory() -> Result<Arc<Self>, CatalogError> {
-        log::debug!("catalog: opening in-memory");
+        tracing::debug!("catalog: opening in-memory");
         let driver = DatabaseDriver::open_in_memory()?;
         Ok(Arc::new(Self {
             inner: Mutex::new(driver),
@@ -62,24 +62,24 @@ impl Catalog {
     // ── Assets ───────────────────────────────────────────────────────────────
 
     pub fn insert_asset(&self, asset: AssetRecord) -> Result<(), CatalogError> {
-        log::debug!("catalog: insert_asset uuid={}", asset.uuid);
+        tracing::debug!(uuid = %asset.uuid, "catalog: insert_asset");
         self.driver().insert_asset(&asset.into())?;
         Ok(())
     }
 
     pub fn upsert_asset(&self, asset: AssetRecord) -> Result<(), CatalogError> {
-        log::debug!("catalog: upsert_asset uuid={}", asset.uuid);
+        tracing::debug!(uuid = %asset.uuid, "catalog: upsert_asset");
         self.driver().upsert_asset(&asset.into())?;
         Ok(())
     }
 
     pub fn find_by_uuid(&self, uuid: String) -> Result<Option<AssetRecord>, CatalogError> {
-        log::trace!("catalog: find_by_uuid uuid={uuid}");
+        tracing::trace!(%uuid, "catalog: find_by_uuid");
         Ok(self.driver().find_by_uuid(&uuid)?.map(AssetRecord::from))
     }
 
     pub fn find_by_hash(&self, hash: String) -> Result<Option<AssetRecord>, CatalogError> {
-        log::trace!("catalog: find_by_hash");
+        tracing::trace!("catalog: find_by_hash");
         Ok(self.driver().find_by_hash(&hash)?.map(AssetRecord::from))
     }
 
@@ -88,7 +88,7 @@ impl Catalog {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<AssetRecord>, CatalogError> {
-        log::trace!("catalog: query_timeline offset={offset} limit={limit}");
+        tracing::trace!(offset, limit, "catalog: query_timeline");
         let rows = self
             .driver()
             .query_timeline(offset as usize, limit as usize)?;
@@ -105,8 +105,11 @@ impl Catalog {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<AssetRecord>, CatalogError> {
-        log::trace!(
-            "catalog: query_timeline_filtered type={asset_type:?} after={after:?} before={before:?}"
+        tracing::trace!(
+            asset_type = ?asset_type,
+            after = ?after,
+            before = ?before,
+            "catalog: query_timeline_filtered"
         );
         let rows = self.driver().query_timeline_filtered(
             asset_type.as_deref(),
@@ -119,13 +122,13 @@ impl Catalog {
     }
 
     pub fn soft_delete(&self, uuid: String, deleted_at: i64) -> Result<(), CatalogError> {
-        log::debug!("catalog: soft_delete uuid={uuid}");
+        tracing::debug!(%uuid, "catalog: soft_delete");
         self.driver().soft_delete(&uuid, deleted_at)?;
         Ok(())
     }
 
     pub fn restore_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        log::debug!("catalog: restore_asset uuid={uuid}");
+        tracing::debug!(%uuid, "catalog: restore_asset");
         self.driver().restore_asset(&uuid)?;
         Ok(())
     }
@@ -140,14 +143,14 @@ impl Catalog {
 
     /// All currently soft-deleted assets — the Recently Deleted listing.
     pub fn query_trash(&self, offset: u64, limit: u64) -> Result<Vec<AssetRecord>, CatalogError> {
-        log::trace!("catalog: query_trash offset={offset} limit={limit}");
+        tracing::trace!(offset, limit, "catalog: query_trash");
         let rows = self.driver().query_trash(offset as usize, limit as usize)?;
         Ok(rows.into_iter().map(AssetRecord::from).collect())
     }
 
     /// Permanently remove an asset row (the file is deleted by the caller).
     pub fn purge_asset(&self, uuid: String) -> Result<(), CatalogError> {
-        log::debug!("catalog: purge_asset uuid={uuid}");
+        tracing::debug!(%uuid, "catalog: purge_asset");
         self.driver().purge_asset(&uuid)?;
         Ok(())
     }
@@ -155,7 +158,7 @@ impl Catalog {
     // ── Stacks ───────────────────────────────────────────────────────────────
 
     pub fn insert_stack(&self, stack: AssetStackRecord) -> Result<(), CatalogError> {
-        log::debug!("catalog: insert_stack id={}", stack.id);
+        tracing::debug!(id = %stack.id, "catalog: insert_stack");
         self.driver().insert_stack(&stack.into())?;
         Ok(())
     }
@@ -191,19 +194,19 @@ impl Catalog {
     // ── Albums ───────────────────────────────────────────────────────────────
 
     pub fn insert_album(&self, album: AlbumRecord) -> Result<(), CatalogError> {
-        log::debug!("catalog: insert_album id={}", album.id);
+        tracing::debug!(id = %album.id, "catalog: insert_album");
         self.driver().insert_album(&album.into())?;
         Ok(())
     }
 
     pub fn update_album(&self, album: AlbumRecord) -> Result<(), CatalogError> {
-        log::debug!("catalog: update_album id={}", album.id);
+        tracing::debug!(id = %album.id, "catalog: update_album");
         self.driver().update_album(&album.into())?;
         Ok(())
     }
 
     pub fn delete_album(&self, id: String) -> Result<(), CatalogError> {
-        log::debug!("catalog: delete_album id={id}");
+        tracing::debug!(%id, "catalog: delete_album");
         self.driver().delete_album(&id)?;
         Ok(())
     }
@@ -222,7 +225,7 @@ impl Catalog {
         uuid: String,
         album_id: Option<String>,
     ) -> Result<(), CatalogError> {
-        log::debug!("catalog: set_asset_album uuid={uuid} album={album_id:?}");
+        tracing::debug!(%uuid, album = ?album_id, "catalog: set_asset_album");
         self.driver().set_asset_album(&uuid, album_id.as_deref())?;
         Ok(())
     }

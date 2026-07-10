@@ -36,9 +36,10 @@ pub fn rebuild_index(library: &Library) -> Result<(), LibraryError> {
         match read_sidecar(path) {
             Ok(sidecar) => sidecars.push(sidecar),
             Err(e) => {
-                log::warn!(
-                    "rebuild_index: skipping unreadable sidecar {}: {e}",
-                    path.display()
+                tracing::warn!(
+                    sidecar = %path.display(),
+                    error = %e,
+                    "rebuild_index: skipping unreadable sidecar"
                 );
             }
         }

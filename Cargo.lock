@@ -1407,7 +1407,6 @@ dependencies = [
  "jiff",
  "jpeg-encoder",
  "kamadak-exif",
- "log",
  "memmap2",
  "ml-dsa",
  "ml-kem",
@@ -1441,13 +1440,14 @@ version = "0.1.0"
 dependencies = [
  "capsule-core",
  "ciborium",
- "log",
  "oslog",
  "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
  "uniffi 0.29.5",
 ]
 
@@ -1469,7 +1469,6 @@ dependencies = [
  "capsule-i18n",
  "hex",
  "jiff",
- "log",
  "prost 0.14.4",
  "reqwest",
  "secrecy",
@@ -2030,19 +2029,6 @@ dependencies = [
  "darling_core 0.23.0",
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "dashmap"
-version = "5.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
-dependencies = [
- "cfg-if",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
 ]
 
 [[package]]
@@ -4255,8 +4241,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "80d2043d1f61d77cb2f4b1f7b7b2295f40507f5f8e9d1c8bf10a1ca5f97a3969"
 dependencies = [
  "cc",
- "dashmap",
- "log",
 ]
 
 [[package]]

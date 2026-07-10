@@ -43,7 +43,6 @@ media = [
     "dep:num-rational",
     "dep:thumbhash",
     "dep:tokio",
-    "dep:tracing",
     "dep:zune-core",
     "dep:zune-jpeg",
 ]
@@ -60,7 +59,6 @@ globset = "0.4.18"
 indexmap = { workspace = true }
 jiff = { workspace = true }
 kamadak-exif = "0.5"
-log = { workspace = true }
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
@@ -98,7 +96,10 @@ memmap2 = { version = "0.9.10", optional = true }
 num-rational = { workspace = true, optional = true }
 thumbhash = { version = "0.1.0", optional = true }
 tokio = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
+# Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
+# Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
+# events, and the WASM sealing build links only the facade (no subscriber), which is free.
+tracing = { workspace = true }
 zune-core = { version = "0.5.1", optional = true }
 zune-jpeg = { version = "0.5.15", optional = true }
 

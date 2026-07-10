@@ -116,7 +116,7 @@ its slice.
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
-| S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | ready   |
+| S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | ready   |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
@@ -1128,6 +1128,11 @@ SDK; they never hand-roll network flows.
 - **Done when:** `rg 'log::'` finds no non-frozen hits in the two crates; the existing
   unit suites pass unchanged; `mise run check-rust` green.
 - **Tier:** Unit (existing suites).
+- **Landed:** 21 call sites migrated to structured `tracing`; `#[instrument]` on
+  executor execute, `import_asset_with`, backup export/import; oslog re-wired as an
+  apple-target `tracing_subscriber::Layer` (level mapping preserved); workspace
+  `log` dep removed (sdk's unused declaration too). `log` remains only as a
+  build-time transitive of `prost-build→tzf-rs`.
 
 ### S-F7 — core-swift XCTest → swift-testing migration
 

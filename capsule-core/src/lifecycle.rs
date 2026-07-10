@@ -688,6 +688,7 @@ impl Workspace {
     /// manifest + append-only provenance, self-verified through [`verify_asset`], and — behind
     /// the `media` feature, when a [`StillEncoder`](crate::media::image::derivative::StillEncoder)
     /// is attached — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+    #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display()))]
     pub fn import_asset_with(
         &mut self,
         album_id: Uuid,
@@ -1028,6 +1029,7 @@ impl Workspace {
     }
 
     /// Export every managed asset to a portable backup artifact.
+    #[tracing::instrument(skip_all, fields(out = %out.display()))]
     pub fn export_backup(&self, out: &Path, passphrase: &[u8]) -> Result<()> {
         let mut assets = Vec::new();
         let mut amks: BTreeMap<(Uuid, u32), [u8; 32]> = BTreeMap::new();
@@ -1078,6 +1080,7 @@ impl Workspace {
         };
         let bytes = backup::export(&input, passphrase, self.device_signer.as_ref())?;
         fs::write(out, &bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        tracing::info!(bytes = bytes.len(), "backup: export complete");
         Ok(())
     }
 
@@ -1090,6 +1093,7 @@ impl Workspace {
     /// decrypted plaintext + provenance into the library. `exporter_pub` is the exporting
     /// device's signing key (resolved from the user's device directory). Returns the count
     /// of assets added.
+    #[tracing::instrument(skip_all, fields(archive = %archive.display()))]
     pub fn import_backup(
         &mut self,
         archive: &Path,
@@ -1135,6 +1139,7 @@ impl Workspace {
             self.assets.insert(restored.asset_id, asset);
             added += 1;
         }
+        tracing::info!(added, "backup: import complete");
         Ok(added)
     }
 

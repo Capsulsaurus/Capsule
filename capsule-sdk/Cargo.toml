@@ -15,7 +15,6 @@ capsule-core = { path = "../capsule-core" }
 # base64 decodes the server's `receipt_cbor` (STANDARD) and the well-known attestation public
 # keys before handing them to capsule-core for verification.
 base64 = { workspace = true }
-log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
