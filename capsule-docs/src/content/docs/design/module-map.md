@@ -135,6 +135,7 @@ Navigation from a design doc back to where the code lives.
 | [Filesystem — Client](/design/filesystem/client/)                   | `capsule-core::{library,db}`, per-platform native code                                                                        |
 | [Filesystem — Maintenance](/design/filesystem/maintenance/)         | `capsule-core::library::{scrub,rebuild,trash}`, server-side scrub in `capsule-api-upload`                                     |
 | [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*`; the streaming import-upload loop, the `capsule-core::library::available_bytes` free-space probe, and the `import::importers` third-party source adapters are planned |
+| [Import — Camera Import](/design/import/camera-import/)             | `capsule-core::import::camera` (planned, post-v1) over the gated in-house `ptpip-rs` crate                                    |
 | [Import — Upload Protocol](/design/import/upload-protocol/)         | `capsule-sdk::upload` (client) + `capsule-api-upload` (server)                                                                |
 | [Import — Download & Sync](/design/import/download-sync/)           | `capsule-sdk` (client) + `capsule-api-sync` (server)                                                                          |
 | [Import — Storage Verification](/design/import/storage-verification/) | `capsule-api-media::verify` (route) + `capsule-sdk` (client) + `capsule-core` (verify-before-destroy predicate)              |

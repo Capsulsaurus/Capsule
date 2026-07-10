@@ -102,6 +102,7 @@ export default defineConfig({
                                 { slug: 'design/import/upload-protocol' },
                                 { slug: 'design/import/download-sync' },
                                 { slug: 'design/import/storage-verification' },
+                                { slug: 'design/import/camera-import' },
                                 { slug: 'design/backup-recovery' },
                                 { slug: 'design/versioning' },
                             ],

@@ -74,6 +74,7 @@ its slice.
 | S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | ready   |
 | S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
+| S-B9  | Tethered camera import (PTP/IP)                      | media/import    | S-B2, ptpip-rs   | L    | post-v1 |
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | ready   |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | ready   |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
@@ -164,6 +165,7 @@ graph LR
   B2 --> B6[S-B6 takeout] --> B7[S-B7 icloud]
   B6 --> B8[S-B8 immich]
   B6 --> Z2[S-Z2 migration guides]
+  B2 --> B9[S-B9 camera import]
   H1[S-H1 embeddings] --> H2[S-H2 registry]
   H1 --> H3[S-H3 semantic/face] --> G3
   X1[S-X1 openmls] --> X2[S-X2 membership] --> X3[S-X3 upgrade ceremony]
@@ -193,6 +195,7 @@ pass until the gate lifts.
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
 | `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
 | `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
+| `ptpip-rs` (in-house PTP/IP camera protocol; repo not yet created) | planned | S-B9 (post-v1). Portable Rust PTP/IP (ISO 15740 over TCP/IP) with a vendor-extension seam (Sony first) — see [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md). |
 | `openmls` X-Wing/SHA-512 ciphersuite (codepoint pending) | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
 
 ## Lane A — core crypto
@@ -377,6 +380,20 @@ pass until the gate lifts.
 - **Deliverable:** the Immich adapter (export/API surface fixed when the slice
   starts) on the S-B6 adapter trait. **Depends on:** S-B6. **Status: post-v1**.
 - **Tier:** Unit + Smoke.
+
+### S-B9 — Tethered camera import (post-v1)
+
+- **Contract:** [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md).
+- **Deliverable:** the PTP/IP source adapter in `capsule-core::import::camera` over
+  the gated in-house `ptpip-rs` crate — deterministic handle enumeration,
+  hash-on-receipt integrity, per-object resume, read-only camera storage, mDNS +
+  manual discovery/pairing — feeding the unmodified pipeline; Sony extension quirks
+  stay behind the crate.
+- **Depends on:** S-B2 (signed path) + the `ptpip-rs` library gate.
+- **Status: post-v1** — indexed so the adapter seam has an owner now.
+- **Done when:** the camera-import doc's mock-responder unit suite passes; the bench
+  smoke pulls a real card's worth from hardware. **Tier:** Unit + Smoke (bench
+  hardware lane); rides E2E case 2 once live.
 
 ## Lane C — server (key-free surfaces)
 
