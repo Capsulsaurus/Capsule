@@ -88,6 +88,20 @@ pub struct ServerConfig {
     /// Read from `SYNC_CURSOR_MAC_KEY` (base64, 32 bytes) or, absent that, derived from the
     /// signing-key DER via HKDF so it is stable across restarts and never leaves the server.
     pub sync_cursor_mac_key: SecretKeyWrapper<[u8; 32]>,
+
+    #[cfg(any(feature = "upload", feature = "media"))]
+    /// The long-lived server **attestation** signing key's 64-byte seed (Ed25519 secret ‖
+    /// ML-DSA-65 ξ) — the hybrid keypair that signs custody receipts and storage attestations
+    /// (slice `S-C15`), distinct from the classical operational/JWT key. Read from
+    /// `ATTESTATION_KEY_SEED` (base64, 32 or 64 bytes) or, absent that, derived from the
+    /// signing-key DER via HKDF so it is stable across restarts and never leaves the server.
+    pub attestation_key_seed: SecretKeyWrapper<[u8; 64]>,
+    #[cfg(any(feature = "upload", feature = "media"))]
+    /// The operator-supplied append-only attestation-key history (base64 of the well-known
+    /// document's `keys` array JSON), retaining retired public keys so pre-rotation receipts
+    /// still verify. `None` = no rotation yet; the active key alone verifies everything it
+    /// signs. Read from `ATTESTATION_KEY_HISTORY`.
+    pub attestation_key_history: Option<String>,
 }
 // TODO: Separate out these configs into environment variables struct ^^
 
@@ -205,6 +219,12 @@ impl Environment {
                 sync_cursor_mac_key: SecretKeyWrapper::from(load_sync_cursor_mac_key(
                     &jwt_ed25519_der,
                 )?),
+                #[cfg(any(feature = "upload", feature = "media"))]
+                attestation_key_seed: SecretKeyWrapper::from(load_attestation_key_seed(
+                    &jwt_ed25519_der,
+                )?),
+                #[cfg(any(feature = "upload", feature = "media"))]
+                attestation_key_history: env::var("ATTESTATION_KEY_HISTORY").ok(),
             },
             log_level: load_log_level("LOG_LEVEL").unwrap_or(if cfg!(debug_assertions) {
                 LevelFilter::TRACE
@@ -251,5 +271,57 @@ fn derive_sync_cursor_mac_key(ikm: &[u8]) -> [u8; 32] {
     let mut out = [0u8; 32];
     okm.fill(&mut out)
         .expect("HKDF fill of 32 bytes never fails");
+    out
+}
+
+/// Resolve the server attestation signing-key seed: the `ATTESTATION_KEY_SEED` override
+/// (base64, 32 or 64 bytes) if set, else derived from the signing-key DER via HKDF (slice
+/// `S-C15`). A 32-byte override is expanded to the 64-byte hybrid seed (Ed25519 ‖ ML-DSA)
+/// via the same derivation, so operators can supply either width.
+#[cfg(any(feature = "upload", feature = "media"))]
+fn load_attestation_key_seed(jwt_der: &[u8]) -> Result<[u8; 64], EnvironmentError> {
+    if let Ok(b64) = env::var("ATTESTATION_KEY_SEED") {
+        let bytes = BASE64.decode(&b64).map_err(|e| {
+            EnvironmentError::ParseError(
+                "ATTESTATION_KEY_SEED".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
+        return match bytes.len() {
+            64 => Ok(<[u8; 64]>::try_from(bytes.as_slice()).expect("64-byte seed")),
+            // A 32-byte root is stretched to the full hybrid seed deterministically.
+            32 => Ok(derive_attestation_key_seed(&bytes)),
+            _ => Err(EnvironmentError::ParseError(
+                "ATTESTATION_KEY_SEED".to_string(),
+                "must decode to exactly 32 or 64 bytes".to_string(),
+            )),
+        };
+    }
+    Ok(derive_attestation_key_seed(jwt_der))
+}
+
+/// Derive the 64-byte hybrid attestation seed (Ed25519 secret ‖ ML-DSA-65 ξ) from `ikm` via
+/// HKDF-SHA256. A distinct salt/info from the sync-cursor and JWT derivations keeps the
+/// attestation key cryptographically separated from the operational key.
+#[cfg(any(feature = "upload", feature = "media"))]
+fn derive_attestation_key_seed(ikm: &[u8]) -> [u8; 64] {
+    use ring::hkdf::{HKDF_SHA256, KeyType, Salt};
+
+    /// A 64-byte HKDF output length.
+    struct L64;
+    impl KeyType for L64 {
+        fn len(&self) -> usize {
+            64
+        }
+    }
+
+    let salt = Salt::new(HKDF_SHA256, b"capsule/attestation-key/v1");
+    let prk = salt.extract(ikm);
+    let okm = prk
+        .expand(&[b"attestation-seed"], L64)
+        .expect("HKDF expand of a fixed-length key never fails");
+    let mut out = [0u8; 64];
+    okm.fill(&mut out)
+        .expect("HKDF fill of 64 bytes never fails");
     out
 }

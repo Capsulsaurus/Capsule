@@ -1,5 +1,6 @@
 use std::clone::Clone;
 
+use capsule_core::crypto::hash::Hash32;
 use capsule_core::utils::hash::get_file_hash;
 use entity::{asset, user};
 use jiff::{SignedDuration, Timestamp};
@@ -7,6 +8,7 @@ use nanoid::nanoid;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
 };
+use service::attestation::{self, ReceiptInput};
 use service::quota::{self, WriteClass};
 use service::{album as AlbumService, asset as AssetService, sync as SyncFeed};
 
@@ -484,10 +486,28 @@ impl UploadService {
             None
         };
 
+        // The custody-receipt input (S-C15): built from what the server itself recomputed or
+        // verified at this commit — the ciphertext hash it re-hashed (== expected), the
+        // declared size, and the envelope hash it re-serialized — never echoed from the
+        // client. Prepared before the txn; a malformed stored envelope un-finalizes the
+        // bundle exactly like a feed-prep failure.
+        let receipt_input = match self.build_receipt_input(&session, now) {
+            Ok(input) => input,
+            Err(e) => {
+                tracing::warn!(upload_id, "receipt prep failed; rolling back bundle: {}", e);
+                let _ = self.storage.remove_blob(&session.expected_hash).await;
+                self.fail_session(&session).await;
+                return Err(e);
+            }
+        };
+
         let txn = self.conn.begin().await?;
-        // The `sync_seq` mint (S-C2) joins THIS finalization transaction: `mark_uploaded`
-        // flips `uploaded` and `record_finalization` mints the per-album `sync_seq` and
-        // appends the feed row, atomically. Any failure rolls back both and GCs the blob.
+        // The `sync_seq` mint (S-C2) and the `CustodyReceipt` (S-C15) both join THIS
+        // finalization transaction: `mark_uploaded` flips `uploaded`, `record_finalization`
+        // mints the per-album `sync_seq` and appends the feed row, and `issue_receipt` mints
+        // the per-server `receipt_seq`, chains + signs the receipt, and inserts it —
+        // atomically. Any failure rolls back all three (no receipt without durable custody,
+        // no custody-marking without a receipt) and GCs the blob.
         let committed = async {
             let asset =
                 AssetService::Mutation::mark_uploaded(&txn, &session.asset_id, width, height, date)
@@ -495,6 +515,8 @@ impl UploadService {
             if let Some(input) = feed_input {
                 SyncFeed::Mutation::record_finalization(&txn, input).await?;
             }
+            attestation::Mutation::issue_receipt(&txn, &self.config.attestation, receipt_input)
+                .await?;
             Ok::<_, sea_orm::DbErr>(asset)
         }
         .await;
@@ -603,6 +625,41 @@ impl UploadService {
             metadata_blob,
             blobs,
             original_held,
+        })
+    }
+
+    /// Build the [`ReceiptInput`] for a finalized blob (S-C15): the server-recomputed
+    /// ciphertext hash (== the verified `expected_hash`), declared size, the envelope hash
+    /// the server re-serializes from the stored envelope (binding the receipt to the asset's
+    /// provenance-chain position), and the uploading device from the envelope.
+    fn build_receipt_input(
+        &self,
+        session: &UploadSession,
+        received_at: Timestamp,
+    ) -> Result<ReceiptInput, UploadError> {
+        let ciphertext_hash = Hash32::from_hex(&session.expected_hash).map_err(|_| {
+            UploadError::ProcessingError("finalized hash is not valid hex".to_string())
+        })?;
+
+        // Re-serialize the stored envelope canonically and hash it — the same projection the
+        // sync feed carries, so the receipt's `envelope_hash` binds to the committed manifest.
+        let envelope: ManifestEnvelope = serde_json::from_str(&session.manifest_envelope)?;
+        let envelope_cbor = capsule_core::cbor::to_canonical_vec(&envelope)
+            .map_err(|e| UploadError::ProcessingError(format!("envelope cbor: {e}")))?;
+        let envelope_hash = Some(capsule_core::crypto::hash::hash_bytes(&envelope_cbor));
+        let uploaded_by_device = Some(envelope.created_by_device.clone());
+
+        Ok(ReceiptInput {
+            protocol_version: session.protocol_version.clone(),
+            upload_id: session.id.clone(),
+            asset_id: session.asset_id.clone(),
+            blob_role: session.blob_role.as_str().to_string(),
+            ciphertext_hash,
+            size: session.total_size,
+            envelope_hash,
+            uploaded_by_user: session.upload_user_id.clone(),
+            uploaded_by_device,
+            received_at,
         })
     }
 

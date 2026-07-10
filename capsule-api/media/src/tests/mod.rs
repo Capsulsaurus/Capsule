@@ -28,6 +28,7 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod attestation;
 mod drops;
 mod verify;
 
@@ -95,10 +96,64 @@ pub(crate) struct TestCtx {
     decoding_key: DecodingKey,
 }
 
+/// The shared test server identity + attestation seed. Matches the upload-crate test harness
+/// so a receipt issued there verifies under this media server's keyring (one deployment).
+pub(crate) const TEST_SERVER_ID: &str = "localhost";
+pub(crate) const TEST_ATTESTATION_SEED: [u8; 64] = [7u8; 64];
+
 impl TestCtx {
     /// The production verification service over this context's blob tree.
     pub(crate) fn service(&self) -> VerificationService {
         VerificationService::new(self.upload_dir.clone())
+    }
+
+    /// The shared attestation keyring for the test deployment (S-C15).
+    pub(crate) fn attestation(&self) -> std::sync::Arc<service::attestation::AttestationKeyring> {
+        std::sync::Arc::new(service::attestation::AttestationKeyring::new(
+            TEST_SERVER_ID.to_string(),
+            &TEST_ATTESTATION_SEED,
+            Vec::new(),
+        ))
+    }
+
+    /// The full media config for this context (S-C15 tests that need the attestation keyring).
+    pub(crate) fn media_config(&self) -> MediaServerConfig {
+        MediaServerConfig {
+            upload_dir: self.upload_dir.clone(),
+            jwt_eddsa_decoding_key: self.decoding_key.clone(),
+            valkey_url: String::new(),
+            max_file_size: 8 * 1024 * 1024,
+            protocol_min: "2026-01-01".to_string(),
+            protocol_max: "2026-12-31".to_string(),
+            allowed_content_types: vec!["image/jpeg".to_string()],
+            timestamp_drift_days: 30,
+            quota_limits: QuotaLimits::unlimited(),
+            drop_rate_limit_max: 60,
+            drop_rate_limit_window_secs: 60,
+            attestation: self.attestation(),
+        }
+    }
+
+    /// A salvo service over the S-C15 read surfaces mounted like the app: `/storage/verify`,
+    /// `/assets/{id}/receipts`, and `/.well-known/capsule/attestation-keys`.
+    pub(crate) fn s_c15_service(&self) -> Service {
+        let state = crate::state::AppState::new(self.db.clone(), self.media_config());
+        let router = salvo::Router::new()
+            .push(
+                salvo::Router::with_path("storage")
+                    .push(crate::routes::get_storage_router(state.clone())),
+            )
+            .push(
+                salvo::Router::with_path("assets")
+                    .push(crate::routes::get_receipts_router(state.clone())),
+            )
+            .push(
+                salvo::Router::with_path(".well-known").push(
+                    salvo::Router::with_path("capsule")
+                        .push(crate::routes::get_well_known_router(state)),
+                ),
+            );
+        Service::new(router)
     }
 
     /// A salvo service over the real `/storage/verify` router (auth + AppState wired).
@@ -117,6 +172,7 @@ impl TestCtx {
             quota_limits: QuotaLimits::unlimited(),
             drop_rate_limit_max: 60,
             drop_rate_limit_window_secs: 60,
+            attestation: self.attestation(),
         };
         let router =
             crate::routes::get_storage_router(crate::state::AppState::new(self.db.clone(), config));
@@ -518,6 +574,11 @@ pub(crate) async fn drop_setup() -> MediaTestCtx {
         quota_limits: QuotaLimits::unlimited(),
         drop_rate_limit_max: 60,
         drop_rate_limit_window_secs: 60,
+        attestation: std::sync::Arc::new(service::attestation::AttestationKeyring::new(
+            "localhost".to_string(),
+            &[7u8; 64],
+            Vec::new(),
+        )),
     };
 
     // Seed owner U, owner group id=U, member U∈U, album A owned by U.

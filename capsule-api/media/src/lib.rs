@@ -36,13 +36,33 @@ pub async fn get_share_router<C: Into<MediaServerConfig>>(
     Ok(routes::get_share_router(state))
 }
 
-/// Storage-verification router (`POST /storage/verify`). Skeleton — slice `S-C3`.
+/// Storage-verification router (`POST /storage/verify`, incl. signed attestation). Slices
+/// `S-C3` / `S-C15`.
 pub async fn get_storage_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,
     config: C,
 ) -> Result<Router> {
     let state = AppState::new(conn, config.into());
     Ok(routes::get_storage_router(state))
+}
+
+/// Durable custody-receipt router (`GET /assets/{asset_id}/receipts`). Slice `S-C15`.
+pub async fn get_receipts_router<C: Into<MediaServerConfig>>(
+    conn: DatabaseConnection,
+    config: C,
+) -> Result<Router> {
+    let state = AppState::new(conn, config.into());
+    Ok(routes::get_receipts_router(state))
+}
+
+/// Attestation-key publication router (`GET /.well-known/capsule/attestation-keys`). Slice
+/// `S-C15`.
+pub async fn get_well_known_router<C: Into<MediaServerConfig>>(
+    conn: DatabaseConnection,
+    config: C,
+) -> Result<Router> {
+    let state = AppState::new(conn, config.into());
+    Ok(routes::get_well_known_router(state))
 }
 
 /// Guest drop-session router (`/u/{opaque-id}/drop`) — slice `S-C5`.

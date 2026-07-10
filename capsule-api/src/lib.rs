@@ -85,10 +85,15 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                 Router::with_path("s")
                     .push(media::get_share_router(conn.clone(), &env.server).await?),
             )
-            // Key-free durability verdicts (skeleton — slice S-C3 in SLICES.md).
+            // Key-free durability verdicts + signed attestation (slices S-C3 / S-C15).
             .push(
                 Router::with_path("storage")
                     .push(media::get_storage_router(conn.clone(), &env.server).await?),
+            )
+            // Durable custody-receipt log per asset (slice S-C15).
+            .push(
+                Router::with_path("assets")
+                    .push(media::get_receipts_router(conn.clone(), &env.server).await?),
             )
             // Guest drop sessions + owner inbox (slice S-C5 in SLICES.md).
             .push(
@@ -115,22 +120,33 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     // Wrap API routes in /v1 prefix
     let v1_router = Router::with_path("v1").push(v1_router);
 
+    // The attestation-key publication (slice S-C15) lives at the server root, not under /v1,
+    // so it sits at the canonical `.well-known/capsule/*` path peers and clients expect.
+    #[cfg(feature = "media")]
+    let well_known_router = Router::with_path(".well-known").push(
+        Router::with_path("capsule")
+            .push(media::get_well_known_router(conn.clone(), &env.server).await?),
+    );
+
     // Build the final router
+    let root = Router::new().push(v1_router);
+    #[cfg(feature = "media")]
+    let root = root.push(well_known_router);
+
     let router;
     #[cfg(feature = "openapi")]
     {
         // Build OpenAPI documentation (at root level, not under /v1)
-        let doc = create_openapi_spec().merge_router(&v1_router);
+        let doc = create_openapi_spec().merge_router(&root);
 
-        router = Router::new()
-            .push(v1_router)
+        router = root
             .push(doc.into_router("/openapi.json"))
             .push(SwaggerUi::new("/openapi.json").into_router("/swagger-ui"))
             .push(Scalar::new("/openapi.json").into_router("/openapi"));
     }
     #[cfg(not(feature = "openapi"))]
     {
-        router = v1_router;
+        router = root;
     }
 
     Ok(router)

@@ -193,6 +193,9 @@ pub(crate) enum VerifyError {
     /// The caller exceeded its per-user deep-scan budget.
     #[error("deep-scan rate limit exceeded")]
     DeepRateLimited,
+    /// The caller exceeded its per-user signed-attestation budget (priced like `deep`).
+    #[error("signed-attestation rate limit exceeded")]
+    SignRateLimited,
     /// A database read failed.
     #[error(transparent)]
     Db(#[from] sea_orm::DbErr),
@@ -223,6 +226,9 @@ struct DeepState {
     rate: HashMap<String, RateBucket>,
     cache: HashMap<String, DeepCacheEntry>,
     gates: HashMap<String, Arc<Mutex<()>>>,
+    /// The per-user signed-attestation budget (S-C15), priced identically to `deep` so a
+    /// client cannot turn signature generation into a server-CPU-amplification attack.
+    sign_rate: HashMap<String, RateBucket>,
 }
 
 // ─── The service ─────────────────────────────────────────────────────────────
@@ -427,6 +433,31 @@ impl VerificationService {
         if bucket.count >= self.inner.limits.deep_max_per_window {
             warn!(user = %user_id, "deep-scan rate limit exceeded");
             return Err(VerifyError::DeepRateLimited);
+        }
+        bucket.count += 1;
+        Ok(())
+    }
+
+    /// Charge one signed-attestation request against the user's fixed-window budget (priced
+    /// identically to `deep`), or fail closed. Uses the injected [`Clock`] so the window is
+    /// deterministically testable.
+    pub(crate) async fn charge_sign(&self, user_id: &str) -> Result<(), VerifyError> {
+        let now = self.inner.clock.now();
+        let mut deep = self.inner.deep.lock().await;
+        let bucket = deep
+            .sign_rate
+            .entry(user_id.to_string())
+            .or_insert(RateBucket {
+                window_start: now,
+                count: 0,
+            });
+        if now.duration_since(bucket.window_start) >= self.inner.limits.deep_window {
+            bucket.window_start = now;
+            bucket.count = 0;
+        }
+        if bucket.count >= self.inner.limits.deep_max_per_window {
+            warn!(user = %user_id, "signed-attestation rate limit exceeded");
+            return Err(VerifyError::SignRateLimited);
         }
         bucket.count += 1;
         Ok(())

@@ -90,7 +90,7 @@ its slice.
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
-| S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | ready   |
+| S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | done    |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | ready   |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
@@ -913,6 +913,13 @@ SDK; they never hand-roll network flows.
   Validation bullets pass (issuance atomicity, log monotonicity, nonce echo,
   loss-proof composition, delete rebuttal, cross-server replay, rotation continuity).
 - **Tier:** Unit + Smoke. **Blocks:** the receipt half of S-D4's release gate.
+- **Landed:** all bullets tested. Receipt insert joins the finalization transaction
+  (with `mark_uploaded` + the S-C2 feed mint — all three atomic, proven by rollback);
+  per-server `receipt_seq` chained by prior-receipt hash, append-only enforced by a
+  DB trigger; hybrid attestation keypair from `ATTESTATION_KEY_SEED` (HKDF-derived
+  fallback, distinct label) published at `/.well-known/capsule/attestation-keys`
+  with key history; `signed`/`nonce` on `/storage/verify` rate-limited like `deep`.
+  `DeleteRebuttal` is a minimal binding — full chain verification rides S-D4.
 
 ### S-D15 — Exact client build identification
 

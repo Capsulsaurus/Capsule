@@ -4,6 +4,7 @@ use crate::envelope::EnvelopeGate;
 use crate::state::AppState;
 
 mod quota;
+mod receipt;
 mod tus;
 
 pub(super) fn get_router(state: AppState, protocol_min: String, protocol_max: String) -> Router {
@@ -26,6 +27,9 @@ pub(super) fn get_router(state: AppState, protocol_min: String, protocol_max: St
         // The quota snapshot (S-C6) is a plain authenticated read; it does not ride the
         // envelope protocol handshake the write routes require.
         .push(Router::with_path("quota").get(quota::get_quota))
+        // The custody-receipt fetch (S-C15) is likewise a plain authenticated read, outside
+        // the envelope handshake — a client with no live session can still recover its receipt.
+        .push(Router::with_path("{id}/receipt").get(receipt::get_receipt))
         .push(gated)
 }
 

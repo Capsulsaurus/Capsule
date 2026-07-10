@@ -6,8 +6,10 @@ use crate::state::AppState;
 mod assets;
 mod drops;
 mod exports;
+mod receipts;
 mod share;
 mod verify;
+mod well_known;
 
 pub fn get_router(state: AppState) -> Router {
     Router::new()
@@ -32,11 +34,27 @@ pub fn get_share_router(state: AppState) -> Router {
         .push(Router::with_path("<token>").get(share::get_shared_content))
 }
 
-/// Storage-verification router (mounted at /storage). Skeleton — slice `S-C3`.
+/// Storage-verification router (mounted at /storage). Slice `S-C3` (+ signed attestation,
+/// slice `S-C15`).
 pub fn get_storage_router(state: AppState) -> Router {
     Router::new()
         .hoop(affix_state::inject(state))
         .push(Router::with_path("verify").post(verify::storage_verify))
+}
+
+/// Durable custody-receipt router (mounted at /assets; slice `S-C15`).
+pub fn get_receipts_router(state: AppState) -> Router {
+    Router::new()
+        .hoop(affix_state::inject(state))
+        .push(Router::with_path("{asset_id}/receipts").get(receipts::get_asset_receipts))
+}
+
+/// Attestation-key publication router (mounted at /.well-known/capsule; slice `S-C15`).
+/// Public — clients pin the keys (TOFU) to verify receipts.
+pub fn get_well_known_router(state: AppState) -> Router {
+    Router::new()
+        .hoop(affix_state::inject(state))
+        .push(Router::with_path("attestation-keys").get(well_known::attestation_keys))
 }
 
 /// Guest drop-session router (mounted at /u; link-capability auth). `POST` opens a session and

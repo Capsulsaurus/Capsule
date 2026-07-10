@@ -15,6 +15,7 @@
 mod invariants;
 mod lifecycle;
 mod quota;
+mod receipts;
 mod sdk_client;
 mod sync_feed;
 
@@ -266,6 +267,11 @@ pub(crate) async fn setup() -> TestCtx {
         quota_hard_limit: DEFAULT_QUOTA_HARD_LIMIT,
         quota_grace_days: DEFAULT_QUOTA_GRACE_DAYS,
         quota_per_peer_budget_ratio: service::quota::DEFAULT_PER_PEER_BUDGET_RATIO,
+        attestation: std::sync::Arc::new(service::attestation::AttestationKeyring::new(
+            "localhost".to_string(),
+            &[7u8; 64],
+            Vec::new(),
+        )),
     };
 
     let session_manager = UploadSessionManager::new(&valkey_url)

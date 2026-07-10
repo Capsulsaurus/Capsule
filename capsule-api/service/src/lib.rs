@@ -1,5 +1,6 @@
 pub mod album;
 pub mod asset;
+pub mod attestation;
 pub mod blob_store;
 pub mod directory;
 pub mod drop;

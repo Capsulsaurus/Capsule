@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
+use service::attestation::{AttestationKeyring, parse_key_history};
 use service::quota::QuotaLimits;
 use upload::transport::{
     DEFAULT_CONTENT_TYPES, DEFAULT_DRIFT_DAYS, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
@@ -35,6 +37,10 @@ pub struct MediaServerConfig {
     pub drop_rate_limit_max: u32,
     /// The drop-session rate-limit window, in seconds.
     pub drop_rate_limit_window_secs: u64,
+    /// The server attestation keyring (slice `S-C15`): signs `StorageAttestation`s on the
+    /// `signed: true` verify path and backs the `.well-known` key publication. The same
+    /// keyring the upload server signs receipts with (built from the same env seed).
+    pub attestation: Arc<AttestationKeyring>,
 }
 
 /// Default drop-session creations allowed per window per key (invariant 31).
@@ -60,6 +66,11 @@ impl From<&environment::ServerConfig> for MediaServerConfig {
             quota_limits: QuotaLimits::unlimited(),
             drop_rate_limit_max: DEFAULT_DROP_RATE_LIMIT_MAX,
             drop_rate_limit_window_secs: DEFAULT_DROP_RATE_LIMIT_WINDOW_SECS,
+            attestation: Arc::new(AttestationKeyring::new(
+                config.domain.clone(),
+                &config.attestation_key_seed,
+                parse_key_history(config.attestation_key_history.as_deref()),
+            )),
         }
     }
 }

@@ -1,8 +1,10 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use environment::ServerConfig;
 use environment::wrapper::SecretKeyWrapper;
 use jsonwebtoken::DecodingKey;
+use service::attestation::{AttestationKeyring, parse_key_history};
 use service::quota::{DEFAULT_PER_PEER_BUDGET_RATIO, QuotaLimits, UNLIMITED};
 
 /// The closed `content_type` enum for the current protocol version (invariant 5).
@@ -76,6 +78,11 @@ pub struct UploadServerConfig {
     /// Per-`(receiving_user, source_peer)` federated caching budget as a fraction of the hard
     /// limit.
     pub quota_per_peer_budget_ratio: f64,
+
+    /// The server attestation keyring (slice `S-C15`): the hybrid signing key that seals each
+    /// finalized upload's `CustodyReceipt` inside the finalization transaction, plus the
+    /// append-only key history. Shared behind an `Arc` — cloning the config is cheap.
+    pub attestation: Arc<AttestationKeyring>,
 }
 
 impl UploadServerConfig {
@@ -113,6 +120,11 @@ impl From<&ServerConfig> for UploadServerConfig {
             quota_hard_limit: DEFAULT_QUOTA_HARD_LIMIT,
             quota_grace_days: DEFAULT_QUOTA_GRACE_DAYS,
             quota_per_peer_budget_ratio: DEFAULT_PER_PEER_BUDGET_RATIO,
+            attestation: Arc::new(AttestationKeyring::new(
+                config.domain.clone(),
+                &config.attestation_key_seed,
+                parse_key_history(config.attestation_key_history.as_deref()),
+            )),
         }
     }
 }
