@@ -59,6 +59,15 @@ The defense is structural isolation:
 
 This is the canonical declaration of the sandbox; [Federation — Security Against Malicious Files](/design/federation/#security-against-malicious-files) references it for the federated-asset case, and [Backup & Recovery — Backup Verification](/design/backup-recovery/#backup-verification) references it for dry-run decode sanity checks.
 
+## Test and Performance Tooling
+
+This section owns the per-platform test-framework and performance-tooling pins (the cross-platform library pins live in [Dependencies](/design/dependencies/)).
+
+- **Apple platforms:** **swift-testing** (`@Suite`/`@Test`) is the sole unit/smoke framework. XCTest is sanctioned **only** inside XCUITest UI-automation bundles, where no swift-testing analogue exists. The `capsule-core-swift` harness's existing XCTest smoke migrates (slice `S-F7` in the repo-root `SLICES.md`); new XCTest unit tests are not accepted.
+- **Apple performance work:** **Instruments** (Time Profiler, Allocations, Leaks, Network, Core Animation) for interactive profiling, and **MetricKit** for field metrics (launch time, hangs, memory, disk writes) — no third-party APM runs on-device.
+- **Kotlin/Android:** JUnit 5 (Jupiter) is the current harness for the `capsule-core-kotlin` bindings; the canonical pin for the Compose app is recorded here when its test harness stabilizes, under the same one-framework-per-platform principle.
+- **Web:** the test runner rides the toolchain pinned in [Dependencies — Web](/design/dependencies/#web) (bun's built-in runner today).
+
 ## Validation
 
 The validation duties above translate directly to test surface. Most live in `capsule-core` (so they apply uniformly to every client); the per-platform pieces are the sandbox harness.

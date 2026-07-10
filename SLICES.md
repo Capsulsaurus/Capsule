@@ -116,6 +116,7 @@ its slice.
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | ready   |
+| S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | ready   |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
@@ -920,6 +921,17 @@ SDK; they never hand-roll network flows.
 - **Done when:** `rg 'log::'` finds no non-frozen hits in the two crates; the existing
   unit suites pass unchanged; `mise run check-rust` green.
 - **Tier:** Unit (existing suites).
+
+### S-F7 — core-swift XCTest → swift-testing migration
+
+- **Contract:** [Clients — Test and Performance Tooling](capsule-docs/src/content/docs/design/clients.md).
+- **Deliverable:** `capsule-core-swift`'s XCTest smoke suite rewritten on
+  swift-testing (`@Suite`/`@Test`), matching the framework the `capsule-swift`
+  app already uses; after this, XCTest imports exist only inside XCUITest
+  UI-automation bundles.
+- **Done when:** `swift test` in `capsule-core-swift` runs green with no
+  `import XCTest` outside UI-automation targets.
+- **Tier:** Smoke per platform.
 
 ## Lane G — legacy retirement (frozen until preconditions)
 

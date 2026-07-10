@@ -64,7 +64,7 @@ The owner docs are:
 | Web upload — upload links, guest drops, adoption                      | [Web Upload](/design/web-upload/)                                   |
 | Moderation policy + federated reporting + blocklists                  | [Moderation](/design/moderation/)                                   |
 | Quota accounting + enforcement points                                 | [Quota](/design/quota/)                                             |
-| Client validation duties + sandboxed decoder                          | [Clients](/design/clients/)                                         |
+| Client validation duties + sandboxed decoder + client test/perf tooling | [Clients](/design/clients/)                                       |
 | Translation catalog format + locale resolution + error-code scheme + supported language set + README translation | [Internationalization](/design/i18n/) |
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 | API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
