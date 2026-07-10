@@ -116,3 +116,30 @@ pub async fn get_router<C: Into<UploadServerConfig>>(
         .hoop(cors)
         .push(routes::get_router(state, protocol_min, protocol_max)))
 }
+
+/// Build the generic lifecycle-write router (slice `S-C16`), mounted at the API root under
+/// `albums/` so its transport path is `POST /albums/{album_id}/ops` — the singular non-upload
+/// lifecycle surface. Reuses the upload server's `EnvelopeGate` (protocol handshake) and the
+/// key-free envelope battery; no blob bytes ever move through it (a write that moves bytes is
+/// an upload). See [Authorization — The Lifecycle Write Surface].
+///
+/// [Authorization — The Lifecycle Write Surface]: https://docs/design/authorization/#the-lifecycle-write-surface
+pub async fn get_ops_router<C: Into<UploadServerConfig>>(
+    conn: DatabaseConnection,
+    config: C,
+) -> Result<Router> {
+    let config = config.into();
+    validate_config(&config).map_err(|e| {
+        eyre::eyre!(
+            "Upload server configuration is invalid: {}. Please fix and retry.",
+            e
+        )
+    })?;
+
+    let protocol_min = config.protocol_min.clone();
+    let protocol_max = config.protocol_max.clone();
+    let ops_service = crate::service::ops::OpService::new(config.clone(), conn);
+    let state = crate::state::OpsState::new(config, ops_service);
+
+    Ok(routes::get_ops_router(state, protocol_min, protocol_max))
+}

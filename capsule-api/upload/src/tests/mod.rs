@@ -14,6 +14,7 @@
 
 mod invariants;
 mod lifecycle;
+mod ops;
 mod quota;
 mod receipts;
 mod sdk_client;
@@ -86,6 +87,20 @@ impl TestCtx {
         );
         // Mount under `/upload` to mirror the real app's `Router::with_path("upload")`.
         let router = salvo::Router::new().push(salvo::Router::with_path("upload").push(inner));
+        Service::new(router)
+    }
+
+    /// Build a salvo service over the generic lifecycle-write router (slice `S-C16`), mounted
+    /// at the API root under `albums/` so the transport path is `POST /albums/{id}/ops`.
+    pub(crate) fn ops_service(&self) -> Service {
+        let ops_service = crate::service::ops::OpService::new(self.config.clone(), self.db.clone());
+        let state = crate::state::OpsState::new(self.config.clone(), ops_service);
+        let inner = crate::routes::get_ops_router(
+            state,
+            self.config.protocol_min.clone(),
+            self.config.protocol_max.clone(),
+        );
+        let router = salvo::Router::new().push(salvo::Router::with_path("albums").push(inner));
         Service::new(router)
     }
 

@@ -221,6 +221,16 @@
         }
       }
     },
+    "error.upload.amk_regressed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This change references an older album key than the server has recorded."
+          }
+        }
+      }
+    },
     "error.upload.checksum_mismatch": {
       "localizations": {
         "en": {
@@ -351,6 +361,16 @@
         }
       }
     },
+    "error.upload.invalid_action": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This change uses an action the album doesn't allow."
+          }
+        }
+      }
+    },
     "error.upload.invalid_hash": {
       "localizations": {
         "en": {
@@ -457,6 +477,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "The upload sent more data than it declared."
+          }
+        }
+      }
+    },
+    "error.upload.stale_revival": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This change is based on an out-of-date version of the item."
           }
         }
       }

@@ -219,6 +219,18 @@
         "message": "The server hit a storage problem. Please try again.",
         "context": "HTTP 500: the upload file's on-disk length diverged from the session's expected offset. Server-side inconsistency, never the client's fault."
     },
+    "error.upload.invalid_action": {
+        "message": "This change uses an action the album doesn't allow.",
+        "context": "HTTP 400 on POST /albums/{album_id}/ops, invariant 16: the manifest's action is outside the closed lifecycle-action set, or is create/replace (which ride the upload protocol, not this surface). Always a client bug."
+    },
+    "error.upload.stale_revival": {
+        "message": "This change is based on an out-of-date version of the item.",
+        "context": "HTTP 409 on POST /albums/{album_id}/ops, invariant 17: the manifest's prior_provenance_hash does not match the asset's current provenance-chain head (a stale or forked position, e.g. a peer replaying an old manifest to revive a deleted asset)."
+    },
+    "error.upload.amk_regressed": {
+        "message": "This change references an older album key than the server has recorded.",
+        "context": "HTTP 400 on POST /albums/{album_id}/ops, invariant 18: the manifest's amk_version regresses below the album's recorded epoch. The server counter is the monotonic backstop; MLS is the authoritative ceiling."
+    },
     "error.drop.cap_exceeded": {
         "message": "This upload link is full.",
         "context": "HTTP 409 on POST /u/{opaque-id}/drop (web-upload, invariant 26): a cumulative per-link cap (total bytes or file count) is already exhausted for an otherwise-live link."

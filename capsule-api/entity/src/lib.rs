@@ -9,6 +9,7 @@ pub mod device_directory;
 pub mod drop_inbox;
 pub mod face;
 pub mod friendship;
+pub mod lifecycle_op_replay;
 pub mod memory;
 pub mod owner;
 pub mod owner_member;

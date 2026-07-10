@@ -91,7 +91,7 @@ its slice.
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | done    |
-| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | ready   |
+| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | done    |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
@@ -694,6 +694,14 @@ pass until the gate lifts.
   byte-identical responses; a delete → restore round-trip smoke passes and appears on
   the sync feed in order.
 - **Tier:** Unit + Smoke + E2E case 7 (with S-C11, S-D2).
+- **Landed:** one-transaction op path (replay lookup → `FOR UPDATE` asset lock →
+  envelope battery incl. invariant 25 → soft-delete/restore → quota metadata-growth
+  → feed mint → replay row `ON CONFLICT DO NOTHING`); chain head + epoch derived
+  from the S-C2 feed projection (no new head tables); invariant 18's MLS ceiling
+  stays Lane-X-gated (monotonic backstop enforced). **Open follow-up:** S-C1 mints
+  a nanoid `assets.id` unrelated to the signed `file_id`, so uploads aren't yet
+  addressable by `/ops` until the ids are aligned — owned by whichever slice unifies
+  asset identity (candidate: S-C10/S-G3 territory).
 
 ## Lane D — SDK / clients
 

@@ -99,9 +99,25 @@ pub enum UploadError {
     /// The declared size would exceed the uploader's storage quota.
     #[error("Quota would be exceeded by the declared size")]
     QuotaExceeded,
+    /// A metadata-growth lifecycle write refused because the account is Grace-expired (read-only).
+    #[error("Account is grace-expired (read-only); metadata-growth writes are refused")]
+    QuotaGraceLocked,
     /// The caller is neither the uploader nor the owner of the session.
     #[error("Forbidden")]
     Forbidden,
+
+    // ── Lifecycle-write invariants (S-C16, `POST /albums/{id}/ops`). ──
+    /// Invariant 16: the manifest `action` is outside the closed lifecycle set, or is an
+    /// upload-only action (`create`/`replace`) submitted to the non-upload surface.
+    #[error("Lifecycle action is not allowed on this surface: {0}")]
+    ActionNotAllowed(String),
+    /// Invariant 17: `prior_provenance_hash` does not match the asset's current chain head
+    /// (a stale or forked chain position — stale-revival).
+    #[error("Manifest prior_provenance_hash does not match the asset's provenance-chain head")]
+    StaleRevival,
+    /// Invariant 18: `amk_version` regressed below the album's recorded epoch.
+    #[error("Manifest amk_version regressed below the album's recorded epoch")]
+    AmkRegressed,
 
     #[error("Unknown error: {0}")]
     Unknown(String),
@@ -153,7 +169,11 @@ impl UploadError {
             UploadError::EnvelopeRejected(_) => Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
             UploadError::OwnerNotPermitted => Some(error_codes::UPLOAD_OWNER_NOT_PERMITTED),
             UploadError::QuotaExceeded => Some(error_codes::QUOTA_EXCEEDED),
+            UploadError::QuotaGraceLocked => Some(error_codes::QUOTA_GRACE_LOCKED),
             UploadError::Forbidden => Some(error_codes::UPLOAD_FORBIDDEN),
+            UploadError::ActionNotAllowed(_) => Some(error_codes::UPLOAD_INVALID_ACTION),
+            UploadError::StaleRevival => Some(error_codes::UPLOAD_STALE_REVIVAL),
+            UploadError::AmkRegressed => Some(error_codes::UPLOAD_AMK_REGRESSED),
             _ => None,
         }
     }
@@ -166,6 +186,7 @@ impl UploadError {
             | UploadError::FinalizeInProgress
             | UploadError::DuplicateBlob { .. }
             | UploadError::ChunkConflict
+            | UploadError::StaleRevival
             | UploadError::InvalidOffset { .. } => StatusCode::CONFLICT,
             UploadError::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             UploadError::ProtocolUnsupported { .. } => StatusCode::UPGRADE_REQUIRED,
@@ -173,6 +194,7 @@ impl UploadError {
             | UploadError::DeviceNotAuthorized
             | UploadError::OwnerNotPermitted
             | UploadError::QuotaExceeded
+            | UploadError::QuotaGraceLocked
             | UploadError::Forbidden => StatusCode::FORBIDDEN,
             UploadError::InvalidUpload(_)
             | UploadError::SizeExceeded
@@ -189,6 +211,8 @@ impl UploadError {
             | UploadError::TimestampOutOfRange
             | UploadError::EnvelopeMismatch(_)
             | UploadError::EnvelopeRejected(_)
+            | UploadError::ActionNotAllowed(_)
+            | UploadError::AmkRegressed
             | UploadError::ParseError(_) => StatusCode::BAD_REQUEST,
             UploadError::IoError(_)
             | UploadError::DbError(_)

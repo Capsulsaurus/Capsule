@@ -76,6 +76,9 @@ pub mod error_codes {
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
 
+    /// `error.upload.amk_regressed`
+    pub const UPLOAD_AMK_REGRESSED: &str = "error.upload.amk_regressed";
+
     /// `error.upload.checksum_mismatch`
     pub const UPLOAD_CHECKSUM_MISMATCH: &str = "error.upload.checksum_mismatch";
 
@@ -115,6 +118,9 @@ pub mod error_codes {
     /// `error.upload.forbidden`
     pub const UPLOAD_FORBIDDEN: &str = "error.upload.forbidden";
 
+    /// `error.upload.invalid_action`
+    pub const UPLOAD_INVALID_ACTION: &str = "error.upload.invalid_action";
+
     /// `error.upload.invalid_hash`
     pub const UPLOAD_INVALID_HASH: &str = "error.upload.invalid_hash";
 
@@ -147,6 +153,9 @@ pub mod error_codes {
 
     /// `error.upload.size_exceeded`
     pub const UPLOAD_SIZE_EXCEEDED: &str = "error.upload.size_exceeded";
+
+    /// `error.upload.stale_revival`
+    pub const UPLOAD_STALE_REVIVAL: &str = "error.upload.stale_revival";
 
     /// `error.upload.storage_inconsistent`
     pub const UPLOAD_STORAGE_INCONSISTENT: &str = "error.upload.storage_inconsistent";

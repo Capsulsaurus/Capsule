@@ -22,6 +22,7 @@
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>
     <string name="error_sync_unauthenticated">Please sign in again to continue syncing.</string>
     <string name="error_upload_album_access_denied">You don\'t have permission to add photos to this album.</string>
+    <string name="error_upload_amk_regressed">This change references an older album key than the server has recorded.</string>
     <string name="error_upload_checksum_mismatch">Upload data was corrupted in transit. Retrying…</string>
     <string name="error_upload_chunk_conflict">The upload sent conflicting data and was stopped.</string>
     <string name="error_upload_chunk_not_aligned">An upload chunk was incorrectly sized.</string>
@@ -35,6 +36,7 @@
     <string name="error_upload_file_too_large">This file exceeds the server\'s size limit.</string>
     <string name="error_upload_finalize_in_progress">This upload is already being finalized.</string>
     <string name="error_upload_forbidden">You don\'t have access to this upload.</string>
+    <string name="error_upload_invalid_action">This change uses an action the album doesn\'t allow.</string>
     <string name="error_upload_invalid_hash">The upload\'s declared content hash is invalid.</string>
     <string name="error_upload_invalid_size">The upload\'s declared size is invalid.</string>
     <string name="error_upload_malformed_request">The upload request was malformed.</string>
@@ -46,6 +48,7 @@
     <string name="error_upload_session_not_active">This upload has already finished.</string>
     <string name="error_upload_session_not_found">The upload session expired. Starting over…</string>
     <string name="error_upload_size_exceeded">The upload sent more data than it declared.</string>
+    <string name="error_upload_stale_revival">This change is based on an out-of-date version of the item.</string>
     <string name="error_upload_storage_inconsistent">The server hit a storage problem. Please try again.</string>
     <string name="error_upload_timestamp_out_of_range">Your device\'s clock appears to be wrong. Check its date and time.</string>
     <string name="error_upload_unknown_crypto_suite">This app version uses an encryption suite the server doesn\'t recognize.</string>

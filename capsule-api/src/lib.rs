@@ -70,9 +70,17 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     }
     #[cfg(feature = "upload")]
     {
-        v1_router = v1_router.push(
-            Router::with_path("upload").push(upload::get_router(conn.clone(), &env.server).await?),
-        );
+        v1_router = v1_router
+            .push(
+                Router::with_path("upload")
+                    .push(upload::get_router(conn.clone(), &env.server).await?),
+            )
+            // The generic lifecycle-write surface (slice S-C16): `POST /albums/{album_id}/ops`
+            // lives at the API root, not under `/upload`, per the authorization contract.
+            .push(
+                Router::with_path("albums")
+                    .push(upload::get_ops_router(conn.clone(), &env.server).await?),
+            );
     }
     #[cfg(feature = "media")]
     {
