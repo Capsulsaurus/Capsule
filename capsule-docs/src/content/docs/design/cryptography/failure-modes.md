@@ -67,7 +67,9 @@ These cross-cutting properties make recovery robust specifically against *catast
 
 All client-server communication is over HTTPS. While Capsule's stack aims to stay PQ-safe (within due course), the transport layer (TLS) must be configured by the server administrator to be PQ-resistant as well. As of 2026, the standard is **TLS 1.3 with hybrid X25519+ML-KEM key exchange** enabled. Since application servers do not terminate TLS, ensure the ingress/reverse proxy is properly configured.
 
-This is the one piece of cryptographic configuration that lives outside the application layer — the application code cannot enforce it, only document the requirement.
+The version policy everywhere: **TLS 1.3 is required wherever both endpoints support it; TLS 1.2 is the absolute floor**, admitted only for compatibility with legacy ingress/reverse-proxy deployments — nothing below 1.2 is ever negotiated, and the PQ-hybrid key-exchange recommendation applies to 1.3. Every Capsule client attempts 1.3 first; deployment documentation shows administrators how to verify their edge actually negotiates 1.3.
+
+The ingress hop is the one piece of cryptographic configuration that lives outside the application layer — the application code cannot enforce it, only document the requirement. Where Capsule code itself terminates or originates TLS — the SDK's HTTP client, [LAN peering](/design/peering/)'s mutual TLS, server-to-server egress — the implementation is the rustls pin in [Dependencies](/design/dependencies/#rust), and the same version policy applies in code.
 
 ## Validation
 
