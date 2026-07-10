@@ -62,6 +62,21 @@ impl Amk {
     pub fn derive_blob_key(&self, blob_id: &Uuid) -> [u8; 32] {
         kdf::derive_key32(&self.0, blob_id.as_bytes(), info::METADATA_BLOB_V1)
     }
+
+    /// Derive the AES-256 key that wraps an externally-chosen file key `K` for an adopted
+    /// [web-upload drop](https://docs/design/web-upload/) (`key_mode = wrapped`):
+    /// `HKDF(ikm=AMK, salt=file_id || wrap_nonce, info="asset-keywrap/v1")`.
+    ///
+    /// The fresh `wrap_nonce` is folded into the salt exactly as `nonce_prefix` is for a
+    /// derived file key, so no `(wrap_key, wrap_nonce)` pair repeats even under a constant
+    /// `file_id`. Used only by the keywrap seal/unseal path
+    /// ([`crate::crypto::encryption::seal_file_key`]).
+    pub fn derive_wrap_key(&self, file_id: &Uuid, wrap_nonce: &[u8]) -> [u8; 32] {
+        let mut salt = Vec::with_capacity(file_id.as_bytes().len() + wrap_nonce.len());
+        salt.extend_from_slice(file_id.as_bytes());
+        salt.extend_from_slice(wrap_nonce);
+        kdf::derive_key32(&self.0, &salt, info::ASSET_KEYWRAP_V1)
+    }
 }
 
 impl std::fmt::Debug for Amk {
@@ -102,5 +117,20 @@ mod tests {
             amk.derive_file_key(&f1),
             Amk::from_bytes([8u8; 32]).derive_file_key(&f1)
         );
+    }
+
+    #[test]
+    fn wrap_key_folds_the_nonce_and_separates_from_file_domain() {
+        let amk = Amk::from_bytes([7u8; 32]);
+        let f = Uuid::from_u128(0x1234);
+        let n1 = [1u8; 12];
+        let n2 = [2u8; 12];
+        // Deterministic for a fixed (file_id, wrap_nonce).
+        assert_eq!(amk.derive_wrap_key(&f, &n1), amk.derive_wrap_key(&f, &n1));
+        // A fresh wrap_nonce re-rolls the wrap key under a constant file_id.
+        assert_ne!(amk.derive_wrap_key(&f, &n1), amk.derive_wrap_key(&f, &n2));
+        // Distinct info label → distinct domain from the derived file/blob keys.
+        assert_ne!(amk.derive_wrap_key(&f, &n1), amk.derive_file_key(&f));
+        assert_ne!(amk.derive_wrap_key(&f, &n1), amk.derive_blob_key(&f));
     }
 }

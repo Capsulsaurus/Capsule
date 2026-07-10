@@ -60,7 +60,7 @@ its slice.
 
 | ID    | Slice                                                | Lane            | Depends on       | Size | Status  |
 | ----- | ---------------------------------------------------- | --------------- | ---------------- | ---- | ------- |
-| S-A1  | Wrapped file-key mode (seal/unseal + verify)         | core-crypto     | —                | M    | ready   |
+| S-A1  | Wrapped file-key mode (seal/unseal + verify)         | core-crypto     | —                | M    | done    |
 | S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | ready   |
 | S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | ready   |
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
@@ -222,6 +222,10 @@ pass until the gate lifts.
   Validation section exist and pass (tampered `wrapped_file_key` → terminal-reject;
   member unwrap + decrypt round-trip); `mise run check-rust` green.
 - **Tier:** Unit (exhaustive negative cases). **Blocks:** S-A3, S-A6.
+- **Landed:** seal/unseal + the `wrapped_file_key` presence rule. The
+  `metadata_blob_hash` presence-by-action rule rides S-A3 (its "field enforcement
+  lands together" note): enforcement needs the `Workspace` to populate the field per
+  the sealing order, which is S-A3's deliverable.
 
 ### S-A2 — Re-key salt fold
 

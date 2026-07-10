@@ -185,14 +185,20 @@ impl AssetManifest {
 
     /// Structural well-formedness independent of any key:
     /// - `prior_provenance_hash` is null **iff** the action is `create`;
-    /// - `retention_until` is set only for `delete`.
+    /// - `retention_until` is set only for `delete`;
+    /// - `wrapped_file_key` is present **iff** `key_mode = wrapped`.
     ///
-    /// These are enforced both here (client `verify_asset`) and by the server envelope.
+    /// The first two are mirrored by the server envelope; the wrapped-key rule is the
+    /// signature-visible presence rule for an adopted web-upload drop, enforced here at
+    /// `verify_asset`. (The `metadata_blob_hash` presence-by-action rule lands with the
+    /// metadata↔manifest binding in S-A3, once the `Workspace` populates the field per the
+    /// sealing order — it cannot be enforced before the field is populated.)
     pub fn structural_ok(&self) -> bool {
-        let prior_rule = self.core.prior_provenance_hash.is_none() == self.core.action.is_create();
-        let retention_rule =
-            self.core.retention_until.is_none() || self.core.action == Action::Delete;
-        prior_rule && retention_rule
+        let core = &self.core;
+        let prior_rule = core.prior_provenance_hash.is_none() == core.action.is_create();
+        let retention_rule = core.retention_until.is_none() || core.action == Action::Delete;
+        let wrapped_rule = core.wrapped_file_key.is_some() == (core.key_mode == KeyMode::Wrapped);
+        prior_rule && retention_rule && wrapped_rule
     }
 }
 
@@ -320,44 +326,75 @@ mod tests {
         assert_eq!(back.signing_bytes(), m.signing_bytes());
     }
 
+    /// A wrapped-file-key length (`structural_ok` is length-agnostic; the real length is
+    /// pinned by `crate::crypto::encryption::WRAPPED_FILE_KEY_LEN`).
+    const WRAPPED_LEN: usize = crate::crypto::encryption::WRAPPED_FILE_KEY_LEN;
+
+    /// A structurally-valid core for `action` (correct prior placement), so tests can perturb
+    /// exactly one field.
+    fn valid_core(action: Action) -> ManifestCore {
+        let prior = (!action.is_create()).then(|| Hash32([1; 32]));
+        core(action, prior)
+    }
+
     #[test]
     fn structural_rules_prior_hash_and_retention() {
         // create + null prior: ok.
         assert!(
-            core(Action::Create, None)
+            valid_core(Action::Create)
                 .sign(&dev(), &wt())
                 .unwrap()
                 .structural_ok()
         );
         // create + non-null prior: violation.
-        assert!(
-            !core(Action::Create, Some(Hash32([1; 32])))
-                .sign(&dev(), &wt())
-                .unwrap()
-                .structural_ok()
-        );
+        let mut c = valid_core(Action::Create);
+        c.prior_provenance_hash = Some(Hash32([1; 32]));
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
         // non-create + null prior: violation.
-        assert!(
-            !core(Action::Replace, None)
-                .sign(&dev(), &wt())
-                .unwrap()
-                .structural_ok()
-        );
+        let mut c = valid_core(Action::Replace);
+        c.prior_provenance_hash = None;
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
         // non-create + non-null prior: ok.
         assert!(
-            core(Action::Replace, Some(Hash32([1; 32])))
+            valid_core(Action::Replace)
                 .sign(&dev(), &wt())
                 .unwrap()
                 .structural_ok()
         );
 
         // retention only on delete.
-        let mut c = core(Action::MetadataUpdate, Some(Hash32([1; 32])));
+        let mut c = valid_core(Action::MetadataUpdate);
         c.retention_until = Some("2026-07-01T00:00:00Z".into());
         assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
-        let mut d = core(Action::Delete, Some(Hash32([1; 32])));
+        let mut d = valid_core(Action::Delete);
         d.retention_until = Some("2026-07-01T00:00:00Z".into());
         assert!(d.sign(&dev(), &wt()).unwrap().structural_ok());
+    }
+
+    #[test]
+    fn structural_rule_wrapped_file_key_present_iff_wrapped() {
+        // derived (default) + absent: ok.
+        assert!(
+            valid_core(Action::Create)
+                .sign(&dev(), &wt())
+                .unwrap()
+                .structural_ok()
+        );
+        // wrapped + present: ok.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; WRAPPED_LEN]));
+        assert!(c.sign(&dev(), &wt()).unwrap().structural_ok());
+        // wrapped + absent: violation.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = None;
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
+        // derived + present: violation.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Derived;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; WRAPPED_LEN]));
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
     }
 
     #[test]

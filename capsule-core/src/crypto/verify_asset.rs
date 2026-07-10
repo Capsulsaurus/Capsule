@@ -183,12 +183,16 @@ mod tests {
 
     use super::*;
     use crate::crypto::authority::ReferenceAuthority;
+    use crate::crypto::encryption::stream::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
+    use crate::crypto::encryption::{seal_file_key, unseal_file_key};
     use crate::crypto::hash::Hash32;
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
-    use crate::crypto::keys::{AmkVersion, HybridSigningKey};
+    use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+    use crate::crypto::provenance::manifest::{
+        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    };
 
     const USER: u128 = 0x05E2;
     const DEVICE: u128 = 0xD1;
@@ -541,6 +545,102 @@ mod tests {
         assert_eq!(
             verify_asset(&m, CIPHERTEXT, &directory, &authority, None),
             VerifyOutcome::Accept
+        );
+    }
+
+    // ── Wrapped file-key mode (adopted web-upload drop) ──────────────────────────
+
+    /// The doc's wrapped-mode positive case: a `key_mode = wrapped` create verifies, and a
+    /// member holding the AMK unwraps `wrapped_file_key` to recover the guest-chosen file key
+    /// and STREAM-decrypts the unchanged ciphertext. Authorization is unchanged from derived.
+    #[test]
+    fn wrapped_mode_member_unwraps_and_decrypts() {
+        let f = Fixture::new();
+        let amk = Amk::from_bytes([0x5A; 32]);
+        let file_id = Uuid::from_u128(0xF11E);
+        // A guest chose a random file key K and STREAM-encrypted the asset under it.
+        let k = [0x77u8; 32];
+        let plaintext = b"adopted web-upload drop bytes";
+        let (enc, ct) = encrypt_asset_vec_with_prefix(&k, [1, 2, 3, 4, 5, 6, 7], plaintext);
+
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(seal_file_key(&amk, &file_id, &k)));
+        c.ciphertext_hash = enc.ciphertext_hash;
+        c.nonce_prefix = enc.nonce_prefix;
+        let m = c.sign(&f.device, &f.write1).unwrap();
+
+        // verify_asset accepts the wrapped manifest exactly like a derived one.
+        assert_eq!(
+            verify_asset(&m, &ct, &f.directory, &f.authority, None),
+            VerifyOutcome::Accept
+        );
+        // The AMK-holding member recovers K and decrypts.
+        let recovered =
+            unseal_file_key(&amk, &file_id, &m.core.wrapped_file_key.as_ref().unwrap().0).unwrap();
+        assert_eq!(recovered, k);
+        assert_eq!(
+            decrypt_asset_vec(&recovered, &enc.nonce_prefix, &ct).unwrap(),
+            plaintext
+        );
+    }
+
+    /// The doc's wrapped-mode negative case: altering `wrapped_file_key` (or `key_mode`
+    /// itself) after signing fails `verify_asset` like any other tampered signed field —
+    /// both are covered by both signatures, so tampering diverges the signing bytes.
+    #[test]
+    fn wrapped_mode_tampering_a_signed_field_terminally_rejects() {
+        let f = Fixture::new();
+        // A valid wrapped-mode create (bound to the fixture's CIPHERTEXT for the hash check).
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; 60]));
+        let signed = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(f.verify(&signed, None), VerifyOutcome::Accept);
+
+        // Tamper the wrapped key after signing → device_sig no longer verifies.
+        let mut tampered = signed.clone();
+        tampered.core.wrapped_file_key = Some(WrappedFileKey(vec![0xCD; 60]));
+        assert_eq!(
+            f.verify(&tampered, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+
+        // Flip the mode back to derived (dropping the wrapped key to keep it structurally
+        // well-formed) → still a signed-field divergence → terminal reject.
+        let mut flipped = signed.clone();
+        flipped.core.key_mode = KeyMode::Derived;
+        flipped.core.wrapped_file_key = None;
+        assert!(flipped.structural_ok(), "flip is structurally well-formed");
+        assert_eq!(
+            f.verify(&flipped, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+    }
+
+    /// A `key_mode = wrapped` manifest missing its `wrapped_file_key` (or a derived one that
+    /// carries one) is structurally rejected before any signature check.
+    #[test]
+    fn wrapped_mode_presence_mismatch_is_structural() {
+        let f = Fixture::new();
+        // Wrapped but no wrapped_file_key.
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = None;
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(
+            f.verify(&m, None),
+            VerifyOutcome::TerminalReject(RejectReason::Structural)
+        );
+
+        // Derived but carrying a wrapped_file_key.
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Derived;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; 60]));
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(
+            f.verify(&m, None),
+            VerifyOutcome::TerminalReject(RejectReason::Structural)
         );
     }
 
