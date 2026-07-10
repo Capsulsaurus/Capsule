@@ -66,6 +66,7 @@ its slice.
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | ready   |
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | ready   |
+| S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | ready |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | ready   |
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
@@ -182,7 +183,7 @@ pass until the gate lifts.
 | --- | --- | --- |
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
 | `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
-| `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display and S-H3 geo features. Until it lands, WGS-84 storage is unaffected (conversion is display-only). |
+| `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
 | `openmls` X-Wing/SHA-512 ciphersuite (codepoint pending) | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
 
 ## Lane A — core crypto
@@ -266,6 +267,22 @@ pass until the gate lifts.
 - **Done when:** the module's three `#[ignore]`d tests flip; the web-upload doc's unit
   Validation bullets pass; the sealing path compiles to `wasm32-unknown-unknown`.
 - **Tier:** Unit (seal round-trip + adoption rewrap).
+
+### S-A7 — `gps.datum` sidecar field + BD-09 input fold
+
+- **Contract:** [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md),
+  [Metadata — Closed Enum Value Sets](capsule-docs/src/content/docs/design/metadata.md).
+- **Deliverable:** the closed `GpsDatum` enum (`wgs84 | gcj02`) in
+  `capsule-core::domain`; the optional `datum` key on the sidecar `gps` value
+  (wire-absent = `wgs84`, byte-identity regression-tested against the existing
+  known-answer vectors, plus a new populated-`datum` vector); the exact BD-09 → GCJ-02
+  fold applied at the input edge (from `geocoordinates-rs` — the only gated piece;
+  verbatim storage of either datum needs no conversion code). The lossy display
+  conversions stay behind the `geocoordinates-rs` gate and are **not** this slice.
+- **Done when:** the metadata doc's datum-verbatim-storage Validation bullet passes
+  (GCJ-02 round-trips unconverted; BD-09 folds exactly; WGS-84 stays wire-absent and
+  byte-identical); `mise run check-rust` green.
+- **Tier:** Unit.
 
 ## Lane B — media / import
 

@@ -49,7 +49,8 @@ SidecarV1 {
   session_id:            UUIDv7,
 
   // geolocation (see Geolocation below)
-  gps:                   Option<{ lat: f64, lon: f64, source: GpsSource }>,
+  gps:                   Option<{ lat: f64, lon: f64, source: GpsSource,
+                                  datum: GpsDatum /* wire-absent ⇒ wgs84 */ }>,
 
   // provenance binding — the PRIOR chain head; see Provenance Binding and Sealing Order below
   provenance_chain_hash: Option<[u8; 32]>, // hash of the provenance record PRECEDING the write that seals this
@@ -73,12 +74,13 @@ SidecarV1 {
 
 ### Closed Enum Value Sets
 
-Two sidecar fields are closed enums whose authoritative value sets live here (the blanket closed-enum rule is [Threat Model — Schema Rules](/design/threat-model/schema-rules/); the code mirror is a closed Rust enum in `capsule-core::domain`, and adding a value requires a new, later-dated `protocol_version`):
+Three sidecar fields are closed enums whose authoritative value sets live here (the blanket closed-enum rule is [Threat Model — Schema Rules](/design/threat-model/schema-rules/); the code mirror is a closed Rust enum in `capsule-core::domain`, and adding a value requires a new, later-dated `protocol_version`):
 
 - **`content_type`** — MIME syntax, exactly **one canonical value per format** (never an alias like `image/jpg`). The v1 set:
   - images: `image/jpeg`, `image/png`, `image/webp`, `image/gif`, `image/tiff`, `image/heic`, `image/avif`, `image/jxl`, `image/x-adobe-dng`
   - video: `video/mp4`, `video/quicktime`, `video/x-matroska`, `video/webm`
 - **`gps.source` (`GpsSource`)** — `exif` (written by the capturing device), `manual` (set by the user), `inferred` (client-derived, e.g. from a paired device's location or an ML suggestion). An `inferred` value is written to the canonical `gps` field only on **explicit user confirmation** — the same promotion rule as `tags_ai` → `tags_user`, so an automated guess can never silently overwrite capture truth.
+- **`gps.datum` (`GpsDatum`)** — `wgs84 | gcj02`. The coordinate is stored **verbatim in the datum the source supplied**, never converted at rest: GCJ-02 → WGS-84 has no exact inverse, so converting on input would destroy the user's ground truth (the raw-input-is-truth principle). **BD-09 is never a storable datum** — BD-09 input is folded to GCJ-02 at the input edge (that transform is closed-form and exact) and stored as `datum = gcj02`. The field is **wire-absent when `wgs84`**, so every existing sidecar and known-answer vector stays byte-identical; it is an additive optional key within sidecar schema v1 (older v1 readers preserve-and-ignore it per the [request-side Postel rule](/design/threat-model/schema-rules/), no `sidecar_schema` bump — if the implementing slice finds the nested `gps` decoder strict rather than tolerant, its documented fallback is a schema bump). The value set is closed: a third datum requires a new `protocol_version`. `gps` is a single atomic value under CRDT merge — `datum` travels with `lat`/`lon` in one write, so no merge rule changes.
 
 ### Canonical CBOR Encoding
 
@@ -206,7 +208,7 @@ The same dual-namespace structure applies to any future ML-derived metadata fiel
 
 ## Geolocation
 
-GPS is stored canonically in **WGS-84** (`gps.lat` / `gps.lon`), the near-universal camera format. Some jurisdictions mandate obfuscated coordinates for display — notably China's **GCJ-02**, and Baidu's **BD-09** (a second obfuscation layer over GCJ-02). Capsule always stores WGS-84 and converts to the required system **deterministically and client-side** (in `capsule-core`) at plot time; the stored coordinate is never the obfuscated one. Per-platform map-provider selection is a client/deployment concern, not part of this schema.
+GPS is stored in **the coordinate datum the source supplied**, tagged by [`gps.datum`](#closed-enum-value-sets) — WGS-84 (the near-universal camera format, and the wire-absent default) or GCJ-02 (China's legally mandated obfuscated datum, which user-entered coordinates from Chinese maps arrive in). The stored value is never converted at rest; conversion between datums for display or search happens **deterministically and client-side** (in `capsule-core`, via the in-house `geocoordinates-rs` library gated in the repo-root `SLICES.md`), with the lossy GCJ-02 → WGS-84 inverse marked approximate wherever it surfaces. Baidu's **BD-09** (a second obfuscation layer over GCJ-02) exists only at the input edge: it is folded exactly to GCJ-02 on entry and never stored. Per-platform map-provider selection is a client/deployment concern, not part of this schema. Implementation is slice `S-A7`.
 
 ## Validation
 
@@ -219,6 +221,7 @@ The sidecar schema is the contract; validation focuses on serde determinism + CR
 - **Add-id rejection (unit).** Issue a remove with an `add_id` never observed locally; assert rejection (not silent no-op).
 - **LWW with superseded capture (unit).** Two devices write captions within milliseconds; merge; assert the winner is the lexicographic-tiebreak chosen, and the loser appears in `superseded_captions`.
 - **Privacy-on-export stripping (unit).** Each row of the privacy table is a fixture test: assert the field is stripped by default, retained when opt-in is set, and that the local sidecar is unchanged either way.
+- **Datum verbatim storage (unit).** A GCJ-02 input round-trips unconverted with `datum = gcj02`; a BD-09 input asserts the exact fold to GCJ-02; a WGS-84 write asserts `datum` is wire-absent and the encoded sidecar is byte-identical to the pre-`datum` vector.
 - **Local–server metadata equivalence (unit).** Seal a sidecar into a metadata blob; assert that decrypting it is byte-identical to the signed sidecar and that the blob's content hash equals the manifest's `metadata_blob_hash`. Mutate the local sidecar by one byte; assert the round-trip check rejects it rather than persisting a divergent copy.
 - **Concurrent-edit reconciliation (smoke).** Two test clients edit the same album offline; merge over MLS; assert convergence with no manual conflict resolution needed.
 
