@@ -1202,6 +1202,7 @@ dependencies = [
  "capsule-api-entity",
  "capsule-api-model",
  "capsule-core",
+ "capsule-i18n",
  "data-encoding",
  "jiff",
  "nanoid",

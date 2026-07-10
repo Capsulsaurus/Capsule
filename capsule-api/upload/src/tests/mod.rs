@@ -14,6 +14,7 @@
 
 mod invariants;
 mod lifecycle;
+mod quota;
 mod sdk_client;
 mod sync_feed;
 
@@ -35,6 +36,7 @@ use testcontainers_modules::postgres::Postgres;
 
 use crate::config::{
     DEFAULT_CONTENT_TYPES, DEFAULT_DRIFT_DAYS, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+    DEFAULT_QUOTA_GRACE_DAYS, DEFAULT_QUOTA_HARD_LIMIT, DEFAULT_QUOTA_SOFT_LIMIT,
     UploadServerConfig,
 };
 use crate::service::discard::DiscardService;
@@ -99,6 +101,81 @@ impl TestCtx {
         Claims::new_access_token(self.user_id.clone(), None)
             .encode(&self.encoding_key)
             .expect("encode token")
+    }
+
+    /// Rebuild the config + upload service with finite quota limits (S-C6 tests). The router
+    /// built by [`Self::service`] then enforces these limits at session creation.
+    pub(crate) fn set_quota_limits(&mut self, soft_limit: u64, hard_limit: u64) {
+        self.config.quota_soft_limit = soft_limit;
+        self.config.quota_hard_limit = hard_limit;
+        self.upload_service = UploadService::new(
+            self.config.clone(),
+            self.storage.clone(),
+            self.session_manager.clone(),
+            self.db.clone(),
+        );
+    }
+
+    /// Seed a bare `users` row (no owner group) and return its id — a second uploader for the
+    /// dedup-attribution test.
+    pub(crate) async fn seed_user(&self) -> String {
+        let id = nanoid!();
+        let created = Timestamp::now() - SignedDuration::from_hours(24);
+        entity::user::ActiveModel {
+            id: Set(id.clone()),
+            username: Set(format!("u{}", nanoid!(8))),
+            name: Set(format!("Test {}", nanoid!(8))),
+            email: Set(format!("{}@example.com", nanoid!(8))),
+            account_verified: Set(true),
+            needs_onboarding: Set(false),
+            password_hash: Set(format!("hash-{}", nanoid!(12))),
+            is_admin: Set(false),
+            created_at: Set(entity::time::ts_to_entity(created)),
+            modified_at: Set(entity::time::ts_to_entity(created)),
+            ..Default::default()
+        }
+        .insert(&self.db)
+        .await
+        .expect("insert second user");
+        id
+    }
+
+    /// Seed one `assets` row owned by the seeded owner group, attributed to `uploader`,
+    /// carrying content `hash` of `size` bytes. `uploaded_at` sets the first-uploader
+    /// ordering for content-hash dedup attribution.
+    pub(crate) async fn seed_asset(
+        &self,
+        uploader: &str,
+        hash: &str,
+        size: i64,
+        uploaded: bool,
+        uploaded_at: Timestamp,
+    ) -> String {
+        let id = nanoid!();
+        entity::asset::ActiveModel {
+            id: Set(id.clone()),
+            owner_id: Set(self.user_id.clone()),
+            album_id: Set(Some(self.album_id.clone())),
+            width: Set(0),
+            height: Set(0),
+            asset_type: Set(entity::asset::AssetType::Photo),
+            original_filename: Set(nanoid!()),
+            file_size: Set(size),
+            file_hash: Set(hash.to_string()),
+            content_type: Set("image/jpeg".to_string()),
+            is_favorite: Set(false),
+            is_stack_hidden: Set(false),
+            uploaded: Set(uploaded),
+            upload_user_id: Set(uploader.to_string()),
+            uploaded_at: Set(entity::time::ts_to_entity(uploaded_at)),
+            modified_at: Set(entity::time::ts_to_entity_tz(uploaded_at)),
+            deleted_at: Set(None),
+            ..Default::default()
+        }
+        .insert(&self.db)
+        .await
+        .expect("insert asset");
+        id
     }
 }
 
@@ -185,6 +262,10 @@ pub(crate) async fn setup() -> TestCtx {
             .map(|s| (*s).to_string())
             .collect(),
         timestamp_drift_days: DEFAULT_DRIFT_DAYS,
+        quota_soft_limit: DEFAULT_QUOTA_SOFT_LIMIT,
+        quota_hard_limit: DEFAULT_QUOTA_HARD_LIMIT,
+        quota_grace_days: DEFAULT_QUOTA_GRACE_DAYS,
+        quota_per_peer_budget_ratio: service::quota::DEFAULT_PER_PEER_BUDGET_RATIO,
     };
 
     let session_manager = UploadSessionManager::new(&valkey_url)

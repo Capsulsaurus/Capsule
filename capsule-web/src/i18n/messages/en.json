@@ -9,6 +9,8 @@
   "error.directory.version_conflict": "This device list is out of date. Capsule will refresh it before continuing.",
   "error.protocol.version_unsupported": "This version of Capsule is no longer supported. Please update the app.",
   "error.quota.exceeded": "Your storage is full.",
+  "error.quota.grace_locked": "Your storage has been full past the grace period, so edits are paused until you free space.",
+  "error.quota.peer_budget_exceeded": "This source has reached its caching limit on your account.",
   "error.sync.cursor_invalid": "The sync session is out of date. Capsule will resync from the start.",
   "error.sync.unauthenticated": "Please sign in again to continue syncing.",
   "error.upload.album_access_denied": "You don't have permission to add photos to this album.",

@@ -12,6 +12,7 @@ path = "src/lib.rs"
 capsule-api-entity = { path = "../entity" }
 capsule-api-model = { path = "../model" }
 capsule-core = { path = "../../capsule-core" }
+capsule-i18n = { path = "../../capsule-i18n" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }

@@ -63,6 +63,14 @@
         "message": "Your storage is full.",
         "context": "HTTP 403 at upload-session creation when the declared size would cross the uploader's hard quota limit."
     },
+    "error.quota.grace_locked": {
+        "message": "Your storage has been full past the grace period, so edits are paused until you free space.",
+        "context": "HTTP 403 in the Grace-expired quota state: quota_used has stayed at/above the hard limit past the grace window, so metadata-growth writes (caption/tag edits, new share or upload links) are refused. Reads, deletes, and restore-from-trash still work; freeing space lifts it."
+    },
+    "error.quota.peer_budget_exceeded": {
+        "message": "This source has reached its caching limit on your account.",
+        "context": "HTTP 403 when a federated blob cached on a user's behalf would cross the per-(receiving_user, source_peer) caching budget (default 25% of the receiver's hard quota per source peer). Bounds how much one user can pull from any single peer."
+    },
     "error.blob.pending_upload": {
         "message": "The original photo hasn't been uploaded from its device yet.",
         "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."

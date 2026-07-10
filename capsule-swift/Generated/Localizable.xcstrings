@@ -101,6 +101,26 @@
         }
       }
     },
+    "error.quota.grace_locked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your storage has been full past the grace period, so edits are paused until you free space."
+          }
+        }
+      }
+    },
+    "error.quota.peer_budget_exceeded": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This source has reached its caching limit on your account."
+          }
+        }
+      }
+    },
     "error.sync.cursor_invalid": {
       "localizations": {
         "en": {

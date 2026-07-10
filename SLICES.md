@@ -81,7 +81,7 @@ its slice.
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | ready   |
-| S-C6  | Quota service                                        | server          | —                | M    | ready   |
+| S-C6  | Quota service                                        | server          | —                | M    | done    |
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | ready   |
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
@@ -540,6 +540,12 @@ pass until the gate lifts.
   enforcement at session creation/cancellation/metadata-growth, `GET /quota`.
 - **Done when:** the quota doc's seven Validation bullets pass. **Tier:** Unit + Smoke.
   **Blocks:** S-C5.
+- **Landed:** all seven bullets tested. Accounting splits originals (assets index,
+  first-uploader attribution; the pending row is the reservation) from aux/federated
+  blobs (`quota_ledger`, refcounted) — the doc's "reads from the asset index" hint
+  cannot hold the blob classes the index doesn't model. `check` runs inside S-C1's
+  create transaction; metadata-growth enforcement is exercised at the service
+  boundary until S-C16 lands its HTTP surface; `Suspended` enforcement rides S-C8.
 
 ### S-C7 — Device-enrollment endpoints
 

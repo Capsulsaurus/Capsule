@@ -2,6 +2,7 @@ pub mod album;
 pub mod asset;
 pub mod directory;
 pub mod friendship;
+pub mod quota;
 pub mod stack;
 pub mod storage;
 pub mod sync;

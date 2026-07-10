@@ -3,6 +3,7 @@ use salvo::prelude::*;
 use crate::envelope::EnvelopeGate;
 use crate::state::AppState;
 
+mod quota;
 mod tus;
 
 pub(super) fn get_router(state: AppState, protocol_min: String, protocol_max: String) -> Router {
@@ -22,6 +23,9 @@ pub(super) fn get_router(state: AppState, protocol_min: String, protocol_max: St
     Router::new()
         .hoop(affix_state::inject(state))
         .push(Router::with_path("status").get(status))
+        // The quota snapshot (S-C6) is a plain authenticated read; it does not ride the
+        // envelope protocol handshake the write routes require.
+        .push(Router::with_path("quota").get(quota::get_quota))
         .push(gated)
 }
 

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use environment::ServerConfig;
 use environment::wrapper::SecretKeyWrapper;
 use jsonwebtoken::DecodingKey;
+use service::quota::{DEFAULT_PER_PEER_BUDGET_RATIO, QuotaLimits, UNLIMITED};
 
 /// The closed `content_type` enum for the current protocol version (invariant 5).
 /// Server-tunable, but frozen for a given `protocol_version`. Metadata/provenance/
@@ -28,6 +29,14 @@ pub(crate) const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
 pub(crate) const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
 /// Gross-drift sanity bound for the envelope timestamp, in days (invariant 8).
 pub(crate) const DEFAULT_DRIFT_DAYS: i64 = 30;
+
+/// Default soft-warning quota threshold in bytes. Unlimited by default — a self-hosted
+/// deployment runs with no quota; a hosted service overrides per tier (Quota design doc).
+pub(crate) const DEFAULT_QUOTA_SOFT_LIMIT: u64 = UNLIMITED;
+/// Default hard quota threshold in bytes (unlimited by default).
+pub(crate) const DEFAULT_QUOTA_HARD_LIMIT: u64 = UNLIMITED;
+/// Default grace window, in days, before the Grace-expired state engages.
+pub(crate) const DEFAULT_QUOTA_GRACE_DAYS: i64 = 14;
 
 #[derive(Clone)]
 pub struct UploadServerConfig {
@@ -56,6 +65,29 @@ pub struct UploadServerConfig {
     pub allowed_content_types: Vec<String>,
     /// Gross-drift sanity bound in days for the envelope timestamp (invariant 8).
     pub timestamp_drift_days: i64,
+
+    /// Soft-warning quota threshold in bytes ([`UNLIMITED`] disables warnings).
+    pub quota_soft_limit: u64,
+    /// Hard quota threshold in bytes ([`UNLIMITED`] disables enforcement; the self-hosted
+    /// default).
+    pub quota_hard_limit: u64,
+    /// Grace window in days before a hard-exceeded account enters read-only (Grace-expired).
+    pub quota_grace_days: i64,
+    /// Per-`(receiving_user, source_peer)` federated caching budget as a fraction of the hard
+    /// limit.
+    pub quota_per_peer_budget_ratio: f64,
+}
+
+impl UploadServerConfig {
+    /// The deployment quota limits (Quota design doc) derived from this config.
+    pub(crate) fn quota_limits(&self) -> QuotaLimits {
+        QuotaLimits {
+            soft_limit: self.quota_soft_limit,
+            hard_limit: self.quota_hard_limit,
+            grace_window: jiff::SignedDuration::from_hours(self.quota_grace_days * 24),
+            per_peer_budget_ratio: self.quota_per_peer_budget_ratio,
+        }
+    }
 }
 
 impl From<&ServerConfig> for UploadServerConfig {
@@ -77,6 +109,10 @@ impl From<&ServerConfig> for UploadServerConfig {
                 .map(|s| (*s).to_string())
                 .collect(),
             timestamp_drift_days: DEFAULT_DRIFT_DAYS,
+            quota_soft_limit: DEFAULT_QUOTA_SOFT_LIMIT,
+            quota_hard_limit: DEFAULT_QUOTA_HARD_LIMIT,
+            quota_grace_days: DEFAULT_QUOTA_GRACE_DAYS,
+            quota_per_peer_budget_ratio: DEFAULT_PER_PEER_BUDGET_RATIO,
         }
     }
 }

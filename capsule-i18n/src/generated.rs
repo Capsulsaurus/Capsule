@@ -40,6 +40,12 @@ pub mod error_codes {
     /// `error.quota.exceeded`
     pub const QUOTA_EXCEEDED: &str = "error.quota.exceeded";
 
+    /// `error.quota.grace_locked`
+    pub const QUOTA_GRACE_LOCKED: &str = "error.quota.grace_locked";
+
+    /// `error.quota.peer_budget_exceeded`
+    pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
+
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 

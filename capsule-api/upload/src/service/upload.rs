@@ -7,6 +7,7 @@ use nanoid::nanoid;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
 };
+use service::quota::{self, WriteClass};
 use service::{album as AlbumService, asset as AssetService, sync as SyncFeed};
 
 use crate::config::UploadServerConfig;
@@ -154,6 +155,30 @@ impl UploadService {
             }
             // The pending row is stale (its session expired). Fall through on the same
             // transaction and create a fresh session.
+        }
+
+        // Quota enforcement (S-C6): the single hard gate. This is a genuinely new blob (the
+        // dedup/merge cases returned above), so charge its declared size against the
+        // uploader's quota and refuse before any pending row is written if it crosses the
+        // hard limit. The declared size becomes the reservation — the pending asset row this
+        // transaction is about to insert — and is released if the session is cancelled
+        // (the row is deleted) or expires.
+        if let Err(e) = quota::Mutation::check(
+            &txn,
+            upload_user_id,
+            request.size,
+            WriteClass::UploadSession,
+            &self.config.quota_limits(),
+        )
+        .await
+        {
+            txn.rollback().await?;
+            return Err(match e {
+                quota::QuotaError::Exceeded { .. } => UploadError::QuotaExceeded,
+                quota::QuotaError::Db(db) => UploadError::DbError(db),
+                // GraceLocked / PeerBudgetExceeded are not reachable for an UploadSession check.
+                other => UploadError::Unknown(other.to_string()),
+            });
         }
 
         // Insert the pending asset row inside this transaction.
@@ -591,6 +616,10 @@ impl UploadService {
             return Err(UploadError::SessionNotActive);
         }
 
+        // Quota release (S-C6): deleting the pending asset row drops the reservation — the
+        // uploader's `quota_used` counts every present `assets` row (pending or finalized),
+        // so removing it frees the reserved-but-uncommitted bytes, and the next quota check
+        // sees the lower usage. No separate ledger write is needed for originals.
         if let Some(session) = &session
             && let Err(e) = AssetService::Mutation::delete(&self.conn, &session.asset_id).await
         {

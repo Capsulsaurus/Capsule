@@ -35,6 +35,19 @@ pub(crate) struct ListSessionsResponse {
     pub sessions: Vec<UploadSession>,
 }
 
+/// Response for `GET /quota` — the uploader's storage-quota snapshot (S-C6).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub(crate) struct QuotaResponse {
+    /// Bytes currently charged to the uploader.
+    pub used: u64,
+    /// Soft-warning threshold in bytes (`null` when unlimited).
+    pub soft_limit: Option<u64>,
+    /// Hard-refusal threshold in bytes (`null` when unlimited).
+    pub hard_limit: Option<u64>,
+    /// Quota state: `ok | soft_warning | hard_exceeded | grace_expired | suspended`.
+    pub state: String,
+}
+
 /// Responses for create upload endpoint
 #[allow(dead_code)]
 pub(crate) enum CreateUploadResponses {
@@ -405,6 +418,53 @@ impl EndpointOutRegister for ListSessionsResponses {
             salvo::oapi::Response::new("List of upload sessions").add_content(
                 "application/json",
                 salvo::oapi::Content::new(ListSessionsResponse::to_schema(components)),
+            ),
+        );
+        operation.responses.insert(
+            String::from("401"),
+            salvo::oapi::Response::new("Unauthorized"),
+        );
+        operation.responses.insert(
+            String::from("500"),
+            salvo::oapi::Response::new("Internal server error"),
+        );
+    }
+}
+
+/// Responses for the `GET /quota` endpoint (S-C6).
+pub(crate) enum QuotaResponses {
+    Success(QuotaResponse),
+    Unauthorized(String),
+    InternalServerError(InternalServerError),
+}
+
+#[async_trait]
+impl Writer for QuotaResponses {
+    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
+        match self {
+            Self::Success(response) => {
+                res.status_code(StatusCode::OK);
+                res.add_header("Cache-Control", "no-store", true).ok();
+                res.render(Json(response));
+            }
+            Self::Unauthorized(msg) => {
+                res.status_code(StatusCode::UNAUTHORIZED);
+                res.render(Text::Plain(msg));
+            }
+            Self::InternalServerError(e) => {
+                e.write(req, depot, res).await;
+            }
+        }
+    }
+}
+
+impl EndpointOutRegister for QuotaResponses {
+    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
+        operation.responses.insert(
+            String::from("200"),
+            salvo::oapi::Response::new("The uploader's storage-quota snapshot").add_content(
+                "application/json",
+                salvo::oapi::Content::new(QuotaResponse::to_schema(components)),
             ),
         );
         operation.responses.insert(
