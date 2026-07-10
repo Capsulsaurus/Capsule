@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use jiff::Timestamp;
 use colored::*;
 use eyre::{Result, eyre};
 use humansize::{BINARY, format_size};
+use jiff::Timestamp;
 
 use crate::config::Config;
 use crate::utils::directories::{
@@ -145,11 +145,7 @@ impl AuthStatus {
                 println!("  {} {}", "Token:".dimmed(), "Invalid".red());
             }
             if let Some(expires) = &self.token_expires_at {
-                println!(
-                    "  {} {}",
-                    "Expires:".dimmed(),
-                    expires.to_string().dimmed()
-                );
+                println!("  {} {}", "Expires:".dimmed(), expires.to_string().dimmed());
             }
         } else {
             println!("  {} {}", "Status:".dimmed(), "Not logged in".red());
