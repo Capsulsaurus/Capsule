@@ -58,6 +58,7 @@ export default defineConfig({
                                 { slug: 'design/module-map' },
                                 { slug: 'design/api-surfaces' },
                                 { slug: 'design/networking' },
+                                { slug: 'design/dependencies' },
                             ],
                         },
                         {

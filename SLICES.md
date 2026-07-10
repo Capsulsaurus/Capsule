@@ -109,6 +109,7 @@ its slice.
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
+| S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | ready   |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
@@ -808,6 +809,19 @@ SDK; they never hand-roll network flows.
 - **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md).
 - **Deliverable:** the device **encryption** key's classical half hardware-bound
   (P-256 ECDH), mirroring the DSK composition. **Depends on:** S-F2. **Tier:** Smoke.
+
+### S-F6 — `log` → `tracing` migration
+
+- **Contract:** [Dependencies — Rust](capsule-docs/src/content/docs/design/dependencies.md)
+  (logging row: `tracing` is the sole facade).
+- **Deliverable:** every `log::` call site in `capsule-core` and `capsule-core-ffi`
+  replaced with `tracing` (structured fields; `#[instrument]` spans on the hot paths
+  the traceability rule names), the platform bridges (oslog) re-wired through a
+  tracing subscriber, and the `log` workspace dependency dropped once nothing consumes
+  it.
+- **Done when:** `rg 'log::'` finds no non-frozen hits in the two crates; the existing
+  unit suites pass unchanged; `mise run check-rust` green.
+- **Tier:** Unit (existing suites).
 
 ## Lane G — legacy retirement (frozen until preconditions)
 

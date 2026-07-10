@@ -69,6 +69,7 @@ The owner docs are:
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 | API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
 | Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
+| Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
 
 **Permitted secondary mentions.** Mechanism-explanatory phrasing inside a non-owner doc is fine — for example, "STREAM tags catch chunk reordering" inside [Peering](/design/peering/) is explaining a *behavior*, not declaring a *choice*. What the rule forbids is restating the choice itself ("we use SHA-256") outside the owner doc. When in doubt, link.
 
