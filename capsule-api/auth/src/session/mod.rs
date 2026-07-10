@@ -56,7 +56,7 @@ impl SessionManager {
         ip_address: Option<String>,
     ) -> Result<String, InternalServerError> {
         let sid = nanoid::nanoid!();
-        let now = chrono::Utc::now().timestamp();
+        let now = jiff::Timestamp::now().as_second();
         let session = Session {
             user_id: user_id.clone(),
             created_at: now,

@@ -1,4 +1,4 @@
-use chrono::Utc;
+use ::entity::time;
 use entity::passkey;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter, Set,
@@ -30,8 +30,8 @@ impl Mutation {
             public_key: Set(args.public_key),
             counter: Set(args.counter),
             name: Set(args.name),
-            created_at: Set(Utc::now()),
-            last_used_at: Set(Some(Utc::now())),
+            created_at: Set(time::now_entity()),
+            last_used_at: Set(Some(time::now_entity())),
             aaguid: Set(args.aaguid),
             backup_eligible: Set(args.backup_eligible),
             backup_state: Set(args.backup_state),
@@ -54,7 +54,7 @@ impl Mutation {
 
         let mut active: passkey::ActiveModel = passkey.into();
         active.counter = Set(new_counter);
-        active.last_used_at = Set(Some(Utc::now()));
+        active.last_used_at = Set(Some(time::now_entity()));
 
         active.update(conn).await
     }

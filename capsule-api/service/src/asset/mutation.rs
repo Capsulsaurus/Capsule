@@ -1,5 +1,6 @@
 use ::entity::asset::{self, AssetType};
-use chrono::{DateTime, Utc};
+use ::entity::time;
+use jiff::Timestamp;
 use nanoid::nanoid;
 use sea_orm::*;
 
@@ -18,7 +19,7 @@ impl Mutation {
         file_size: i64,
         file_hash: String,
         content_type: String,
-        captured_at: Option<DateTime<Utc>>,
+        captured_at: Option<Timestamp>,
     ) -> Result<asset::Model, DbErr> {
         let model = asset::ActiveModel {
             id: Set(nanoid!()),
@@ -32,9 +33,9 @@ impl Mutation {
             file_size: Set(file_size),
             file_hash: Set(file_hash),
             content_type: Set(content_type),
-            captured_at: Set(captured_at),
-            uploaded_at: Set(Utc::now()),
-            modified_at: Set(Utc::now().into()),
+            captured_at: Set(captured_at.map(time::ts_to_entity)),
+            uploaded_at: Set(time::now_entity()),
+            modified_at: Set(time::now_entity().into()),
             uploaded: Set(false),
             ..Default::default()
         };
@@ -47,7 +48,7 @@ impl Mutation {
         asset_id: &str,
         width: i32,
         height: i32,
-        captured_at: Option<DateTime<Utc>>,
+        captured_at: Option<Timestamp>,
     ) -> Result<asset::Model, DbErr> {
         let asset = asset::Entity::find_by_id(asset_id)
             .one(db)
@@ -59,9 +60,9 @@ impl Mutation {
         model.width = Set(width);
         model.height = Set(height);
         if captured_at.is_some() {
-            model.captured_at = Set(captured_at);
+            model.captured_at = Set(captured_at.map(time::ts_to_entity));
         }
-        model.modified_at = Set(Utc::now().into());
+        model.modified_at = Set(time::now_entity().into());
         model.update(db).await
     }
 
@@ -76,7 +77,7 @@ impl Mutation {
             .ok_or_else(|| DbErr::Custom("Asset not found".to_string()))?;
 
         let mut model: asset::ActiveModel = asset.into();
-        model.deleted_at = Set(Some(Utc::now()));
+        model.deleted_at = Set(Some(time::now_entity()));
         model.update(db).await
     }
 

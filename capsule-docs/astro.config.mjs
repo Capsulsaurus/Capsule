@@ -27,6 +27,10 @@ export default defineConfig({
                 baseUrl:
                     'https://github.com/justin13888/Capsule/tree/master/capsule-docs',
             },
+            components: {
+                // Renders the `status` frontmatter (draft/stable) as a title badge.
+                PageTitle: './src/components/PageTitle.astro',
+            },
             sidebar: [
                 {
                     label: 'Guides',
@@ -52,6 +56,9 @@ export default defineConfig({
                                 { slug: 'design' },
                                 { slug: 'design/principles' },
                                 { slug: 'design/module-map' },
+                                { slug: 'design/api-surfaces' },
+                                { slug: 'design/networking' },
+                                { slug: 'design/dependencies' },
                             ],
                         },
                         {
@@ -95,6 +102,7 @@ export default defineConfig({
                                 { slug: 'design/import/upload-protocol' },
                                 { slug: 'design/import/download-sync' },
                                 { slug: 'design/import/storage-verification' },
+                                { slug: 'design/import/camera-import' },
                                 { slug: 'design/backup-recovery' },
                                 { slug: 'design/versioning' },
                             ],
@@ -114,6 +122,7 @@ export default defineConfig({
                             items: [
                                 { slug: 'design/organization' },
                                 { slug: 'design/clients' },
+                                { slug: 'design/local-gallery' },
                                 { slug: 'design/i18n' },
                                 { slug: 'design/ai' },
                             ],

@@ -8,6 +8,8 @@ pub mod open;
 pub mod paths;
 pub mod rebuild;
 pub mod scrub;
+pub mod space;
+pub mod storage_verify;
 pub mod trash;
 
 pub use cache::{EvictionReport, cache_sweep};
@@ -20,3 +22,5 @@ pub use paths::{
     transcode_h264_path, transcode_live_path, trash_path, uuid_shard,
 };
 pub use rebuild::rebuild_index;
+pub use space::{available_bytes, streaming_recommended};
+pub use storage_verify::{BlobRole, BlobVerdict, StorageVerdict, release_is_safe};

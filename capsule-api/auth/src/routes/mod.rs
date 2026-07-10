@@ -1,4 +1,5 @@
 mod auth;
+mod devices;
 mod passkey;
 mod password;
 mod profile;
@@ -28,7 +29,17 @@ pub(super) fn get_router(state: AppState) -> Router {
         )
         .push(Router::with_path("refresh").post(auth::refresh_token))
         .push(Router::with_path("validate").post(auth::validate_token))
-        .push(Router::with_path("devices").get(auth::get_devices))
+        .push(
+            Router::with_path("devices")
+                .get(auth::get_devices)
+                // Device-enrollment ceremony (skeleton — slice S-C7 in SLICES.md);
+                // distinct from the session listing above.
+                .push(
+                    Router::with_path("enroll")
+                        .post(devices::issue_enrollment_code)
+                        .push(Router::with_path("redeem").post(devices::redeem_enrollment_code)),
+                ),
+        )
         .push(Router::with_path("logout").post(auth::logout))
         // Password routes
         .push(Router::with_path("password-reset-request").post(password::reset_password_request))

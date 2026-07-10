@@ -8,7 +8,7 @@
 //!
 //! Signing is **fallible** because a hardware element can refuse (the user cancels a
 //! biometric, the element is unavailable). The software implementation never returns `Err`.
-//! The hardware-backed implementation lands with [hardware-bound key storage] (`DEFERRED.md`).
+//! The hardware-backed implementation lands with [hardware-bound key storage] (`SLICES.md`).
 //!
 //! [Cryptography — Keys § Device Keys]: https://docs/design/cryptography/keys/#device-keys
 //! [hardware-bound key storage]: https://docs/design/cryptography/keys/

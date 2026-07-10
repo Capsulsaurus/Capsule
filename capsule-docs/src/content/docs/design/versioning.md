@@ -1,11 +1,12 @@
 ---
 title: Versioning
 description: How Capsule pins each album to a protocol version, upgrades safely, and bounds client deprecation
+status: draft
 ---
 
 Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.
 
-The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning is implemented in the album metadata model (`capsule-api` + `capsule-core`); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI. The min-supported-client window is enforced server-side in `capsule-api`.
+The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-api` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI (blocked with MLS — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-api` (planned).
 
 ## Versioned Surfaces
 
@@ -15,20 +16,11 @@ Versioning happens on multiple layers, each owned by the doc that defines it:
 - **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/primitives/#versioning-identifiers)).
 - **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) for the universal handshake.
 - **Client cache** — internal and rebuildable; cache schema changes drop and rebuild rather than migrate.
-- **Server data structures** — PostgreSQL schema migrations forward-only. The session-state store is a deployment choice, not a versioned API surface (see [Filesystem — Server: Deployment Profiles](/design/filesystem/server/#deployment-profiles)).
+- **Server data structures** — PostgreSQL schema migrations forward-only. Volatile session state in Valkey is not a versioned API surface (see [Filesystem — Server: Required Services](/design/filesystem/server/#required-services)).
 
 ## Negotiation Headers
 
-The contract for version compatibility — every API request and response carries these. The full fail-closed rule set is owned by [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation).
-
-| Header                       | Sent by                   | Meaning                                                                                               |
-| ---------------------------- | ------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `X-Capsule-Protocol`         | client / peer             | `YYYY-MM-DD` protocol version the request is written against                                          |
-| `X-Capsule-Crypto-Suite`     | client / peer on writes   | `u16` suite id from the [Primitives Inventory](/design/cryptography/primitives/#primitives-inventory) |
-| `X-Capsule-Sidecar-Schema`   | client on metadata-update | `u16` schema version declared at `sidecar_schema` field 0                                             |
-| `X-Capsule-Protocol-Min`     | server on every response  | the lowest protocol version this server accepts                                                       |
-| `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
-| `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
+The negotiation-header set — `X-Capsule-Protocol`, `X-Capsule-Crypto-Suite`, `X-Capsule-Sidecar-Schema`, and the server's `X-Capsule-Protocol-Min`/`-Max` and `X-Capsule-Min-Client-Build` responses — is declared **once**, in the registry at [Threat Model — Universal Headers](/design/threat-model/validation/#universal-headers), together with the fail-closed rules; the cross-transport carriage is [API Surfaces](/design/api-surfaces/#negotiation-across-transports). This doc adds only the versioning semantics: `protocol_version` is **date-based** (`YYYY-MM-DD`, ordered lexicographically = chronologically), a request is written against exactly one version, and the server advertises the closed `[Min, Max]` window it accepts on every response.
 
 ## Compatibility Verification
 
@@ -59,14 +51,14 @@ A version-pinned album is upgraded by a **tombstone-plus-fork** ceremony: the ol
 
 ### Steps
 
-1. **Freeze proposal.** An album admin issues an MLS application message `UpgradeIntent { from_version, to_version, intent_id, proposer_device, deadline }`, hybrid-signed by the admin's [DSK](/design/cryptography/keys/#device-keys). The proposal carries a deadline (default 7 days). Any member's client receiving an `UpgradeIntent` for an album that is already in upgrade quiescence under a *different* `intent_id` rejects the new proposal — only one upgrade can be in flight per album.
+1. **Freeze proposal.** An album admin issues an MLS application message `UpgradeIntent { from_version, to_version, intent_id, proposer_device, deadline }`, hybrid-signed by the admin's [DSK](/design/cryptography/keys/#device-keys). `deadline` is a **duration** (default 7 days); the effective expiry is `received_at + deadline` on the **server's trusted clock** ([Filesystem — Server](/design/filesystem/server/#postgresql-what-the-server-knows)), and the abort-on-expiry in step 3 is evaluated against that server-attested time — a skewed member clock can neither extend nor shorten the window. Any member's client receiving an `UpgradeIntent` for an album that is already in upgrade quiescence under a *different* `intent_id` rejects the new proposal — only one upgrade can be in flight per album.
 2. **Quiesce writes.** Members enter upgrade quiescence on receipt of `UpgradeIntent`:
    - In-flight uploads against the album are allowed to reach a terminal state.
    - New writes are queued **locally** with a `pending_until_upgrade` flag and the `intent_id`; they are not sent to the server.
    - The server augments the album row with `upgrade_pending_to = to_version, intent_id`. New upload sessions for this album whose `manifest.intent_id` does **not** match are rejected with `409 Conflict` — preventing a stale v_old client from writing past the freeze.
 3. **Drain.** The upgrade cannot proceed while any session for this album is in `Uploading` or `WaitingForProcessing`. The server exposes the in-flight count to the proposer's client. The deadline from step 1 bounds the wait; on deadline expiry the upgrade aborts cleanly (state returns to v_old normal; queued local writes are flushed back to v_old).
-4. **Tombstone.** Once drained, the proposing admin issues an MLS commit `AlbumTombstone { intent_id, frozen_state_hash }`. `frozen_state_hash` is a SHA-256 over the canonical CBOR of the album's full state: the sorted member list, every accepted manifest's hash, and the head of the album's provenance log. Every receiving member's client recomputes the hash against its own state; on mismatch the upgrade aborts (each member independently — the album returns to normal operation). Hash mismatch means at least one member's view of the album diverges and must be resolved before any upgrade.
-5. **Fork.** A new album group is created at `to_version`, MLS-named `parent_id_v{n}`, with the manifest field `upgraded_from: { old_album_id, intent_id, frozen_state_hash }`. Assets are **not** re-encrypted: the new album references the existing ciphertext blobs by content hash. Members are added to the new MLS group via standard `Add` proposals; fresh `AMK_v1` and a fresh write-tier key are minted.
+4. **Tombstone.** Once drained, the proposing admin issues an MLS commit `AlbumTombstone { intent_id, frozen_state_hash }`. `frozen_state_hash` is the [content hash fixed by `crypto_suite_id`](/design/cryptography/primitives/#cryptographic-hash) over the canonical CBOR of the album's full state: the sorted member list, every accepted manifest's hash, and the head of the album's provenance log. Every receiving member's client recomputes the hash against its own state; on mismatch the upgrade aborts (each member independently — the album returns to normal operation). Hash mismatch means at least one member's view of the album diverges and must be resolved before any upgrade.
+5. **Fork.** A new album group is created at `to_version` (its MLS group naming is an MLS-layer detail owned by [Cryptography — MLS](/design/cryptography/mls/); the normative link between old and new album is the field below, never the group name), with the manifest field `upgraded_from: { old_album_id, intent_id, frozen_state_hash }`. Assets are **not** re-encrypted: the new album references the existing ciphertext blobs by content hash. Members are added to the new MLS group via standard `Add` proposals; fresh `AMK_v1` and a fresh write-tier key are minted.
 6. **Apply queued writes.** Each member's locally queued `pending_until_upgrade` writes are re-encoded against `to_version` (the album pin and `crypto_suite_id` may have changed) and replayed into the new album.
 7. **Resumption (partial-failure recovery).** A client that crashes between step 2 and step 6 reads its local `upgrade_pending_to` on restart, queries the server for the upgrade's current phase via the album row, and resumes from there. The `intent_id` is the idempotency key — the same `UpgradeIntent` never produces two forks, and a duplicate `AlbumTombstone` commit is a no-op at the MLS layer.
 8. **Atomicity guarantee.** The cutover is the single MLS commit in step 4. Until that commit is applied by a member's client, the client is operating in v_old; after, in v_new. There is no in-between state visible to one client. Cross-member, the cutover is observed as each member processes the commit; until the slowest member processes it, that member is still in v_old (and its `pending_until_upgrade` writes remain queued locally, never lost).

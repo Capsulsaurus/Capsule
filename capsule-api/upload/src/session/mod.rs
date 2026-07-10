@@ -4,10 +4,10 @@ use std::time::Duration;
 use bb8_redis::RedisConnectionManager;
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::AsyncCommands;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::UploadError;
-use crate::models::session::{UploadSession, UploadSessionStatus};
+use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
 
 // TODO: Validate this code
 
@@ -54,13 +54,30 @@ impl UploadSessionManager {
             ),
             ("expected_hash", session.expected_hash.clone().into_bytes()),
             (
+                "crypto_suite_id",
+                session.crypto_suite_id.to_string().into_bytes(),
+            ),
+            (
+                "protocol_version",
+                session.protocol_version.clone().into_bytes(),
+            ),
+            ("blob_role", session.blob_role.as_str().as_bytes().to_vec()),
+            (
+                "manifest_envelope",
+                session.manifest_envelope.clone().into_bytes(),
+            ),
+            (
                 "status",
                 serde_json::to_string(&session.status)
                     .unwrap_or_else(|_| "\"Pending\"".to_string())
                     .into_bytes(),
             ),
-            ("created_at", session.created_at.to_rfc3339().into_bytes()),
-            ("expires_at", session.expires_at.to_rfc3339().into_bytes()),
+            ("created_at", session.created_at.to_string().into_bytes()),
+            (
+                "last_progress_at",
+                session.last_progress_at.to_string().into_bytes(),
+            ),
+            ("expires_at", session.expires_at.to_string().into_bytes()),
         ];
 
         // Store optional fields if present
@@ -69,6 +86,9 @@ impl UploadSessionManager {
         }
         if let Some(content_type) = &session.content_type {
             fields.push(("content_type", content_type.as_bytes().to_vec()));
+        }
+        if let Some(intent_id) = &session.intent_id {
+            fields.push(("intent_id", intent_id.as_bytes().to_vec()));
         }
 
         // Use HSET with multiple fields
@@ -113,6 +133,17 @@ impl UploadSessionManager {
         let new_value: i64 = conn.hincr(&key, "received_bytes", bytes as i64).await?;
 
         Ok(new_value as u64)
+    }
+
+    /// Record chunk progress: refreshes `last_progress_at`, the anchor of the
+    /// ≥1-hour survival floor (the pressure sweeper itself is S-C1).
+    pub(crate) async fn touch_progress(&self, upload_id: &str) -> Result<(), UploadError> {
+        let mut conn = self.pool.get().await?;
+        let key = self.key(upload_id);
+        let _: () = conn
+            .hset(&key, "last_progress_at", Timestamp::now().to_string())
+            .await?;
+        Ok(())
     }
 
     /// Atomically update the upload status.
@@ -209,15 +240,33 @@ impl UploadSessionManager {
             .map_err(|e| UploadError::Unknown(format!("Invalid total_size: {e}")))?;
         let expected_hash: String = get_string("expected_hash")?;
 
+        let crypto_suite_id: u16 = get_string("crypto_suite_id")?
+            .parse()
+            .map_err(|e| UploadError::Unknown(format!("Invalid crypto_suite_id: {e}")))?;
+        let protocol_version = get_string("protocol_version")?;
+        let blob_role_str = get_string("blob_role")?;
+        let blob_role: BlobRole =
+            serde_json::from_str(&format!("\"{blob_role_str}\"")).map_err(|e| {
+                UploadError::Unknown(format!("Invalid blob_role '{blob_role_str}': {e}"))
+            })?;
+        let manifest_envelope = get_string("manifest_envelope")?;
+        let intent_id = fields
+            .get("intent_id")
+            .and_then(|bytes| String::from_utf8(bytes.clone()).ok());
+
         let status_str = get_string("status")?;
         let status: UploadSessionStatus = serde_json::from_str(&status_str)
             .map_err(|e| UploadError::Unknown(format!("Invalid status '{status_str}': {e}")))?;
 
-        let created_at: DateTime<Utc> = get_string("created_at")?
+        let created_at: Timestamp = get_string("created_at")?
             .parse()
             .map_err(|e| UploadError::Unknown(format!("Invalid created_at: {e}")))?;
 
-        let expires_at: DateTime<Utc> = get_string("expires_at")?
+        let last_progress_at: Timestamp = get_string("last_progress_at")?
+            .parse()
+            .map_err(|e| UploadError::Unknown(format!("Invalid last_progress_at: {e}")))?;
+
+        let expires_at: Timestamp = get_string("expires_at")?
             .parse()
             .map_err(|e| UploadError::Unknown(format!("Invalid expires_at: {e}")))?;
 
@@ -229,10 +278,16 @@ impl UploadSessionManager {
             album_id,
             content_type,
             expected_hash,
+            crypto_suite_id,
+            protocol_version,
+            blob_role,
+            intent_id,
+            manifest_envelope,
             received_bytes,
             total_size,
             status,
             created_at,
+            last_progress_at,
             expires_at,
         })
     }

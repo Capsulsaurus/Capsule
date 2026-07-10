@@ -27,6 +27,9 @@ use tower::Service;
 pub mod config;
 
 pub mod proto {
+    // LEGACY-PLAINTEXT (frozen): SLICES.md S-G2 — the pre-E2EE metadata service. It
+    // models plaintext photos/albums/tags the key-free server never sees; it is kept
+    // compiling but frozen, and retires once `capsule.sync.v1` reaches parity.
     pub mod photolibrary {
         pub mod metadata {
             pub mod v1 {
@@ -34,8 +37,39 @@ pub mod proto {
             }
         }
     }
+
+    /// The key-free sync feed (contract skeleton — slice `S-C2` in the repo-root
+    /// `SLICES.md`; SSoT: <https://docs/design/import/download-sync/>).
+    pub mod capsule {
+        pub mod sync {
+            pub mod v1 {
+                tonic::include_proto!("capsule.sync.v1");
+            }
+        }
+    }
 }
 
+/// The key-free sync feed service (skeleton — every RPC is `unimplemented` until slice
+/// `S-C2`). Entries carry the signed manifest as opaque canonical CBOR plus the small
+/// encrypted metadata blob and per-role blob references; blob bytes stay on REST.
+#[derive(Default, Debug, Clone)]
+pub struct SyncFeedService {
+    // S-C2 injects the DB connection (sync_seq mint + cursor MAC key) here.
+}
+
+#[tonic::async_trait]
+impl proto::capsule::sync::v1::sync_service_server::SyncService for SyncFeedService {
+    async fn sync(
+        &self,
+        _request: Request<proto::capsule::sync::v1::SyncRequest>,
+    ) -> Result<Response<proto::capsule::sync::v1::SyncResponse>, Status> {
+        Err(Status::unimplemented(
+            "S-C2: key-free sync feed — see SLICES.md",
+        ))
+    }
+}
+
+// LEGACY-PLAINTEXT (frozen): SLICES.md S-G2 — see the proto module note above.
 #[derive(Default, Debug, Clone)]
 pub struct CapsuleMetadataService {
     // Inject DB or Config here if needed
@@ -154,20 +188,32 @@ impl PhotoLibraryMetadataService for CapsuleMetadataService {
     }
 }
 
-/// A Salvo handler that wraps the gRPC service
+/// A Salvo handler that wraps a tonic gRPC service (the legacy metadata service and the
+/// key-free `SyncService` both ride it).
 #[derive(Clone)]
-pub struct GrpcHandler {
-    service: PhotoLibraryMetadataServiceServer<CapsuleMetadataService>,
+pub struct GrpcHandler<S> {
+    service: S,
 }
 
-impl GrpcHandler {
-    pub fn new(service: PhotoLibraryMetadataServiceServer<CapsuleMetadataService>) -> Self {
+impl<S> GrpcHandler<S> {
+    pub fn new(service: S) -> Self {
         Self { service }
     }
 }
 
 #[async_trait]
-impl Handler for GrpcHandler {
+impl<S> Handler for GrpcHandler<S>
+where
+    S: Service<
+            hyper::Request<salvo::http::ReqBody>,
+            Response = hyper::Response<tonic::body::Body>,
+            Error = Infallible,
+        > + Clone
+        + Send
+        + Sync
+        + 'static,
+    S::Future: Send,
+{
     async fn handle(
         &self,
         req: &mut salvo::Request,
@@ -219,12 +265,23 @@ pub async fn get_router<C: Into<SyncServerConfig>>(
     _conn: DatabaseConnection,
     _config: C,
 ) -> Result<Router> {
+    // The key-free sync feed (skeleton — SLICES.md S-C2). Mounted at its explicit
+    // service path BEFORE the legacy catch-all so it wins matching.
+    let sync_feed = GrpcHandler::new(
+        proto::capsule::sync::v1::sync_service_server::SyncServiceServer::new(
+            SyncFeedService::default(),
+        ),
+    );
+
+    // LEGACY-PLAINTEXT (frozen): SLICES.md S-G2.
     let service = CapsuleMetadataService::default();
     let grpc_service = PhotoLibraryMetadataServiceServer::new(service);
     let handler = GrpcHandler::new(grpc_service);
 
     // gRPC routes need to match the full path including the service name
-    let router = Router::new().push(Router::with_path("<**rest>").goal(handler));
+    let router = Router::new()
+        .push(Router::with_path("capsule.sync.v1.SyncService/<**rest>").goal(sync_feed))
+        .push(Router::with_path("<**rest>").goal(handler));
 
     Ok(router)
 }

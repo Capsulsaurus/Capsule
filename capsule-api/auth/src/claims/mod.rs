@@ -1,8 +1,8 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use chrono::Utc;
 use environment::constants::{ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY};
+use jiff::Timestamp;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, TokenData, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 
@@ -58,7 +58,7 @@ impl Claims {
         sid: Option<String>,
     ) -> Self {
         let expiry_duration = expiry_duration.into();
-        let iat = Utc::now().timestamp() as u64;
+        let iat = Timestamp::now().as_second() as u64;
         let exp: u64 = iat + expiry_duration.as_secs();
 
         Self {
@@ -110,7 +110,7 @@ impl Claims {
 
     /// Returns true if the token has not expired
     pub fn has_expired(&self) -> bool {
-        self.exp <= Utc::now().timestamp() as u64
+        self.exp <= Timestamp::now().as_second() as u64
     }
 
     /// Returns true if the token has valid issuer
@@ -238,8 +238,8 @@ mod tests {
 
         let claims = Claims {
             sub: user_id,
-            exp: Utc::now().timestamp() as u64 - 100,
-            iat: Utc::now().timestamp() as u64,
+            exp: Timestamp::now().as_second() as u64 - 100,
+            iat: Timestamp::now().as_second() as u64,
             jti: uuid::Uuid::new_v4().to_string(),
             iss: ISSUER.to_string(),
             sid: None, // Added sid

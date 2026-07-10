@@ -1,5 +1,4 @@
-use chrono::Utc;
-use entity::{owner, owner_member};
+use entity::{owner, owner_member, time};
 use nanoid::nanoid;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DatabaseConnection, DatabaseTransaction, EntityTrait,
@@ -74,7 +73,7 @@ impl OwnerService {
         let owner_id = nanoid!();
         let owner = owner::ActiveModel {
             id: Set(owner_id.clone()),
-            created_at: Set(Utc::now()),
+            created_at: Set(time::now_entity()),
         };
         owner.insert(txn).await?;
 
@@ -83,7 +82,7 @@ impl OwnerService {
             let member = owner_member::ActiveModel {
                 owner_id: Set(owner_id.clone()),
                 user_id: Set(uid.clone()),
-                created_at: Set(Utc::now()),
+                created_at: Set(time::now_entity()),
                 ..Default::default()
             };
             member.insert(txn).await?;

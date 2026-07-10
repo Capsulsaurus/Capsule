@@ -1,6 +1,7 @@
 ---
 title: Core Principles
 description: The core principles that guide the design and development of Capsule
+status: draft
 ---
 
 These principles apply universally to all components of Capsule, from clients to server. The owner-doc rules and structural guidance below apply to every doc in `design/`.
@@ -40,13 +41,15 @@ The owner docs are:
 | Device enrollment + cross-device add ceremony                         | [Device Enrollment](/design/device-enrollment/)                     |
 | ML model identities + embedding provenance                            | [AI/ML Integrations](/design/ai/)                                   |
 | LQIP scheme + thumbnail/preview formats                               | [Thumbnails and Previews](/design/thumbnails/)                      |
-| Server filesystem (blob store, Postgres index, deployment profiles)   | [Filesystem — Server](/design/filesystem/server/)                   |
+| Server filesystem (blob store, Postgres index, required services)     | [Filesystem — Server](/design/filesystem/server/)                   |
 | Client filesystem (library layout, local index, space recovery)       | [Filesystem — Client](/design/filesystem/client/)                   |
 | Library self-maintenance + atomic-write granularity                   | [Filesystem — Maintenance](/design/filesystem/maintenance/)         |
 | Session/access tokens + identity binding + auth flow                  | [Authentication](/design/authentication/)                           |
 | Backup artifact container + escrow + recovery mechanisms              | [Backup and Recovery](/design/backup-recovery/)                     |
 | CRDT scheme, identifiers, geolocation, sidecar schema                 | [Metadata](/design/metadata/)                                       |
 | Import pipeline (scan, plan, execute)                                 | [Import — Pipeline](/design/import/pipeline/)                       |
+| Connection classes + retry policy classes + adverse-network posture   | [Network Resilience](/design/networking/)                           |
+| Offline-first requirement contract (local-gallery FRs/NFRs)           | [Local Gallery](/design/local-gallery/)                             |
 | Upload protocol (wire, sessions, finalization)                        | [Import — Upload Protocol](/design/import/upload-protocol/)         |
 | Download, sync feed, tiered fetch, auto-sync                          | [Import — Download & Sync](/design/import/download-sync/)           |
 | Federation trust model, capability tokens, soft-fail                  | [Federation](/design/federation/)                                   |
@@ -61,9 +64,13 @@ The owner docs are:
 | Web upload — upload links, guest drops, adoption                      | [Web Upload](/design/web-upload/)                                   |
 | Moderation policy + federated reporting + blocklists                  | [Moderation](/design/moderation/)                                   |
 | Quota accounting + enforcement points                                 | [Quota](/design/quota/)                                             |
-| Client validation duties + sandboxed decoder                          | [Clients](/design/clients/)                                         |
-| Translation catalog format + locale resolution + error-code scheme    | [Internationalization](/design/i18n/)                               |
+| Client validation duties + sandboxed decoder + client test/perf tooling | [Clients](/design/clients/)                                       |
+| Translation catalog format + locale resolution + error-code scheme + supported language set + README translation | [Internationalization](/design/i18n/) |
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
+| API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
+| Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
+| Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
+| Tethered camera import (PTP/IP source adapter)                        | [Import — Camera Import](/design/import/camera-import/)             |
 
 **Permitted secondary mentions.** Mechanism-explanatory phrasing inside a non-owner doc is fine — for example, "STREAM tags catch chunk reordering" inside [Peering](/design/peering/) is explaining a *behavior*, not declaring a *choice*. What the rule forbids is restating the choice itself ("we use SHA-256") outside the owner doc. When in doubt, link.
 
@@ -81,6 +88,25 @@ Regardless of shape, every design doc must let a reader answer four questions:
 These are goals, not required headings. Some docs hit all four in a single intro paragraph; others (especially wire-protocol and schema docs) dedicate focused sections. The choice is per doc.
 
 The [Module Map](/design/module-map/) is the cross-cutting index: every code module → owning design doc → validation tier. It is the developer's first stop.
+
+### Implementation Status
+
+Design intent and shipped code drift apart unless the docs say which is which. Every design doc that names an implementing module states, where that module is introduced, one of three statuses per surface:
+
+- **Implemented** — the named module exists and its validation tier runs in CI.
+- **Planned** — the contract is designed; no code exists yet. Marked `(planned)` in the [Module Map](/design/module-map/).
+- **Blocked** — planned, plus a named external blocker (e.g. an upstream dependency), stated where the surface is declared and marked `(blocked)` in the map.
+
+The repo-root `SLICES.md` (a plain repository file, not part of this site) is the executable index of every planned surface — its slice IDs are the unit of implementation work. A doc describing a planned surface writes the *contract* in normative present tense, but must not claim the code exists.
+
+### Review Status
+
+Separately from per-surface implementation status, every design doc carries a `status` frontmatter field tracking **human design review**, validated by the site schema:
+
+- `draft` — the doc's current content has not passed a human re-review since the last substantive design change.
+- `stable` — a human reviewed the doc as written and signed off; substantive edits flip it back to `draft`.
+
+The field is review-queue metadata, not publication state (drafts still build and publish).
 
 ## Validation Tiers
 

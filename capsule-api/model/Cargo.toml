@@ -11,7 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 capsule-api-entity = { path = "../entity" }
 argon2 = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 jsonwebtoken = { workspace = true }
 salvo = { workspace = true }
 serde = { workspace = true }

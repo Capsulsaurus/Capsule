@@ -11,10 +11,11 @@ SDK for Capsule API. Assess all Capsule APIs statelessly via one library only. N
 
 ## Development
 
-- Generate OpenAPI spec:
-  - Start up external dependencies with `podman compose up` in [capsule-api](../capsule-api).
-  - Run `./generate_openapi.sh` in [capsule-sdk](./).
-  - Note: [Progenitor](https://github.com/oxidecomputer/progenitor) is used to generate the SDK as long as the OpenAPI spec is provided at the assumed path.
+- The typed REST client is generated from the server's OpenAPI **3.1** schema by `spargen`,
+  our in-house generator (in development; slice `S-D8` in the repo-root `SLICES.md`).
+  The previous progenitor pipeline required a lossy 3.1→3.0 schema down-conversion and is
+  gone — we do not downgrade schemas. Until spargen lands, `AuthenticatedClient` is parked
+  (commented out) in `src/lib.rs` and the hand-written surfaces stand alone.
 
 ## Usage
 

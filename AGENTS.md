@@ -10,6 +10,15 @@
 - Mocking: Use mocks for all external dependencies and critical internal processes. This allows us to have deterministic tests and easily simulate edge cases and failure scenarios that are hard to reproduce with real dependencies. Do not try to wire up two incomplete complex systems to mock each other.
 - Linting and formatting is setup to be strict. Pre-commit and pre-push hooks are configured so you won't be able to push code that doesn't meet the standards.
 
+## Dependencies
+
+- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-api/entity` and `capsule-cli/entity` (convert at the entity boundary) and in the frozen `capsule-api-library`.
+- Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
+- Logging: `tracing`, never the `log` facade in new code.
+- TLS: `rustls` only; never native-tls/openssl.
+- Identifiers: UUIDv7 for new ids; UUIDv4 only where creation time must not leak.
+- The canonical table (all platforms, exceptions, rationale) is the [Dependencies design doc](capsule-docs/src/content/docs/design/dependencies.md) — add a row there before introducing a dependency for a new domain.
+
 ## Internationalization
 
 - No hardcoded user-facing strings. Every translatable string is a key in the canonical catalogs under `locales/` (ICU MessageFormat). Add the key there, not inline in app code.

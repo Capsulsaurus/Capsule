@@ -1,6 +1,7 @@
 ---
 title: Backup and Recovery
 description: The portable backup artifact, the master-key escrow, and the recovery flows
+status: draft
 ---
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class failure mode. Recovery rests on a single rule: holding the recovery secret must restore every asset, even after every device is lost. This document defines the two artifacts and the mechanisms that uphold it.
@@ -43,7 +44,7 @@ The container properties below are what make it both safe and portable:
 
 - **Uncompressed.** Asset ciphertext is incompressible (it is the output of [AES-256-GCM-STREAM](/design/cryptography/primitives/#bulk-aead)); compressing it buys nothing and adds CPU cost. Metadata blobs are likewise encrypted before they hit the archive, so the same applies.
 - **Streamable.** Tar is append-friendly and has no central directory, so a backup of arbitrary size can be written and read end-to-end without seeking — important when exporting a terabyte-scale library to spinning rust or an external drive.
-- **Deterministic ordering.** Entries are written in sorted order by `(album_id, asset_id, blob_role)`, so two exports of the same logical content produce byte-identical archives. This lets the integrity manifest's signature verify across re-exports.
+- **Deterministic ordering.** Entries are written in sorted order by `(album_id, asset_id, blob_role)`, so two exports of the same logical content produce byte-identical archives. This lets the integrity manifest's signature verify across re-exports. Determinism also requires **normalized tar headers** — `mtime = 0`, `uid = gid = 0`, empty user/group names, fixed mode bits, plain ustar with no PAX extension headers — so every entry's bytes are a pure function of its content and path, never of the exporting machine.
 - **Top-level integrity manifest.** Written before any blob entry (right after the tiny `VERSION` header), `MANIFEST.cbor` lists every entry's path, [content hash](/design/cryptography/primitives/), declared size, and the exporting device's identity — so a streaming reader holds the full integrity list before the first blob arrives. The manifest is authenticated **two ways**:
   - An **HMAC** keyed by the backup's wrap key (derived from the user passphrase via the [password-based KDF](/design/cryptography/primitives/#password-based-kdf)) catches truncation, reordering, and corruption *before* any decrypt is attempted.
   - A **hybrid Ed25519 + ML-DSA-65 signature** from the exporting device's [DSK](/design/cryptography/keys/#device-keys) — the same [signature scheme](/design/cryptography/primitives/#signature-scheme) used for asset manifests. The signature defeats a symmetric-key attacker who could otherwise re-HMAC after tampering: an attacker who steals the wrap key can re-HMAC but cannot forge the device signature.
@@ -56,9 +57,17 @@ ZIP was considered and rejected: its central-directory-at-end makes streaming wr
 
 The account master key is the single backed-up root of the key hierarchy (see [Cryptography — Keys](/design/cryptography/keys/)). It is escrowed server-side so a user holding only their recovery secret can reconstruct it:
 
-- Wrap the account master key with a user-chosen high-entropy passphrase or a randomly generated 48+ bit recovery code.
+- Wrap the account master key with a user-chosen high-entropy passphrase or a randomly generated recovery code of **≥128 bits** (e.g. a BIP39-style phrase) — the same entropy floor as every other unguessable identifier in the system. The escrow blob is offline-attackable once exfiltrated, and [Argon2id](/design/cryptography/primitives/#password-based-kdf) raises brute-force cost only linearly, so the secret itself must carry the security: **no low-entropy code is permitted without an enclave** (below).
 - Derive the wrapping key with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). Store the wrapped blob server-side.
-- If you can run enclaves (SGX/Nitro/SEV-SNP), do Signal's SVR trick: rate-limit PIN attempts inside the enclave so a weak PIN is still safe. Without enclaves, require a real passphrase or recovery code — don't let users pick 4-digit PINs.
+- If you can run enclaves (SGX/Nitro/SEV-SNP), Signal's SVR pattern is the *only* sanctioned way to soften that floor: rate-limit unwrap attempts inside the enclave so a shorter, human-friendly PIN is still safe. Without an attested enclave, the ≥128-bit floor is mandatory — never a 4-digit PIN, never a short numeric code.
+
+## Single-Root Invariant
+
+**Every recovery path terminates at the one account master key, and the recovery secret (or a quorum of its Shamir shares) is the only user-held secret class. No feature may introduce a second escrowed secret class or a recovery path that bypasses the master key.**
+
+This is already true; the invariant fixes it against drift. The audit, stated so nobody has to re-derive it: the server **escrow** is the master key wrapped by the recovery secret (above); the **backup artifact's** wrap key derives from that same recovery passphrase; **Shamir** splits that same seed; the [OGK](/design/cryptography/keys/#owner-group-keys-ogks) and Drop-Key escrows are wraps *reachable from* the master key, not additional roots; [sponsored accounts](/design/authentication/#account-types) deliberately hold no root of their own — every path routes through the sponsor's, which is why the verification cadence below never prompts a sponsoree. These are **wraps, not roots** — holding the recovery secret reaches all of them; losing everything but the recovery secret loses nothing.
+
+One versioning seam to know about, not remove: an already-exported backup artifact stays bound to the passphrase in force at export. Rotating the recovery secret (below) therefore ends with "re-export or destroy old artifacts" guidance — a property of offline artifacts, not a second secret class.
 
 ## Recovery Mechanisms
 
@@ -82,6 +91,28 @@ Users who want to spread recovery across trusted parties or storage locations ca
 
 This is the social-recovery escape hatch — useful for users who would otherwise lose access from a single forgotten passphrase plus a single dead device.
 
+## Recovery Verification Cadence
+
+A recovery secret that was written on a napkin thirteen months ago is a recovery secret the user *believes* they have. The client therefore occasionally asks the user to **verify** it — and the check is designed so it can never itself become a lock-out or a guessing oracle.
+
+### Local Verification
+
+Verification is **local-only**: the client keeps a cached copy of the escrow blob (fetched at enrollment, refreshed opportunistically via sync); the user enters the passphrase; the client runs the [password KDF](/design/cryptography/primitives/#password-based-kdf), unwraps the cached blob (`capsule_core::backup::verify_recovery_secret`), and compares an HKDF-derived tag (`capsule-recovery-verify/v1`) against the same tag derived from the device-held master key — a derived-tag compare, never raw key bytes. No server round-trip: it works offline, creates no server-side guessing surface, and a failure can't lock anything.
+
+**Stale-cache rule:** before recording a failure, the client refreshes the escrow blob from the server (it may have been rotated from another device) and retries once — otherwise every rotation would manufacture false failures on the user's other devices.
+
+### Schedule and Triggers
+
+- **7 days** after setup (catches the lost-napkin case while re-setup is cheap), then **90 days**, backing off to a **180-day cap** after two consecutive successes.
+- **Re-arm triggers** (reset to the 7-day step): a new device enrolls (the prompt lands on the *new* device — it has never seen the passphrase); the recovery secret rotates; a restore-from-escrow completes.
+- Snooze: 24 h or 7 d, at most 3 consecutive snoozes, then a persistent non-blocking badge. The check **never blocks** sync, unlock, or any critical flow — it is advisory by design.
+
+### On Repeated Failure: Guided Re-Wrap
+
+After 3 failures across ≥ 2 app sessions — or an explicit "I lost it" — the client runs the guided rotation flow: mint a fresh ≥128-bit recovery secret, **re-wrap the same master key**, replace the server escrow (a single active escrow; the old blob is deleted, so the lost secret unwraps nothing), re-run the setup-style type-back gate, re-issue Shamir shares if enrolled (old shares explicitly invalidated and surfaced as such), and surface the old-backup-artifact guidance from the [single-root invariant](#single-root-invariant).
+
+**This is wrap rotation, not key rotation**: an O(1) escrow-blob replacement with no data re-encryption and no blob-hash changes. Rotating the master key itself remains the separate compromise procedure owned by [Cryptography — Keys](/design/cryptography/keys/).
+
 ## Backup Verification
 
 A restore that overwrites live state silently is the worst foot-gun a backup system can ship. Capsule therefore makes **dry-run the default**: a `restore` invocation runs in dry-run mode unless the user passes an explicit `--commit` flag (or its UI equivalent: a confirm-with-typed-phrase dialog after the dry-run report is shown). The mode hierarchy:
@@ -104,6 +135,10 @@ The MANIFEST.cbor carries the exporter's device id, the export timestamp, the so
 
 ## Validation
 
+- **Local verify round-trip (unit).** Offline: the correct passphrase verifies with zero network I/O; a wrong one fails without side effects. Rotate the escrow out-of-band; assert the stale-cache rule refreshes before recording a failure and then passes with the new passphrase.
+- **Cadence schedule (unit).** Under a mocked clock: 7 d → 90 d → 180 d backoff; re-arm on device-add, rotation, and restore; snooze caps; never blocks a critical flow.
+- **Guided re-wrap (smoke).** After the failure threshold: a new escrow wraps the *same* master key (fixture assets still decrypt; blob hashes unchanged), the old escrow is rejected everywhere, Shamir re-issue is prompted where enrolled, and the old-artifact guidance is surfaced.
+- **Single-root audit (unit).** A doc-driven test walks the seven recovery paths and asserts each terminates at the master key; a tripwire asserts no second escrowed secret class exists in the schema.
 - **Artifact round-trip (unit).** Export → import a small library; assert byte-equal blob set, sidecars, and provenance chains. Determinism check: re-export the same library twice; assert byte-identical archives.
 - **MANIFEST verification (unit).** Tamper individual entries; assert HMAC mismatch detected. Tamper MANIFEST itself and re-HMAC; assert exporter-signature mismatch detected. Strip the exporter from the device directory; assert restore refusal.
 - **AMK-completeness check (unit).** Build an artifact whose `keys/amk-ledger.cbor` is deliberately missing an `amk_version` that an included asset references; assert detection at dry-run, before any commit. Build a self-sufficient artifact; assert every included asset decrypts from the artifact's own ledger with no server contact.

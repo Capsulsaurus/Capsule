@@ -1,9 +1,10 @@
 ---
 title: Moderation
 description: Server moderation policy — reports, suspensions, takedowns, blocklists, federated reporting
+status: draft
 ---
 
-Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no content scanner will be built. Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.
+Capsule is end-to-end encrypted, so a server **cannot** scan content it holds — server-side content or CSAM scanning is impossible by design, and no server-side content scanner will be built. (Client-side, opt-in ML over a user's *own* library — [AI/ML](/design/ai/) — is a different thing entirely: it runs where the keys are, under the user's control; its candidate shared-album-flagging classifiers are client-side and user-initiated, never a server scanner.) Moderation operates entirely on what *is* available: user reports, account-level signals, and federated peer reputation.
 
 Implementation will live in `capsule-api::moderation` (a new sub-crate or service inside `capsule-api`). The boundary surfaces — report submission, federated report exchange, blocklist publication — are the eventual contract; this doc captures what they will need to do.
 
@@ -32,7 +33,7 @@ A report against `alice@other.tld`'s asset is routed to her home server's admini
 Server-level blocklists, plus per-user blocks that federate:
 
 - **Server-level blocklist.** A server admin publishes a list of peer servers that this server refuses to accept federated requests from. Operates at the [federation capability](/design/federation/#federation-capabilities) layer.
-- **Per-user block.** A user can block another user; the block is enforced by the blocker's home server — the blocked user is removed from albums shared with the blocker and cannot share new albums with them. Removal is an ordinary MLS `Remove` + AMK epoch bump applied at the blocked user's next sync; the prior epochs' keys they already hold are not retroactively clawed back (consistent with [removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block is **scoped to that user**: it does **not** propagate as a server-wide federation block, so one user (or a coordinated group) cannot weaponize blocks to sever an entire peer server from the federation. Each home server enforces only its own users' blocks.
+- **Per-user block.** A user can block another user; the block is enforced by the blocker's home server — the blocked user is removed from albums shared with the blocker and cannot share new albums with them. Removal is an ordinary MLS `Remove` + AMK epoch bump applied at the blocked user's next sync; the prior epochs' keys they already hold are not retroactively clawed back (consistent with [removal semantics](/design/cryptography/mls/#remove-user-charlie)). A per-user block is **scoped to that user**: it does **not** propagate as a server-wide federation block, so one user (or a coordinated group) cannot weaponize blocks to sever an entire peer server from the federation. Each home server enforces only its own users' blocks. (The MLS `Remove` this rides is blocked upstream — see the [MLS status note](/design/cryptography/mls/).)
 - **Blocklist exchange (v2).** A peer-level mechanism for sharing *server-level* blocklists across federated servers (so a malicious server isn't pure whack-a-mole) is **deferred to v2**, but its shape is fixed now: signed, versioned blocklist documents an admin **opts into** consuming from peers they already trust — never auto-applied, and deliberately distinct from per-user blocks (which never propagate). v1 ships only the manual server-level blocklist above.
 
 ### Untrusted-Server Whitelist
@@ -44,8 +45,8 @@ Server-level blocklists, plus per-user blocks that federate:
 A server admin can suspend a user account on their home server. Suspended accounts:
 
 - Cannot upload — `POST /upload` session creation is refused with a structured `403 AccountSuspended` code (distinct from quota and permission rejections, so the client surfaces the right remediation).
-- Cannot share new albums (existing shares remain valid for the share-link TTL; revocation lists can revoke them).
-- Cannot revoke other devices' sessions (a suspended account's `revoke_all_sessions` is refused — defends against compromised-account-as-DoS).
+- Cannot share new albums or create new share/upload links (existing share links keep serving until they expire or are revoked — [share links](/design/share-links/) have optional expiry plus revocation, no implicit TTL).
+- **Can still secure the account**: `revoke_all_sessions` remains available to a suspended user — it is gated by [master-key proof](/design/authentication/#explicit-revocation), not by account standing, so it cannot be abused by a session-token thief, and a suspended user whose account may be compromised needs it most. Suspension removes upload and sharing capability, never the ability to evict sessions.
 
 The user's *data* is untouched — suspension is an access-level action, not a data-level one. Reversibility (a suspension can be lifted) is the default; permanent termination is a separate policy.
 
@@ -54,7 +55,7 @@ The user's *data* is untouched — suspension is an access-level action, not a d
 When a moderation action requires the *home server* to stop serving a specific asset (e.g. legal request, CSAM report verified by admin viewing in their album):
 
 - The asset is marked unservable on the home server (`served = false` in the index).
-- Federated peers fetching the asset receive `410 Gone`.
+- Federated peers fetching the asset receive `410 Gone`. (This deliberately diverges from the [share-link and drop serve paths](/design/share-links/#security-contract), which return an indistinguishable `404` — those must not confirm a capability URL ever existed, while a takedown *intends* to signal removal of content whose existence the peer already knows. The per-surface rule: capability-URL serving → `404`; takedown of known content → `410`.)
 - The asset's underlying blob is **not** deleted — the user owns the data, and a takedown is a serving constraint, not a destruction; the user can still restore from their own backup. A takedown is therefore **reversible by default** (an admin can lift it). A **legal-hold** variant marks the asset indefinitely unservable where law requires it — lifted only when the legal obligation ends, not at admin discretion — but even then never destroys the user's bytes: the constraint is on the *home server's serving*, not on the data the user holds.
 - The takedown emits a **server-visible moderation provenance record** the user sees in their audit log — what was taken down, when, and (where policy permits) why — honoring the "[No silent operations](#what-moderation-cannot-do-structural)" rule. A user whose asset stops serving is never left to guess why, and the moderation action is itself auditable after the fact.
 

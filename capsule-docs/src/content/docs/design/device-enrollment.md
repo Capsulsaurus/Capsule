@@ -1,6 +1,7 @@
 ---
 title: Device Enrollment
 description: First-device bootstrap and cross-device add ceremonies for Capsule accounts
+status: draft
 ---
 
 A Capsule account has one or more devices, each holding a hardware-bound DSK + DEK cross-signed into the user's [device directory](/design/cryptography/keys/#device-directory). This doc owns the two enrollment ceremonies a device can go through to *get into* that directory:
@@ -10,15 +11,15 @@ A Capsule account has one or more devices, each holding a hardware-bound DSK + D
 
 These are distinct from **[cross-device recovery](/design/backup-recovery/#default-mechanisms)** (which is also a way to bring up a new device, but in the recovery context — the user has lost their other devices and is using the recovery passphrase + master-key escrow to restore).
 
-Implementation will live in `capsule-core::crypto::keys` (key generation and wrapping) and `capsule-api-auth::devices` (the device directory and the enrollment authentication surface). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt).
+Implementation lives in `capsule-core::crypto::keys` (key generation and wrapping — implemented) and `capsule-api-auth::devices` (the device directory and enrollment authentication surface — planned). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are blocked upstream — see the [MLS status note](/design/cryptography/mls/).
 
 ## First-Device Enrollment
 
 When a user creates a brand-new Capsule account, the very first device runs the full setup ceremony:
 
-1. **Generate the master key.** A 32-byte CSPRNG draw becomes the account master key. It is wrapped under a recovery passphrase via [Argon2id](/design/cryptography/primitives/#password-based-kdf); the wrapped blob is uploaded to the server-side [master-key escrow](/design/backup-recovery/#master-key-escrow). The plaintext recovery passphrase is shown to the user and never persisted.
-2. **Generate the User IK.** A hybrid Ed25519 + ML-DSA-65 keypair (the [User Identity Keys](/design/cryptography/keys/#user-identity-keys-user-iks)). The private halves are wrapped under the master key; the public halves go into the (initial, single-member) device directory.
-3. **Generate this device's keys.** A DSK (hybrid Ed25519 + ML-DSA-65) and a DEK (hybrid X25519 + ML-KEM-768), both generated inside the hardware secure element and non-exportable. Both are signed by the IK and added to the device directory.
+1. **Generate the master key.** A fresh account master key is drawn from the [OS CSPRNG](/design/cryptography/primitives/#randomness) ([Keys — Registered accounts](/design/cryptography/keys/#registered-accounts) owns its shape). It is wrapped under a recovery passphrase via [Argon2id](/design/cryptography/primitives/#password-based-kdf); the wrapped blob is uploaded to the server-side [master-key escrow](/design/backup-recovery/#master-key-escrow). The plaintext recovery passphrase is shown to the user and never persisted.
+2. **Generate the User IK.** The [User Identity Key](/design/cryptography/keys/#user-identity-keys-user-iks) pair (composition owned there). The private halves are wrapped under the master key; the public halves go into the (initial, single-member) device directory.
+3. **Generate this device's keys.** A DSK and a DEK per the [device-key composition](/design/cryptography/keys/#device-keys). The **classical half** of each is generated inside the hardware secure element and is non-exportable; shipping secure elements (Secure Enclave, StrongBox, TPM) expose **ECDSA/ECDH-P256**, not Ed25519/X25519, so the hardware-backed composition is the planned **P-256 hybrid variant** ([Keys](/design/cryptography/keys/)), with the PQ half software-sealed under hardware-protected material — no secure element holds PQ keys. Until the P-256 variant lands, the software composition generates both halves in software. Both keys are signed by the IK and added to the device directory.
 4. **Publish the device directory.** The IK-signed directory is uploaded to the server.
 5. **Create the default album.** Establish the owner's [default album](/design/organization/#the-default-album) — a new MLS group at the `album_id` derived from the master key (see [Keys — Key Chain](/design/cryptography/keys/#key-chain)), with this device as the sole admin/writer — and set the owner's `default_album_id` pointer ([Filesystem — Server](/design/filesystem/server/#ownership-partitioning-and-quota)) to it. This guarantees a writable import destination from the first moment the account exists.
 6. **Show the recovery passphrase.** This is the only path back into the account if every device is lost, so saving it is **gated, not advisory**: the user must type back a short slice of the passphrase before setup completes, forcing them to actually record it rather than dismiss the screen. The plaintext passphrase is never persisted.
@@ -32,7 +33,7 @@ Two design points:
 
 When an existing signed-in device adds a new device to the same account:
 
-1. **Initiate from the existing device.** The user opens "Add another device" on device A (already signed in). Initiating an add requires a **fresh local device authorization** on A (biometric or device passcode) — a valid session token alone is **not** sufficient, so an attacker holding only a stolen session token cannot enroll a rogue device without physical control of A. Device A then generates a one-time **enrollment code** — **single-use, ≥64 bits of entropy, valid 10 minutes**, scoped to this one ceremony, collision-checked at generation, and deleted by the server on redemption or expiry — and displays it as a QR code (with a text fallback).
+1. **Initiate from the existing device.** The user opens "Add another device" on device A (already signed in). Initiating an add requires a **fresh local device authorization** on A (biometric or device passcode) — a valid session token alone is **not** sufficient, so an attacker holding only a stolen session token cannot enroll a rogue device without physical control of A. Device A then generates a one-time **enrollment code** — **single-use, valid 10 minutes**, scoped to this one ceremony, collision-checked at generation, rate-limited at redemption, and deleted by the server on redemption or expiry; the QR payload carries **≥64 bits of entropy** (the text fallback may be shorter — see the presentation note below) — and displays it as a QR code (with a text fallback).
 2. **Scan or enter on the new device.** Device B scans the QR (or types the code).
 3. **Establish a short-lived channel.** Devices A and B perform an ephemeral X25519 ECDH to derive a one-time channel key, carried over a **server relay by default, or a direct LAN connection when both devices are on the same network** (discovered via mDNS; LAN preferred — fewer moving parts, no relay trust). The channel is mutually authenticated by the enrollment code plus the ephemeral DH.
 4. **Verify the channel.** A short safety code derived from the channel transcript is displayed on both devices, **alongside each device's identity (model + a short key fingerprint)**; the user confirms both that the codes match and that the device being added is the one physically in front of them. Binding the code to device identity defends against a MITM on the relay channel and against a relay that swaps in a different device.
@@ -42,7 +43,7 @@ When an existing signed-in device adds a new device to the same account:
 
 Two presentation choices:
 
-- **Enrollment code.** Presented as a QR code with a **friendly numeric** text fallback — the channel is independently authenticated by the safety code, so the code itself only needs to be conveniently transcribable, not dense. Entropy (≥64-bit), single-use, and 10-minute expiry are fixed in step 1.
+- **Enrollment code.** Presented as a QR code carrying the full ≥64-bit payload, with a **deliberately shorter, friendly numeric text fallback** (8–10 digits) that trades entropy for transcribability. The shorter fallback is safe to offer because it never stands alone: redemption is single-use, expires in 10 minutes, and is rate-limited per pending enrollment (so it cannot be brute-forced within its lifetime), and channel integrity never rests on the code — the safety-code check in step 4 is the MITM defense. Single-use and expiry for both forms are fixed in step 1.
 - **Safety-code check.** Step 4 binds the code to each device's identity (model + key fingerprint). To make the human comparison failure-resistant, both devices show the code in the same chunked, fixed-length format, and confirming requires an explicit match-and-identity acknowledgement on **both** devices — a mismatch is the abort path, not a missed default.
 
 ## Relationship to Cross-Device Recovery

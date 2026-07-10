@@ -1,6 +1,7 @@
 ---
 title: Threat Model
 description: How Capsule contains damage from faulty, malicious, or version-mismatched clients
+status: draft
 ---
 
 E2EE shifts most of the trust to the client. The server holds no keys; clients write the canonical state. That makes the question "what damage can a client cause?" load-bearing for the design — a single buggy implementation, a hostile keyholder inside an album, a stranded old build, or a too-new prototype all have to fail safely.
@@ -72,3 +73,8 @@ Each owner doc gains a short section linking back to the relevant threat-model i
 | [Organization](/design/organization/)         | [Atomicity](/design/threat-model/validation/#atomicity-invariants), [Forbidden Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors)                                                                                |
 | [Clients](/design/clients/)                   | [Client Validation](/design/threat-model/validation/#client-side-validation-invariants), [Deprecation Policy](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy)                                               |
 | [Web Upload](/design/web-upload/)             | [Server Validation](/design/threat-model/validation/#server-side-validation-invariants), [Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map), [Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces)   |
+| [Share Links](/design/share-links/)           | [Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) (enumeration + passphrase rows)                                                                                                                            |
+| [Quota](/design/quota/)                       | [Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) (federated-receive row), [Server Validation](/design/threat-model/validation/#server-side-validation-invariants) (session-creation checks)                 |
+| [Moderation](/design/moderation/)             | [Server Validation](/design/threat-model/validation/#server-side-validation-invariants) (federated-report invariant), [Scenario Map](/design/threat-model/scenarios/#damage-scenario--invariant-map) (mass-report row)                    |
+| [Device Enrollment](/design/device-enrollment/) | [Idempotency](/design/threat-model/validation/#idempotency-invariants) (enrollment-code row), [Forbidden Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors)                                                      |
+| [MLS Resilience](/design/mls-resilience/)     | [Idempotency](/design/threat-model/validation/#idempotency-invariants) (re-keying row), [Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces)                                                                        |

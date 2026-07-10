@@ -34,8 +34,8 @@ pub fn album_pin_matches(request_protocol: &str, album_pin: &str) -> bool {
 /// Invariant 7 (time half): the device's directory `added_at` precedes the manifest
 /// `timestamp`. `None` on an unparseable timestamp (the caller rejects with `400`).
 pub fn device_added_before(added_at: &str, timestamp: &str) -> Option<bool> {
-    let a = chrono::DateTime::parse_from_rfc3339(added_at).ok()?;
-    let t = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+    let a = added_at.parse::<jiff::Timestamp>().ok()?;
+    let t = timestamp.parse::<jiff::Timestamp>().ok()?;
     Some(a <= t)
 }
 
@@ -46,9 +46,10 @@ pub fn timestamp_within_drift(
     server_clock: &str,
     drift_days: i64,
 ) -> Option<bool> {
-    let t = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
-    let now = chrono::DateTime::parse_from_rfc3339(server_clock).ok()?;
-    let delta = (t - now).num_days().abs();
+    let t = timestamp.parse::<jiff::Timestamp>().ok()?;
+    let now = server_clock.parse::<jiff::Timestamp>().ok()?;
+    // Absolute-time days: 24 h, matching the drift guard's UTC semantics.
+    let delta = (t.as_second() - now.as_second()).abs() / 86_400;
     Some(delta <= drift_days)
 }
 
@@ -151,7 +152,7 @@ mod tests {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
+    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 
     #[test]
     fn hash_length_and_size_and_content_type() {
@@ -222,6 +223,9 @@ mod tests {
             plaintext_size: 10,
             chunk_size: 65_520,
             nonce_prefix: [0; 7],
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: None,
             created_by_user: Uuid::from_u128(3),
             created_by_device: Uuid::from_u128(4),
             client_version: "t".into(),

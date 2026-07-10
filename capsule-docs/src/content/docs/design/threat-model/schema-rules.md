@@ -1,6 +1,7 @@
 ---
 title: Schema Rules and Open Questions
 description: Schema evolution, forbidden client behaviors, deprecation policy, and unresolved design questions
+status: draft
 ---
 
 Capsule schemas evolve over time, but the rules of evolution are fixed — what fields a writer may add, what a receiver may safely ignore, what fields are closed enums, and what timing/grammar rules apply. Each schema's owner doc defines its fields; this doc defines what evolution is allowed across them. Schema-rule enforcement lives in `capsule-core::crypto` (sidecar/manifest decode) and the validation layers of every API crate.
@@ -16,9 +17,9 @@ Capsule schemas evolve over time, but the rules of evolution are fixed — what 
 
 ### Closed Enums
 
-**Every enum in a signed or validated structure is closed per `protocol_version`** — a value outside the set known at that version is a structural error, never a "future value to ignore." This is a blanket rule, not a curated list, so it cannot rot: adding a value to *any* such enum bumps `protocol_version` (see [Versioning — Album Protocol Version Pinning](/design/versioning/#album-protocol-version-pinning)), and a pinned old album never sees the new value. It is enforced on **both sides** — the server's structural envelope check (invariant 16) and the client's `verify_asset`/decode path (see [Validation](/design/threat-model/validation/)).
+**Every enum in a signed or validated structure is closed per `protocol_version`** — a value outside the set known at that version is a structural error, never a "future value to ignore." This is a blanket rule, not a curated list, so it cannot rot: adding a value to *any* such enum requires a new (later-dated) `protocol_version` (see [Versioning — Album Protocol Version Pinning](/design/versioning/#album-protocol-version-pinning)), and a pinned old album never sees the new value. It is enforced on **both sides** — the server's structural envelope check (invariant 16) and the client's `verify_asset`/decode path (see [Validation](/design/threat-model/validation/)).
 
-The authoritative value set for each enum lives in its owner doc — `AssetManifest.action` in [Authorization](/design/authorization/#the-closed-action-set), `content_type` and `gps.source` in [Metadata](/design/metadata/#sidecar-schema-v1), `DerivativeManifest.role` in [Provenance](/design/cryptography/provenance/#derivative-provenance) — never duplicated here.
+The authoritative value set for each enum lives in its owner doc — `AssetManifest.action` in [Authorization](/design/authorization/#the-closed-action-set), `content_type` and `gps.source` in [Metadata — Closed Enum Value Sets](/design/metadata/#closed-enum-value-sets), `key_mode` and `DerivativeManifest.role`/`format` in [Provenance](/design/cryptography/provenance/#derivative-provenance), `stack_type`/`role` in [Organization](/design/organization/#stack-membership-schema) — never duplicated here.
 
 ### Timestamp Grammar
 
@@ -61,7 +62,7 @@ The deprecation surface is **never** retroactive against historical state. Old a
 
 One design question remains open — and it is **deliberately deferred to v2**, not a v1 blocker:
 
-1. **Cross-server album replication (v2).** v1 pins each album to a single home server; v2 will need a story for cross-server MLS state and federated commit ordering.
+1. **Cross-server album replication (v2).** v1 pins each album to a single home server; v2 will need a story for cross-server MLS state and federated commit ordering. The interim shipping answer is the [aggregated album](/design/federation/#federated-shared-albums-aggregated-albums) — client-side aggregation of per-contributor single-writer albums — which neither depends on nor precludes the v2 design.
 
 The following questions have since been **resolved** and now live in their owner docs, not here:
 

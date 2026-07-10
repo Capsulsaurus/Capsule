@@ -16,7 +16,6 @@ members = [
     "capsule-core",
     "capsule-core-ffi",
     "capsule-i18n",
-    "capsule-media",
     "capsule-sdk",
     "xtask",
 ]
@@ -38,7 +37,6 @@ default-members = [
     "capsule-core",
     "capsule-core-ffi",
     "capsule-i18n",
-    "capsule-media",
 ]
 resolver = "3"
 
@@ -49,7 +47,6 @@ publish = false
 
 [workspace.dependencies]
 argon2 = "0.5.3"
-axum = { version = "0.8.9", features = ["http2", "macros"] }
 base64 = "0.22.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"
@@ -60,6 +57,7 @@ derive_more = "2.1.1"
 eyre = "0.6.12"
 futures-util = "0.3.32"
 indexmap = { version = "2.14.0", features = ["serde"] }
+jiff = { version = "0.2", features = ["serde"] }
 jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 log = { version = "0.4.32", features = ["release_max_level_debug"] }
 file-format = "0.28"

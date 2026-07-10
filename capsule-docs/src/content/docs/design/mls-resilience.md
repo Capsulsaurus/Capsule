@@ -1,11 +1,12 @@
 ---
 title: MLS Resilience
 description: How Capsule's MLS layer recovers from lost commits, state divergence, and group corruption
+status: draft
 ---
 
 OpenMLS handles MLS (RFC 9420) correctly under normal operation — commits ordered by the group's chain, duplicates rejected, ratchet advanced atomically. But MLS can still hit scenarios the base protocol does not resolve on its own: a commit lost in transit, two devices proposing concurrently with the wrong ordering, a member whose local state has diverged from the server's. This doc owns Capsule's recovery contracts for those edge cases.
 
-It is kept **separate** from [Cryptography — MLS](/design/cryptography/mls/) (which owns the ciphersuite binding and the four standard ceremonies) because recovery is a distinct, cross-cutting concern — it reaches into the [OGK](/design/cryptography/keys/#owner-group-keys-ogks), backup, and quarantine UX, not the steady-state membership protocol. The recovery surfaces here are exercised in `capsule-core::crypto::mls` (the OpenMLS wrapper) and surface to users through quarantine + reconciliation UX in the native clients.
+It is kept **separate** from [Cryptography — MLS](/design/cryptography/mls/) (which owns the ciphersuite binding and the four standard ceremonies) because recovery is a distinct, cross-cutting concern — it reaches into the [OGK](/design/cryptography/keys/#owner-group-keys-ogks), backup, and quarantine UX, not the steady-state membership protocol. The recovery surfaces here will be exercised in `capsule-core::crypto::mls` (the OpenMLS wrapper — blocked upstream with the rest of the MLS layer; see the [status note](/design/cryptography/mls/)) and surface to users through quarantine + reconciliation UX in the native clients.
 
 ## Failure Modes
 
@@ -21,7 +22,7 @@ A device sends an MLS commit (e.g. an `Add` or AMK rotation) and the server neve
 
 Two devices' local MLS state has diverged — different views of the group's current epoch, different write-tier key, different member list. This can happen after a buggy commit, an incomplete sync, or a long offline period.
 
-**Recovery direction:** the device with the older epoch reconciles by replaying every commit it missed from the server's chain. A device whose local state is *ahead* of the server — it holds a commit whose hash is **absent from the server's authoritative chain** (a local state-mutation bug, or a commit the server never persisted) — declares itself unreconcilable, discards its local group state, and **re-bootstraps in full**. Partial re-bootstrap is deliberately not attempted: MLS group state is small, so a clean full re-fetch is simpler to reason about than splicing suspect local state, and is the only path taken.
+**Recovery direction:** the device with the older epoch reconciles by replaying every commit it missed from the server's chain. A device whose local state is *ahead* of the server — it holds a commit whose hash is **absent from the server's authoritative chain** — first treats that as a [lost commit](#lost-commit) and re-submits within that path's backoff budget; **only after the budget is exhausted**, or when the absence is a *provable fork* (the server's chain has advanced past the local commit's parent with a different commit, so re-submission can never land), does it declare itself unreconcilable, discard its local group state, and **re-bootstrap in full**. The discriminator matters: without it, an honestly-lost commit (e.g. an AMK rotation the server never persisted) would route to discard and be silently dropped instead of retried. Partial re-bootstrap is deliberately not attempted: MLS group state is small, so a clean full re-fetch is simpler to reason about than splicing suspect local state, and is the only path taken.
 
 ### Concurrent commits with the wrong ordering
 

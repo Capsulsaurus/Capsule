@@ -15,7 +15,8 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-// TODO: authorization via access token for asset routes
+// LEGACY-PLAINTEXT (frozen): SLICES.md S-G3 — plaintext-era serving assumptions; the
+// key-free ranged ciphertext serving (and per-route access-token auth) is slice S-C10.
 
 // ============================================================================
 // Request/Response Types

@@ -1,11 +1,12 @@
 ---
 title: Authentication
 description: Identity, account portability, session and access tokens
+status: draft
 ---
 
 Authentication binds a user identity to their master key, which is the root of every encryption and decryption operation in Capsule. The server can prove "this request is from a session it issued" but cannot prove "this user is who they say they are" — the master key, owned client-side, is the actual identity root. Everything below works to keep that binding intact through the lifetime of a session and across server moves.
 
-Implemented in `capsule-api-auth`: OIDC handler (`oidc`), session ledger (`session`), claim validation (`claims`), per-device records (`devices`). The session token format and the OIDC discovery surface below are the contracts other components — including federated peers — depend on.
+Implemented in `capsule-api-auth`: OIDC handler (`oidc`), session ledger (`session`), claim validation (`claims`). The per-device enrollment records (`devices`) are planned with [Device Enrollment](/design/device-enrollment/). The session token format and the OIDC discovery surface below are the contracts other components — including federated peers — depend on.
 
 ## Design Principles
 
@@ -27,7 +28,18 @@ Patterns borrowed from Matrix 2.0, with one critical departure: **`.well-known/`
 - **User lookup is authenticated.** A client or peer server must present credentials to resolve `user@server.tld`:
   - **Local client lookup** (resolving another user on the same server, e.g. for sharing): authenticated by the looker's session token.
   - **Federated peer lookup** (resolving a user across servers): authenticated by a federation capability token (see [Federation — Federation Capabilities](/design/federation/#federation-capabilities)) and rate-limited per peer.
-  - **Anonymous WebFinger**: returns only records the target user has explicitly opted into making public. The default is opt-out: no anonymous record. This is deliberately stricter than Matrix's default and follows the [deny-by-default rule](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar) from the threat model.
+  - **Anonymous WebFinger**: returns only records the target user has explicitly opted into making public. The default is opt-out: no anonymous record. The opt-in-able record set is deliberately tiny — handle and display name only, never keys, device lists, or album hints; anything richer requires authenticated lookup. This is deliberately stricter than Matrix's default and follows the [deny-by-default rule](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar) from the threat model.
+
+### The `.well-known/capsule/*` Registry
+
+Every well-known path Capsule serves, in one census. Each path's record format is owned by the linked doc; a new path MUST add a row here when introduced.
+
+| Path                                 | Contents                                                                                                                        | Owner                                                                                                   |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `.well-known/capsule/server-info`    | Public server-scoped facts: API base URL, auth + federation endpoints, server signing key, supported `protocol_version` range, deprecation cutoffs. Never a user list. | this doc ([Identity and Discovery](#identity-and-discovery))                                            |
+| `.well-known/capsule/moved/{user}`   | The IK-signed moved certificate for a migrated account.                                                                          | this doc ([Account Portability](#account-portability))                                                  |
+| `.well-known/capsule/revoked-jti`    | Federation capability revocation list (bounded to ≤ 24 h of revocations).                                                        | [Federation](/design/federation/#token-lifecycle-and-chain-of-trust)                                    |
+| `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
 
 ## Account Portability
 
@@ -36,8 +48,8 @@ A user must be able to move servers without losing their identity. Capsule does 
 Migration re-homes the handle while keeping the same IK:
 
 - The new server registers the account under the same IK; nothing in the [key hierarchy](/design/cryptography/keys/) changes.
-- The old server publishes an IK-signed **"moved" certificate** at its `.well-known/` path, naming the new handle. This is the one well-known record that names a specific user — opted-into (the user actively migrates) and carrying the user's own signature, so it does not constitute the kind of enumeration leak we forbid.
-- Clients and [federated](/design/federation/) peers that resolve the old handle fetch this certificate, verify its IK signature, and re-resolve to the new handle it names.
+- The old server publishes an IK-signed **moved certificate** at `.well-known/capsule/moved/{user}` — a small signed record `{ old_handle, new_handle, moved_at, ik_sig }`, cacheable for 24 hours. This is the one well-known record that names a specific user — opted-into (the user actively migrates) and carrying the user's own signature, so it does not constitute the kind of enumeration leak we forbid.
+- Clients and [federated](/design/federation/) peers that resolve the old handle fetch this certificate, verify `ik_sig` against the IK they already trust for the user (from the signed [device directory](/design/cryptography/keys/#device-directory)), and re-resolve to the new handle it names. An unverifiable certificate is ignored — the old handle keeps resolving as before, and the failure is surfaced.
 
 Because the IK signs the move and every device cross-signs to that IK, no server — old or new — can forge a migration or hijack the handle.
 
@@ -55,7 +67,7 @@ A long-lived **128-bit secret** generated by the server upon successful authenti
 
 ### Access Token
 
-Short-lived tokens derived from the session token, used to authenticate API requests. They have a limited lifespan and are refreshed using the session token without re-authenticating the user.
+Short-lived tokens issued against the session token (presented, not cryptographically derived), used to authenticate API requests. They have a limited lifespan and are refreshed using the session token without re-authenticating the user.
 
 Capsule uses **EdDSA JWTs** as access tokens, signed under the server's Ed25519 signing key — classical only, per the [operational-signature carve-out](/design/cryptography/primitives/#signature-scheme) (access tokens are short-lived, so PQ hybridization buys no margin).
 
@@ -87,6 +99,47 @@ The asymmetric authentication on (3) addresses a damage scenario that pure sessi
 
 Note: the server can theoretically just kick off sessions because session tokens are stored server-side and the server holds the encrypted data. But this should not ever be implemented and an attempt to do so would be a bug — it bypasses the audit trail of a user-initiated revoke.
 
+## Device Cohorts
+
+The session ledger has a legibility problem: reinstalling the app re-enrolls with a **new** `device_id` by design (device keys are hardware-bound and non-exportable — [Metadata, Add-id Binding](/design/metadata/#add-id-binding)), so one physical phone accumulates several ledger entries over its life and the user cannot tell them apart. The **device cohort hash** groups sessions from the same physical device. It is a grouping aid, nothing more.
+
+### Per-Platform Primary Identifier
+
+One primary identifier per platform — fewer, better-chosen inputs beat a concatenated fingerprint that splits whenever any component shifts:
+
+| Platform | Primary identifier | Survives app reinstall | OS reinstall | Factory reset |
+| --- | --- | --- | --- | --- |
+| iOS | Keychain-persisted random 128-bit cohort seed (`ThisDeviceOnly`, **non-synchronized** — iCloud sync would merge distinct physical devices) | yes in practice (not Apple-guaranteed) | no | no |
+| Android | SSAID (app-signing-key-scoped `ANDROID_ID`) | yes | no | no |
+| macOS | `IOPlatformUUID` | yes | yes | **yes** |
+| Windows | `MachineGuid` | yes | no | no |
+| Linux | `/etc/machine-id` (never used raw — hashed below, per systemd guidance) | yes | no | no |
+
+(IDFV was rejected for iOS: it resets on reinstall when no sibling app remains — precisely the case cohorts exist for.)
+
+**Honest scope.** "The same device even after a factory reset" is technically impossible on iOS and Android: a reset destroys every app-accessible identifier by OS design, and post-reset attestation (DeviceCheck, Play Integrity) yields verdicts, not identifiers. The promise is therefore: **reinstall-stable everywhere; reset-stable only where the OS allows (macOS)**. A factory-reset phone starts a new cohort, and the doc says so rather than pretending otherwise — the same honesty rule as [platform limitations](/design/import/download-sync/#platform-limitations). (DeviceCheck's per-device bits may later corroborate a boolean "this hardware enrolled before"; deliberately out of scope for v1.)
+
+### Encoding
+
+```text
+cohort_hash = SHA-256( canonical-CBOR([ "capsule-device-cohort/v1", user_id, platform_tag, primary_id ]) )
+```
+
+Domain-separated, [canonical CBOR](/design/metadata/#canonical-cbor-encoding) (never naive string concatenation), with a closed `platform_tag` enum. **`user_id` is folded in** so the same physical device under two accounts yields unlinkable hashes — the cross-account correlation surface is removed at the source. The pure function lives in `capsule-core` (`cohort` module) so every platform computes it identically.
+
+### Privacy and Scope
+
+- Sent **only** in the session-creation request body during the auth ceremony; **never** in signed artifacts (manifests, sidecars, the device directory), never to federated peers, never in `.well-known`. It is registered in the [`X-Capsule-*` header census](/design/threat-model/validation/#universal-headers) by pointer as a body field so no header variant drifts into existence.
+- **Advisory-only, structurally:** the value is client-asserted and unverifiable, so **no authorization or capability decision may read it** — otherwise it becomes spoofable attack surface. It never substitutes for `device_id` (random UUIDv4, security-bearing) or the DSK. A server that receives an absent or garbage cohort value behaves identically to one that receives a valid one.
+
+### Server Storage and Surfacing
+
+The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort.
+
+### UX and Support Contract
+
+The client **asserts, it does not litigate**: "a device you've used before (last seen *date*)" — there is deliberately no "this isn't my device" toggle, because the user cannot adjudicate a hash and the value is advisory anyway. The dispute path is a **support report**: one tap bundles `{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}` — the exact hash and device-id map — for a bug report.
+
 ## Validation
 
 - **Token issuance round-trip (unit).** Generate a session token; issue an access JWT from it; verify the JWT under the server's Ed25519 key. Repeat with rotated keys; assert old JWTs verify under the old key for their grace window.
@@ -94,6 +147,9 @@ Note: the server can theoretically just kick off sessions because session tokens
 - **Revoke-all master-key proof (unit).** Issue a revoke-all without master-key proof; assert rejection. With proof; assert success and invalidation of every other session.
 - **Login flow (smoke).** Full OIDC handshake against a testcontainer IdP; assert session token issued, persisted, and usable for an immediate access-token request. Re-run after a server restart; assert resilience.
 - **Account portability (smoke).** Issue a moved certificate from server A; assert server B can register the same IK; assert federated peers honor the move after fetching A's well-known.
+- **Cohort hash vectors (unit).** Known-answer vectors for `cohort_hash` through the cross-language canonical-CBOR conformance gate; same `primary_id` under two `user_id`s → distinct hashes.
+- **Cohort is advisory (unit).** Session creation with an absent, malformed, or colliding cohort value behaves identically to a valid one; a tripwire test asserts no signed-structure schema contains a cohort field.
+- **Cohort grouping (smoke).** Two sessions with one cohort group together in the session listing; a reinstall (new `device_id`, same cohort) groups with "previously used"; the durable map outlives session expiry.
 
 The cross-module case — auth → query library schema — is one bounded E2E test listed in [Module Map](/design/module-map/#e2e-test-surface).
 

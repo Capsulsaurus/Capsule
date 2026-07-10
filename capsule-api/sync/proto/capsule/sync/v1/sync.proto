@@ -1,0 +1,91 @@
+// The key-free sync feed — contract skeleton (slice S-C2 in the repo-root SLICES.md;
+// SSoT: https://docs/design/import/download-sync/).
+//
+// INVARIANT — the signed AssetManifest travels as OPAQUE canonical-CBOR bytes
+// (`manifest_cbor`), never re-modeled as proto fields: verification re-serializes the
+// canonical CBOR, so a re-encoding would detach the bytes from their signatures. A
+// tombstone is the signed delete manifest itself. Blob BYTES never ride this service —
+// ranged fetches stay on the REST /blob/{hash} endpoint (api-surfaces design doc).
+//
+// Negotiation rides call metadata (x-capsule-protocol, x-capsule-crypto-suite, ...) and
+// rejections map onto gRPC status codes with the error.* catalog code as the
+// cross-transport discriminator — both owned by the api-surfaces design doc.
+
+syntax = "proto3";
+
+package capsule.sync.v1;
+
+service SyncService {
+  // A page of changes after `cursor`; monotonic and resumable. Unary-paged: the cursor
+  // is the resumption token, and re-issuing the same cursor returns the same page
+  // (the idempotency key of the federation-pull surface too).
+  rpc Sync(SyncRequest) returns (SyncResponse);
+}
+
+message SyncRequest {
+  // Opaque, server-MAC'd resumption cursor; empty on first sync. A forged or mutated
+  // cursor is rejected (invariant 22); the client separately enforces per-album
+  // sync_seq monotonicity against its high-water mark.
+  bytes cursor = 1;
+  // Maximum entries in the returned page (the server may clamp).
+  uint32 page_size = 2;
+}
+
+message SyncResponse {
+  repeated SyncEntry entries = 1;
+  // Cursor for the next page.
+  bytes next_cursor = 2;
+}
+
+// What changed. Closed enum per protocol_version — an unknown value is a structural
+// error on the receiving side, never a "future value to ignore".
+enum ChangeKind {
+  CHANGE_KIND_UNSPECIFIED = 0;
+  CHANGE_KIND_CREATED = 1;
+  CHANGE_KIND_METADATA_UPDATED = 2;
+  CHANGE_KIND_DELETED = 3;
+}
+
+message SyncEntry {
+  // The album this entry belongs to (16-byte UUID).
+  bytes album_id = 1;
+  // Per-album, strictly-increasing sequence — the client's anti-rewind high-water mark.
+  uint64 sync_seq = 2;
+  // The album pin this entry conforms to (YYYY-MM-DD).
+  string protocol_version = 3;
+  // What changed.
+  ChangeKind kind = 4;
+  // The asset id (16-byte UUID).
+  bytes asset_id = 5;
+  // The signed AssetManifest as opaque canonical CBOR (see the header invariant).
+  bytes manifest_cbor = 6;
+  // The encrypted metadata blob (wire format owned by the encryption design doc);
+  // empty for deletes — the tombstone is the manifest itself.
+  bytes metadata_blob = 7;
+  // Content addresses of the asset's blobs by role — never blob bytes.
+  BlobManifest blobs = 8;
+  // Whether the original blob is finalized on the server (S-B4, staged uploads:
+  // visibility flips on manifest+metadata, so an entry can precede its original —
+  // the derived `awaiting-original` state; download-sync design doc). proto3
+  // absent-default is false, so clients read this only at/after the protocol
+  // date that introduces it.
+  bool original_held = 9;
+}
+
+message BlobManifest {
+  // The original ciphertext blob.
+  BlobRef original = 1;
+  // Derivative blobs (thumbnails, previews, embeddings).
+  repeated BlobRef derivatives = 2;
+}
+
+message BlobRef {
+  // Ciphertext content address.
+  bytes ciphertext_hash = 1;
+  // original | metadata | derivative | provenance (closed enum).
+  string role = 2;
+  // MIME/format string, for derivatives.
+  string format = 3;
+  // Ciphertext size in bytes.
+  uint64 size = 4;
+}

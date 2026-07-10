@@ -14,8 +14,8 @@ capsule-api-entity = { path = "../entity" }
 capsule-api-environment = { path = "../environment", features = ["upload"] }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service" }
-capsule-core = { path = "../../capsule-core" }
-capsule-media = { path = "../../capsule-media" }
+capsule-core = { path = "../../capsule-core", features = ["media"] }
+capsule-i18n = { path = "../../capsule-i18n" }
 bb8-redis = { workspace = true }
 eyre = { workspace = true }
 futures-util = { workspace = true }
@@ -31,7 +31,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 ring = { workspace = true }
 base64 = { workspace = true }
 secrecy = { workspace = true }
@@ -39,4 +39,3 @@ nanoid = { workspace = true }
 indexmap = { workspace = true }
 bytes = { workspace = true }
 jsonwebtoken = { workspace = true }
-libc = "0.2.186"

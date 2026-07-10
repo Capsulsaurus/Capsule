@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Datelike};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,8 +38,14 @@ fn shard_dirs(uuid: &Uuid) -> (String, String) {
 fn date_parts(capture_utc: Option<i64>) -> (u32, u8) {
     match capture_utc {
         Some(ts) => {
-            let dt = DateTime::from_timestamp(ts, 0).unwrap_or(DateTime::UNIX_EPOCH);
-            (dt.year() as u32, dt.month() as u8)
+            let date = jiff::Timestamp::from_second(ts)
+                .unwrap_or(jiff::Timestamp::UNIX_EPOCH)
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .date();
+            (
+                u32::try_from(date.year()).unwrap_or(1970),
+                u8::try_from(date.month()).unwrap_or(1),
+            )
         }
         None => (1970, 1),
     }

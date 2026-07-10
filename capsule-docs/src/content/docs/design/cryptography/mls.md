@@ -1,9 +1,12 @@
 ---
 title: MLS Group Membership
 description: How Capsule binds MLS (RFC 9420) to its identity layer and uses it for album membership
+status: draft
 ---
 
-Capsule's group layer is the [MLS ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) from the inventory. It is implemented in `capsule-core::crypto::mls` as a thin wrapper over OpenMLS — the wrapper is what binds MLS to Capsule's identity layer ([Keys](/design/cryptography/keys/)) and to the in-band AMK distribution.
+Capsule's group layer is the [MLS ciphersuite](/design/cryptography/primitives/#mls-ciphersuite) from the inventory. It will be implemented in `capsule-core::crypto::mls` (planned) as a thin wrapper over OpenMLS — the wrapper is what binds MLS to Capsule's identity layer ([Keys](/design/cryptography/keys/)) and to the in-band AMK distribution.
+
+**Status: blocked upstream — a deliberate hold, not an absence of code.** Capsule targets `MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519`, the X-Wing suite the upstream ecosystem is converging on; it has no IANA codepoint yet. Three facts gate adoption (verified 2026-07): (1) the PQ suites ride `draft-ietf-mls-pq-ciphersuites`, a non-final informational draft with no IANA codepoints — groups created on a pre-final suite must migrate when codepoints land; (2) what OpenMLS ships today is the *earlier* SHA-256 variant (`0x004D`) via its `libcrux` provider — a formally verified **Rust** backend, but pre-1.0 and not fully audited, and that suite is a likely dead-end codepoint; (3) the RustCrypto-backed implementation of the SHA-512 suites is requested upstream ([openmls#1940](https://github.com/openmls/openmls/issues/1940)) with no PR yet. Until the draft finalizes or #1940 lands, the epoch-authority role this doc assigns to the MLS commit chain is filled offline by the admin-signed epoch ledger behind the [`AlbumAuthority` interface](/design/cryptography/keys/#write-authority-interface); the membership ceremonies, `Welcome`/history delivery, and the [album upgrade ceremony](/design/versioning/#album-upgrade-ceremony) wait for live MLS. Because nothing implements MLS yet, a final suite re-pin at adoption time is a one-line inventory edit behind the same seam, not a redesign. Docs that depend on live MLS link to this note rather than restating it.
 
 The ciphersuite's choice of [ChaCha20-Poly1305](/design/cryptography/primitives/#mls-control-aead) (rather than the [AES-GCM](/design/cryptography/primitives/#bulk-aead) used for user data) is acceptable because:
 
@@ -50,7 +53,7 @@ For first-device enrollment (a brand new account with no other device), see [Dev
 
 ## History Delivery for New Joiners
 
-The one spot where the wrapper writes real custom code. Two patterns:
+The one spot where the wrapper writes real custom code. AMK delivery — both the steady-state broadcast on an epoch bump and the batch form inside a `Welcome` — rides one application message whose shape this doc owns: `AlbumKeyDistribution { amk_version, amk_bytes }` ([Encryption](/design/cryptography/encryption/#asset-key-derivation) consumes it; the AMK itself is owned by [Keys](/design/cryptography/keys/#album-master-keys-amks)). Two delivery patterns:
 
 **Full history (recommended for shared albums):** Welcome message carries an encrypted blob of `[AMK_v1, AMK_v2, ..., AMK_current]`. The new joiner decrypts all, can now read every photo.
 

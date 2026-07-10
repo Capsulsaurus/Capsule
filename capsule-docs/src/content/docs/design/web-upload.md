@@ -1,6 +1,7 @@
 ---
 title: Web Upload
 description: Browser-based guest drops — upload-link provisioning, the sealed drop format, and adoption into the library
+status: draft
 ---
 
 Web upload lets a Capsule user accept assets from someone who has **no Capsule account** — a guest with a browser, the *web client*. Unlike a native client, the web client holds no album keys, has no place in any album's MLS group, and (being WASM in a browser) cannot run the full signed-import pipeline. So it does not write into the library directly. Instead the user **provisions an upload link**; the guest's browser **encrypts each asset client-side and seals the asset key to the user's public key**; the sealed bytes land in a **staging inbox** charged to the provisioning user's quota; and nothing becomes a library asset until the user **reviews and adopts it on one of their native (trusted) clients**, where provenance is finally appended. The guest is the [non-registered account](/design/authentication/#account-types) class — no master key, no User IK, no MLS membership.
@@ -39,12 +40,12 @@ Out of scope for v1 (deliberate non-goals):
 
 These are **normative** — the security-relevant decisions are committed; only UX presentation remains open.
 
-- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` is a **random 128-bit value** from the CSPRNG — full 128-bit entropy, *not* a UUIDv7 or other structured id (identical rule to the [share-link opaque-id](/design/share-links/#security-contract)); it is fully opaque and carries no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
-- **Drops never enter the library.** A drop is written only to the provisioning user's **inbox**; it is never an album asset, never appears in any album member's [`/sync`](/design/import/download-sync/#discovering-what-changed) feed, and is served only to the provisioning user's own authenticated devices. A drop carries **no `AssetManifest`** — no `device_sig`, no `write_sig`, no `album_id`, no provenance — and therefore never flows through [`verify_asset`](/design/cryptography/keys/#write-authorization). Library state is reachable only through adoption by a trusted client.
+- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
+- **Drops never enter the library.** A drop is written only to the provisioning user's **inbox**; it is never an album asset, never appears in any album member's [sync feed](/design/import/download-sync/#discovering-what-changed), and is served only to the provisioning user's own authenticated devices. A drop carries **no `AssetManifest`** — no `device_sig`, no `write_sig`, no `album_id`, no provenance — and therefore never flows through [`verify_asset`](/design/cryptography/keys/#write-authorization). Library state is reachable only through adoption by a trusted client.
 - **Per-link caps are enforced server-side at the no-key layer.** Expiry, cumulative-byte cap, file-count cap, and per-file size cap are checked on every drop-session creation; an over-cap or expired/revoked link is refused. These bound a leaked link to *wasted quota and inbox space*, never to library corruption.
 - **Quota is charged to the provisioning user at drop-session creation.** A drop debits the link owner's quota at session creation — the single hard [enforcement point](/design/quota/#enforcement-points) — using the [`upload_user_id = owner_id` attribution](/design/quota/#accounting-model). A link cannot be used to push the owner past their hard limit.
 - **Serving-endpoint rate limits.** Drop-session creation is rate-limited **per source IP and per `{opaque-id}`** (two independent limiters), and a not-found, revoked, or expired link returns an **indistinguishable `404`** — never `410 Gone` — exactly as the [share-link serve path](/design/share-links/#security-contract), so probing reveals nothing.
-- **Optional passphrase is an abuse gate, not a confidentiality layer.** A link may carry an optional passphrase (wrapped via the [password-based KDF](/design/cryptography/primitives/#password-based-kdf)); the guest must supply it to open a drop session. It limits *who may spend the owner's quota*; it adds no confidentiality, because the guest already encrypts every asset. The passphrase is verified the same client-out-of-band way share links use, never transmitted in the clear.
+- **Optional passphrase is an abuse gate, not a confidentiality layer.** A link may carry an optional passphrase. Unlike a share-link passphrase — which wraps a *read* secret the client unwraps locally — this one gates a **write**, so the server must verify possession: the link record stores an [Argon2id](/design/cryptography/primitives/#password-based-kdf) **verifier** (salt + derived hash), and the guest proves possession at drop-session creation by submitting the Argon2id-derived proof. The passphrase itself is never transmitted, and the KDF cost rate-limits guessing on top of the per-IP/per-link limiters below. It limits *who may spend the owner's quota*; it adds no confidentiality, because the guest already encrypts every asset.
 - **Home-server-only.** Like a [share link](/design/share-links/#security-contract), an upload link is served **only by the album owner's [home server](/design/federation/#album-ownership-v1-single-home-server)**; a federated peer never accepts a drop and returns a structured `{ home_server }` pointer the client resolves. This keeps revocation, rate-limiting, and quota at one authoritative point.
 - **Adopted bytes are external-origin.** No device authored a drop's plaintext, so an adopted asset is **never** "local-origin": every client (including the adopter, on preview) decodes its bytes only in the [sandboxed decoder](/design/clients/#sandboxed-decoder). A hostile or malformed guest file can at worst crash a sandbox; it cannot reach the host or be silently admitted.
 
@@ -52,22 +53,22 @@ These are **normative** — the security-relevant decisions are committed; only 
 
 ### 1. Provision (native client, registered user)
 
-The user's client mints a [Drop Key](/design/cryptography/keys/#non-registered-accounts) (a hybrid X25519 + ML-KEM-768 KEM keypair), wraps the private half under the [account master key](/design/cryptography/keys/#registered-accounts) and re-wraps it to the user's [OGK](/design/cryptography/keys/#owner-group-keys-ogks) so any of the user's enrolled devices can later decapsulate, and registers an upload-link record with the server: `{opaque-id}`, the per-link caps, the pinned `protocol_version` + `crypto_suite_id`, and an optional passphrase wrap. The server stores the record under `{opaque-id}` and never sees `{drop_pubkey}`. The user shares the full URL (including the fragment) with the guest over any out-of-band channel.
+The user's client mints a [Drop Key](/design/cryptography/keys/#non-registered-accounts) (composition owned there), wraps the private half under the [account master key](/design/cryptography/keys/#registered-accounts) and re-wraps it to the user's [OGK](/design/cryptography/keys/#owner-group-keys-ogks) so any of the user's enrolled devices can later decapsulate, and registers an upload-link record with the server: `{opaque-id}`, the per-link caps, the pinned `protocol_version` + `crypto_suite_id`, and an optional passphrase wrap. The server stores the record under `{opaque-id}` and never sees `{drop_pubkey}`. The user shares the full URL (including the fragment) with the guest over any out-of-band channel.
 
 ### 2. Seal and upload (web client, guest)
 
 For each selected asset the web client:
 
 1. Draws a random 32-byte asset key **`K`** from the browser CSPRNG.
-2. Encrypts the asset with **AES-256-GCM-STREAM** under `K`, using the *unchanged* [STREAM construction](/design/cryptography/encryption/#stream-construction) (65,520-byte plaintext chunks, a fresh 7-byte `nonce_prefix`), and computes `ciphertext_hash` incrementally.
+2. Encrypts the asset under `K` with the *unchanged* [STREAM construction](/design/cryptography/encryption/#stream-construction) (chunking and nonce shape owned there), and computes `ciphertext_hash` incrementally.
 3. **Encapsulates `K`** to `{drop_pubkey}` with the link's KEM, producing `kem_ct`.
-4. Emits an unsigned **`DropDescriptor`** and uploads it alongside the ciphertext via the drop upload protocol — the [upload protocol](/design/import/upload-protocol/)'s chunk and finalization mechanics under link-capability auth, with the drop endpoints in the [Contract Skeleton](#contract-skeleton):
+4. Emits an unsigned **`DropDescriptor`** and uploads it alongside the ciphertext via the drop upload protocol — the [upload protocol](/design/import/upload-protocol/)'s chunk and finalization mechanics under link-capability auth, with the drop endpoints in the [Contract Skeleton](#contract-skeleton). Its [session-lifetime and discard policy](/design/import/upload-protocol/#session-lifetime-and-discard) applies to drop sessions unchanged — a discarded drop session is a uniform `404`, which is also exactly what link probing must see:
 
 ```rust
 DropDescriptor {
   content_type:       enum,          // closed enum for the link's protocol_version (same set as a manifest's)
   plaintext_size:     u64,
-  chunk_size:         u32,           // 65,520
+  chunk_size:         u32,           // the STREAM plaintext chunk size (owned by Encryption)
   nonce_prefix:       [u8; 7],       // the STREAM nonce prefix used above
   ciphertext_hash:    bytes,         // content-address digest of the STREAM ciphertext
   kem_ct:             bytes,         // K encapsulated to {drop_pubkey}; length fixed by crypto_suite_id
@@ -79,7 +80,7 @@ A `DropDescriptor` is deliberately **not** an [`AssetManifest`](/design/cryptogr
 
 ### 3. Stage (server)
 
-The server validates the drop session against the link record and the no-key drop invariants ([Threat Model — On `POST /drop`](/design/threat-model/validation/#server-side-validation-invariants)), debits the provisioning user's quota, and stores the ciphertext as a content-addressed blob in the [blob store](/design/filesystem/server/) referenced by a **drop-inbox row** (not an album asset row), with the `DropDescriptor` attached. The drop now appears in the provisioning user's inbox and on their native clients as "awaiting your review" — a [quarantine surface](/design/threat-model/scenarios/#quarantine-surfaces), never silently applied.
+The server validates the drop session against the link record and the no-key drop invariants ([Threat Model — On `POST /drop`](/design/threat-model/validation/#on-post-drop-upload-link-drop-session-and-adoption)), debits the provisioning user's quota, and stores the ciphertext as a content-addressed blob in the [blob store](/design/filesystem/server/) referenced by a **drop-inbox row** (not an album asset row), with the `DropDescriptor` attached. The drop now appears in the provisioning user's inbox and on their native clients as "awaiting your review" — a [quarantine surface](/design/threat-model/scenarios/#quarantine-surfaces), never silently applied.
 
 ### 4. Review and adopt-in-place (native client, provisioning user)
 
@@ -88,7 +89,7 @@ The user fetches a pending drop, decapsulates `kem_ct` with the Drop Key private
 1. Assign a `file_id` and author the [signed sidecar](/design/metadata/#sidecar-schema-v1), including an **unverified, self-asserted guest-origin note** (`received via link {opaque-id} on {date}`, optional `suggested_filename`). This note is descriptive provenance only; the guest is **never** a signer.
 2. **Rewrap `K` under the destination album's AMK** with the [`asset-keywrap/v1`](/design/cryptography/encryption/#asset-key-derivation) derivation, producing `wrapped_file_key`. Because `K` was chosen by an external party it cannot be re-derived from the AMK — it is *carried* wrapped instead.
 3. Build an `AssetManifest` with `action = create`, `ciphertext_hash = drop.ciphertext_hash`, `nonce_prefix = drop.nonce_prefix`, the freshly authored `metadata_blob_hash`, `key_mode = wrapped`, and `wrapped_file_key`; set `created_by_user`/`created_by_device` to the **adopter** (the cryptographic author); sign `device_sig` + `write_sig` and append the `create` provenance record. See [Provenance — Asset Manifest](/design/cryptography/provenance/#asset-manifest).
-4. Submit the `create` write. Its `ciphertext_hash` references the **already-stored drop blob**, so only the small metadata blob is uploaded. The server validates the manifest envelope (invariants 1–8, 16–18, 25) **and** that the referenced blob is a drop in the caller's own inbox, then **atomically promotes** the blob from inbox to album asset — writing the asset row, the provenance record, and the refcount — and deletes the inbox row, in one transaction. The bulk bytes never move; the quota is unchanged (same user).
+4. Submit the `create` write. Its `ciphertext_hash` references the **already-stored drop blob**, so only the small metadata blob is uploaded. The server validates the manifest envelope (invariants 1–8, 16–18, 25 — invariant 14, the ciphertext-hash recomputation, already ran at the drop's own finalization, which is why adoption need not re-hash the referenced blob) **and** that the referenced blob is a drop in the caller's own inbox, then **atomically promotes** the blob from inbox to album asset — writing the asset row, the provenance record, and the refcount — and deletes the inbox row, in one transaction. The bulk bytes never move and their charge is unchanged (same user); only the small metadata and provenance blobs are new quota, as for any metadata write.
 
 From this point the asset is an ordinary library asset: it syncs, it `verify_asset`-accepts on every other album member's device, and any later edit (`replace`, `metadata-update`) follows the standard **derived-key** path. `key_mode = wrapped` is set only by this adopting `create`.
 
@@ -130,7 +131,8 @@ fn seal_drop(plaintext: impl Read, drop_pubkey: KemPublicKey, crypto_suite_id: u
 
 // in capsule-api-media::drops
 //   POST   /u/{opaque-id}/drop            → open a drop session (link-capability auth; quota + caps checked here)
-//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (reuses upload-protocol chunk rules)
+//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (upload-protocol chunk rules verbatim:
+//                                            required X-Capsule-Checksum, application/octet-stream, alignment)
 //   GET    /drops                         → provisioning user's inbox (session-token auth)
 //   POST   /drops/{id}/adopt              → create-manifest write referencing the inbox blob; atomic promotion
 //   DELETE /drops/{id}                    → discard a pending drop
@@ -154,7 +156,7 @@ The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply
 - **Opaque-id entropy (unit).** Assert generated upload-link ids are ≥128-bit and non-sequential, identical to the [share-link check](/design/share-links/#validation).
 - **Adoption rewrap accepts (unit).** Decapsulate a drop, rewrap `K` under a test AMK, build the `create` manifest with `key_mode = wrapped`; assert [`verify_asset`](/design/cryptography/keys/#write-authorization) accepts and a second member can unwrap `wrapped_file_key` and STREAM-decrypt the unchanged ciphertext.
 - **Wrapped-mode negative cases (unit).** A manifest with `key_mode = wrapped` but a forged `wrapped_file_key` (failing the `metadata_blob_hash` binding), or `key_mode` disagreeing with the manifest, is rejected at `verify_asset`. Owned alongside the [Provenance negative-case suite](/design/cryptography/provenance/#validation).
-- **No library injection (unit).** Assert a `DropDescriptor` cannot be presented on any album-write path: the drop endpoints accept no `album_id`/manifest fields, and the inbox is never emitted on `/sync`.
+- **No library injection (unit).** Assert a `DropDescriptor` cannot be presented on any album-write path: the drop endpoints accept no `album_id`/manifest fields, and the inbox is never emitted on the sync feed.
 - **Drop session lifecycle (smoke).** Against a real Postgres + blob store: open a drop session, exceed each per-link cap in turn, exhaust the owner's quota, and probe a revoked/expired/unknown link — assert caps and quota refuse, the rate limiter engages, and not-found/revoked/expired all return an indistinguishable `404`.
 - **Adoption atomicity (smoke).** Inject a crash between blob promotion and the Postgres commit; assert the asset row, provenance record, and inbox-row deletion either all land or all roll back — no half-adopted drop, no orphaned blob, no zombie inbox row.
 

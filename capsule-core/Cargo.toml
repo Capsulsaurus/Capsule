@@ -22,6 +22,22 @@ required-features = ["ffi-bindgen"]
 # additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
+# `media` exposes the decode/encode + media-metadata utilities (the former standalone
+# `capsule-media` crate) as `capsule_core::media`. Non-default so the default library
+# build (crypto data plane, CLI, FFI, future WASM) never compiles the media stack;
+# `capsule-api-upload` opts in.
+media = [
+    "dep:base64",
+    "dep:file-format",
+    "dep:jpeg-encoder",
+    "dep:memmap2",
+    "dep:num-rational",
+    "dep:thumbhash",
+    "dep:tokio",
+    "dep:tracing",
+    "dep:zune-core",
+    "dep:zune-jpeg",
+]
 # `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
 # `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
@@ -29,11 +45,11 @@ ffi-bindgen = ["ffi", "uniffi/cli"]
 tpm = ["dep:tss-esapi"]
 
 [dependencies]
-chrono = { workspace = true }
 ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
 indexmap = { workspace = true }
+jiff = { workspace = true }
 kamadak-exif = "0.5"
 log = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -63,6 +79,18 @@ getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 
+# ── Media (optional; `media` feature) — decode/encode + media metadata ──────
+base64 = { workspace = true, optional = true }
+file-format = { workspace = true, optional = true }
+jpeg-encoder = { version = "0.6", optional = true }
+memmap2 = { version = "0.9.10", optional = true }
+num-rational = { workspace = true, optional = true }
+thumbhash = { version = "0.1.0", optional = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+zune-core = { version = "0.5.1", optional = true }
+zune-jpeg = { version = "0.5.15", optional = true }
+
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
 # build (CLI, server, tests) never compiles it.
@@ -73,6 +101,18 @@ uniffi = { version = "0.31", optional = true }
 # `libtss2`). Optional + off by default so neither the default nor the mobile FFI
 # build pulls in the TPM stack. See `crypto::keys::tpm`.
 tss-esapi = { version = "7", optional = true }
+
+[[example]]
+name = "extract_metadata"
+required-features = ["media"]
+
+[[example]]
+name = "generate_derivative"
+required-features = ["media"]
+
+[[example]]
+name = "generate_lqip"
+required-features = ["media"]
 
 [dev-dependencies]
 tempfile = "3"

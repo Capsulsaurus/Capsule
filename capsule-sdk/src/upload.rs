@@ -6,10 +6,7 @@
 // TODO: Use this module in SDK
 
 use std::collections::VecDeque;
-use std::path::Path;
 use std::time::Duration;
-
-use crate::AuthenticatedClient;
 
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
@@ -20,6 +17,11 @@ const CHUNK_SIZE_16MB: u64 = 16 * 1024 * KB;
 
 /// All chunks MUST be multiples of 4KB (4096 bytes)
 const ALIGNMENT: u64 = 4096;
+/// Protocol-surface chunk bounds (upload-protocol doc, §Chunk Rules and
+/// Strictness). Every adaptive tier range sits inside these; the server rejects
+/// outside them (400 / 413).
+pub const PROTOCOL_MIN_CHUNK: u64 = 4096;
+pub const PROTOCOL_MAX_CHUNK: u64 = CHUNK_SIZE_16MB;
 /// Window size for throughput measurements
 const THROUGHPUT_WINDOW_SECS: f64 = 30.0;
 /// Minimum bytes before scaling chunk size
@@ -145,7 +147,12 @@ impl AdaptiveChunkSizeStrategy {
         }
     }
 
-    /// Get the next chunk size to use
+    /// Get the next chunk size to use.
+    ///
+    /// Alignment is a hard guarantee by construction: every candidate size is a
+    /// doubling/halving of a 4 KiB-aligned tier bound, so this can never return
+    /// an unaligned size — the debug_assert is a tripwire for future edits, not
+    /// a runtime dependency.
     pub fn next_chunk_size(&self) -> u64 {
         debug_assert!(
             self.current_size.is_multiple_of(ALIGNMENT),
@@ -155,65 +162,70 @@ impl AdaptiveChunkSizeStrategy {
     }
 }
 
-/// Upload client for managing chunked uploads to Capsule API
-pub struct UploadClient {
-    /// Capsule API Client
-    client: AuthenticatedClient,
-}
-
-impl UploadClient {
-    /// Create a new upload client
-    pub fn new(client: AuthenticatedClient) -> Self {
-        Self { client }
-    }
-
-    /// Upload a file using adaptive chunked upload
-    ///
-    /// # Arguments
-    /// * `file_path` - Path to the file to upload
-    /// * `filename` - Optional filename to use (defaults to file name from path)
-    /// * `content_type` - Optional content type (defaults to auto-detection)
-    ///
-    /// # Returns
-    /// The upload session ID on success
-    pub async fn upload_file(
-        &self,
-        _file_path: &Path,
-        _filename: Option<&str>,
-        _content_type: Option<&str>,
-    ) -> Result<String, UploadError> {
-        // TODO: Implement file upload
-        // 1. Get file size and metadata
-        // 2. Create upload session via API
-        // 3. Create AdaptiveChunkSizeStrategy based on file size
-        // 4. Upload chunks with adaptive sizing
-        // 5. Return session ID on completion
-        todo!("Upload file not yet implemented - waiting for API client generation")
-    }
-
-    /// Create an upload session
-    pub async fn create_session(
-        &self,
-        _total_size: u64,
-        _filename: Option<&str>,
-        _content_type: Option<&str>,
-    ) -> Result<CreateSessionResponse, UploadError> {
-        // TODO: Call POST /upload with X-Capsule-Content-Length header
-        todo!("Create session not yet implemented")
-    }
-
-    /// Upload a single chunk
-    pub async fn upload_chunk(
-        &self,
-        _session_id: &str,
-        _data: &[u8],
-        _offset: u64,
-    ) -> Result<u64, UploadError> {
-        // TODO: Call PATCH /upload/{id} with X-Capsule-Offset header
-        // Returns the new offset on success
-        todo!("Upload chunk not yet implemented")
-    }
-}
+// ─── Parked until spargen (S-D8) + the S-D1 upload driver ──────────────────
+// `UploadClient` transports over `AuthenticatedClient`, which is parked in
+// lib.rs until the spargen-generated client exists. The adaptive strategy and
+// error taxonomy below are live and tested; only the transport is parked.
+//
+// /// Upload client for managing chunked uploads to Capsule API
+// pub struct UploadClient {
+//     /// Capsule API Client
+//     client: AuthenticatedClient,
+// }
+//
+// impl UploadClient {
+//     /// Create a new upload client
+//     pub fn new(client: AuthenticatedClient) -> Self {
+//         Self { client }
+//     }
+//
+//     /// Upload a file using adaptive chunked upload
+//     ///
+//     /// # Arguments
+//     /// * `file_path` - Path to the file to upload
+//     /// * `content_type` - Optional content type (defaults to auto-detection)
+//     ///
+//     /// # Returns
+//     /// The upload session ID on success
+//     pub async fn upload_file(
+//         &self,
+//         _file_path: &Path,
+//         _content_type: Option<&str>,
+//     ) -> Result<String, UploadError> {
+//         // S-D1: 1. size + ciphertext hash; 2. create session (JSON body per the
+//         // upload-protocol doc — size/hash/content_type/crypto_suite_id/
+//         // protocol_version/blob_role/manifest_envelope); 3. adaptive strategy;
+//         // 4. chunk loop with the code-driven recovery matrix; 5. session id.
+//         // No filename on the wire: plaintext metadata rides the encrypted
+//         // metadata blob.
+//         todo!("S-D1: upload driver — see SLICES.md")
+//     }
+//
+//     /// Create an upload session
+//     pub async fn create_session(
+//         &self,
+//         _total_size: u64,
+//         _content_type: Option<&str>,
+//     ) -> Result<CreateSessionResponse, UploadError> {
+//         // S-D1: POST /upload with the JSON body from the upload-protocol doc's
+//         // endpoint table (size is the `size` body field, NOT a header).
+//         todo!("S-D1: create session — see SLICES.md")
+//     }
+//
+//     /// Upload a single chunk
+//     pub async fn upload_chunk(
+//         &self,
+//         _session_id: &str,
+//         _data: &[u8],
+//         _offset: u64,
+//     ) -> Result<u64, UploadError> {
+//         // S-D1: PATCH /upload/{id} with Content-Type: application/octet-stream,
+//         // X-Capsule-Offset, and the REQUIRED X-Capsule-Checksum (lowercase-hex
+//         // SHA-256 of the chunk bytes). Returns the new offset on success.
+//         todo!("S-D1: upload chunk — see SLICES.md")
+//     }
+// }
+//
 
 /// Response from creating an upload session
 #[derive(Debug)]
@@ -244,10 +256,10 @@ pub enum UploadError {
 impl std::fmt::Display for UploadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UploadError::IoError(e) => write!(f, "IO error: {}", e),
-            UploadError::NetworkError(msg) => write!(f, "Network error: {}", msg),
+            UploadError::IoError(e) => write!(f, "IO error: {e}"),
+            UploadError::NetworkError(msg) => write!(f, "Network error: {msg}"),
             UploadError::ServerError { status, message } => {
-                write!(f, "Server error ({}): {}", status, message)
+                write!(f, "Server error ({status}): {message}")
             }
             UploadError::ChecksumMismatch => write!(f, "Checksum mismatch"),
             UploadError::SessionNotFound => write!(f, "Session not found or expired"),
@@ -294,11 +306,17 @@ mod tests {
     #[test]
     fn test_adaptive_scaling_up() {
         let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(50 * 1024 * 1024);
-        // Simulate 3 fast uploads (high throughput)
+        // Warm-up rule (upload-protocol doc, §Adaptive Chunk Sizing): no
+        // adjustment until ≥5 chunks or ≥8 MiB at the current size. Three fast
+        // chunks must NOT scale yet…
         for _ in 0..3 {
             strategy.record_chunk(CHUNK_SIZE_1MB, Duration::from_millis(100));
         }
-        // After 3 fast chunks, should scale up
+        assert_eq!(strategy.current_size, CHUNK_SIZE_1MB);
+        // …but sustained >5 MB/s past the warm-up doubles the size.
+        for _ in 0..2 {
+            strategy.record_chunk(CHUNK_SIZE_1MB, Duration::from_millis(100));
+        }
         assert!(strategy.current_size > CHUNK_SIZE_1MB);
     }
 }

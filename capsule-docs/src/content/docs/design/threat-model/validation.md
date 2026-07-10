@@ -1,11 +1,12 @@
 ---
 title: Validation Invariants
 description: Server and client refuse-by-default checklists; protocol handshake; idempotency; atomicity
+status: draft
 ---
 
 The cross-cutting refuse-by-default rules every Capsule receiver runs before persisting any incoming write. These are the operational core of the threat model — a server or client that skips one of them silently widens the blast radius for the entire client class taxonomy.
 
-The server-side invariants are enforced in `capsule-api` (every write path passes through them); the client-side invariants are enforced via the single `verify_asset` chokepoint in `capsule-core::crypto` plus the per-receiver decoder paths. The protocol handshake is a one-shot pre-flight check on every request; idempotency and atomicity invariants are properties of specific write surfaces, each cross-linked to the doc that owns the surface.
+The server-side invariants are implemented as pure, key-free checks in `capsule-core::validation` (protocol gate, manifest-envelope check, idempotency keys); wiring them into every `capsule-api` write path lands with the networked surface (planned). The client-side invariants are enforced via the single `verify_asset` chokepoint in `capsule-core::crypto` (implemented) plus the per-receiver decoder paths. The protocol handshake is a one-shot pre-flight check on every request; idempotency and atomicity invariants are properties of specific write surfaces, each cross-linked to the doc that owns the surface.
 
 ## Server-Side Validation Invariants
 
@@ -29,9 +30,11 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 ### On each `PATCH /upload/{id}` chunk
 
 - **9.** Offset is exactly the current received-byte count. Otherwise `409`, with `X-Capsule-Offset` returned.
-- **10.** Non-final chunk size is a multiple of 4 KiB. Otherwise `400`.
+- **10.** The chunk body is well-shaped: `Content-Type: application/octet-stream` (otherwise `415`), non-empty (otherwise `400`), a non-final chunk is a multiple of 4 KiB (otherwise `400`), and no chunk exceeds the 16 MiB protocol maximum (otherwise `413`).
 - **11.** Cumulative received ≤ declared `size`. Otherwise `400` / `413`, session moves to `FailedProcessing`.
-- **12.** The `(upload_id, offset, chunk_hash)` idempotency tuple is new OR matches an exact prior PATCH. Otherwise (same offset, different hash) `409` + corruption error.
+- **12.** The `(upload_id, offset, chunk_hash)` idempotency tuple is new OR matches an exact prior PATCH, where `chunk_hash` is the SHA-256 of the chunk bytes carried in the **required** `X-Capsule-Checksum` header (missing/malformed → `400`; header-vs-body mismatch → `400` with nothing persisted). Otherwise (same offset, different hash) `409` + corruption error.
+
+Session TTL, the ≥ 1-hour survival floor, and pressure-discard semantics are server lifecycle behavior, not refuse-by-default write checks — they are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard).
 
 ### At finalization
 
@@ -40,6 +43,8 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 - **15.** Manifest envelope re-validated (rerun 1–8) inside the finalization transaction.
 
 ### On non-upload writes (lifecycle action manifest, metadata-update, derivative-add/replace, trash-restore)
+
+These checks run at the single lifecycle-write surface, `POST /albums/{album_id}/ops`, owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface) (transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map); slice `S-C16`).
 
 - **16.** `action` is in the closed enum. Otherwise `400`.
 - **17.** `prior_provenance_hash` equals the last accepted manifest's content hash for this `asset_id`. Otherwise `409` (stale-revival).
@@ -51,7 +56,7 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 - **20.** All checks (1)–(18) re-applied — federation does not unlock looser rules.
 - **21.** Per-peer rate budgets unbroken (events/hour, bytes/hour, CPU/hour). Otherwise `429`.
 
-### On the `/sync` feed, directory publish, and federated reports
+### On the sync feed, directory publish, and federated reports
 
 - **22.** The `sync_cursor` carries a server MAC under a server-only key; a forged or mutated cursor is rejected (`400`). This is the authenticity layer; the client independently enforces per-album `sync_seq` monotonicity (client-side invariants below). Owner: [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed).
 - **23.** A published `DeviceDirectory` has `directory_version` **strictly greater** than the version currently stored for that user, and the master signature covers it. A non-advancing or regressing publish is rejected (`409`). Owner: [Cryptography — Device Directory](/design/cryptography/keys/#device-directory).
@@ -75,7 +80,12 @@ A [web-upload](/design/web-upload/) drop carries **no `AssetManifest`** — no s
 
 Drop **chunks** reuse the `PATCH` chunk rules (9–12) and **finalization** reuses the integrity checks (13–14) unchanged; only drop-session creation (26–31) and adoption (32) differ from the album upload path.
 
-Every rejection is logged with a structured reason code; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
+### On custody receipts and signed attestations
+
+- **33.** A [`CustodyReceipt`](/design/import/storage-verification/#custody-receipts) is signed and persisted **only** inside the finalization transaction that durably commits the blob and flips `uploaded` — both or neither. `receipt_seq` is strictly monotonic per server; `prior_receipt_hash` matches the preceding receipt's content hash; no API path overwrites or deletes an existing receipt. A receipt request before `Completed` is `409 error.upload.receipt_not_available`. Owner: [Storage Verification — Custody Receipts](/design/import/storage-verification/#custody-receipts).
+- **34.** A signed [`StorageAttestation`](/design/import/storage-verification/#signed-storage-attestation) echoes the client-supplied `nonce` verbatim and is signed over the same state read that produced its verdict — never over state older than the unsigned path would have returned. Owner: [Storage Verification — Signed Storage Attestation](/design/import/storage-verification/#signed-storage-attestation).
+
+Every rejection carries a machine-readable [`error.*` code](/design/i18n/#server-error-codes) alongside its transport status — the code, never the bare status, is what clients switch on and localize (see [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping)) — and is logged with it; the rejected hash is remembered (bounded, see [Federation — Soft-Fail Semantics](/design/federation/#soft-fail-semantics)) so divergence between Capsule's view and a permissive peer's view is detectable.
 
 ## Client-Side Validation Invariants
 
@@ -87,7 +97,8 @@ Mirror checklist that every client implements before applying any received data 
 - Reject an unknown enum value for any field whose enum is closed at the current schema (notably `action`, `content_type`, `gps.source`, `DerivativeManifest.role`). Unknown CBOR map keys are preserved per [Postel's Law](/design/principles/#postels-law-asymmetric) and never executed.
 - Maintain a local `latest_provenance_hash` per `asset_id`. Refuse to apply any manifest whose `prior_provenance_hash` is behind the local value. Surface it.
 - Round-trip the metadata blob on decode: the plaintext sidecar a client persists MUST be byte-identical to the canonical CBOR obtained by decrypting the asset's metadata blob, and the blob's content hash MUST equal the manifest's `metadata_blob_hash`. A divergence is quarantined, never persisted. See [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
-- Before any post-write local cleanup that would discard the only copy of irreplaceable bytes — releasing a device-owned original, deleting a move-import source, streaming-mode release — confirm a `durable` verdict from the [storage-verification endpoint](/design/import/storage-verification/#verify-before-destroy) *in addition to* a `verify_asset` accept. A non-`durable` verdict means the local copy is retained, not dropped. This does not gate intentional deletes (trash/hard-purge) or reclaiming rebuildable/re-fetchable data.
+- Fetch, verify, and persist the [`CustodyReceipt`](/design/import/storage-verification/#custody-receipts) for every finalized upload: signature under the pinned attestation key, `ciphertext_hash`/`size`/`envelope_hash` matching what was sent. A receipt that fails verification is surfaced, and the write is treated as unconfirmed.
+- Before any post-write local cleanup that would discard the only copy of irreplaceable bytes — releasing a device-owned original, deleting a move-import source, streaming-mode release — confirm a verified [`CustodyReceipt`](/design/import/storage-verification/#custody-receipts) **and** a `durable` verdict from the [storage-verification endpoint](/design/import/storage-verification/#verify-before-destroy) *in addition to* a `verify_asset` accept. A missing receipt or non-`durable` verdict means the local copy is retained, not dropped. This does not gate intentional deletes (trash/hard-purge) or reclaiming rebuildable/re-fetchable data.
 - Maintain a per-user `directory_version` high-water mark. Refuse a `DeviceDirectory` whose `directory_version` is below it (a server attempting to roll back a revocation or hide a device); pin and surface the regression.
 - Reject an OR-set remove whose `add_id` was never observed locally as an add.
 - Refuse to follow a `revoke_all_sessions` confirmation that did not include a master-key proof.
@@ -96,6 +107,8 @@ Mirror checklist that every client implements before applying any received data 
 ## Protocol and Capability Negotiation
 
 Every versioned API surface — client-to-server uploads, sync feed, federation pull, peering — runs the same compatibility gate. The gate is **fail-closed**: a mismatch is a hard reject before any state is written, never a silent degrade.
+
+The rules are stated once, in REST terms (headers + HTTP statuses). On the gRPC surfaces the same values ride call metadata and the same rejections map onto gRPC status codes per [API Surfaces](/design/api-surfaces/#negotiation-across-transports) — one gate, two carriages.
 
 ### Universal Headers
 
@@ -107,6 +120,8 @@ Every versioned API surface — client-to-server uploads, sync feed, federation 
 | `X-Capsule-Protocol-Min`     | server on every response  | the lowest protocol version this server accepts                                                       |
 | `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
 | `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
+
+This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Upload-Status` (server → client on `HEAD /upload/{id}`), `X-Capsule-Checksum` (**required** on `PATCH /upload/{id}`), and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift. (Registered by pointer as a **body field, deliberately not a header**: the advisory `cohort_hash` in the session-creation request — semantics owned by [Authentication — Device Cohorts](/design/authentication/#device-cohorts).)
 
 ### Fail-Closed Rules
 
@@ -125,13 +140,18 @@ Every write surface has a single idempotency key. Duplicates are no-ops; conflic
 | Surface                             | Idempotency key                                                                    | Duplicate behavior                                |
 | ----------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
 | Upload chunk (`PATCH /upload/{id}`) | `(upload_id, offset, chunk_hash)`                                                  | Returns current offset; no double-write           |
-| Session creation (`POST /upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Returns the existing session; no second session   |
+| Session creation (`POST /upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Active session: returned as-is, no second session. Hash already finalized: `409 error.upload.duplicate_blob` + the existing asset reference (the client's merge trigger) |
 | Lifecycle manifest write            | `(asset_id, prior_provenance_hash, manifest_hash)`                                 | No-op append; chain advances exactly once         |
 | Metadata-update operation           | Operation id (UUIDv7) + `(asset_id, prior_provenance_hash)`                        | Re-applying the same op is structurally identical |
 | Federation capability proof         | `(peer_id, jti)`                                                                   | Refresh with same `jti` returns the same response |
 | Federation pull                     | `(peer_id, sync_cursor)` — the sync cursor itself is the key                       | Re-pull returns the same page                     |
 | MLS commit                          | Handled by OpenMLS; commits are ordered by the group's commit chain                | OpenMLS rejects duplicates                        |
 | Album upgrade ceremony              | `intent_id` (UUIDv7); see [Versioning](/design/versioning/#album-upgrade-ceremony) | Same intent never produces two forks              |
+| MLS group re-keying ceremony        | `intent_id` (UUIDv7); same machinery as the album upgrade ([MLS Resilience](/design/mls-resilience/#group-re-keying-ceremony)) | Same intent never re-keys twice                   |
+| Device enrollment (code redeem / cross-device add) | The [enrollment code](/design/device-enrollment/#cross-device-add) — single-use, deleted on redemption or expiry | Re-redemption is rejected (the code is consumed); a restarted ceremony mints a fresh code |
+| Share-link / upload-link creation   | Client-supplied operation id (UUIDv7)                                              | Retried create returns the already-minted link    |
+| Share-link / upload-link revoke     | `link_id`                                                                          | Second revoke is a no-op                          |
+| Drop adoption (`POST /drops/{id}/adopt`) | `drop_id` — the atomic inbox→album promotion (invariant 32)                   | A retry after success finds the inbox row gone and returns the already-promoted asset |
 
 A write surface that does not appear here is, by default, **not** idempotent and must be designed before it ships.
 

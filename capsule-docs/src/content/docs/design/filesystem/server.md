@@ -1,36 +1,29 @@
 ---
 title: Server Filesystem
-description: The server's blob store layout, Postgres index, and deployment profiles
+description: The server's blob store layout, Postgres index, and required services
+status: draft
 ---
 
 The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.
 
-Implemented in `capsule-api` (blob storage, Postgres index, manifest envelope validation). The session-state store is a [deployment choice](#deployment-profiles), not a versioned API surface.
+Implemented in `capsule-api` (blob storage, Postgres index, manifest envelope validation). Volatile session state lives in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
 
-## Deployment Profiles
+## Required Services
 
-The server's durable state is always split across **two required systems** plus an **optional third** for high-concurrency deployments:
+The server's state is split across **three required systems** — one code path, no optional profiles:
 
-- **Blob store** (filesystem) — the encrypted bytes of every asset. *Required.*
-- **PostgreSQL** — the authoritative index: ownership, album references, blob references, lifecycle state, and (in the default profile) upload-session state. *Required.*
-- **Valkey** — volatile upload-session state (offsets, status) with a 24-hour TTL. *Optional.* Recommended only for deployments where upload-session hot-path contention on PostgreSQL becomes measurable.
+- **Blob store** (filesystem) — the encrypted bytes of every asset.
+- **PostgreSQL** — the authoritative durable index: ownership, album references, blob references, lifecycle state, and the pending-asset rows uploads create.
+- **Valkey** — volatile session state: upload-session records (offsets, status) keyed `upload:session:{id}`, with the store's native 24-hour TTL as the lifetime **cap** (the ≥1-hour survival floor and pressure-discard semantics are owned by [Upload Protocol — Session Lifetime and Discard](/design/import/upload-protocol/#session-lifetime-and-discard)); [auth session records](/design/authentication/) ride the same store.
 
-This gives two concrete deployment profiles:
-
-| Profile                     | Session state lives in                                                                                             | When to choose it                                                                      |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
-| **Default (Postgres-only)** | `upload_sessions` table with `expires_at` TTL column and a periodic sweep                                          | Self-hosted, small-to-medium servers, single-node deployments. Reduces ops surface.    |
-| **High-concurrency**        | Valkey (keyed `upload:session:{id}`) with native 24-hour TTL; PostgreSQL still holds the durable pending-asset row | Large multi-tenant deployments where session-table contention is a measured bottleneck |
-
-Switching profiles is operationally invisible to clients — the [upload protocol](/design/import/upload-protocol/) does not change, only where the server stores volatile session counters. The protocol is written to be store-agnostic.
+The durable/volatile split is design, not a tuning knob: the hot upload path — offset increments and status transitions — never touches the durable Postgres asset row, which is written exactly twice per upload (pending row at session creation, `uploaded` flip at finalization). A Postgres-resident session table would be a second implementation of the same contract; Capsule ships exactly one.
 
 ## Blob Store Layout
 
 ```text
 {blob_root}/
 ├── incoming/
-│   ├── {upload_id}_{n}.part        # in-flight chunk
-│   └── {upload_id}.bin             # assembled blob, pre-verification
+│   └── {upload_id}.bin             # in-progress append-only upload, pre-verification
 ├── blobs/
 │   └── {hash[0:2]}/{hash[2:4]}/
 │       └── {hash}                  # finalized blob, content-addressed
@@ -40,30 +33,31 @@ Switching profiles is operationally invisible to clients — the [upload protoco
 ```
 
 - **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
-- **`incoming/`**: live uploads. Chunks land as `{upload_id}_{n}.part`; on finalization they are concatenated into `{upload_id}.bin`. The 4 KiB chunk alignment is what allows each chunk to be reflinked into place on copy-on-write filesystems, turning assembly into a near-instant metadata operation. See the upload protocol in [Import — Upload Protocol](/design/import/upload-protocol/).
+- **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
 - **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/); the two-level hex-prefix shard keeps directory sizes bounded for multi-million-blob stores. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
 
 ## Uniform, Opaque Blobs
 
-A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), the encrypted CBOR metadata blob (which carries the LQIP), and the encrypted provenance blob (see [Cryptography — Provenance](/design/cryptography/provenance/)). The blob store does not distinguish them — every blob is just content-addressed ciphertext. The mapping from an asset to its constituent blobs, and the role of each blob, lives entirely in PostgreSQL.
+A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), and the encrypted CBOR metadata blob (which carries the LQIP) — every one of them fully opaque, content-addressed ciphertext the store does not distinguish. Beside them, each write persists its signed **manifest envelope object** (see [Provenance — Physical placement](/design/cryptography/provenance/#asset-manifest)): a small, deliberately server-visible signed CBOR object, stored content-addressed like any blob, whose append-only sequence is the asset's provenance chain. The hot-path mapping from an asset to its blobs and their roles lives in PostgreSQL, with the envelope objects as its durable, key-free fallback.
 
 ## Recovering the Index from Blobs Alone
 
-The PostgreSQL index is authoritative but **not the only copy** of what the server knows. Every blob carries enough server-visible structural metadata — the [unencrypted portion](/design/cryptography/provenance/#asset-manifest) of the asset manifest — to rebuild the index row that referenced it. This is the server-side counterpart of the recovery-first principle that lets a client rebuild its index from CBOR sidecars.
+The PostgreSQL index is authoritative but **not the only copy** of what the server knows. Every write persists its signed [manifest envelope object](/design/cryptography/provenance/#asset-manifest) in the blob store beside the opaque ciphertext blobs it names, and those envelopes carry everything needed to rebuild the index rows. This is the server-side counterpart of the recovery-first principle that lets a client rebuild its index from CBOR sidecars.
 
-The server-visible portion of a blob includes:
+The server-visible envelope includes:
 
 - `crypto_suite_id`, `protocol_version`, `amk_version` — what bundle of primitives encrypted this asset and which album epoch
 - the ciphertext hash and declared size — content address and storage attribution
 - `created_by_user`, `created_by_device`, `album_id`, `file_id`, `prior_provenance_hash`, `action` — owner, provenance chain link, and lifecycle action
+- `client_version` — the [exact client build](/design/cryptography/provenance/#client-build-identification) that produced the write, down to the commit hash — what scopes a defective-build incident to the assets it touched
 - the device's hybrid signature — provenance attribution; verifiable against the public device directory even without any key the server holds
 
-A rebuild walks `blobs/`, reads the manifest envelope of each blob, verifies the device signature against the cached device directory, and writes an index row. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
+A rebuild walks the **envelope objects** under `blobs/`, verifies each device signature against the cached device directory, and writes index rows for the blobs each envelope names (original and derivatives by `ciphertext_hash` + role, the metadata blob by `metadata_blob_hash`). A ciphertext blob referenced by no envelope surfaces as an orphan for [GC](#deletion-and-garbage-collection); an envelope naming a missing blob surfaces as a dangling reference — **except** a missing *original* on an asset whose feed state is [`awaiting-original`](/design/import/download-sync/#upload-tiering-staged-uploads), which is expected staged-upload state, not corruption. The rebuild is idempotent: re-running it against an existing index produces no changes. The full envelope check list a server runs at recovery is the same list it runs at write time — see [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants).
 
-A blob whose manifest envelope fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
+An envelope object that fails structural validation during rebuild is **quarantined**, not silently dropped — moved to `{blob_root}/quarantine/` with a sibling `.reason.json` recording the rejection code. This guarantees that an unrecoverable byte sequence is preserved for forensic inspection rather than vanishing on rebuild.
 
-Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it.
+Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or a logical-corruption event is detected; it is **never** the hot path. The hot path runs through the authoritative PG index. The recovery path's job is to make the index reconstructible if PG is lost, not to substitute for it. Recovery is also not *verification*: the proactive, read-only check that a frozen Postgres + blob-store pair is mutually consistent — the path that detects the drift before anyone needs a rebuild — is the [server-side integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub).
 
 ## Manifest Envelope Validation
 
@@ -85,11 +79,12 @@ The server index records only what can be known without a key:
 - declared ciphertext size and `content_type`
 - the `uploaded` flag and server-visible lifecycle state
 - the server's own trusted `received_at` per write — the authoritative clock for time-based policy (retention, rate limits) — alongside the client's self-asserted, audit-only `timestamp`
+- `client_version` — the [exact producing client build](/design/cryptography/provenance/#client-build-identification), audit-only, kept queryable so one defective build's writes can be enumerated
 - provenance records (see [Cryptography — Provenance](/design/cryptography/provenance/#provenance-of-library-modifications))
 
 No plaintext capture date, dimensions, EXIF, tags, or filename ever reaches the server. Those live inside the encrypted metadata blob (see [Metadata Encryption](/design/cryptography/encryption/#metadata-encryption)) and are readable only by authorized clients.
 
-Session creation writes a *pending* asset row (`uploaded = false`) that reserves the asset ID the bundle's blobs reference; finalization flips it. See the [session lifecycle](/design/import/upload-protocol/#session-lifecycle).
+Session creation writes a *pending* asset row (`uploaded = false`) that reserves the asset ID the bundle's blobs reference; finalization flips it. See the [session state machine](/design/import/upload-protocol/#session-state-machine).
 
 ## Ownership, Partitioning, and Quota
 
@@ -115,7 +110,6 @@ Clients need to confirm an asset is *safely stored* before they discard their on
 - **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash[0:2]}/{hash[2:4]}/{hash}` on disk. Recompute the hash from disk; assert match.
 - **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
 - **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
-- **Deployment-profile parity (smoke).** Run the upload-server smoke suite against the Postgres-only profile and the Postgres+Valkey profile; assert byte-identical client-observable behavior.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
 - **Dangling-reference safety (unit).** Point a committed row at a blob hash absent from `blobs/`; run the integrity check; assert the row is surfaced/quarantined and **never** auto-deleted, and that the missing blob is not treated as collectable.
 - **Storage-verification verdict (unit).** Compose the no-key verdict for a finalized asset (stored + indexed + retrievable → `durable`); then mark a referenced blob `collectable_since` and assert it reports non-retrievable, and remove a blob from `blobs/` and assert non-stored. Owner: [Import — Storage Verification](/design/import/storage-verification/).

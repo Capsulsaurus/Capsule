@@ -1,6 +1,7 @@
 ---
 title: Asset and Metadata Encryption
 description: How Capsule encrypts asset bytes and metadata blobs, including streaming and wire formats
+status: draft
 ---
 
 Every asset Capsule stores — original bytes, derivative bytes, metadata blob — is encrypted client-side before it ever crosses a network boundary. The encryption code lives in `capsule-core::crypto::encryption` and is the only place AES-256-GCM is invoked in the codebase. Two constructions live here:
@@ -46,7 +47,7 @@ file_key = HKDF_SHA512(
 
 The salt folds in `nonce_prefix` — the fresh 7-byte STREAM nonce prefix drawn for *this* encryption (below). Because a new `nonce_prefix` is drawn on **every** encryption of a file, the derived `file_key` is unique to that encryption even when `file_id` and `amk_version` are unchanged — so a same-epoch [`replace`](/design/authorization/#the-closed-action-set) (which keeps the same `file_id`) re-rolls the *key*, not merely the nonce. This is what lets the STREAM nonce safely start at zero per encryption: no `(file_key, nonce_prefix)` pair is ever reused across two encryptions of the same file, so AES-GCM nonce reuse is structurally impossible. See [Re-keying on Rewrite](#re-keying-on-rewrite).
 
-**Wrapped file keys (external-origin assets).** The derivation above is the **derived** mode, where the file key is recomputed from the AMK and never stored. An asset a client did *not* author — a [web-upload drop](/design/web-upload/) adopted in place — arrives already encrypted under a random key `K` the guest chose, which no member can re-derive from the AMK. The adopting client therefore *carries* `K` wrapped under the AMK instead of deriving it:
+**Wrapped file keys (external-origin assets; planned — lands with the [web-upload](/design/web-upload/) slice).** The derivation above is the **derived** mode, where the file key is recomputed from the AMK and never stored. An asset a client did *not* author — a [web-upload drop](/design/web-upload/) adopted in place — arrives already encrypted under a random key `K` the guest chose, which no member can re-derive from the AMK. The adopting client therefore *carries* `K` wrapped under the AMK instead of deriving it:
 
 ```rust
 wrap_key = HKDF_SHA512(ikm: AMK_v{amk_version}, salt: file_id || wrap_nonce, info: "asset-keywrap/v1", length: 32)
@@ -55,7 +56,7 @@ wrapped_file_key = wrap_nonce || AES-256-GCM(wrap_key, plaintext: K)   // 12-byt
 
 `wrapped_file_key` is stored in the signed [manifest](/design/cryptography/provenance/#asset-manifest) under [`key_mode = wrapped`](/design/cryptography/provenance/#asset-manifest). The fresh `wrap_nonce` is folded into the salt exactly as `nonce_prefix` is for derived keys, so no `(wrap_key, wrap_nonce)` pair repeats. Decryption is identical once `K` is recovered: a reader holding the AMK unwraps `wrapped_file_key` to obtain `K`, then runs the unchanged [STREAM construction](#stream-construction). Wrapped mode is set only by the adopting `create`; any later [`replace`](#re-keying-on-rewrite) re-encrypts the bytes under a freshly *derived* key. This is the sole case where a per-file key is stored rather than recomputed, and it is owned jointly with [Keys — Key Chain](/design/cryptography/keys/#key-chain).
 
-AMKs are delivered over MLS application messages. When epoch N's MLS group is established, the creating device sends an `AlbumKeyDistribution { amk_version, amk_bytes }` message through MLS. Every current member's device receives and stores it locally (hardware-wrapped).
+AMKs are delivered over MLS application messages; the distribution message's shape is owned by [MLS — History Delivery](/design/cryptography/mls/#history-delivery-for-new-joiners). Every current member's device receives the epoch's AMK over that channel and stores it locally (hardware-wrapped).
 
 **Distribution lag is expected and is not a failure.** An epoch bump and its `AlbumKeyDistribution` broadcast are separate MLS messages, so during a bump a device can legitimately receive an asset manifest referencing an `amk_version` whose key bytes have not yet arrived. A device that lacks the AMK for an `amk_version` that is otherwise **within the [MLS-attested epoch range](/design/cryptography/keys/#write-authorization)** treats the asset as *pending* — held and retried as MLS state catches up — rather than as a decryption failure or a forged manifest. Only an `amk_version` beyond the MLS-attested epoch, or one still missing after the retry timeout, is escalated. This is the `verify_asset` *pending* outcome and the matching [Failure Modes](/design/cryptography/failure-modes/#failure-mode-catalog) row; it is what keeps a concurrent upload during an epoch bump from being misread as an attack.
 
@@ -73,7 +74,7 @@ Encrypting an asset for upload:
 Streaming download / ranged reads:
 
 - **Sequential:** `DecryptorBE32<Aes256Gcm>` consumes chunks in order, verifying each tag.
-- **Ranged:** to start at plaintext byte `B`, compute `chunk_index = B / 65,520`. Because the [STREAM construction](#stream-construction) derives each chunk's nonce deterministically, chunk `i` decrypts independently given `file_key` and `i` — the server need only serve that 64 KiB ciphertext chunk, which the client decrypts and verifies.
+- **Ranged:** to start at plaintext byte `B`, compute `chunk_index = B / 65,520` (the **plaintext** stride). Because the [STREAM construction](#stream-construction) derives each chunk's nonce deterministically, chunk `i` decrypts independently given `file_key` and `i` — the server need only serve the 64 KiB ciphertext chunk at **ciphertext byte offset `chunk_index × 65,536`** (the ciphertext stride, which includes each chunk's 16-byte tag), which the client decrypts and verifies. Mixing the two strides — serving from `chunk_index × 65,520` — corrupts every ranged read; the offset formula is normative.
 
 ### Re-keying on Rewrite
 
@@ -93,7 +94,7 @@ Not all metadata can be encrypted — some must stay server-readable for routing
 
 - **Encrypted** (AES-256-GCM under a key derived from the album's AMK, fresh random nonce per blob): the CBOR sidecar / metadata blobs — including the [chromahash LQIP](/design/thumbnails/#lqip) and `dominant_color`, so image-derived display hints never leak to a server that never decodes assets. Each blob is independently versioned and signed like an [asset manifest](/design/cryptography/provenance/#asset-manifest).
 - **Server-plaintext by necessity:** `owner_id`, the [ciphertext content hash](/design/cryptography/primitives/), and the ciphertext size — the routing and storage-accounting facts a key-less server needs. This is a deliberate, documented trade-off.
-- **AI embeddings** (semantic-search vectors, face embeddings) are sensitive — a user can be re-identified from them. They are kept plaintext *locally* (vector search requires it) but encrypted at rest in the server-side backup.
+- **AI embeddings** (semantic-search vectors, face embeddings) are sensitive — a user can be re-identified from them. They are kept plaintext *locally* (vector search requires it) but always encrypted at rest on the server.
 
 CBOR metadata blobs use **deterministic encoding** per the [canonical CBOR ruleset](/design/metadata/#canonical-cbor-encoding) owned by [Metadata](/design/metadata/) — the same byte-exact rules the plaintext sidecar follows, since the metadata blob's plaintext *is* that CBOR document. Because a blob's hash is what content-addresses it and what the [signed manifest](/design/cryptography/provenance/#asset-manifest) commits to, two implementations encoding the same logical metadata must produce byte-identical output — otherwise the hash diverges and the signature fails to verify across [federated](/design/federation/) peers. Conformance to the canonical ruleset is mandatory and is the load-bearing check behind cross-platform and cross-language interop.
 
