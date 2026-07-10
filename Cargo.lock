@@ -1414,11 +1414,16 @@ dependencies = [
 name = "capsule-sdk"
 version = "0.1.0"
 dependencies = [
+ "capsule-i18n",
+ "jiff",
  "log",
  "reqwest",
+ "secrecy",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

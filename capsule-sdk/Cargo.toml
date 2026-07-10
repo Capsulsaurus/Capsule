@@ -7,6 +7,14 @@ edition.workspace = true
 log = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+jiff = { workspace = true }
+secrecy = { workspace = true }
+tracing = { workspace = true }
+capsule-i18n = { path = "../capsule-i18n" }
+
+# Single-flight refresh coordination (Mutex / RwLock / Notify). The async runtime
+# itself is supplied by the caller; the SDK only needs the sync primitives here.
+tokio = { version = "1", features = ["sync"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = [
@@ -19,3 +27,4 @@ reqwest = { version = "0.12", default-features = false, features = [
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.23.3", features = ["v7"] }
+serde_json = { workspace = true }

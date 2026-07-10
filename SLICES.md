@@ -98,7 +98,7 @@ its slice.
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | ready   |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
-| S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | ready   |
+| S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
 | S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | ready   |
@@ -726,6 +726,10 @@ SDK; they never hand-roll network flows.
 - **Done when:** login/refresh/expiry flows round-trip against a dev server; a mocked
   clock exercises pre-flight refresh + single-flight; `capsule-sdk` stays in every
   Rust gate. **Tier:** Unit + Smoke. **Blocks:** S-D9, S-D11; S-D5 consumes it.
+- **Landed:** wire flows proven against a focused in-process mock HTTP server (real
+  `reqwest` over TCP) — booting `capsule-api-auth` from the SDK crate would pull the
+  server stack into SDK dev-deps, against the mocking rule. The live dev-server
+  round-trip rides S-D5's E2E case 1, which consumes this store.
 
 ### S-D8 — spargen REST client integration
 
