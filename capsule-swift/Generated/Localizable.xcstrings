@@ -61,6 +61,26 @@
         }
       }
     },
+    "error.directory.malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The device list could not be read."
+          }
+        }
+      }
+    },
+    "error.directory.version_conflict": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device list is out of date. Capsule will refresh it before continuing."
+          }
+        }
+      }
+    },
     "error.protocol.version_unsupported": {
       "localizations": {
         "en": {

@@ -1061,6 +1061,7 @@ dependencies = [
  "capsule-api-migration",
  "capsule-api-model",
  "capsule-api-service",
+ "capsule-core",
  "capsule-i18n",
  "derive_more",
  "eyre",
@@ -1209,6 +1210,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "uuid",
 ]
 

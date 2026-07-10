@@ -84,7 +84,7 @@ its slice.
 | S-C6  | Quota service                                        | server          | —                | M    | ready   |
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | ready   |
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
-| S-C9  | Device-directory publish/fetch                       | server          | —                | M    | ready   |
+| S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | ready   |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
@@ -564,6 +564,12 @@ pass until the gate lifts.
   in core.)
 - **Done when:** invariant 23's rejecting test passes; a client can fetch and pin a
   directory end-to-end. **Tier:** Unit + Smoke. **Blocks:** S-C7, S-D2.
+- **Landed:** publish/fetch of verbatim signed CBOR (server projects only
+  `directory_version` for the guarded-upsert monotonicity check; fetch is
+  byte-identical). S-C1's invariant-7 per-device floor stays on account-creation
+  time: the upload contract carries no UUID device id (`created_by_device` is
+  zeroed in the envelope battery), so joining directory entries needs a contract
+  change — follow-up owned by whichever slice adds device identity to uploads.
 
 ### S-C10 — Key-free media serving conformance
 

@@ -6,6 +6,8 @@
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
+    <string name="error_directory_malformed">The device list could not be read.</string>
+    <string name="error_directory_version_conflict">This device list is out of date. Capsule will refresh it before continuing.</string>
     <string name="error_protocol_version_unsupported">This version of Capsule is no longer supported. Please update the app.</string>
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>

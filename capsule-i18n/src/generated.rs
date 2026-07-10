@@ -28,6 +28,12 @@ pub mod error_codes {
     /// `error.blob.pending_upload`
     pub const BLOB_PENDING_UPLOAD: &str = "error.blob.pending_upload";
 
+    /// `error.directory.malformed`
+    pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
+
+    /// `error.directory.version_conflict`
+    pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 

@@ -24,6 +24,7 @@ sea-orm = { workspace = true, features = [
     "debug-print",
 ] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 default = []

@@ -1,5 +1,6 @@
 mod auth;
 mod devices;
+mod directory;
 mod passkey;
 mod password;
 mod profile;
@@ -38,6 +39,15 @@ pub(super) fn get_router(state: AppState) -> Router {
                     Router::with_path("enroll")
                         .post(devices::issue_enrollment_code)
                         .push(Router::with_path("redeem").post(devices::redeem_enrollment_code)),
+                )
+                // Signed device-directory publish/fetch (slice S-C9); publish is the
+                // caller's own directory, fetch is by target user id.
+                .push(
+                    Router::with_path("directory")
+                        .post(directory::publish_device_directory)
+                        .push(
+                            Router::with_path("{user_id}").get(directory::fetch_device_directory),
+                        ),
                 ),
         )
         .push(Router::with_path("logout").post(auth::logout))
