@@ -15,6 +15,10 @@ use upload::transport::{
 /// album upload path (invariant 27 is "the same set as invariant 5").
 #[derive(Debug, Clone)]
 pub struct MediaServerConfig {
+    /// This server's identity (`SERVER_DOMAIN`) — the home-server id a share link is matched
+    /// against. A share whose `home_server` differs is not served here; the serve path returns a
+    /// `{ home_server }` pointer instead (slice `S-C4`; Security Contract — Home-server-only).
+    pub server_id: String,
     /// Upload directory (the content-addressed blob store lives under it).
     pub upload_dir: PathBuf,
     /// JWT decoding key for owner (session) authentication.
@@ -51,6 +55,7 @@ pub(crate) const DEFAULT_DROP_RATE_LIMIT_WINDOW_SECS: u64 = 60;
 impl From<&environment::ServerConfig> for MediaServerConfig {
     fn from(config: &environment::ServerConfig) -> Self {
         Self {
+            server_id: config.domain.clone(),
             upload_dir: config.upload_dir.clone(),
             jwt_eddsa_decoding_key: (*config.jwt_eddsa_decoding_key).clone(),
             valkey_url: config.valkey_url.clone(),

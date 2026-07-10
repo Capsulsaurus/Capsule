@@ -18,6 +18,7 @@
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>
     <string name="error_quota_peer_budget_exceeded">This source has reached its caching limit on your account.</string>
+    <string name="error_share_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_storage_deep_rate_limited">Too many deep storage checks. Please wait and try again.</string>
     <string name="error_storage_invalid_request">The storage-verification request was malformed.</string>
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>

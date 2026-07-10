@@ -4,6 +4,7 @@ use salvo::prelude::*;
 use sea_orm::DatabaseConnection;
 
 use crate::drop_state::DropState;
+use crate::share_state::ShareState;
 use crate::state::AppState;
 
 mod config;
@@ -11,6 +12,7 @@ mod drop_state;
 mod error;
 pub mod routes; // Expose routes module if needed or just functions
 mod service;
+mod share_state;
 mod state;
 
 #[cfg(test)]
@@ -26,12 +28,14 @@ pub async fn get_router<C: Into<MediaServerConfig>>(
     Ok(Router::new().push(routes::get_router(state)))
 }
 
+/// Public share-link serve router (`/s/{opaque-id}` metadata + blob + wrapped-secret). Slice
+/// `S-C4`.
 pub async fn get_share_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,
     config: C,
 ) -> Result<Router> {
     let config = config.into();
-    let state = AppState::new(conn, config);
+    let state = ShareState::new(conn, config);
 
     Ok(routes::get_share_router(state))
 }

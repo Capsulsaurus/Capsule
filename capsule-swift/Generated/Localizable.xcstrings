@@ -181,6 +181,16 @@
         }
       }
     },
+    "error.share.rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many attempts. Please wait and try again."
+          }
+        }
+      }
+    },
     "error.storage.deep_rate_limited": {
       "localizations": {
         "en": {

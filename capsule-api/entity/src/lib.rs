@@ -17,6 +17,7 @@ pub mod owner;
 pub mod owner_member;
 pub mod passkey;
 pub mod person;
+pub mod public_share;
 pub mod quota_ledger;
 pub mod share_link;
 pub mod smart_tag;

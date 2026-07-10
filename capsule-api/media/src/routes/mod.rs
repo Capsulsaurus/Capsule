@@ -1,6 +1,7 @@
 use salvo::prelude::*;
 
 use crate::drop_state::DropState;
+use crate::share_state::ShareState;
 use crate::state::AppState;
 
 mod assets;
@@ -27,11 +28,19 @@ pub fn get_router(state: AppState) -> Router {
         .push(Router::with_path("batch-download").post(assets::batch_download))
 }
 
-/// Separate router for public share access (mounted at /s)
-pub fn get_share_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("<token>").get(share::get_shared_content))
+/// Public share-link serve router (mounted at `/s`; slice `S-C4`). All three endpoints are
+/// key-free and unauthenticated; the serve engine enforces rate limits, the fail-closed
+/// revocation cache, the mandatory privacy strip, and the home-server gate.
+pub fn get_share_router(state: ShareState) -> Router {
+    Router::new().hoop(affix_state::inject(state)).push(
+        Router::with_path("{opaque_id}")
+            .get(share::get_share_metadata)
+            .push(Router::with_path("wrapped-secret").get(share::get_wrapped_secret))
+            .push(
+                Router::with_path("blob")
+                    .push(Router::with_path("{hash}").get(share::get_share_blob)),
+            ),
+    )
 }
 
 /// Storage-verification router (mounted at /storage). Slice `S-C3` (+ signed attestation,

@@ -9,6 +9,7 @@ pub mod escrow;
 pub mod friendship;
 pub mod gc;
 pub mod quota;
+pub mod share;
 pub mod stack;
 pub mod storage;
 pub mod sync;

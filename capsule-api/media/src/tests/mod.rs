@@ -30,6 +30,7 @@
 
 mod attestation;
 mod drops;
+mod shares;
 mod verify;
 
 use std::path::{Path, PathBuf};
@@ -119,6 +120,7 @@ impl TestCtx {
     /// The full media config for this context (S-C15 tests that need the attestation keyring).
     pub(crate) fn media_config(&self) -> MediaServerConfig {
         MediaServerConfig {
+            server_id: TEST_SERVER_ID.to_string(),
             upload_dir: self.upload_dir.clone(),
             jwt_eddsa_decoding_key: self.decoding_key.clone(),
             valkey_url: String::new(),
@@ -159,6 +161,7 @@ impl TestCtx {
     /// A salvo service over the real `/storage/verify` router (auth + AppState wired).
     pub(crate) fn http_service(&self) -> Service {
         let config = MediaServerConfig {
+            server_id: TEST_SERVER_ID.to_string(),
             upload_dir: self.upload_dir.clone(),
             jwt_eddsa_decoding_key: self.decoding_key.clone(),
             // The verify router never opens drop sessions; these mirror drop_setup's
@@ -329,6 +332,14 @@ impl MockClock {
 }
 
 impl Clock for MockClock {
+    fn now(&self) -> Timestamp {
+        *self.now.lock().unwrap()
+    }
+}
+
+// The same controllable clock also drives the S-C4 share serve engine (rate windows + the
+// fail-closed revocation-cache TTL), so both seams are proven without sleeps.
+impl crate::service::share::Clock for MockClock {
     fn now(&self) -> Timestamp {
         *self.now.lock().unwrap()
     }
@@ -559,6 +570,7 @@ pub(crate) async fn drop_setup() -> MediaTestCtx {
     std::fs::create_dir_all(&upload_dir).expect("mkdir");
 
     let config = MediaServerConfig {
+        server_id: "localhost".to_string(),
         upload_dir,
         jwt_eddsa_decoding_key: decoding_key,
         valkey_url,

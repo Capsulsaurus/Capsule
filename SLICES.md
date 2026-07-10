@@ -79,7 +79,7 @@ its slice.
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | done    |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | done    |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | done    |
-| S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
+| S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | done    |
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | done    |
 | S-C6  | Quota service                                        | server          | —                | M    | done    |
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | ready   |
@@ -545,6 +545,14 @@ pass until the gate lifts.
   mandatory privacy strip, fail-closed revocation cache, home-server pointer for peers.
 - **Depends on:** S-A5. **Blocks:** S-E1. **Done when:** the doc's six Validation
   bullets pass. **Tier:** Unit + Smoke.
+- **Landed:** all six bullets tested, incl. byte-identical 404s across
+  unknown/revoked/expired (status+headers+body asserted equal), fail-closed
+  revocation cache (stale cache refuses, injected clock), mandatory privacy strip
+  via `export_policy::strip_for_export` with no opt-out. Home-server pointer is
+  `421 + {home_server}` (deliberately distinguishable non-content). Publish is a
+  service-level mutation mirroring drops' provision step (HTTP publish surface
+  deferred with drops'). Migration renumbered to `000009` at landing (escrow holds
+  `000008`).
 
 ### S-C5 — Drop store, inbox, adoption
 

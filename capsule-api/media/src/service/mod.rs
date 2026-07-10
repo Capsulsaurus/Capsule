@@ -1,3 +1,4 @@
 //! Media-server domain services.
 
+pub(crate) mod share;
 pub(crate) mod verify;

@@ -95,6 +95,10 @@
         "message": "Too many deep storage checks. Please wait and try again.",
         "context": "HTTP 429 from POST /storage/verify with deep=true (slice S-C3): the caller exceeded its per-user deep re-hash budget for the current window. Deep scans are server-priced (rate-limited and coalesced) so they cannot be turned into an I/O-amplification attack."
     },
+    "error.share.rate_limited": {
+        "message": "Too many attempts. Please wait and try again.",
+        "context": "HTTP 429 on the public share serve path (slice S-C4): the per-source-IP or per-{opaque-id} serve rate limit engaged. Both limiters are charged on every /s/{opaque-id} request (metadata, blob, wrapped-secret) to throttle link enumeration; a not-found/revoked/expired link is an indistinguishable bodyless 404, never a distinct code."
+    },
     "error.sync.cursor_invalid": {
         "message": "The sync session is out of date. Capsule will resync from the start.",
         "context": "gRPC INVALID_ARGUMENT (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, or lifted from another context. The client discards it and resyncs from an empty cursor."

@@ -64,6 +64,9 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.share.rate_limited`
+    pub const SHARE_RATE_LIMITED: &str = "error.share.rate_limited";
+
     /// `error.storage.deep_rate_limited`
     pub const STORAGE_DEEP_RATE_LIMITED: &str = "error.storage.deep_rate_limited";
 
