@@ -81,6 +81,26 @@
         }
       }
     },
+    "error.sync.cursor_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The sync session is out of date. Capsule will resync from the start."
+          }
+        }
+      }
+    },
+    "error.sync.unauthenticated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please sign in again to continue syncing."
+          }
+        }
+      }
+    },
     "error.upload.album_access_denied": {
       "localizations": {
         "en": {

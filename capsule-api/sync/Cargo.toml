@@ -12,11 +12,15 @@ path = "src/lib.rs"
 capsule-api-auth = { path = "../auth" }
 capsule-api-entity = { path = "../entity" }
 capsule-api-environment = { path = "../environment", features = ["sync"] }
+capsule-api-service = { path = "../service" }
 capsule-core = { path = "../../capsule-core" }
+capsule-i18n = { path = "../../capsule-i18n" }
 eyre = { workspace = true }
 futures-util = { workspace = true }
 http-body-util = "0.1"
 prost = { workspace = true }
+ring = { workspace = true }
+serde_json = { workspace = true }
 prost-types = { workspace = true }
 salvo = { workspace = true }
 sea-orm = { workspace = true, features = [
@@ -39,3 +43,13 @@ tower = "0.5.3"
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
+
+[dev-dependencies]
+migration = { path = "../migration", package = "capsule-api-migration" }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sea-orm-migration = { workspace = true }
+tracing-subscriber = { workspace = true }
+base64 = { workspace = true }
+nanoid = { workspace = true }
+jiff = { workspace = true }

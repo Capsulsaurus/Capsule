@@ -3,6 +3,7 @@ pub mod asset;
 pub mod friendship;
 pub mod stack;
 pub mod storage;
+pub mod sync;
 pub mod user;
 
 #[cfg(feature = "auth")]

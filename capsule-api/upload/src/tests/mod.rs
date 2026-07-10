@@ -14,6 +14,7 @@
 
 mod invariants;
 mod lifecycle;
+mod sync_feed;
 
 use std::path::PathBuf;
 use std::sync::Once;

@@ -7,12 +7,12 @@ use nanoid::nanoid;
 use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QuerySelect, TransactionTrait,
 };
-use service::{album as AlbumService, asset as AssetService};
+use service::{album as AlbumService, asset as AssetService, sync as SyncFeed};
 
 use crate::config::UploadServerConfig;
 use crate::envelope::{revalidate_envelope, validate_create_envelope};
 use crate::error::UploadError;
-use crate::models::requests::CreateUploadRequest;
+use crate::models::requests::{CreateUploadRequest, ManifestEnvelope};
 use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
 use crate::service::processing::ProcessingService;
 use crate::service::storage::StorageService;
@@ -22,6 +22,10 @@ use crate::visibility::{derive_original_held, finalization_makes_visible};
 /// A device-directory `added_at` floor for a user whose row is missing (the JWT would be
 /// invalid anyway; this keeps the pure envelope battery from spuriously failing invariant 7).
 const EPOCH_RFC3339: &str = "1970-01-01T00:00:00Z";
+
+/// Upper bound on the metadata blob bytes inlined onto a sync feed entry (S-C2). Larger
+/// metadata blobs travel by content-address reference only; the design keeps them small.
+const MAX_INLINE_METADATA: u64 = 1024 * 1024;
 
 /// The outcome of a `POST /upload`: a freshly created session (`201`) or the active session
 /// already open for the `(owner_id, hash, album_id)` idempotency tuple (`200`).
@@ -425,11 +429,52 @@ impl UploadService {
             .commit_blob(upload_id, &session.expected_hash)
             .await?;
 
+        // Prepare the sync feed payload (S-C2) before opening the txn: the manifest as
+        // canonical CBOR, the per-role blob refs, the inlined metadata blob (metadata role
+        // only), and the derived `original_held` fact. A prep failure un-finalizes the bundle
+        // exactly like a commit failure — the blob is GC'd and the session fails.
+        let original_held = derive_original_held(session.blob_role == BlobRole::Original);
+        let feed_input = if let Some(album_id) = &session.album_id {
+            match self
+                .prepare_feed_input(&session, album_id, original_held)
+                .await
+            {
+                Ok(input) => Some(input),
+                Err(e) => {
+                    tracing::warn!(
+                        upload_id,
+                        "sync feed prep failed; rolling back bundle: {}",
+                        e
+                    );
+                    let _ = self.storage.remove_blob(&session.expected_hash).await;
+                    self.fail_session(&session).await;
+                    return Err(e);
+                }
+            }
+        } else {
+            tracing::debug!(
+                upload_id,
+                "session has no album; no sync feed entry emitted"
+            );
+            None
+        };
+
         let txn = self.conn.begin().await?;
-        let marked =
-            AssetService::Mutation::mark_uploaded(&txn, &session.asset_id, width, height, date)
-                .await;
-        let asset = match marked {
+        // The `sync_seq` mint (S-C2) joins THIS finalization transaction: `mark_uploaded`
+        // flips `uploaded` and `record_finalization` mints the per-album `sync_seq` and
+        // appends the feed row, atomically. Any failure rolls back both and GCs the blob.
+        let committed = async {
+            let asset =
+                AssetService::Mutation::mark_uploaded(&txn, &session.asset_id, width, height, date)
+                    .await?;
+            if let Some(input) = feed_input {
+                SyncFeed::Mutation::record_finalization(&txn, input).await?;
+            }
+            Ok::<_, sea_orm::DbErr>(asset)
+        }
+        .await;
+
+        let asset = match committed {
             Ok(asset) => {
                 txn.commit().await?;
                 asset
@@ -457,7 +502,6 @@ impl UploadService {
         // Visibility gate + original_held derivation (staged-uploads contract): visibility
         // flips on the metadata (T0) tier; the original-held fact is derived, never stored.
         let visible = finalization_makes_visible(session.blob_role);
-        let original_held = derive_original_held(session.blob_role == BlobRole::Original);
         tracing::info!(
             upload_id,
             asset_id = %session.asset_id,
@@ -468,6 +512,73 @@ impl UploadService {
         );
 
         Ok(asset)
+    }
+
+    /// Build the sync feed entry payload (S-C2) for a finalized blob: the signed manifest as
+    /// canonical CBOR (re-serialized from the stored envelope), the per-role blob refs, the
+    /// inlined metadata blob (metadata role only), and the derived `original_held` fact.
+    ///
+    /// `original_held` is derived here via S-C1's `visibility::derive_original_held` — one
+    /// definition, no second source of truth.
+    async fn prepare_feed_input(
+        &self,
+        session: &UploadSession,
+        album_id: &str,
+        original_held: bool,
+    ) -> Result<SyncFeed::FeedEntryInput, UploadError> {
+        // The signed manifest travels as opaque canonical CBOR; the server holds only the
+        // envelope projection, so re-serialize that canonically (never re-modeled on the wire).
+        let envelope: ManifestEnvelope = serde_json::from_str(&session.manifest_envelope)?;
+        let manifest_cbor = capsule_core::cbor::to_canonical_vec(&envelope)
+            .map_err(|e| UploadError::ProcessingError(format!("manifest cbor: {e}")))?;
+
+        // Inline the metadata blob only when this blob *is* the metadata blob and it is small.
+        let metadata_blob = if session.blob_role == BlobRole::Metadata {
+            let bytes = self
+                .storage
+                .read_committed_blob(&session.expected_hash)
+                .await?;
+            if bytes.len() as u64 <= MAX_INLINE_METADATA {
+                Some(bytes)
+            } else {
+                tracing::warn!(
+                    upload_id = %session.id,
+                    "metadata blob too large to inline on the feed; carrying ref only"
+                );
+                None
+            }
+        } else {
+            None
+        };
+
+        let blob_ref = SyncFeed::FeedBlobRef {
+            ciphertext_hash: session.expected_hash.clone(),
+            role: session.blob_role.as_str().to_string(),
+            format: session.content_type.clone().unwrap_or_default(),
+            size: session.total_size,
+        };
+        let blobs = if session.blob_role == BlobRole::Original {
+            SyncFeed::FeedBlobManifest {
+                original: Some(blob_ref),
+                derivatives: Vec::new(),
+            }
+        } else {
+            SyncFeed::FeedBlobManifest {
+                original: None,
+                derivatives: vec![blob_ref],
+            }
+        };
+
+        Ok(SyncFeed::FeedEntryInput {
+            album_id: album_id.to_string(),
+            protocol_version: session.protocol_version.clone(),
+            kind: SyncFeed::ChangeKind::Created,
+            asset_id: session.asset_id.clone(),
+            manifest_cbor,
+            metadata_blob,
+            blobs,
+            original_held,
+        })
     }
 
     pub(crate) async fn cancel_upload(&self, upload_id: &str) -> Result<(), UploadError> {

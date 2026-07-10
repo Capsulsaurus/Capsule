@@ -34,6 +34,12 @@ pub mod error_codes {
     /// `error.quota.exceeded`
     pub const QUOTA_EXCEEDED: &str = "error.quota.exceeded";
 
+    /// `error.sync.cursor_invalid`
+    pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
+
+    /// `error.sync.unauthenticated`
+    pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
+
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
 

@@ -1216,20 +1216,31 @@ dependencies = [
 name = "capsule-api-sync"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "capsule-api-auth",
  "capsule-api-entity",
  "capsule-api-environment",
+ "capsule-api-migration",
+ "capsule-api-service",
  "capsule-core",
+ "capsule-i18n",
  "eyre",
  "futures-util",
  "http-body-util",
+ "jiff",
  "jsonwebtoken",
+ "nanoid",
  "prost 0.14.4",
  "prost-types 0.14.4",
+ "ring",
  "salvo",
  "sea-orm",
+ "sea-orm-migration",
  "serde",
+ "serde_json",
  "sync_wrapper",
+ "testcontainers",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -1241,6 +1252,7 @@ dependencies = [
  "tonic-web",
  "tower",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

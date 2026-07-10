@@ -77,7 +77,7 @@ its slice.
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
 | S-B9  | Tethered camera import (PTP/IP)                      | media/import    | S-B2, ptpip-rs   | L    | post-v1 |
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | done    |
-| S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | ready   |
+| S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | done    |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | ready   |
@@ -482,6 +482,15 @@ pass until the gate lifts.
 - **Done when:** the download-sync doc's sync-feed Validation bullets (monotonicity,
   forward-version rejection, rewind rejection, cursor authenticity) pass server-side.
 - **Tier:** Unit + Smoke + E2E case 3.
+- **Landed:** `sync_seq` mint joins S-C1's finalization transaction (counter-row-lock
+  linearised, gap-free per album); HMAC-SHA256 opaque cursor (MAC key HKDF-derived
+  from the JWT key, `SYNC_CURSOR_MAC_KEY` override); manifest travels as the
+  canonical-CBOR envelope projection (the server holds no full signed manifest);
+  salvo↔tonic bridge fixed en route (`{**rest}` route syntax + trailer streaming).
+  Known limitation: global `feed_seq` pagination is bigserial — a long-racing
+  finalization could commit below a served cursor; per-album `sync_seq` (the
+  anti-rewind layer) is unaffected. S-D2's client high-water marks are the
+  client-side halves of forward-version/rewind rejection.
 
 ### S-C3 — Storage-verification endpoint
 

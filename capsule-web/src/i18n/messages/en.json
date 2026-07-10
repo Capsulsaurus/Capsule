@@ -7,6 +7,8 @@
   "error.blob.pending_upload": "The original photo hasn't been uploaded from its device yet.",
   "error.protocol.version_unsupported": "This version of Capsule is no longer supported. Please update the app.",
   "error.quota.exceeded": "Your storage is full.",
+  "error.sync.cursor_invalid": "The sync session is out of date. Capsule will resync from the start.",
+  "error.sync.unauthenticated": "Please sign in again to continue syncing.",
   "error.upload.album_access_denied": "You don't have permission to add photos to this album.",
   "error.upload.checksum_mismatch": "Upload data was corrupted in transit. Retrying…",
   "error.upload.chunk_conflict": "The upload sent conflicting data and was stopped.",

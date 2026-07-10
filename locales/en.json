@@ -67,6 +67,14 @@
         "message": "The original photo hasn't been uploaded from its device yet.",
         "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."
     },
+    "error.sync.cursor_invalid": {
+        "message": "The sync session is out of date. Capsule will resync from the start.",
+        "context": "gRPC INVALID_ARGUMENT (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, or lifted from another context. The client discards it and resyncs from an empty cursor."
+    },
+    "error.sync.unauthenticated": {
+        "message": "Please sign in again to continue syncing.",
+        "context": "gRPC UNAUTHENTICATED on the sync feed: the request carried no valid access token in the `authorization` call metadata."
+    },
     "error.upload.malformed_request": {
         "message": "The upload request was malformed.",
         "context": "HTTP 400 on POST /upload: unknown or missing JSON fields. The transport JSON is strict (deny unknown fields)."

@@ -50,6 +50,12 @@ impl StorageService {
         Ok(())
     }
 
+    /// Read a committed blob's bytes by its content address. Used to inline the small
+    /// encrypted metadata blob onto its sync feed entry (S-C2).
+    pub(crate) async fn read_committed_blob(&self, hash: &str) -> Result<Vec<u8>, UploadError> {
+        Ok(fs::read(self.get_blob_path(hash)).await?)
+    }
+
     /// Remove a committed blob by its content address. Used to GC a partial bundle when the
     /// finalization transaction fails after the rename.
     pub(crate) async fn remove_blob(&self, hash: &str) -> Result<(), UploadError> {

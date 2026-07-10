@@ -80,6 +80,12 @@ pub struct ServerConfig {
     #[cfg(any(feature = "auth", feature = "upload"))]
     /// Allowed CORS origins. Use `["*"]` to allow all origins (development only).
     pub allowed_origins: Vec<String>,
+
+    #[cfg(feature = "sync")]
+    /// Server-only HMAC key for the opaque sync cursor (threat-model invariant 22).
+    /// Read from `SYNC_CURSOR_MAC_KEY` (base64, 32 bytes) or, absent that, derived from the
+    /// signing-key DER via HKDF so it is stable across restarts and never leaves the server.
+    pub sync_cursor_mac_key: SecretKeyWrapper<[u8; 32]>,
 }
 // TODO: Separate out these configs into environment variables struct ^^
 
@@ -119,26 +125,19 @@ impl Environment {
             })
         };
 
-        let load_jwt_ed25519_keys = |key: &str| {
-            load_env(key).and_then(|s| {
-                let der = BASE64.decode(s).map_err(|e| {
-                    EnvironmentError::ParseError(
-                        key.to_string(),
-                        format!("Unable to decode base64: {e}"),
-                    )
-                })?;
-
-                convert_ed25519_der_to_jwt_keys(&der).map_err(|e| {
-                    EnvironmentError::ParseError(
-                        key.to_string(),
-                        format!("Unable to convert DER to JWT keys: {e}"),
-                    )
-                })
-            })
-        };
-
+        let jwt_ed25519_der = BASE64.decode(load_env("JWT_ED25519_DER")?).map_err(|e| {
+            EnvironmentError::ParseError(
+                "JWT_ED25519_DER".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
         let (jwt_eddsa_encoding_key, jwt_eddsa_decoding_key) =
-            load_jwt_ed25519_keys("JWT_ED25519_DER")?;
+            convert_ed25519_der_to_jwt_keys(&jwt_ed25519_der).map_err(|e| {
+                EnvironmentError::ParseError(
+                    "JWT_ED25519_DER".to_string(),
+                    format!("Unable to convert DER to JWT keys: {e}"),
+                )
+            })?;
 
         let load_log_level = |key: &str| {
             load_env(key).and_then(|s| {
@@ -200,6 +199,10 @@ impl Environment {
                             .collect()
                     },
                 ),
+                #[cfg(feature = "sync")]
+                sync_cursor_mac_key: SecretKeyWrapper::from(load_sync_cursor_mac_key(
+                    &jwt_ed25519_der,
+                )?),
             },
             log_level: load_log_level("LOG_LEVEL").unwrap_or(if cfg!(debug_assertions) {
                 LevelFilter::TRACE
@@ -208,4 +211,43 @@ impl Environment {
             }),
         })
     }
+}
+
+/// Resolve the server-only sync-cursor MAC key: the `SYNC_CURSOR_MAC_KEY` override (base64,
+/// exactly 32 bytes) if set, else derived from the signing-key DER (invariant 22).
+#[cfg(feature = "sync")]
+fn load_sync_cursor_mac_key(jwt_der: &[u8]) -> Result<[u8; 32], EnvironmentError> {
+    if let Ok(b64) = env::var("SYNC_CURSOR_MAC_KEY") {
+        let bytes = BASE64.decode(&b64).map_err(|e| {
+            EnvironmentError::ParseError(
+                "SYNC_CURSOR_MAC_KEY".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
+        return <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+            EnvironmentError::ParseError(
+                "SYNC_CURSOR_MAC_KEY".to_string(),
+                "must decode to exactly 32 bytes".to_string(),
+            )
+        });
+    }
+    Ok(derive_sync_cursor_mac_key(jwt_der))
+}
+
+/// Derive a stable 32-byte HMAC key from the server's signing-key DER via HKDF-SHA256.
+/// The DER is a server-only secret, so the cursor key never leaves the server and survives
+/// restarts (outstanding cursors stay valid).
+#[cfg(feature = "sync")]
+fn derive_sync_cursor_mac_key(ikm: &[u8]) -> [u8; 32] {
+    use ring::hkdf::{HKDF_SHA256, Salt};
+
+    let salt = Salt::new(HKDF_SHA256, b"capsule/sync-cursor-mac/v1");
+    let prk = salt.extract(ikm);
+    let okm = prk
+        .expand(&[b"cursor-mac-key"], HKDF_SHA256)
+        .expect("HKDF expand of a fixed-length key never fails");
+    let mut out = [0u8; 32];
+    okm.fill(&mut out)
+        .expect("HKDF fill of 32 bytes never fails");
+    out
 }
