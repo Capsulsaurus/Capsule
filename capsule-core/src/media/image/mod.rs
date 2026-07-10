@@ -8,6 +8,7 @@ use crate::media::image::metadata::{ImageMetadata, ImageMetadataProvider};
 use crate::media::image::types::ImageFormat;
 
 pub mod buffer;
+pub mod derivative;
 pub mod formats;
 pub mod lqip;
 pub mod metadata;
@@ -304,7 +305,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "S-B1: PngImage decoder not yet implemented — see SLICES.md"]
     fn test_image_conversion() {
         use crate::media::image::formats::jpeg::JpegImage;
         use crate::media::image::formats::png::PngImage;

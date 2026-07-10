@@ -463,6 +463,31 @@ mod tests {
         assert!(back.verify(&ik.verifying_key()));
     }
 
+    /// S-B1: the generated LQIP (chromahash + version + dominant_color) lands in the sidecar,
+    /// is covered by the signature, and survives a canonical round-trip byte-identically.
+    #[test]
+    fn lqip_lands_in_signed_sidecar_and_round_trips() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.lqip = Some(Lqip {
+            chromahash: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            format_version: 1,
+            dominant_color: [10, 20, 30],
+        });
+        s.sign(&ik);
+        assert!(s.verify(&ik.verifying_key()));
+
+        let bytes = s.to_canonical_vec();
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.lqip, s.lqip);
+        assert!(back.verify(&ik.verifying_key()));
+
+        // Dropping the LQIP after signing invalidates the signature (it was covered).
+        let mut stripped = back.clone();
+        stripped.lqip = None;
+        assert!(!stripped.verify(&ik.verifying_key()));
+    }
+
     #[test]
     fn tampering_after_signing_breaks_verification() {
         let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);

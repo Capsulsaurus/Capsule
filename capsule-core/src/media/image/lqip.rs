@@ -3,6 +3,13 @@ use thiserror::Error;
 use crate::media::image::buffer::{ComponentType, ImageBuffer, ImageBufferError, PixelFormat};
 use crate::media::image::resize_to_max_dimension;
 use crate::media::metadata::ColorSpace;
+use crate::sidecar::sidecar_v1::Lqip as SidecarLqip;
+
+/// The current LQIP chromahash format version written into the sidecar (SSoT: Thumbnails —
+/// LQIP). A decoder that does not recognize this version falls back to the solid
+/// `dominant_color` fill (see [`render_sidecar_lqip`]) rather than misrendering, so a future
+/// chromahash revision is a versioned change, never a silent break.
+pub const LQIP_FORMAT_V1: u16 = 1;
 
 /// LQIP (thumbhash) struct
 pub struct LQIP(Vec<u8>);
@@ -77,6 +84,52 @@ impl LQIP {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+
+    /// Build the encrypted-sidecar [`Lqip`](SidecarLqip) record from this hash: the chromahash
+    /// bytes, the current [`LQIP_FORMAT_V1`] version tag, and the `dominant_color` fallback
+    /// derived from the hash's average color (the solid fill an older/newer decoder uses when
+    /// it cannot decode this chromahash version).
+    pub fn to_sidecar(&self) -> Result<SidecarLqip, LQIPError> {
+        let [r, g, b, _a] = self.average_rgba()?;
+        Ok(SidecarLqip {
+            chromahash: self.0.clone(),
+            format_version: LQIP_FORMAT_V1,
+            dominant_color: [to_u8(r), to_u8(g), to_u8(b)],
+        })
+    }
+}
+
+/// Clamp a 0.0..=1.0 channel to an 8-bit value.
+fn to_u8(v: f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+/// Render a sidecar [`Lqip`](SidecarLqip) to a displayable RGBA placeholder.
+///
+/// If the record's `format_version` is recognized *and* its chromahash decodes, the decoded
+/// placeholder tier is returned. Otherwise — an unknown future version, or corrupt bytes — the
+/// caller gets a 1×1 solid `dominant_color` fill instead of a misrender, exactly the versioned
+/// fallback the [contract](https://docs/design/thumbnails/#lqip) specifies.
+pub fn render_sidecar_lqip(lqip: &SidecarLqip) -> ImageBuffer {
+    if lqip.format_version == LQIP_FORMAT_V1
+        && let Ok(buf) = LQIP::from_bytes(lqip.chromahash.clone()).thumb_hash_to_rgba()
+    {
+        return buf;
+    }
+    dominant_color_fill(lqip.dominant_color)
+}
+
+/// A 1×1 opaque RGBA buffer of the given color — the solid fallback fill.
+fn dominant_color_fill([r, g, b]: [u8; 3]) -> ImageBuffer {
+    ImageBuffer::new(
+        vec![r, g, b, 255],
+        1,
+        1,
+        PixelFormat::Rgba,
+        ComponentType::U8,
+        ColorSpace::Srgb,
+    )
+    .expect("1x1 RGBA buffer is always valid")
 }
 
 #[derive(Error, Debug)]
@@ -234,5 +287,48 @@ mod tests {
             "Reconstructed aspect ratio {} should be near 2.0",
             ar
         );
+    }
+
+    #[tokio::test]
+    async fn to_sidecar_carries_version_and_dominant_color() {
+        // A mostly-red image: the dominant_color fallback should be red-dominant.
+        let rgba = create_solid_rgba(64, 48, 220, 20, 30, 255);
+        let lqip = LQIP::from_image_buffer(&rgba).await.unwrap();
+        let sidecar = lqip.to_sidecar().unwrap();
+
+        assert_eq!(sidecar.format_version, LQIP_FORMAT_V1);
+        assert_eq!(sidecar.chromahash, lqip.as_bytes());
+        let [r, g, b] = sidecar.dominant_color;
+        assert!(r > g && r > b, "dominant color {r},{g},{b} should be red");
+    }
+
+    #[tokio::test]
+    async fn render_recognized_version_decodes_placeholder() {
+        let rgba = create_solid_rgba(80, 40, 40, 160, 200, 255);
+        let lqip = LQIP::from_image_buffer(&rgba).await.unwrap();
+        let sidecar = lqip.to_sidecar().unwrap();
+
+        // A recognized version decodes to a non-trivial RGBA placeholder (it "renders").
+        let rendered = render_sidecar_lqip(&sidecar);
+        assert_eq!(rendered.format, PixelFormat::Rgba);
+        assert!(rendered.width > 1 && rendered.height > 1);
+        assert_eq!(
+            rendered.data.len(),
+            rendered.width * rendered.height * 4,
+            "decoded buffer is well-formed RGBA"
+        );
+    }
+
+    #[test]
+    fn render_unrecognized_version_falls_back_to_dominant_color() {
+        // A future/unknown chromahash version must not misrender: solid dominant_color fill.
+        let sidecar = SidecarLqip {
+            chromahash: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            format_version: LQIP_FORMAT_V1 + 999,
+            dominant_color: [12, 34, 56],
+        };
+        let rendered = render_sidecar_lqip(&sidecar);
+        assert_eq!(rendered.format, PixelFormat::Rgba);
+        assert_eq!(rendered.data, vec![12, 34, 56, 255]);
     }
 }
