@@ -88,6 +88,13 @@ pub struct Model {
     /// User who uploaded the asset (for storage quota)
     #[sea_orm(indexed)]
     pub upload_user_id: String,
+
+    // ===== Moderation (S-C8) =====
+    /// Whether this asset is servable. A takedown flips it `false`; a federated fetch then
+    /// returns `410 Gone`. The underlying blob is never deleted — takedown is a serving
+    /// constraint, not destruction (moderation doc). Default `true`.
+    #[sea_orm(default_value = "true")]
+    pub served: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

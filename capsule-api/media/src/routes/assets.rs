@@ -76,6 +76,11 @@ pub(super) enum AssetResponses {
     Ok(Box<NamedFile>),
     /// Asset or file not found
     NotFound(String),
+    /// The asset was taken down (moderation, S-C8): `410 Gone`. Deliberately distinct from the
+    /// capability-URL serve paths' indistinguishable `404` — a takedown signals removal of
+    /// content the peer already knows exists (moderation doc's per-surface rule).
+    #[from(ignore)]
+    Gone(String),
     /// Internal server error
     InternalServerError(InternalServerError),
 }
@@ -87,6 +92,10 @@ impl Writer for AssetResponses {
             Self::Ok(file) => file.write(req, depot, res).await,
             Self::NotFound(msg) => {
                 res.status_code(StatusCode::NOT_FOUND);
+                res.render(Json(ErrorResponse { error: msg }));
+            }
+            Self::Gone(msg) => {
+                res.status_code(StatusCode::GONE);
                 res.render(Json(ErrorResponse { error: msg }));
             }
             Self::InternalServerError(e) => {
@@ -111,6 +120,10 @@ impl EndpointOutRegister for AssetResponses {
             salvo::oapi::Response::new("Asset not found"),
         );
         operation.responses.insert(
+            String::from("410"),
+            salvo::oapi::Response::new("Asset taken down (moderation)"),
+        );
+        operation.responses.insert(
             String::from("500"),
             salvo::oapi::Response::new("Internal server error"),
         );
@@ -132,6 +145,13 @@ async fn serve_asset_file(depot: &mut Depot, asset_id_str: &str) -> AssetRespons
         Ok(None) => return AssetResponses::NotFound("Asset not found".to_string()),
         Err(e) => return AssetResponses::InternalServerError(e.into()),
     };
+
+    // Takedown gate (moderation, S-C8): an unservable asset returns 410 Gone before any disk
+    // access. The blob is not deleted — takedown is a serving constraint, not destruction.
+    if !asset.served {
+        tracing::info!(asset_id = %asset.id, "asset fetch refused: taken down (410 Gone)");
+        return AssetResponses::Gone("Asset has been taken down".to_string());
+    }
 
     // Parse UUID for storage path logic
     let uuid = match Uuid::from_str(&asset.id) {

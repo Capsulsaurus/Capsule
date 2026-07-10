@@ -13,6 +13,7 @@ mod m20260710_000006_lifecycle_ops;
 mod m20260710_000007_device_cohorts;
 mod m20260710_000008_backup_escrow;
 mod m20260710_000009_public_shares;
+mod m20260710_000010_moderation;
 
 pub struct Migrator;
 
@@ -33,6 +34,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_000007_device_cohorts::Migration),
             Box::new(m20260710_000008_backup_escrow::Migration),
             Box::new(m20260710_000009_public_shares::Migration),
+            Box::new(m20260710_000010_moderation::Migration),
         ]
     }
 }

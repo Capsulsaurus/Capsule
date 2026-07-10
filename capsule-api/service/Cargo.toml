@@ -13,6 +13,7 @@ capsule-api-entity = { path = "../entity" }
 capsule-api-model = { path = "../model" }
 capsule-core = { path = "../../capsule-core" }
 capsule-i18n = { path = "../../capsule-i18n" }
+ed25519-dalek = { workspace = true }
 serde = { workspace = true }
 serde_bytes = "0.11"
 serde_json = { workspace = true }

@@ -191,6 +191,46 @@
         }
       }
     },
+    "error.moderation.account_suspended": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your account is suspended. You can't upload or share until it's reinstated."
+          }
+        }
+      }
+    },
+    "error.moderation.report_rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many reports from this source. Please wait and try again."
+          }
+        }
+      }
+    },
+    "error.moderation.report_unsigned": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The moderation report could not be verified."
+          }
+        }
+      }
+    },
+    "error.moderation.server_blocked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This server is blocked from federating with us."
+          }
+        }
+      }
+    },
     "error.protocol.version_unsupported": {
       "localizations": {
         "en": {

@@ -15,6 +15,7 @@
 mod gc;
 mod invariants;
 mod lifecycle;
+mod moderation;
 mod ops;
 mod quota;
 mod receipts;

@@ -102,6 +102,9 @@ pub enum UploadError {
     /// A metadata-growth lifecycle write refused because the account is Grace-expired (read-only).
     #[error("Account is grace-expired (read-only); metadata-growth writes are refused")]
     QuotaGraceLocked,
+    /// The account is suspended (moderation, S-C8): upload-session creation is refused.
+    #[error("Account is suspended; uploads are not permitted")]
+    AccountSuspended,
     /// The caller is neither the uploader nor the owner of the session.
     #[error("Forbidden")]
     Forbidden,
@@ -170,6 +173,7 @@ impl UploadError {
             UploadError::OwnerNotPermitted => Some(error_codes::UPLOAD_OWNER_NOT_PERMITTED),
             UploadError::QuotaExceeded => Some(error_codes::QUOTA_EXCEEDED),
             UploadError::QuotaGraceLocked => Some(error_codes::QUOTA_GRACE_LOCKED),
+            UploadError::AccountSuspended => Some(error_codes::MODERATION_ACCOUNT_SUSPENDED),
             UploadError::Forbidden => Some(error_codes::UPLOAD_FORBIDDEN),
             UploadError::ActionNotAllowed(_) => Some(error_codes::UPLOAD_INVALID_ACTION),
             UploadError::StaleRevival => Some(error_codes::UPLOAD_STALE_REVIVAL),
@@ -195,6 +199,7 @@ impl UploadError {
             | UploadError::OwnerNotPermitted
             | UploadError::QuotaExceeded
             | UploadError::QuotaGraceLocked
+            | UploadError::AccountSuspended
             | UploadError::Forbidden => StatusCode::FORBIDDEN,
             UploadError::InvalidUpload(_)
             | UploadError::SizeExceeded

@@ -16,9 +16,11 @@ mod well_known;
 pub fn get_router(state: AppState) -> Router {
     Router::new()
         .hoop(affix_state::inject(state.clone()))
-        // Asset media endpoints
+        // Asset media endpoints. (Path syntax modernized to salvo's `{param}` wisp form —
+        // the legacy `<param>` form no longer matches, which had left the takedown 410 gate
+        // and these serve endpoints unreachable.)
         .push(
-            Router::with_path("<asset_id>")
+            Router::with_path("{asset_id}")
                 .get(assets::get_original)
                 .push(Router::with_path("thumbnail").get(assets::get_thumbnail))
                 .push(Router::with_path("preview").get(assets::get_preview))

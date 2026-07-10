@@ -83,7 +83,7 @@ its slice.
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | done    |
 | S-C6  | Quota service                                        | server          | —                | M    | done    |
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | done    |
-| S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
+| S-C8  | Moderation hooks                                     | server          | S-C2             | M    | done    |
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | done    |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
@@ -616,6 +616,15 @@ pass until the gate lifts.
   (`served = false`, 410 to peers, moderation provenance record), server blocklist.
 - **Depends on:** S-C2 (report transport rides the peer surface). **Done when:** the
   moderation doc's six Validation bullets pass. **Tier:** Unit + Smoke.
+- **Landed:** all six bullets tested. Suspension wires S-C6's flag into S-C1's
+  create path (`403 error.moderation.account_suspended`); takedown flips
+  `assets.served` + appends a `moderation_events` provenance row, 410 before any
+  disk access, blob preserved; report intake = shape → blocklist → Ed25519 verify
+  against registered `federation_peers` → per-peer budget → admin queue (peer
+  identity gets re-grounded when S-E2's capabilities land); per-user block is the
+  server-visible half (share-row revocation) — the MLS Remove/epoch-bump half is
+  Lane-X-gated. Also fixed the legacy asset routes' dead `<id>` salvo syntax so
+  the 410 gate is actually reachable.
 
 ### S-C9 — Device-directory publish/fetch
 

@@ -100,6 +100,21 @@ impl UploadService {
         // Refuse-by-default envelope battery (invariants 1–8, 15 family) BEFORE any write.
         validate_create_envelope(request, &self.config, &added_at, &now.to_string())?;
 
+        // Moderation (S-C8): a suspended account cannot upload. This is an account-level gate,
+        // distinct from quota and permission — refuse session creation with the structural
+        // `error.moderation.account_suspended` code (403) before any album/quota work.
+        match service::moderation::Suspension::is_suspended(&self.conn, upload_user_id).await {
+            Ok(true) => {
+                tracing::info!(upload_user_id, "upload session refused: account suspended");
+                return Err(UploadError::AccountSuspended);
+            }
+            Ok(false) => {}
+            Err(service::moderation::ModerationError::Db(e)) => {
+                return Err(UploadError::DbError(e));
+            }
+            Err(e) => return Err(UploadError::Unknown(e.to_string())),
+        }
+
         // Invariant 6 (DB half): album exists and the user has write capability on it.
         if let Some(album_id) = &request.album_id {
             match AlbumService::Query::get_album_access(&self.conn, owner_id, album_id).await {

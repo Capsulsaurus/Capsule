@@ -31,6 +31,7 @@
 mod attestation;
 mod blob;
 mod drops;
+mod moderation;
 mod shares;
 mod verify;
 

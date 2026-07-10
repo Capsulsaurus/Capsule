@@ -107,6 +107,22 @@
         "message": "The device-add request could not be read.",
         "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
     },
+    "error.moderation.account_suspended": {
+        "message": "Your account is suspended. You can't upload or share until it's reinstated.",
+        "context": "HTTP 403 at POST /upload session creation (slice S-C8): the account carries an admin/billing suspension flag. Distinct from quota and permission rejections so the client surfaces the right remediation. Suspension is an access-level action — the user's data is untouched and the block is reversible."
+    },
+    "error.moderation.server_blocked": {
+        "message": "This server is blocked from federating with us.",
+        "context": "HTTP 403 (federation pull / report intake, slice S-C8): the requesting peer server is on this server's blocklist, so its federated request — a pull or a moderation report — is refused at the federation-capability layer."
+    },
+    "error.moderation.report_unsigned": {
+        "message": "The moderation report could not be verified.",
+        "context": "Federated report intake (slice S-C8, threat-model invariant 24): the report's Ed25519 signature did not verify against a known peer key — unsigned, tampered, or from an unregistered peer — or the report was structurally malformed. It is dropped before the admin queue, never surfaced."
+    },
+    "error.moderation.report_rate_limited": {
+        "message": "Too many reports from this source. Please wait and try again.",
+        "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
+    },
     "error.storage.invalid_request": {
         "message": "The storage-verification request was malformed.",
         "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."

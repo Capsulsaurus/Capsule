@@ -19,6 +19,10 @@
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
+    <string name="error_moderation_account_suspended">Your account is suspended. You can\'t upload or share until it\'s reinstated.</string>
+    <string name="error_moderation_report_rate_limited">Too many reports from this source. Please wait and try again.</string>
+    <string name="error_moderation_report_unsigned">The moderation report could not be verified.</string>
+    <string name="error_moderation_server_blocked">This server is blocked from federating with us.</string>
     <string name="error_protocol_version_unsupported">This version of Capsule is no longer supported. Please update the app.</string>
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>

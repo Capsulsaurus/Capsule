@@ -67,6 +67,18 @@ pub mod error_codes {
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 
+    /// `error.moderation.account_suspended`
+    pub const MODERATION_ACCOUNT_SUSPENDED: &str = "error.moderation.account_suspended";
+
+    /// `error.moderation.report_rate_limited`
+    pub const MODERATION_REPORT_RATE_LIMITED: &str = "error.moderation.report_rate_limited";
+
+    /// `error.moderation.report_unsigned`
+    pub const MODERATION_REPORT_UNSIGNED: &str = "error.moderation.report_unsigned";
+
+    /// `error.moderation.server_blocked`
+    pub const MODERATION_SERVER_BLOCKED: &str = "error.moderation.server_blocked";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 

@@ -8,6 +8,7 @@ pub mod drop;
 pub mod escrow;
 pub mod friendship;
 pub mod gc;
+pub mod moderation;
 pub mod quota;
 pub mod share;
 pub mod stack;

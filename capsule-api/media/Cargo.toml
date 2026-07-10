@@ -41,6 +41,7 @@ uuid = { workspace = true }
 [dev-dependencies]
 migration = { path = "../migration", package = "capsule-api-migration" }
 base64 = { workspace = true }
+ed25519-dalek = { workspace = true }
 nanoid = { workspace = true }
 serde_json = { workspace = true }
 salvo = { workspace = true, features = ["test"] }
