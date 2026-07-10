@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::civil;
 use serde::{Deserialize, Serialize};
 
 use crate::media::core::types::ImageFormat;
@@ -28,7 +28,7 @@ pub trait ImageMetadataExtractor {
     fn get_file_size(&self) -> u64;
 
     // Generic typed metadata
-    fn get_date_taken(&self) -> Option<DateTime<Utc>>;
+    fn get_date_taken(&self) -> Option<civil::DateTime>;
     fn get_device_metadata(&self) -> Option<DeviceMetadata>;
     fn get_capture_settings(&self) -> Option<CaptureSettings>;
     fn get_location(&self) -> Option<GpsLocation>;
@@ -93,7 +93,7 @@ pub struct ImageMetadata {
 
     // --- Extracted Typed Metadata (From your original struct) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub date_taken: Option<DateTime<Utc>>,
+    pub date_taken: Option<civil::DateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]

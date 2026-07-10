@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::{Datelike, Utc};
+use jiff::Timestamp;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -135,7 +135,7 @@ pub struct Workspace {
 }
 
 fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339()
+    Timestamp::now().to_string()
 }
 
 fn content_type_for(ext: &str) -> String {
@@ -151,10 +151,13 @@ fn content_type_for(ext: &str) -> String {
 }
 
 fn media_dir(root: &Path, capture_utc: i64) -> PathBuf {
-    let dt = chrono::DateTime::from_timestamp(capture_utc, 0).unwrap_or_default();
+    let date = Timestamp::from_second(capture_utc)
+        .unwrap_or(Timestamp::UNIX_EPOCH)
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date();
     root.join("media")
-        .join(format!("{:04}", dt.year()))
-        .join(format!("{:04}-{:02}", dt.year(), dt.month()))
+        .join(format!("{:04}", date.year()))
+        .join(format!("{:04}-{:02}", date.year(), date.month()))
 }
 
 fn asset_type_for(content_type: &str) -> String {
@@ -167,7 +170,7 @@ fn asset_type_for(content_type: &str) -> String {
 }
 
 fn rfc3339_to_secs(s: &str) -> i64 {
-    chrono::DateTime::parse_from_rfc3339(s).map_or(0, |d| d.timestamp())
+    s.parse::<Timestamp>().map_or(0, Timestamp::as_second)
 }
 
 /// Map a managed asset's in-memory state to its queryable `assets` index row. Deletion state is
@@ -461,7 +464,7 @@ impl Workspace {
                 format: Some(asset.ext.clone()),
                 bytes: bytes as i64,
                 path: self.media_path(asset).to_string_lossy().into_owned(),
-                last_accessed_at: Utc::now().timestamp(),
+                last_accessed_at: Timestamp::now().as_second(),
                 pinned: false,
                 is_owned_original: true,
             })
@@ -477,7 +480,7 @@ impl Workspace {
             .extension()
             .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
         let asset_id = Uuid::now_v7();
-        let capture_utc = Utc::now().timestamp();
+        let capture_utc = Timestamp::now().as_second();
 
         let album = self.album(&album_id)?;
         let file_key = self.file_key(album, album.current_epoch, &asset_id);
@@ -677,7 +680,11 @@ impl Workspace {
 
     /// Soft-delete: emit a `delete` record carrying a signed retention window.
     pub fn soft_delete(&mut self, asset_id: &Uuid, retain_days: i64) -> Result<()> {
-        let until = (Utc::now() + chrono::Duration::days(retain_days)).to_rfc3339();
+        // Timestamp arithmetic is absolute, so a retention "day" is exactly 24 h — the
+        // correct semantic for a UTC retention window.
+        let until = (Timestamp::now()
+            + jiff::SignedDuration::from_hours(retain_days.saturating_mul(24)))
+        .to_string();
         self.append_lifecycle(asset_id, Action::Delete, Some(until), |_, _| {})
     }
 
@@ -770,7 +777,7 @@ impl Workspace {
                 .last()
                 .expect("restored provenance is never empty")
                 .manifest;
-            let capture_utc = Utc::now().timestamp();
+            let capture_utc = Timestamp::now().as_second();
             let mut chain = ProvenanceChain::new();
             for rec in &restored.provenance {
                 chain

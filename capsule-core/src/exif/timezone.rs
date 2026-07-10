@@ -1,4 +1,4 @@
-use chrono::{FixedOffset, TimeZone};
+use jiff::tz::{Offset, TimeZone};
 
 use crate::domain::CaptureTzSource;
 use crate::exif::ExifExtract;
@@ -15,15 +15,18 @@ pub struct TimezoneResolution {
 pub fn resolve_timezone(extract: &ExifExtract) -> TimezoneResolution {
     let capture_timestamp = extract
         .date_time_original
-        .map(|dt| dt.and_utc().timestamp());
+        .and_then(|dt| dt.to_zoned(TimeZone::UTC).ok())
+        .map(|z| z.timestamp().as_second());
 
     // Case 1: OffsetTimeOriginal present
     if let (Some(dt), Some(offset_str)) =
         (extract.date_time_original, &extract.offset_time_original)
         && let Some(offset) = parse_offset(offset_str)
     {
-        let local = offset.from_local_datetime(&dt).single();
-        let capture_utc = local.map(|t| t.timestamp());
+        // A fixed offset is never ambiguous, so this either resolves or the datetime
+        // itself is out of range.
+        let local = dt.to_zoned(TimeZone::fixed(offset)).ok();
+        let capture_utc = local.map(|t| t.timestamp().as_second());
         return TimezoneResolution {
             capture_timestamp,
             capture_utc,
@@ -39,7 +42,7 @@ pub fn resolve_timezone(extract: &ExifExtract) -> TimezoneResolution {
     {
         return TimezoneResolution {
             capture_timestamp,
-            capture_utc: None, // Would need chrono-tz to apply IANA tz; leave as None
+            capture_utc: None, // Applying the IANA tz is deferred; leave as None
             capture_tz: Some(tz_name),
             capture_tz_source: Some(CaptureTzSource::GpsLookup),
             tz_db_version: Some(tz_db_ver),
@@ -56,7 +59,7 @@ pub fn resolve_timezone(extract: &ExifExtract) -> TimezoneResolution {
     }
 }
 
-fn parse_offset(s: &str) -> Option<FixedOffset> {
+fn parse_offset(s: &str) -> Option<Offset> {
     // Parse "+HH:MM" or "-HH:MM"
     let s = s.trim();
     if s.len() < 6 {
@@ -70,7 +73,7 @@ fn parse_offset(s: &str) -> Option<FixedOffset> {
     let hours: i32 = parts[0].parse().ok()?;
     let minutes: i32 = parts[1].parse().ok()?;
     let total_secs = sign * (hours * 3600 + minutes * 60);
-    FixedOffset::east_opt(total_secs)
+    Offset::from_seconds(total_secs).ok()
 }
 
 fn lookup_timezone(lat: f64, lon: f64) -> Option<(String, String)> {
@@ -86,7 +89,7 @@ fn lookup_timezone(lat: f64, lon: f64) -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::NaiveDateTime;
+    use jiff::civil;
 
     use super::*;
     use crate::domain::CaptureTzSource;
@@ -94,7 +97,7 @@ mod tests {
 
     fn extract_with_offset(dt: &str, offset: &str) -> ExifExtract {
         ExifExtract {
-            date_time_original: NaiveDateTime::parse_from_str(dt, "%Y:%m:%d %H:%M:%S").ok(),
+            date_time_original: civil::DateTime::strptime("%Y:%m:%d %H:%M:%S", dt).ok(),
             offset_time_original: Some(offset.to_string()),
             gps_lat: None,
             gps_lon: None,
@@ -109,7 +112,7 @@ mod tests {
 
     fn extract_with_gps(dt: &str, lat: f64, lon: f64) -> ExifExtract {
         ExifExtract {
-            date_time_original: NaiveDateTime::parse_from_str(dt, "%Y:%m:%d %H:%M:%S").ok(),
+            date_time_original: civil::DateTime::strptime("%Y:%m:%d %H:%M:%S", dt).ok(),
             offset_time_original: None,
             gps_lat: Some(lat),
             gps_lon: Some(lon),
@@ -124,7 +127,7 @@ mod tests {
 
     fn extract_floating(dt: &str) -> ExifExtract {
         ExifExtract {
-            date_time_original: NaiveDateTime::parse_from_str(dt, "%Y:%m:%d %H:%M:%S").ok(),
+            date_time_original: civil::DateTime::strptime("%Y:%m:%d %H:%M:%S", dt).ok(),
             offset_time_original: None,
             gps_lat: None,
             gps_lon: None,
@@ -214,13 +217,13 @@ mod tests {
     #[test]
     fn test_parse_offset_positive() {
         let offset = parse_offset("+09:00").unwrap();
-        assert_eq!(offset.utc_minus_local(), -9 * 3600);
+        assert_eq!(offset.seconds(), 9 * 3600);
     }
 
     #[test]
     fn test_parse_offset_negative() {
         let offset = parse_offset("-05:30").unwrap();
-        assert_eq!(offset.utc_minus_local(), 5 * 3600 + 30 * 60);
+        assert_eq!(offset.seconds(), -(5 * 3600 + 30 * 60));
     }
 
     #[test]

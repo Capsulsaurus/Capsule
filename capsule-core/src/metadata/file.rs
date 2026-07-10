@@ -2,7 +2,7 @@ use std::ops::Deref;
 use std::path::Path;
 use std::{fs, io};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::utils::hash::get_file_hash;
@@ -41,12 +41,12 @@ pub struct FileMetadata {
     /// Original file name
     pub original_filename: String,
     /// Creation timestamp
-    pub created_timestamp: DateTime<Utc>,
+    pub created_timestamp: Timestamp,
     /// Last modified timestamp
-    pub modified_timestamp: DateTime<Utc>,
+    pub modified_timestamp: Timestamp,
 
     /// Import timestamp
-    pub import_timestamp: DateTime<Utc>,
+    pub import_timestamp: Timestamp,
     // pub size: u64,
     // pub modified: u64,
 }
@@ -72,13 +72,17 @@ impl FileMetadata {
         // Get timestamps
         let created_timestamp = metadata
             .created()
-            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
+            .ok()
+            .and_then(|t| Timestamp::try_from(t).ok())
+            .unwrap_or_else(Timestamp::now);
 
         let modified_timestamp = metadata
             .modified()
-            .map_or_else(|_| Utc::now(), DateTime::<Utc>::from);
+            .ok()
+            .and_then(|t| Timestamp::try_from(t).ok())
+            .unwrap_or_else(Timestamp::now);
 
-        let import_timestamp = Utc::now();
+        let import_timestamp = Timestamp::now();
 
         // Detect media (MIME) type
         // let media_type = ...;

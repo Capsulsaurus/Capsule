@@ -31,7 +31,7 @@ pub struct JpegImage {
 }
 
 impl ImageMetadataExtractor for JpegImage {
-    fn get_date_taken(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn get_date_taken(&self) -> Option<jiff::civil::DateTime> {
         None
     }
     fn get_dimensions(&self) -> (u32, u32) {

@@ -80,8 +80,8 @@ impl VerifyOutcome {
 }
 
 fn rfc3339_le(a: &str, b: &str) -> Option<bool> {
-    let pa = chrono::DateTime::parse_from_rfc3339(a).ok()?;
-    let pb = chrono::DateTime::parse_from_rfc3339(b).ok()?;
+    let pa = a.parse::<jiff::Timestamp>().ok()?;
+    let pb = b.parse::<jiff::Timestamp>().ok()?;
     Some(pa <= pb)
 }
 

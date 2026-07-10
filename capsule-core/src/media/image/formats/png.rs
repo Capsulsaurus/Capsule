@@ -19,7 +19,7 @@ use crate::media::metadata::{ColorSpace, DeviceMetadata};
 pub struct PngImage {}
 
 impl ImageMetadataExtractor for PngImage {
-    fn get_date_taken(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn get_date_taken(&self) -> Option<jiff::civil::DateTime> {
         unimplemented!()
     }
     fn get_dimensions(&self) -> (u32, u32) {
