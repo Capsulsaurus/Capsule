@@ -102,7 +102,7 @@ its slice.
 | S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
-| S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
+| S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | done*   |
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | done    |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | done    |
@@ -968,6 +968,13 @@ SDK; they never hand-roll network flows.
   support bundle (`cohort_hash` + device-id/session map).
 - **Depends on:** S-C13, S-D7. **Done when:** a reinstall groups with "previously
   used" in the devices view; the support bundle round-trips. **Tier:** Unit + Smoke.
+- **Landed (done\* — native halves owed):** `PrimaryIdentifierReader` seam with
+  Linux machine-id (hashed, never raw) + macOS IOPlatformUUID readers host-tested;
+  emission rides login/register (absent = omitted, not null); devices grouping
+  view model with reinstall→`PreviouslyUsed` proven; assert-don't-litigate copy as
+  catalog keys; support bundle serde round-trips. Owed: iOS/Android/Windows reader
+  adapters + the native devices screens; `device_id` in the bundle awaits the
+  server listing surfacing it (S-C13 follow-up).
 
 ### S-D12 — Recovery verification cadence + guided re-wrap
 

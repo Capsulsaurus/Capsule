@@ -22,6 +22,10 @@
     <string name="cli_sync_failed">Sync failed: {reason}</string>
     <string name="cli_sync_in_progress">Syncing from {endpoint}…</string>
     <string name="cli_sync_up_to_date">Already up to date.</string>
+    <string name="device_cohort_label_new_device">A new device</string>
+    <string name="device_cohort_label_previously_used">A device you\'ve used before (last seen {last_seen})</string>
+    <string name="device_cohort_label_this_device">This device</string>
+    <string name="device_cohort_support_report">Report a problem with this device grouping</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>

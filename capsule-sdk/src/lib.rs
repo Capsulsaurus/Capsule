@@ -12,6 +12,7 @@
 //! the generated-client wrapper is parked below.
 
 pub mod auth;
+pub mod cohort;
 pub mod fetch;
 pub mod net;
 pub mod recovery;

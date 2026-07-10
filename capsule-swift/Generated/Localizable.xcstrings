@@ -221,6 +221,46 @@
         }
       }
     },
+    "device.cohort.label.new_device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A new device"
+          }
+        }
+      }
+    },
+    "device.cohort.label.previously_used": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A device you've used before (last seen {last_seen})"
+          }
+        }
+      }
+    },
+    "device.cohort.label.this_device": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device"
+          }
+        }
+      }
+    },
+    "device.cohort.support.report": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report a problem with this device grouping"
+          }
+        }
+      }
+    },
     "error.auth.invalid_credentials": {
       "localizations": {
         "en": {

@@ -145,6 +145,7 @@ impl AuthError {
 /// Which auth endpoint a wire error came from — drives status→variant mapping.
 #[derive(Clone, Copy)]
 enum Endpoint {
+    Register,
     Login,
     Refresh,
     Logout,
@@ -153,6 +154,7 @@ enum Endpoint {
 impl Endpoint {
     fn name(self) -> &'static str {
         match self {
+            Self::Register => "register",
             Self::Login => "login",
             Self::Refresh => "refresh",
             Self::Logout => "logout",
@@ -162,7 +164,9 @@ impl Endpoint {
     /// What a `401` from this endpoint means.
     fn unauthorized_error(self) -> AuthError {
         match self {
-            Self::Login => AuthError::InvalidCredentials,
+            // Registration does not authenticate an existing session, so a `401` from
+            // it is not a real ceremony outcome; treat it as a credential rejection.
+            Self::Register | Self::Login => AuthError::InvalidCredentials,
             Self::Refresh | Self::Logout => AuthError::SessionExpired,
         }
     }
@@ -174,6 +178,23 @@ impl Endpoint {
 struct LoginRequestBody<'a> {
     email: &'a str,
     password: &'a str,
+    /// Advisory device-cohort hash (slice `S-D11`). Rides the session-creation body
+    /// only; **omitted entirely when absent** so "absent stays legal" is literal on
+    /// the wire (no `null` field). Never read by any authorization decision (S-C13).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cohort_hash: Option<&'a str>,
+}
+
+/// The registration body. The SDK mirrors the server's `RegisterRequest`
+/// (`capsule-api-auth`) and lets the same advisory cohort ride account creation.
+#[derive(Serialize)]
+struct RegisterRequestBody<'a> {
+    username: &'a str,
+    name: &'a str,
+    email: &'a str,
+    password: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cohort_hash: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -244,6 +265,7 @@ pub struct PersistedSession {
 
 /// Precomputed absolute endpoint URLs derived from the auth base URL.
 struct AuthEndpoints {
+    register: String,
     login: String,
     refresh: String,
     logout: String,
@@ -259,6 +281,7 @@ impl AuthEndpoints {
         })?;
         let trimmed = base_url.trim_end_matches('/');
         Ok(Self {
+            register: format!("{trimmed}/register"),
             login: format!("{trimmed}/login"),
             refresh: format!("{trimmed}/refresh"),
             logout: format!("{trimmed}/logout"),
@@ -276,6 +299,12 @@ pub struct AuthClient {
     base: Arc<AuthEndpoints>,
     clock: Arc<dyn Clock>,
     refresh_skew_secs: i64,
+    /// The advisory device-cohort hash to ride every session-creation request
+    /// (slice `S-D11`). `None` ⇒ nothing is sent — the server behaves identically
+    /// (S-C13's advisory-only invariant). Computed by the platform app from its
+    /// primary identifier via [`crate::cohort`] and set with
+    /// [`with_cohort_hash`](AuthClient::with_cohort_hash).
+    cohort_hash: Option<Arc<str>>,
 }
 
 impl AuthClient {
@@ -305,21 +334,84 @@ impl AuthClient {
             base: Arc::new(AuthEndpoints::from_base(base_url)?),
             clock,
             refresh_skew_secs,
+            cohort_hash: None,
         })
     }
 
+    /// Attach the advisory device-cohort hash that rides every subsequent
+    /// session-creation request (login/register) from this client (slice `S-D11`).
+    ///
+    /// The value is a lowercase-hex SHA-256 digest computed by the platform app from
+    /// its primary identifier and the account's `user_id`
+    /// ([`crate::cohort::compute_cohort_hash`]). It is a **grouping aid only** — the
+    /// server never reads it for any authorization decision (S-C13). Not setting it
+    /// (the default) is fully legal: nothing is sent and the server behaves
+    /// identically.
+    #[must_use]
+    pub fn with_cohort_hash(mut self, cohort_hash: String) -> Self {
+        self.cohort_hash = Some(Arc::from(cohort_hash));
+        self
+    }
+
+    /// The advisory cohort hash this client rides, if configured.
+    fn cohort(&self) -> Option<&str> {
+        self.cohort_hash.as_deref()
+    }
+
     /// Authenticate with email + password, returning an authenticated [`Session`].
+    ///
+    /// If a cohort hash is configured ([`with_cohort_hash`](AuthClient::with_cohort_hash))
+    /// it rides the request body; otherwise the field is omitted entirely.
     #[instrument(skip_all)]
     pub async fn login(&self, email: &str, password: &str) -> Result<Session, AuthError> {
-        tracing::info!("authenticating via password login");
+        tracing::info!(
+            cohort_emitted = self.cohort().is_some(),
+            "authenticating via password login"
+        );
         let response = self
             .http
             .post(&self.base.login)
-            .json(&LoginRequestBody { email, password })
+            .json(&LoginRequestBody {
+                email,
+                password,
+                cohort_hash: self.cohort(),
+            })
             .send()
             .await?;
         let tokens = read_tokens(Endpoint::Login, response).await?;
         tracing::info!("login succeeded; session established");
+        Ok(self.session_with_tokens(tokens))
+    }
+
+    /// Create a new account and return an authenticated [`Session`] (the server
+    /// issues tokens on registration). The configured cohort hash rides the body
+    /// under the same advisory contract as [`login`](AuthClient::login).
+    #[instrument(skip_all)]
+    pub async fn register(
+        &self,
+        username: &str,
+        name: &str,
+        email: &str,
+        password: &str,
+    ) -> Result<Session, AuthError> {
+        tracing::info!(
+            cohort_emitted = self.cohort().is_some(),
+            "registering a new account"
+        );
+        let response = self
+            .http
+            .post(&self.base.register)
+            .json(&RegisterRequestBody {
+                username,
+                name,
+                email,
+                password,
+                cohort_hash: self.cohort(),
+            })
+            .send()
+            .await?;
+        let tokens = read_tokens(Endpoint::Register, response).await?;
+        tracing::info!("registration succeeded; session established");
         Ok(self.session_with_tokens(tokens))
     }
 
@@ -657,6 +749,7 @@ mod tests {
     struct MockRequest {
         path: String,
         headers: HashMap<String, String>,
+        body: String,
     }
 
     struct MockResponse {
@@ -756,7 +849,13 @@ mod tests {
             body.extend_from_slice(&tmp[..n]);
         }
 
-        let response = handler(MockRequest { path, headers }).await;
+        let body_str = String::from_utf8_lossy(&body).to_string();
+        let response = handler(MockRequest {
+            path,
+            headers,
+            body: body_str,
+        })
+        .await;
         let mut payload = format!(
             "HTTP/1.1 {} STATUS\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n",
             response.status,
@@ -1200,5 +1299,88 @@ mod tests {
             AuthClient::new("not a url"),
             Err(AuthError::InvalidBaseUrl { .. })
         ));
+    }
+
+    // ── Cohort emission (S-D11) ───────────────────────────────────────────────
+
+    /// Capture the JSON body a session-creation endpoint received, so a test can
+    /// assert what rode the wire.
+    fn capturing_handler(captured: Arc<std::sync::Mutex<Option<serde_json::Value>>>) -> Handler {
+        Arc::new(move |req: MockRequest| {
+            let captured = captured.clone();
+            Box::pin(async move {
+                if matches!(req.path.as_str(), "/login" | "/register") {
+                    *captured.lock().unwrap() = serde_json::from_str(&req.body).ok();
+                }
+                MockResponse::json(200, token_json("access-1", "refresh-1", far_future()))
+            })
+        })
+    }
+
+    /// The configured cohort hash rides the login body verbatim and lands server-side.
+    #[tokio::test]
+    async fn cohort_hash_rides_login_body() {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let server = start_mock(capturing_handler(captured.clone())).await;
+
+        let client = AuthClient::new(&server.base_url)
+            .unwrap()
+            .with_cohort_hash("deadbeef".to_string());
+        client.login("a@example.com", "pw").await.unwrap();
+
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("login body captured");
+        assert_eq!(body["email"], "a@example.com");
+        assert_eq!(
+            body["cohort_hash"], "deadbeef",
+            "the advisory cohort must ride the session-creation body"
+        );
+    }
+
+    /// The same emission rides account registration (session creation on `/register`).
+    #[tokio::test]
+    async fn cohort_hash_rides_register_body() {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let server = start_mock(capturing_handler(captured.clone())).await;
+
+        let client = AuthClient::new(&server.base_url)
+            .unwrap()
+            .with_cohort_hash("cafef00d".to_string());
+        client
+            .register("johndoe", "John Doe", "john@example.com", "pw")
+            .await
+            .unwrap();
+
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("register body captured");
+        assert_eq!(body["username"], "johndoe");
+        assert_eq!(body["cohort_hash"], "cafef00d");
+    }
+
+    /// Absent stays legal: with no cohort configured, the field is **omitted entirely**
+    /// (no `null`), so the server behaves identically to a valid one (S-C13 invariant).
+    #[tokio::test]
+    async fn absent_cohort_is_omitted_from_the_body() {
+        let captured = Arc::new(std::sync::Mutex::new(None));
+        let server = start_mock(capturing_handler(captured.clone())).await;
+
+        let client = AuthClient::new(&server.base_url).unwrap();
+        client.login("a@example.com", "pw").await.unwrap();
+
+        let body = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("login body captured");
+        assert!(
+            body.get("cohort_hash").is_none(),
+            "an unset cohort must not appear on the wire, not even as null"
+        );
     }
 }

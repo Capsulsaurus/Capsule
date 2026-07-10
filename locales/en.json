@@ -374,5 +374,21 @@
     "cli.list.failed": {
         "message": "Failed to list the library: {reason}",
         "context": "CLI failure line for `capsule list`. {reason} is an error detail."
+    },
+    "device.cohort.label.previously_used": {
+        "message": "A device you've used before (last seen {last_seen})",
+        "context": "Devices screen: label for a device grouping (cohort) the account has enrolled before — e.g. after reinstalling the app. Assert-don't-litigate copy: it states recognition, it never asks the user to confirm or deny. {last_seen} is a formatted date the app supplies."
+    },
+    "device.cohort.label.this_device": {
+        "message": "This device",
+        "context": "Devices screen: label for the device grouping that contains the session currently signed in."
+    },
+    "device.cohort.label.new_device": {
+        "message": "A new device",
+        "context": "Devices screen: label for a device grouping (cohort) seen for the first time on this account."
+    },
+    "device.cohort.support.report": {
+        "message": "Report a problem with this device grouping",
+        "context": "Devices screen: the one-tap support action. Because a device grouping is an advisory hash the user cannot adjudicate, there is deliberately no 'this isn't my device' toggle; the dispute path is a support report carrying the cohort hash and session map."
     }
 }
