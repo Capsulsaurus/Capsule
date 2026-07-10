@@ -111,7 +111,7 @@ its slice.
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | ready   |
-| S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | ready   |
+| S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | ready   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
@@ -1130,6 +1130,12 @@ SDK; they never hand-roll network flows.
 - **Done when:** a single uniffi version across the workspace; both binding sets
   regenerate non-empty. **Tier:** Smoke (binding generation + harness tests).
   **Blocks:** S-F2.
+- **Landed:** layered strategy — two crates, one uniffi (0.31.1, `cargo tree -i`
+  single node); catalog surface bumped 0.29→0.31 with a symbol-level Swift diff
+  proving zero source-breaking changes for `CatalogFFIBridge` (additive
+  `LocalizedError` only; internal pointer→handle plumbing invisible to consumers);
+  both binding sets regenerate non-empty; `swiftc -parse` clean. Merging was
+  rejected — it would collapse namespaces and force consumer edits.
 
 ### S-F2 — Secure Enclave / StrongBox composition
 
