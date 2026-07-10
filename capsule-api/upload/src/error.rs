@@ -31,6 +31,10 @@ pub(crate) enum UploadError {
     FinalizeInProgress,
     #[error("Invalid offset: expected {expected}, got {actual}")]
     InvalidOffset { expected: u64, actual: u64 },
+    #[error("Missing or invalid X-Capsule-Offset header")]
+    MissingOffset,
+    #[error("Same offset re-sent with a different chunk hash")]
+    ChunkConflict,
     #[error("Invalid upload: {0}")]
     InvalidUpload(String),
     #[error("Upload exceeds its declared size")]
@@ -57,6 +61,48 @@ pub(crate) enum UploadError {
     ParseError(#[from] std::string::ParseError),
     #[error("Upload file length {on_disk} diverged from expected offset {expected}")]
     StorageInconsistent { expected: u64, on_disk: u64 },
+
+    // ── Session-creation envelope invariants (upload-protocol Error Taxonomy). ──
+    /// Invariant 1: `X-Capsule-Protocol` / `protocol_version` outside the accepted window.
+    #[error("Protocol version is not supported; accepted range is [{min}, {max}]")]
+    ProtocolUnsupported { min: String, max: String },
+    /// Invariant 2: `crypto_suite_id` not in the primitives inventory.
+    #[error("Unknown crypto suite")]
+    UnknownCryptoSuite,
+    /// Invariant 3: declared `hash` is not lowercase hex of the suite's digest length.
+    #[error("Declared hash is not valid for the crypto suite")]
+    InvalidHash,
+    /// Invariant 4: declared `size` is zero (or otherwise out of `(0, max_file_size]`).
+    #[error("Declared size must be greater than zero")]
+    InvalidSize,
+    /// Invariant 5: `content_type` outside the closed enum for this protocol version.
+    #[error("Unsupported content type")]
+    UnsupportedContentType,
+    /// Invariant 6: album missing / no write capability / protocol drift.
+    #[error("Album access denied")]
+    AlbumAccessDenied,
+    /// Invariant 7: `created_by_device` not authorized in the uploader's directory.
+    #[error("Creating device is not authorized")]
+    DeviceNotAuthorized,
+    /// Invariant 8: envelope `timestamp` beyond the gross-drift sanity window.
+    #[error("Envelope timestamp is outside the accepted range")]
+    TimestampOutOfRange,
+    /// Invariant 15 family: a top-level field contradicts the `manifest_envelope`.
+    #[error("Top-level fields contradict the manifest envelope: {0}")]
+    EnvelopeMismatch(&'static str),
+    /// Invariant 15 (finalization): the envelope failed re-validation.
+    #[error("Manifest envelope re-validation failed: {0}")]
+    EnvelopeRejected(String),
+    /// On-behalf upload without a verified relationship.
+    #[error("Uploading on behalf of this owner is not permitted")]
+    OwnerNotPermitted,
+    /// The declared size would exceed the uploader's storage quota.
+    #[error("Quota would be exceeded by the declared size")]
+    QuotaExceeded,
+    /// The caller is neither the uploader nor the owner of the session.
+    #[error("Forbidden")]
+    Forbidden,
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -89,6 +135,25 @@ impl UploadError {
                 Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
             }
             UploadError::InvalidUpload(_) => Some(error_codes::UPLOAD_MALFORMED_REQUEST),
+            UploadError::MissingOffset => Some(error_codes::UPLOAD_MISSING_OFFSET),
+            UploadError::ChunkConflict => Some(error_codes::UPLOAD_CHUNK_CONFLICT),
+            UploadError::ProtocolUnsupported { .. } => {
+                Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            }
+            UploadError::UnknownCryptoSuite => Some(error_codes::UPLOAD_UNKNOWN_CRYPTO_SUITE),
+            UploadError::InvalidHash => Some(error_codes::UPLOAD_INVALID_HASH),
+            UploadError::InvalidSize => Some(error_codes::UPLOAD_INVALID_SIZE),
+            UploadError::UnsupportedContentType => {
+                Some(error_codes::UPLOAD_UNSUPPORTED_CONTENT_TYPE)
+            }
+            UploadError::AlbumAccessDenied => Some(error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
+            UploadError::DeviceNotAuthorized => Some(error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED),
+            UploadError::TimestampOutOfRange => Some(error_codes::UPLOAD_TIMESTAMP_OUT_OF_RANGE),
+            UploadError::EnvelopeMismatch(_) => Some(error_codes::UPLOAD_ENVELOPE_MISMATCH),
+            UploadError::EnvelopeRejected(_) => Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
+            UploadError::OwnerNotPermitted => Some(error_codes::UPLOAD_OWNER_NOT_PERMITTED),
+            UploadError::QuotaExceeded => Some(error_codes::QUOTA_EXCEEDED),
+            UploadError::Forbidden => Some(error_codes::UPLOAD_FORBIDDEN),
             _ => None,
         }
     }
@@ -100,15 +165,30 @@ impl UploadError {
             UploadError::SessionNotActive
             | UploadError::FinalizeInProgress
             | UploadError::DuplicateBlob { .. }
+            | UploadError::ChunkConflict
             | UploadError::InvalidOffset { .. } => StatusCode::CONFLICT,
             UploadError::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            UploadError::ProtocolUnsupported { .. } => StatusCode::UPGRADE_REQUIRED,
+            UploadError::AlbumAccessDenied
+            | UploadError::DeviceNotAuthorized
+            | UploadError::OwnerNotPermitted
+            | UploadError::QuotaExceeded
+            | UploadError::Forbidden => StatusCode::FORBIDDEN,
             UploadError::InvalidUpload(_)
             | UploadError::SizeExceeded
             | UploadError::EmptyChunk
             | UploadError::ChunkNotAligned
             | UploadError::MissingChecksum
+            | UploadError::MissingOffset
             | UploadError::ChunkChecksumMismatch { .. }
             | UploadError::ContentHashMismatch { .. }
+            | UploadError::UnknownCryptoSuite
+            | UploadError::InvalidHash
+            | UploadError::InvalidSize
+            | UploadError::UnsupportedContentType
+            | UploadError::TimestampOutOfRange
+            | UploadError::EnvelopeMismatch(_)
+            | UploadError::EnvelopeRejected(_)
             | UploadError::ParseError(_) => StatusCode::BAD_REQUEST,
             UploadError::IoError(_)
             | UploadError::DbError(_)
@@ -140,6 +220,15 @@ impl Writer for UploadError {
         // can re-align without a extra HEAD round-trip.
         if let UploadError::InvalidOffset { expected, .. } = &self {
             res.add_header("X-Capsule-Offset", expected.to_string(), true)
+                .ok();
+        }
+
+        // An out-of-window protocol rejection advertises the accepted range so the
+        // client can surface an actionable "update to keep uploading" message.
+        if let UploadError::ProtocolUnsupported { min, max } = &self {
+            res.add_header("X-Capsule-Protocol-Min", min.clone(), true)
+                .ok();
+            res.add_header("X-Capsule-Protocol-Max", max.clone(), true)
                 .ok();
         }
 

@@ -4,6 +4,31 @@ use environment::ServerConfig;
 use environment::wrapper::SecretKeyWrapper;
 use jsonwebtoken::DecodingKey;
 
+/// The closed `content_type` enum for the current protocol version (invariant 5).
+/// Server-tunable, but frozen for a given `protocol_version`. Metadata/provenance/
+/// backup blobs are opaque CBOR/ciphertext and declare `application/octet-stream`.
+pub(crate) const DEFAULT_CONTENT_TYPES: &[&str] = &[
+    "image/jpeg",
+    "image/png",
+    "image/heic",
+    "image/heif",
+    "image/webp",
+    "image/avif",
+    "image/gif",
+    "image/tiff",
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+    "application/octet-stream",
+];
+
+/// Lowest protocol date this server accepts (`X-Capsule-Protocol-Min`).
+pub(crate) const DEFAULT_PROTOCOL_MIN: &str = "2026-01-01";
+/// Highest protocol date this server accepts (`X-Capsule-Protocol-Max`).
+pub(crate) const DEFAULT_PROTOCOL_MAX: &str = "2026-12-31";
+/// Gross-drift sanity bound for the envelope timestamp, in days (invariant 8).
+pub(crate) const DEFAULT_DRIFT_DAYS: i64 = 30;
+
 #[derive(Clone)]
 pub struct UploadServerConfig {
     pub host: String,
@@ -22,6 +47,15 @@ pub struct UploadServerConfig {
     pub jwt_eddsa_decoding_key: SecretKeyWrapper<DecodingKey>,
     /// Allowed CORS origins. Use `["*"]` to allow all origins (development only).
     pub allowed_origins: Vec<String>,
+
+    /// Lowest accepted protocol date (`YYYY-MM-DD`); the protocol handshake window.
+    pub protocol_min: String,
+    /// Highest accepted protocol date (`YYYY-MM-DD`).
+    pub protocol_max: String,
+    /// The closed `content_type` allow-list (invariant 5).
+    pub allowed_content_types: Vec<String>,
+    /// Gross-drift sanity bound in days for the envelope timestamp (invariant 8).
+    pub timestamp_drift_days: i64,
 }
 
 impl From<&ServerConfig> for UploadServerConfig {
@@ -36,6 +70,13 @@ impl From<&ServerConfig> for UploadServerConfig {
             valkey_url: config.valkey_url.clone(),
             jwt_eddsa_decoding_key: config.jwt_eddsa_decoding_key.clone(),
             allowed_origins: config.allowed_origins.clone(),
+            protocol_min: DEFAULT_PROTOCOL_MIN.to_string(),
+            protocol_max: DEFAULT_PROTOCOL_MAX.to_string(),
+            allowed_content_types: DEFAULT_CONTENT_TYPES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            timestamp_drift_days: DEFAULT_DRIFT_DAYS,
         }
     }
 }

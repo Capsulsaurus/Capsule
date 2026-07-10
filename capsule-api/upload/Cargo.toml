@@ -39,3 +39,11 @@ nanoid = { workspace = true }
 indexmap = { workspace = true }
 bytes = { workspace = true }
 jsonwebtoken = { workspace = true }
+
+[dev-dependencies]
+migration = { path = "../migration", package = "capsule-api-migration" }
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sea-orm-migration = { workspace = true }
+tracing-subscriber = { workspace = true }
+salvo = { workspace = true, features = ["test"] }

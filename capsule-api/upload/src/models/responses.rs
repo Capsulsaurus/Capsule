@@ -39,6 +39,12 @@ pub(crate) struct ListSessionsResponse {
 #[allow(dead_code)]
 pub(crate) enum CreateUploadResponses {
     Success(CreateUploadResponse),
+    /// The active session already open for this idempotency tuple (`200`, carries the
+    /// authoritative offset so the client resumes without a `HEAD`).
+    Existing {
+        response: CreateUploadResponse,
+        offset: u64,
+    },
     Unauthorized(String),
     Forbidden,
     BadRequest(String),
@@ -54,6 +60,20 @@ impl Writer for CreateUploadResponses {
             Self::Success(response) => {
                 res.status_code(StatusCode::CREATED);
                 res.add_header("Location", &response.upload_url, true).ok();
+                res.add_header(
+                    "X-Capsule-Suggested-Chunk-Size",
+                    response.suggested_chunk_size.to_string(),
+                    true,
+                )
+                .ok();
+                res.render(Json(response));
+            }
+            Self::Existing { response, offset } => {
+                // Idempotent create: the active session, not a second one (`200`).
+                res.status_code(StatusCode::OK);
+                res.add_header("Location", &response.upload_url, true).ok();
+                res.add_header("X-Capsule-Offset", offset.to_string(), true)
+                    .ok();
                 res.add_header(
                     "X-Capsule-Suggested-Chunk-Size",
                     response.suggested_chunk_size.to_string(),

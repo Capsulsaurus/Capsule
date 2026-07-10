@@ -17,6 +17,10 @@ mod routes;
 mod service;
 mod session;
 mod state;
+mod visibility;
+
+#[cfg(test)]
+mod tests;
 
 pub async fn get_router<C: Into<UploadServerConfig>>(
     conn: DatabaseConnection,
@@ -40,6 +44,23 @@ pub async fn get_router<C: Into<UploadServerConfig>>(
 
     // Initialize Storage Service
     let storage = service::storage::StorageService::new(config.clone());
+
+    // Startup scrub: reconcile disk against the session store before serving traffic
+    // (orphan upload files deleted; length-diverged sessions failed). Recoverable by
+    // construction — no permanently orphaned upload files or pending rows survive a boot.
+    let discard = service::discard::DiscardService::new(
+        session_manager.clone(),
+        storage.clone(),
+        conn.clone(),
+    );
+    match discard.scrub().await {
+        Ok(report) => info!(
+            orphan_files_deleted = report.orphan_files_deleted,
+            length_diverged_failed = report.length_diverged_failed,
+            "upload startup scrub complete"
+        ),
+        Err(e) => tracing::warn!("upload startup scrub failed: {}", e),
+    }
 
     // Initialize Upload Service
     let upload_service = service::upload::UploadService::new(
@@ -68,7 +89,11 @@ pub async fn get_router<C: Into<UploadServerConfig>>(
         .allow_headers("*")
         .into_handler();
 
+    let protocol_min = config.protocol_min.clone();
+    let protocol_max = config.protocol_max.clone();
     let state = AppState::new(conn, config, upload_service);
 
-    Ok(Router::new().hoop(cors).push(routes::get_router(state)))
+    Ok(Router::new()
+        .hoop(cors)
+        .push(routes::get_router(state, protocol_min, protocol_max)))
 }

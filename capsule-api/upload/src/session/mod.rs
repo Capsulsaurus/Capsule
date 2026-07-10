@@ -3,13 +3,16 @@ use std::time::Duration;
 
 use bb8_redis::RedisConnectionManager;
 use bb8_redis::bb8::Pool;
-use bb8_redis::redis::AsyncCommands;
+use bb8_redis::redis::{AsyncCommands, Script};
 use jiff::Timestamp;
 
 use crate::error::UploadError;
 use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
 
-// TODO: Validate this code
+/// The global progress index: a sorted set of active session ids scored by the epoch
+/// second of their last accepted chunk. Pressure eviction reads it least-recently-
+/// progressed first; the ≥1-hour survival floor is a score filter over it.
+const PROGRESS_INDEX_KEY: &str = "upload:progress_index";
 
 #[derive(Clone)]
 pub(crate) struct UploadSessionManager {
@@ -31,8 +34,16 @@ impl UploadSessionManager {
         format!("upload:session:{upload_id}")
     }
 
-    fn owner_index_key(&self, owner_id: &str) -> String {
-        format!("upload:owner_sessions:{owner_id}")
+    /// The uploader-scoped session index — keyed by `upload_user_id` (the resuming party),
+    /// so `GET /upload/sessions` lists exactly the sessions that uploader can resume.
+    fn uploader_index_key(&self, upload_user_id: &str) -> String {
+        format!("upload:uploader_sessions:{upload_user_id}")
+    }
+
+    /// The per-session chunk-replay store: `(offset -> "{chunk_hash}:{next_offset}")`, the
+    /// durable half of the `(upload_id, offset, chunk_hash)` idempotency tuple.
+    fn chunks_key(&self, upload_id: &str) -> String {
+        format!("upload:chunks:{upload_id}")
     }
 
     /// Create a new upload session in Redis using HSET.
@@ -107,13 +118,22 @@ impl UploadSessionManager {
             )
             .await?;
 
-        // Add to owner index (SADD for session listing by owner)
-        let owner_index_key = self.owner_index_key(&session.owner_id);
-        let _: () = conn.sadd(&owner_index_key, &session.id).await?;
+        // Add to the uploader-scoped index for session listing.
+        let uploader_index_key = self.uploader_index_key(&session.upload_user_id);
+        let _: () = conn.sadd(&uploader_index_key, &session.id).await?;
         let _: () = conn
             .expire(
-                &owner_index_key,
+                &uploader_index_key,
                 i64::try_from(self.expiration.as_secs()).unwrap_or(i64::MAX) * 2, // Keep index longer
+            )
+            .await?;
+
+        // Seed the progress index at the creation time (no chunk yet).
+        let _: () = conn
+            .zadd(
+                PROGRESS_INDEX_KEY,
+                &session.id,
+                session.last_progress_at.as_second(),
             )
             .await?;
 
@@ -135,13 +155,29 @@ impl UploadSessionManager {
         Ok(new_value as u64)
     }
 
-    /// Record chunk progress: refreshes `last_progress_at`, the anchor of the
-    /// ≥1-hour survival floor (the pressure sweeper itself is S-C1).
+    /// Set `received_bytes` to an absolute value. Used only by the startup scrub to
+    /// reconcile the session counter up to the on-disk file length (the file is the truth)
+    /// after a crash between the durable append and the counter increment.
+    pub(crate) async fn set_received_bytes(
+        &self,
+        upload_id: &str,
+        value: u64,
+    ) -> Result<(), UploadError> {
+        let mut conn = self.pool.get().await?;
+        let key = self.key(upload_id);
+        let _: () = conn.hset(&key, "received_bytes", value.to_string()).await?;
+        Ok(())
+    }
+
+    /// Record chunk progress: refreshes `last_progress_at` (the anchor of the ≥1-hour
+    /// survival floor) on the session hash **and** its score in the progress index.
     pub(crate) async fn touch_progress(&self, upload_id: &str) -> Result<(), UploadError> {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
+        let now = Timestamp::now();
+        let _: () = conn.hset(&key, "last_progress_at", now.to_string()).await?;
         let _: () = conn
-            .hset(&key, "last_progress_at", Timestamp::now().to_string())
+            .zadd(PROGRESS_INDEX_KEY, upload_id, now.as_second())
             .await?;
         Ok(())
     }
@@ -158,7 +194,85 @@ impl UploadSessionManager {
         let status_json = serde_json::to_string(&status)?;
         let _: () = conn.hset(&key, "status", status_json).await?;
 
+        // A terminal session leaves the progress index — its bytes are already gone, so it
+        // is exempt from pressure eviction (the receipt is retained until the 24-hour cap).
+        if status.is_inactive() {
+            let _: () = conn.zrem(PROGRESS_INDEX_KEY, upload_id).await?;
+        }
+
         Ok(())
+    }
+
+    /// Atomic compare-and-set into `WaitingForProcessing` (the finalization CAS). Only a
+    /// session currently `Pending` or `Uploading` transitions; two racing finalizers cannot
+    /// both win. Returns `true` for the winner, `false` for a loser (which returns
+    /// `finalize_in_progress`). Removes the winner from the progress index — a finalizing
+    /// session is never evicted out from under the finalizer.
+    pub(crate) async fn begin_finalize_cas(&self, upload_id: &str) -> Result<bool, UploadError> {
+        let mut conn = self.pool.get().await?;
+        let key = self.key(upload_id);
+        let script = Script::new(
+            r#"
+            local cur = redis.call('HGET', KEYS[1], 'status')
+            if cur == '"Pending"' or cur == '"Uploading"' then
+                redis.call('HSET', KEYS[1], 'status', '"WaitingForProcessing"')
+                redis.call('ZREM', KEYS[2], ARGV[1])
+                return 1
+            else
+                return 0
+            end
+            "#,
+        );
+        let won: i64 = script
+            .key(&key)
+            .key(PROGRESS_INDEX_KEY)
+            .arg(upload_id)
+            .invoke_async(&mut *conn)
+            .await?;
+        Ok(won == 1)
+    }
+
+    /// Record an accepted chunk in the replay store, keyed by its offset. TTL-bounded with
+    /// the session. `next_offset` is the received-byte count after this chunk.
+    pub(crate) async fn record_chunk(
+        &self,
+        upload_id: &str,
+        offset: u64,
+        chunk_hash: &str,
+        next_offset: u64,
+    ) -> Result<(), UploadError> {
+        let mut conn = self.pool.get().await?;
+        let key = self.chunks_key(upload_id);
+        let _: () = conn
+            .hset(
+                &key,
+                offset.to_string(),
+                format!("{chunk_hash}:{next_offset}"),
+            )
+            .await?;
+        let _: () = conn
+            .expire(
+                &key,
+                i64::try_from(self.expiration.as_secs()).unwrap_or(i64::MAX),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Look up a recorded chunk at `offset`, returning `(chunk_hash, next_offset)` if this
+    /// offset was previously accepted.
+    pub(crate) async fn get_chunk(
+        &self,
+        upload_id: &str,
+        offset: u64,
+    ) -> Result<Option<(String, u64)>, UploadError> {
+        let mut conn = self.pool.get().await?;
+        let key = self.chunks_key(upload_id);
+        let raw: Option<String> = conn.hget(&key, offset.to_string()).await?;
+        Ok(raw.and_then(|v| {
+            let (hash, next) = v.rsplit_once(':')?;
+            Some((hash.to_string(), next.parse().ok()?))
+        }))
     }
 
     /// Get a session by ID using HGETALL.
@@ -177,13 +291,40 @@ impl UploadSessionManager {
         Ok(Some(session))
     }
 
-    /// List sessions by owner ID. Returns active session IDs.
-    pub(crate) async fn list_by_owner(&self, owner_id: &str) -> Result<Vec<String>, UploadError> {
+    /// List sessions by the uploader (`upload_user_id`). Returns session IDs.
+    pub(crate) async fn list_by_uploader(
+        &self,
+        upload_user_id: &str,
+    ) -> Result<Vec<String>, UploadError> {
         let mut conn = self.pool.get().await?;
-        let owner_index_key = self.owner_index_key(owner_id);
+        let index_key = self.uploader_index_key(upload_user_id);
 
-        let session_ids: Vec<String> = conn.smembers(&owner_index_key).await?;
+        let session_ids: Vec<String> = conn.smembers(&index_key).await?;
         Ok(session_ids)
+    }
+
+    /// All session ids currently in the progress index (active, non-terminal sessions).
+    /// Used by the pressure sweeper and the startup scrub.
+    pub(crate) async fn list_progress_ids(&self) -> Result<Vec<String>, UploadError> {
+        let mut conn = self.pool.get().await?;
+        let ids: Vec<String> = conn.zrange(PROGRESS_INDEX_KEY, 0, -1).await?;
+        Ok(ids)
+    }
+
+    /// Candidates eligible for pressure eviction: active sessions whose last progress is
+    /// older than `floor_epoch` (i.e. beyond the ≥1-hour survival floor), least-recently-
+    /// progressed first. Returns `(id, last_progress_epoch)` pairs in ascending score order.
+    #[allow(dead_code)]
+    pub(crate) async fn evictable_candidates(
+        &self,
+        floor_epoch: i64,
+    ) -> Result<Vec<(String, i64)>, UploadError> {
+        let mut conn = self.pool.get().await?;
+        // Scores strictly below the floor: progress older than the survival window.
+        let raw: Vec<(String, i64)> = conn
+            .zrangebyscore_withscores(PROGRESS_INDEX_KEY, "-inf", format!("({floor_epoch}"))
+            .await?;
+        Ok(raw)
     }
 
     /// Delete a session from Redis if it exists.
@@ -192,15 +333,17 @@ impl UploadSessionManager {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
 
-        // Get owner_id before deleting to clean up the index
-        let owner_id: Option<String> = conn.hget(&key, "owner_id").await.ok();
+        // Get the uploader before deleting to clean up the index.
+        let upload_user_id: Option<String> = conn.hget(&key, "upload_user_id").await.ok();
 
         let _: () = conn.del(&key).await?;
+        let _: () = conn.del(self.chunks_key(upload_id)).await?;
+        let _: () = conn.zrem(PROGRESS_INDEX_KEY, upload_id).await?;
 
-        // Remove from owner index if we found the owner
-        if let Some(owner_id) = owner_id {
-            let owner_index_key = self.owner_index_key(&owner_id);
-            let _: () = conn.srem(&owner_index_key, upload_id).await?;
+        // Remove from the uploader index if we found the uploader.
+        if let Some(uid) = upload_user_id {
+            let index_key = self.uploader_index_key(&uid);
+            let _: () = conn.srem(&index_key, upload_id).await?;
         }
 
         Ok(())

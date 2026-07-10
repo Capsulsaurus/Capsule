@@ -76,7 +76,7 @@ its slice.
 | S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
 | S-B9  | Tethered camera import (PTP/IP)                      | media/import    | S-B2, ptpip-rs   | L    | post-v1 |
-| S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | ready   |
+| S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | done    |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | ready   |
 | S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
@@ -453,6 +453,13 @@ pass until the gate lifts.
 - **Tier:** Unit + Smoke + E2E case 2/11. **Blocks:** S-C2, S-C5, S-C11, S-D1, S-B4.
   (The custody-receipt insert that joins this finalization transaction is owned by
   S-C15 — no scope change here.)
+- **Landed:** all deliverables; invariants 1–15 + Strictness Table each tested against
+  testcontainer Postgres + Valkey. Schema-driven partials: invariant 7's device half
+  uses the account-creation time as the `added_at` floor until S-C9's directory table
+  lands; invariant 6's album protocol-pin sub-check is a no-op (no pin column yet) —
+  album existence + write capability are enforced and re-validated at finalization.
+  `original_held` ships as a pure derivation; the feed field carrying it is S-C2.
+  Pressure eviction is operator/sweeper-invoked (no live cache-bytes counter yet).
 
 ### S-C2 — Key-free sync feed
 
