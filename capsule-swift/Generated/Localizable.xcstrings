@@ -131,6 +131,56 @@
         }
       }
     },
+    "error.enrollment.channel_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device-add session has ended. Start again."
+          }
+        }
+      }
+    },
+    "error.enrollment.code_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That device code didn't work. Generate a new one and try again."
+          }
+        }
+      }
+    },
+    "error.enrollment.local_auth_required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm it's you on this device to add another device."
+          }
+        }
+      }
+    },
+    "error.enrollment.rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many device-add attempts. Please wait and try again."
+          }
+        }
+      }
+    },
+    "error.enrollment.relay_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The device-add request could not be read."
+          }
+        }
+      }
+    },
     "error.escrow.malformed": {
       "localizations": {
         "en": {

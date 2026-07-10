@@ -39,7 +39,15 @@ pub(super) fn get_router(state: AppState) -> Router {
                 .push(
                     Router::with_path("enroll")
                         .post(devices::issue_enrollment_code)
-                        .push(Router::with_path("redeem").post(devices::redeem_enrollment_code)),
+                        .push(Router::with_path("redeem").post(devices::redeem_enrollment_code))
+                        // Opaque relay channel for the ceremony messages: POST relays a
+                        // payload into a mailbox, GET drains one. Authorized by possession of
+                        // the opaque channel handle (device B is unauthenticated).
+                        .push(
+                            Router::with_path("channel/{channel_id}")
+                                .post(devices::relay_send)
+                                .get(devices::relay_recv),
+                        ),
                 )
                 // Signed device-directory publish/fetch (slice S-C9); publish is the
                 // caller's own directory, fetch is by target user id.

@@ -82,7 +82,7 @@ its slice.
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | done    |
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | done    |
 | S-C6  | Quota service                                        | server          | —                | M    | done    |
-| S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | ready   |
+| S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | done    |
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
@@ -600,6 +600,13 @@ pass until the gate lifts.
 - **Depends on:** S-C9. **Blocks:** S-E3 (peering assumes enrolled same-user devices).
 - **Done when:** the enrollment doc's code-lifecycle Validation bullets (expiry,
   single-use, local-auth gate) pass. **Tier:** Unit + Smoke; E2E case 12 needs S-F2.
+- **Landed:** issue/redeem (256-bit code + 10-digit text fallback, both single-use,
+  deleted on redeem/expiry; issuance rate-limited); relay = per-channel directional
+  mailboxes over Valkey, opaque payloads, possession-authorized (enrollee is
+  unauthenticated); cross-device add republishes the signed directory through
+  S-C9's monotonic publish (no fork). Local-auth gate enforced as the
+  server-visible proxy: access-token freshness ≤ 2 min. Redemption brute-force
+  folds into the indistinguishable `code_refused`.
 
 ### S-C8 — Moderation hooks
 

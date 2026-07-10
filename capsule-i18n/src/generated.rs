@@ -49,6 +49,21 @@ pub mod error_codes {
     /// `error.drop.rate_limited`
     pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
 
+    /// `error.enrollment.channel_not_found`
+    pub const ENROLLMENT_CHANNEL_NOT_FOUND: &str = "error.enrollment.channel_not_found";
+
+    /// `error.enrollment.code_refused`
+    pub const ENROLLMENT_CODE_REFUSED: &str = "error.enrollment.code_refused";
+
+    /// `error.enrollment.local_auth_required`
+    pub const ENROLLMENT_LOCAL_AUTH_REQUIRED: &str = "error.enrollment.local_auth_required";
+
+    /// `error.enrollment.rate_limited`
+    pub const ENROLLMENT_RATE_LIMITED: &str = "error.enrollment.rate_limited";
+
+    /// `error.enrollment.relay_malformed`
+    pub const ENROLLMENT_RELAY_MALFORMED: &str = "error.enrollment.relay_malformed";
+
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 

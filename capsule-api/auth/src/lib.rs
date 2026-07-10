@@ -8,6 +8,8 @@ use state::AppState;
 pub mod claims;
 pub mod config;
 pub mod constants;
+#[cfg(feature = "server")]
+pub mod enrollment;
 pub mod errors;
 #[cfg(feature = "server")]
 pub mod models;

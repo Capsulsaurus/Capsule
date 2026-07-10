@@ -87,6 +87,26 @@
         "message": "The recovery backup could not be saved.",
         "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
     },
+    "error.enrollment.local_auth_required": {
+        "message": "Confirm it's you on this device to add another device.",
+        "context": "HTTP 403 on POST /devices/enroll (slice S-C7): the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."
+    },
+    "error.enrollment.rate_limited": {
+        "message": "Too many device-add attempts. Please wait and try again.",
+        "context": "HTTP 429 on POST /devices/enroll (slice S-C7): the caller exceeded the per-user enrollment-code issuance budget for the current window."
+    },
+    "error.enrollment.code_refused": {
+        "message": "That device code didn't work. Generate a new one and try again.",
+        "context": "HTTP 404 on POST /devices/enroll/redeem (slice S-C7): the submitted enrollment code is unknown, already redeemed, expired, or rate-limited. Every reason is surfaced identically (indistinguishable by design) so redemption is not an oracle."
+    },
+    "error.enrollment.channel_not_found": {
+        "message": "This device-add session has ended. Start again.",
+        "context": "HTTP 404 on the enrollment relay channel (slice S-C7): the channel handle is unknown or expired, so the server has nothing to relay between the two devices."
+    },
+    "error.enrollment.relay_malformed": {
+        "message": "The device-add request could not be read.",
+        "context": "HTTP 400 on the enrollment relay channel (slice S-C7): the request named an unknown direction or carried a missing/oversized opaque payload. The server never inspects the payload contents; this is a structural rejection only."
+    },
     "error.storage.invalid_request": {
         "message": "The storage-verification request was malformed.",
         "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."
