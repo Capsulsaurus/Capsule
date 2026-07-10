@@ -67,6 +67,12 @@ pub mod info {
     pub const ASSET_KEYWRAP_V1: &[u8] = b"asset-keywrap/v1";
     /// Default-album *identifier* derived from the account master key (an ID, not a key).
     pub const DEFAULT_ALBUM_ID_V1: &[u8] = b"default-album-id/v1";
+    /// Share-link scope-key wrap: `HKDF(ikm=link_secret, salt=opaque_id,
+    /// info=SHARE_SCOPE_WRAP_V1)` derives the key that encapsulates a share link's scope
+    /// decryption material around the random link secret (SSoT: [Share Links]).
+    ///
+    /// [Share Links]: https://docs/design/share-links/
+    pub const SHARE_SCOPE_WRAP_V1: &[u8] = b"share-scope-wrap/v1";
 }
 
 /// Device hardware tier, selecting Argon2id cost parameters at *wrap* time. The chosen

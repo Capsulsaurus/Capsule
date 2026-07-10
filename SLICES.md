@@ -64,7 +64,7 @@ its slice.
 | S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | ready   |
 | S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | ready   |
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
-| S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | ready   |
+| S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | ready   |
 | S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | ready |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | ready   |
@@ -277,6 +277,9 @@ pass until the gate lifts.
 - **Done when:** the module's `#[ignore]`d tests flip (opaque-id entropy, client-side
   passphrase unwrap) plus the share-links doc's unit Validation bullets.
 - **Tier:** Unit. **Blocks:** S-C4.
+- **Landed:** issuer + encapsulation + client-side open + revocation records. The
+  doc's two serve-path unit bullets (privacy-strip on serve, home-server-only) have
+  no issuer surface and land with S-C4's six-bullet contract.
 
 ### S-A6 — Drop crypto
 
