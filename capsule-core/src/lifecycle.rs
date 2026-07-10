@@ -35,7 +35,7 @@ use crate::backup::{self, BackupArtifact, BackupAsset, BackupInput, RestoreMode}
 use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::ReferenceAuthority;
-use crate::crypto::encryption::{seal_blob, stream};
+use crate::crypto::encryption::{blob_ciphertext_hash, seal_blob, stream};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{
@@ -45,7 +45,9 @@ use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION}
 use crate::crypto::provenance::action::Action;
 use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain, ProvenanceRecord};
-use crate::crypto::verify_asset::{VerifyOutcome, verify_asset};
+use crate::crypto::verify_asset::{
+    MetadataBinding, VerifyOutcome, verify_asset, verify_metadata_binding,
+};
 use crate::db::{AssetRow, CachedRepresentationRow, DatabaseDriver};
 use crate::library::Library;
 use crate::metadata::crdt::{AddId, Counter, Lww};
@@ -71,6 +73,10 @@ pub enum LifecycleError {
     /// An asset failed its own `verify_asset` self-check (a bug — should never happen).
     #[error("verify_asset self-check failed: {0:?}")]
     SelfVerify(VerifyOutcome),
+    /// A sealed metadata blob failed its own metadata↔manifest binding self-check (a bug —
+    /// the sidecar the workspace just wrote does not round-trip to the committed hash).
+    #[error("metadata binding self-check failed: {0:?}")]
+    MetadataUnbound(MetadataBinding),
     /// Cryptographic error.
     #[error(transparent)]
     Crypto(#[from] CryptoError),
@@ -117,6 +123,14 @@ pub struct AssetState {
     pub chain: ProvenanceChain,
     /// The signed sidecar.
     pub sidecar: SidecarV1,
+    /// The **exact** sealed metadata-blob wire bytes the current metadata-bearing manifest
+    /// commits to via `metadata_blob_hash`. Because [`seal_blob`] draws a fresh nonce per call,
+    /// the blob cannot be regenerated deterministically from the plaintext sidecar (unlike the
+    /// asset ciphertext, which is re-derived from the recorded `nonce_prefix`), so the bytes are
+    /// retained to keep the content address stable across export. Re-sealed on every
+    /// metadata-bearing write ([`Action::binds_metadata_blob`]); untouched by `delete` /
+    /// `trash-restore`, which mint no new blob.
+    pub metadata_blob: Vec<u8>,
 }
 
 /// An offline Capsule workspace over a client library directory.
@@ -416,7 +430,9 @@ impl Workspace {
     }
 
     /// Build a signed lifecycle manifest for `asset`, sharing the create manifest's content
-    /// fields. Used for metadata-update / delete / trash-restore.
+    /// fields. Used for metadata-update / delete / trash-restore. `metadata_blob_hash` is set
+    /// explicitly per the presence-by-action rule (`Some` for a metadata-update that seals a
+    /// fresh blob, `None` for delete / trash-restore) rather than inherited from `base`.
     fn sign_lifecycle(
         &self,
         album: &AlbumKeys,
@@ -424,11 +440,13 @@ impl Workspace {
         action: Action,
         prior: Option<Hash32>,
         retention_until: Option<String>,
+        metadata_blob_hash: Option<Hash32>,
     ) -> std::result::Result<AssetManifest, CryptoError> {
         let core = ManifestCore {
             action,
             prior_provenance_hash: prior,
             retention_until,
+            metadata_blob_hash,
             timestamp: now_rfc3339(),
             ..base.clone()
         };
@@ -484,7 +502,11 @@ impl Workspace {
     }
 
     /// Import a file into `album_id`: encrypt, build the signed create manifest + provenance,
-    /// write the signed sidecar, and self-verify through `verify_asset`. Returns the asset id.
+    /// write the signed sidecar, and self-verify through `verify_asset` **and** the
+    /// metadata↔manifest binding. Follows the [sealing order] so the manifest commits to the
+    /// content address of the sidecar it seals, without a cycle. Returns the asset id.
+    ///
+    /// [sealing order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
         let plaintext = fs::read(src)
             .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
@@ -495,43 +517,12 @@ impl Workspace {
         let capture_utc = Timestamp::now().as_second();
 
         let album = self.album(&album_id)?;
-        let file_key = self.file_key(album, album.current_epoch, &asset_id);
+        let epoch = album.current_epoch;
+        let file_key = self.file_key(album, epoch, &asset_id);
         let (enc, ciphertext) = stream::encrypt_asset_vec_full(&file_key, &plaintext);
 
-        let core = ManifestCore {
-            version: ASSET_MANIFEST_VERSION.into(),
-            crypto_suite_id: CRYPTO_SUITE_ID,
-            protocol_version: PROTOCOL_VERSION.into(),
-            file_id: asset_id,
-            album_id,
-            amk_version: AmkVersion(album.current_epoch),
-            ciphertext_hash: enc.ciphertext_hash,
-            plaintext_size: enc.plaintext_size,
-            chunk_size: enc.chunk_size,
-            nonce_prefix: enc.nonce_prefix,
-            key_mode: KeyMode::Derived,
-            wrapped_file_key: None,
-            metadata_blob_hash: None,
-            created_by_user: self.account.user_id,
-            created_by_device: self.account.device.device_id,
-            client_version: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
-            timestamp: now_rfc3339(),
-            action: Action::Create,
-            prior_provenance_hash: None,
-            retention_until: None,
-        };
-        let manifest = core.sign(self.device_signer.as_ref(), &album.write_tier)?;
-
-        let mut chain = ProvenanceChain::new();
-        chain
-            .append(ProvenanceRecord {
-                asset_id,
-                manifest: manifest.clone(),
-                prior_provenance_hash: None,
-            })
-            .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
-        let chain_head = chain.head().expect("just appended");
-
+        // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
+        // sidecar with `provenance_chain_hash = H`.
         let mut sidecar = SidecarV1 {
             sidecar_schema: SIDECAR_SCHEMA_V1,
             crypto_suite_id: CRYPTO_SUITE_ID,
@@ -553,17 +544,68 @@ impl Workspace {
             device_id: self.account.device.device_id,
             session_id: Uuid::now_v7(),
             gps: None,
-            provenance_chain_hash: chain_head,
+            provenance_chain_hash: None,
             unknown: BTreeMap::new(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);
 
-        // Self-check: the asset must verify through the one chokepoint before we accept it.
+        // (3) Seal the sidecar into the metadata blob; compute its content hash.
+        let amk = Amk::from_bytes(album.amks[&epoch]);
+        let blob_key = amk.derive_blob_key(&asset_id);
+        let metadata_blob = seal_blob(&blob_key, &sidecar.to_canonical_vec());
+        let metadata_blob_hash = blob_ciphertext_hash(&metadata_blob);
+
+        // (4) Build + sign the manifest with `prior_provenance_hash = H` (None) and the
+        // `metadata_blob_hash` from (3); append it as the new chain head.
+        let core = ManifestCore {
+            version: ASSET_MANIFEST_VERSION.into(),
+            crypto_suite_id: CRYPTO_SUITE_ID,
+            protocol_version: PROTOCOL_VERSION.into(),
+            file_id: asset_id,
+            album_id,
+            amk_version: AmkVersion(epoch),
+            ciphertext_hash: enc.ciphertext_hash,
+            plaintext_size: enc.plaintext_size,
+            chunk_size: enc.chunk_size,
+            nonce_prefix: enc.nonce_prefix,
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: Some(metadata_blob_hash),
+            created_by_user: self.account.user_id,
+            created_by_device: self.account.device.device_id,
+            client_version: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+            timestamp: now_rfc3339(),
+            action: Action::Create,
+            prior_provenance_hash: None,
+            retention_until: None,
+        };
+        let manifest = core.sign(self.device_signer.as_ref(), &album.write_tier)?;
+
+        let mut chain = ProvenanceChain::new();
+        chain
+            .append(ProvenanceRecord {
+                asset_id,
+                manifest: manifest.clone(),
+                prior_provenance_hash: None,
+            })
+            .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
+
+        // Self-check: the asset must verify through the one chokepoint, and the sealed metadata
+        // blob must round-trip to the signed sidecar and the committed hash, before we accept it.
         let authority = &self.authorities[&album_id];
         let outcome = verify_asset(&manifest, &ciphertext, &self.directory, authority, None);
         if outcome != VerifyOutcome::Accept {
             return Err(LifecycleError::SelfVerify(outcome));
+        }
+        let binding = verify_metadata_binding(
+            &manifest,
+            &metadata_blob,
+            &blob_key,
+            &sidecar.to_canonical_vec(),
+        );
+        if binding != MetadataBinding::Bound {
+            return Err(LifecycleError::MetadataUnbound(binding));
         }
 
         let asset = AssetState {
@@ -573,6 +615,7 @@ impl Workspace {
             capture_utc,
             chain,
             sidecar,
+            metadata_blob,
         };
         self.write_asset_files(&asset, &plaintext)?;
         self.index_asset_row(&asset)?;
@@ -628,6 +671,7 @@ impl Workspace {
             .get(asset_id)
             .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
             .album_id;
+        // Sealing order (1): the prior head `H` is this asset's current chain head.
         let prior = self.assets[asset_id].chain.head();
         let base = self.assets[asset_id]
             .chain
@@ -637,10 +681,46 @@ impl Workspace {
             .manifest
             .core
             .clone();
-        let album = self.album(&album_id)?;
-        let manifest = self.sign_lifecycle(album, &base, action, prior, retention_until)?;
-        let add_id = self.counter.issue();
+        let binds = action.binds_metadata_blob();
+        let epoch = base.amk_version.0;
+        let blob_key = {
+            let album = self.album(&album_id)?;
+            Amk::from_bytes(album.amks[&epoch]).derive_blob_key(asset_id)
+        };
 
+        // Sealing order (2)+(3) for a metadata-bearing action: mutate + re-sign the sidecar with
+        // `provenance_chain_hash = H`, then seal it and compute the fresh blob hash. `delete` /
+        // `trash-restore` mint no new blob, so the sidecar and its stored blob are left as the
+        // last metadata-bearing write produced them (their manifests commit to no blob).
+        let metadata_blob_hash = if binds {
+            let add_id = self.counter.issue();
+            let asset = self
+                .assets
+                .get_mut(asset_id)
+                .expect("asset_id was validated above");
+            mutate_sidecar(&mut asset.sidecar, add_id);
+            asset.sidecar.provenance_chain_hash = prior;
+            asset.sidecar.signature = None;
+            asset.sidecar.sign(&self.account.user_ik);
+            let blob = seal_blob(&blob_key, &asset.sidecar.to_canonical_vec());
+            let hash = blob_ciphertext_hash(&blob);
+            asset.metadata_blob = blob;
+            Some(hash)
+        } else {
+            None
+        };
+
+        // Sealing order (4): build + sign the manifest with `prior_provenance_hash = H` and the
+        // `metadata_blob_hash` from (3); append it as the new chain head.
+        let album = self.album(&album_id)?;
+        let manifest = self.sign_lifecycle(
+            album,
+            &base,
+            action,
+            prior,
+            retention_until,
+            metadata_blob_hash,
+        )?;
         {
             let asset = self
                 .assets
@@ -650,15 +730,24 @@ impl Workspace {
                 .chain
                 .append(ProvenanceRecord {
                     asset_id: *asset_id,
-                    manifest,
+                    manifest: manifest.clone(),
                     prior_provenance_hash: prior,
                 })
                 .map_err(|e| LifecycleError::Cbor(format!("chain: {e}")))?;
-            let new_head = asset.chain.head().expect("chain has a head after append");
-            mutate_sidecar(&mut asset.sidecar, add_id);
-            asset.sidecar.provenance_chain_hash = new_head;
-            asset.sidecar.signature = None;
-            asset.sidecar.sign(&self.account.user_ik);
+        }
+
+        // Self-check the metadata↔manifest binding for a metadata-bearing write, enforcement on.
+        if binds {
+            let asset = &self.assets[asset_id];
+            let binding = verify_metadata_binding(
+                &manifest,
+                &asset.metadata_blob,
+                &blob_key,
+                &asset.sidecar.to_canonical_vec(),
+            );
+            if binding != MetadataBinding::Bound {
+                return Err(LifecycleError::MetadataUnbound(binding));
+            }
         }
 
         // Re-borrow immutably to write the updated artifacts to disk.
@@ -735,17 +824,14 @@ impl Workspace {
                 head.core.nonce_prefix,
                 &plaintext,
             );
-            let amk = Amk::from_bytes(album.amks[&epoch]);
-            let metadata_blob = seal_blob(
-                &amk.derive_blob_key(&asset.asset_id),
-                &asset.sidecar.to_canonical_vec(),
-            );
             amks.insert((asset.album_id, epoch), album.amks[&epoch]);
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
+                // Export the exact sealed blob the manifest committed to (re-sealing would draw
+                // a fresh nonce and break the `metadata_blob_hash` content address).
+                metadata_blob: asset.metadata_blob.clone(),
                 ciphertext,
-                metadata_blob,
                 provenance: asset.chain.records().to_vec(),
             });
         }
@@ -806,6 +892,8 @@ impl Workspace {
                 capture_utc,
                 chain,
                 sidecar,
+                // The artifact preserves the exact sealed blob the manifest committed to.
+                metadata_blob: restored.metadata_blob.clone(),
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
             self.index_asset_row(&asset)?;
@@ -845,11 +933,10 @@ impl Workspace {
             device_id: head.core.created_by_device,
             session_id: Uuid::now_v7(),
             gps: None,
-            provenance_chain_hash: restored
-                .provenance
-                .last()
-                .expect("restored provenance is never empty")
-                .record_hash(),
+            // Mirror the head manifest's prior (the sealing invariant for its action); the true
+            // sidecar plaintext lives in the preserved `metadata_blob`, decodable by an album
+            // member that holds the AMK.
+            provenance_chain_hash: head.core.prior_provenance_hash,
             unknown: BTreeMap::new(),
             signature: None,
         };
@@ -1017,6 +1104,93 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// S-A3: the `Workspace` populates `metadata_blob_hash` per the sealing order, the sidecar
+    /// binds to the manifest through the prior head, and a one-byte sidecar mutation quarantines.
+    #[test]
+    fn metadata_binding_populated_and_enforced() {
+        use crate::crypto::verify_asset::{
+            BindingReject, MetadataBinding, verify_metadata_binding,
+        };
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF metadata-binding bytes").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+        let asset = ws.import_asset(album, &img).unwrap();
+
+        // The create manifest commits to a metadata blob; its sidecar references no prior head,
+        // and that absence equals the manifest's `prior_provenance_hash` (both `None` on create).
+        let st = ws.asset(&asset).unwrap();
+        let head = &st.chain.records().last().unwrap().manifest;
+        let epoch = head.core.amk_version.0;
+        assert!(
+            head.core.metadata_blob_hash.is_some(),
+            "create must bind a metadata blob"
+        );
+        assert_eq!(st.sidecar.provenance_chain_hash, None);
+        assert_eq!(
+            head.core.prior_provenance_hash,
+            st.sidecar.provenance_chain_hash
+        );
+
+        // The stored blob round-trips to the signed sidecar under the asset's blob key.
+        let blob_key =
+            Amk::from_bytes(ws.album(&album).unwrap().amks[&epoch]).derive_blob_key(&asset);
+        assert_eq!(
+            verify_metadata_binding(
+                head,
+                &st.metadata_blob,
+                &blob_key,
+                &st.sidecar.to_canonical_vec()
+            ),
+            MetadataBinding::Bound
+        );
+        // A one-byte mutation of the local sidecar quarantines (surfaced, never persisted).
+        let mut tampered = st.sidecar.to_canonical_vec();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert_eq!(
+            verify_metadata_binding(head, &st.metadata_blob, &blob_key, &tampered),
+            MetadataBinding::Quarantine(BindingReject::SidecarMismatch)
+        );
+
+        // A metadata-update re-binds: the sidecar references the PRIOR head (the create record),
+        // equal to the update manifest's `prior_provenance_hash`.
+        let create_head = ws.asset(&asset).unwrap().chain.records()[0].record_hash();
+        ws.tag_add(&asset, "vacation").unwrap();
+        let st = ws.asset(&asset).unwrap();
+        let update = &st.chain.records().last().unwrap().manifest;
+        assert!(update.core.metadata_blob_hash.is_some());
+        assert_eq!(st.sidecar.provenance_chain_hash, Some(create_head));
+        assert_eq!(
+            update.core.prior_provenance_hash,
+            st.sidecar.provenance_chain_hash
+        );
+        assert_eq!(
+            verify_metadata_binding(
+                update,
+                &st.metadata_blob,
+                &blob_key,
+                &st.sidecar.to_canonical_vec()
+            ),
+            MetadataBinding::Bound
+        );
+
+        // A delete mints no metadata blob: the head manifest commits to none, and that is
+        // structurally valid under the presence-by-action rule.
+        ws.soft_delete(&asset, 30).unwrap();
+        let st = ws.asset(&asset).unwrap();
+        let del = &st.chain.records().last().unwrap().manifest;
+        assert!(
+            del.core.metadata_blob_hash.is_none(),
+            "delete binds no metadata blob"
+        );
+        assert!(del.structural_ok());
     }
 
     #[test]

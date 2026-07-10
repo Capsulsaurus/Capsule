@@ -175,8 +175,15 @@ pub struct SidecarV1 {
     pub session_id: Uuid,
     /// Geolocation (export-rounded).
     pub gps: Option<Gps>,
-    /// Hash of the latest provenance record for this asset.
-    pub provenance_chain_hash: Hash32,
+    /// The **prior** provenance head — the record *preceding* the write that seals this sidecar,
+    /// always equal to that write's manifest `prior_provenance_hash` (SSoT:
+    /// [Metadata — Provenance Binding and Sealing Order]). Referencing the prior head (not the
+    /// sealing write's own record) keeps the binding well-founded — the manifest commits to this
+    /// sidecar's `metadata_blob_hash`, so a sidecar referencing that manifest would be a cycle.
+    /// Wire-absent (`None`) exactly on the initial `create`.
+    ///
+    /// [Metadata — Provenance Binding and Sealing Order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
+    pub provenance_chain_hash: Option<Hash32>,
     /// Unknown CBOR keys preserved verbatim (re-sorted canonically; covered by signature).
     pub unknown: BTreeMap<String, Value>,
     /// Hybrid signature over every byte above (the canonical map minus this field).
@@ -246,7 +253,8 @@ impl SidecarV1 {
         put!("device_id", self.device_id);
         put!("session_id", self.session_id);
         put_opt!("gps", self.gps);
-        put!("provenance_chain_hash", self.provenance_chain_hash);
+        // Wire-absent on the initial create (no prior head); present on every later write.
+        put_opt!("provenance_chain_hash", self.provenance_chain_hash);
 
         // Merge preserved unknown fields (canonical encode re-sorts everything).
         for (k, v) in &self.unknown {
@@ -354,7 +362,7 @@ impl SidecarV1 {
         let device_id = req!("device_id", Uuid);
         let session_id = req!("session_id", Uuid);
         let gps = opt!("gps", Gps);
-        let provenance_chain_hash = req!("provenance_chain_hash", Hash32);
+        let provenance_chain_hash = opt!("provenance_chain_hash", Hash32);
         let signature = opt!("signature", HybridSignature);
 
         Ok(SidecarV1 {
@@ -422,7 +430,7 @@ mod tests {
                 lon: -74.0060,
                 source: GpsSource::Exif,
             }),
-            provenance_chain_hash: Hash32([0xCC; 32]),
+            provenance_chain_hash: Some(Hash32([0xCC; 32])),
             unknown: BTreeMap::new(),
             signature: None,
         }
@@ -501,6 +509,34 @@ mod tests {
     fn canonical_encoding_is_deterministic() {
         let s = minimal();
         assert_eq!(s.to_canonical_vec(), s.to_canonical_vec());
+    }
+
+    #[test]
+    fn create_sidecar_provenance_chain_hash_is_wire_absent() {
+        // A create sidecar references no prior head (sealing order step 2, `H = None`), so
+        // `provenance_chain_hash` encodes as an absent map key and round-trips back to `None`.
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.provenance_chain_hash = None;
+        s.sign(&ik);
+        let bytes = s.to_canonical_vec();
+        let needle = b"provenance_chain_hash";
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "an absent prior head must not appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.provenance_chain_hash, None);
+        assert_eq!(back, s);
+        assert!(back.verify(&ik.verifying_key()));
+        // A post-create sidecar (minimal carries `Some`) keeps the key present.
+        assert!(
+            minimal()
+                .to_canonical_vec()
+                .windows(needle.len())
+                .any(|w| w == needle),
+            "a present prior head must appear as a byte string on the wire"
+        );
     }
 
     #[test]

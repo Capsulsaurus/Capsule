@@ -95,7 +95,7 @@ mod tests {
                 lon: -74.006015,
                 source: GpsSource::Exif,
             }),
-            provenance_chain_hash: Hash32([0; 32]),
+            provenance_chain_hash: Some(Hash32([0; 32])),
             unknown: BTreeMap::new(),
             signature: None,
         }

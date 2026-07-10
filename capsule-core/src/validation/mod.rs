@@ -17,4 +17,7 @@ pub mod structural;
 
 pub use idempotency::IdempotencyKey;
 pub use protocol::{HandshakeReject, protocol_gate};
-pub use structural::{EnvelopeContext, EnvelopeReject, check_manifest_envelope};
+pub use structural::{
+    EnvelopeContext, EnvelopeReject, check_manifest_envelope, check_metadata_blob_envelope,
+    metadata_blob_hash_matches,
+};

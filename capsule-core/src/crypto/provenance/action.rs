@@ -35,6 +35,20 @@ impl Action {
     pub fn is_create(self) -> bool {
         matches!(self, Action::Create)
     }
+
+    /// Whether this action mints a new encrypted metadata blob and its manifest therefore
+    /// commits to `metadata_blob_hash`: `create | replace | metadata-update` carry the field,
+    /// the other four (`delete | derivative-add | derivative-replace | trash-restore`) omit it
+    /// (SSoT: [Provenance — Asset Manifest]). The presence-by-action rule is enforced at
+    /// [`structural_ok`](super::manifest::AssetManifest::structural_ok).
+    ///
+    /// [Provenance — Asset Manifest]: https://docs/design/cryptography/provenance/#asset-manifest
+    pub fn binds_metadata_blob(self) -> bool {
+        matches!(
+            self,
+            Action::Create | Action::Replace | Action::MetadataUpdate
+        )
+    }
 }
 
 /// The role of a derivative (SSoT: [Provenance — Derivative Provenance]).
@@ -95,6 +109,23 @@ mod tests {
             Action::TrashRestore,
         ] {
             assert!(!a.is_create());
+        }
+    }
+
+    #[test]
+    fn only_create_replace_and_metadata_update_bind_a_metadata_blob() {
+        // The three metadata-bearing actions commit to `metadata_blob_hash`...
+        for a in [Action::Create, Action::Replace, Action::MetadataUpdate] {
+            assert!(a.binds_metadata_blob(), "{a:?} must bind a metadata blob");
+        }
+        // ...the other four omit it (key absent on the wire).
+        for a in [
+            Action::Delete,
+            Action::DerivativeAdd,
+            Action::DerivativeReplace,
+            Action::TrashRestore,
+        ] {
+            assert!(!a.binds_metadata_blob(), "{a:?} must not bind a blob");
         }
     }
 }

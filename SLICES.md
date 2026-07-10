@@ -62,7 +62,7 @@ its slice.
 | ----- | ---------------------------------------------------- | --------------- | ---------------- | ---- | ------- |
 | S-A1  | Wrapped file-key mode (seal/unseal + verify)         | core-crypto     | —                | M    | done    |
 | S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | ready   |
-| S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | ready   |
+| S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | done    |
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | ready   |
@@ -253,6 +253,12 @@ pass until the gate lifts.
 - **Done when:** metadata round-trip equivalence tests (metadata + encryption docs)
   pass; a one-byte sidecar mutation quarantines.
 - **Tier:** Unit.
+- **Landed:** closes S-A1's presence-by-action deferral. The sidecar's
+  `provenance_chain_hash` became `Option<Hash32>` (wire-absent exactly on create,
+  referencing the **prior** head per the sealing order); `verify_metadata_binding`
+  quarantines (distinct from terminal-reject); the server half is
+  `validation::check_metadata_blob_envelope` (`error.upload.envelope_mismatch`
+  mapping wired in `capsule-api-upload`).
 
 ### S-A4 — P-256 hybrid DSK variant
 

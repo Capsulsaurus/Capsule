@@ -291,6 +291,11 @@ fn map_envelope_reject(result: Result<(), EnvelopeReject>) -> Result<(), UploadE
             Err(UploadError::EnvelopeMismatch("prior_provenance_hash"))
         }
         Err(EnvelopeReject::AmkRegressed) => Err(UploadError::EnvelopeMismatch("amk_version")),
+        // Invariant 25: the bundled metadata blob's content hash must equal the manifest's
+        // committed metadata_blob_hash (checked where a bundle carries the blob).
+        Err(EnvelopeReject::MetadataBlobHashMismatch) => {
+            Err(UploadError::EnvelopeMismatch("metadata_blob_hash"))
+        }
     }
 }
 

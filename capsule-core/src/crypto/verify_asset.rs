@@ -17,6 +17,7 @@
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization
 
 use crate::crypto::authority::AlbumAuthority;
+use crate::crypto::encryption::{blob_ciphertext_hash, open_blob};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::DeviceDirectory;
 use crate::crypto::primitives::SuiteId;
@@ -177,6 +178,91 @@ pub fn verify_asset(
     }
 }
 
+/// Why a metadata blob fails to bind to its manifest and the locally-signed sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingReject {
+    /// The manifest commits to no `metadata_blob_hash` — a metadata-bearing action must
+    /// (`create | replace | metadata-update`); a caller should not seek a binding otherwise.
+    NoManifestCommitment,
+    /// The blob's content hash does not equal the manifest's committed `metadata_blob_hash`.
+    /// This is the key-free half — the same comparison the server runs as [invariant 25].
+    ///
+    /// [invariant 25]: crate::validation::check_metadata_blob_envelope
+    BlobHashMismatch,
+    /// The blob did not decrypt/authenticate under the derived blob key (tampered ciphertext,
+    /// wrong key, or a truncated wire).
+    Undecryptable,
+    /// The blob decrypted, but its plaintext is not byte-identical to the locally-signed
+    /// sidecar — the client would be persisting one sidecar while its manifest commits to a
+    /// different one.
+    SidecarMismatch,
+}
+
+/// The outcome of the metadata↔manifest round-trip binding check (client-side; SSoT:
+/// [Metadata — Local and Server Metadata Equivalence]).
+///
+/// This is a **distinct class** from a [`verify_asset`] terminal-reject: a manifest's two
+/// signatures can be perfectly valid while the metadata blob a client was handed diverges from
+/// what the manifest commits to. Per the [client-side invariant] a divergence is
+/// **quarantined** — surfaced, never silently persisted — exactly like the pending→timeout and
+/// terminal-reject cases funnel into quarantine, but reached from a different check.
+///
+/// [Metadata — Local and Server Metadata Equivalence]: https://docs/design/metadata/#local-and-server-metadata-equivalence
+/// [client-side invariant]: https://docs/design/threat-model/validation/#client-side-validation-invariants
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataBinding {
+    /// The blob decrypts to the byte-identical signed sidecar and hashes to the manifest field.
+    Bound,
+    /// The blob diverges from the manifest or the signed sidecar — quarantine, never persist.
+    Quarantine(BindingReject),
+}
+
+impl MetadataBinding {
+    /// Convenience: did the metadata blob bind?
+    pub fn is_bound(self) -> bool {
+        matches!(self, MetadataBinding::Bound)
+    }
+}
+
+/// Run the metadata↔manifest round-trip equivalence check for a metadata-bearing manifest
+/// (SSoT: [Metadata — Local and Server Metadata Equivalence], [Encryption — Local–server
+/// equivalence]). Two facts must hold, both funnelling a failure into a
+/// [quarantine](MetadataBinding::Quarantine):
+///
+/// 1. **Content address** — the metadata blob's content hash equals the manifest's committed
+///    `metadata_blob_hash` (the key-free half; the server enforces the same value at
+///    [invariant 25](crate::validation::check_metadata_blob_envelope)).
+/// 2. **Round-trip** — decrypting the blob under `blob_key` yields canonical CBOR
+///    byte-identical to `signed_sidecar` (the sidecar the client persists locally).
+///
+/// A client therefore never persists a sidecar that does not round-trip to the committed
+/// `metadata_blob_hash`.
+///
+/// [Metadata — Local and Server Metadata Equivalence]: https://docs/design/metadata/#local-and-server-metadata-equivalence
+/// [Encryption — Local–server equivalence]: https://docs/design/cryptography/encryption/#metadata-encryption
+pub fn verify_metadata_binding(
+    manifest: &AssetManifest,
+    metadata_blob: &[u8],
+    blob_key: &[u8; 32],
+    signed_sidecar: &[u8],
+) -> MetadataBinding {
+    use MetadataBinding::Quarantine;
+
+    let Some(committed) = manifest.core.metadata_blob_hash else {
+        return Quarantine(BindingReject::NoManifestCommitment);
+    };
+    // (1) Key-free content address: the ciphertext blob hashes to the committed value.
+    if blob_ciphertext_hash(metadata_blob) != committed {
+        return Quarantine(BindingReject::BlobHashMismatch);
+    }
+    // (2) Round-trip: the blob decrypts to the byte-identical signed sidecar.
+    match open_blob(blob_key, metadata_blob) {
+        Err(_) => Quarantine(BindingReject::Undecryptable),
+        Ok(plaintext) if plaintext != signed_sidecar => Quarantine(BindingReject::SidecarMismatch),
+        Ok(_) => MetadataBinding::Bound,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
@@ -259,7 +345,9 @@ mod tests {
                 nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
                 key_mode: KeyMode::Derived,
                 wrapped_file_key: None,
-                metadata_blob_hash: None,
+                // Present exactly on the metadata-bearing actions, so `structural_ok` (checked
+                // before any signature) holds for every otherwise-valid fixture.
+                metadata_blob_hash: action.binds_metadata_blob().then(|| Hash32([0x4D; 32])),
                 created_by_user: Uuid::from_u128(USER),
                 created_by_device: Uuid::from_u128(DEVICE),
                 client_version: "capsule-cli/0.1.0".into(),
@@ -655,6 +743,97 @@ mod tests {
         assert_eq!(
             verify_asset(&f.valid_create(), CIPHERTEXT, &f.directory, dynamic, None),
             VerifyOutcome::TerminalReject(RejectReason::WrongEpoch)
+        );
+    }
+
+    // ── Metadata↔manifest binding (S-A3, invariant 25 client half) ───────────────
+
+    use crate::crypto::encryption::seal_blob;
+
+    /// Seal `sidecar` under a fixed blob key and produce a create manifest committing to the
+    /// blob's content hash. Returns `(manifest, blob, blob_key)`.
+    fn sealed_create(f: &Fixture, sidecar: &[u8]) -> (AssetManifest, Vec<u8>, [u8; 32]) {
+        let amk = Amk::from_bytes([0x5A; 32]);
+        let file_id = Uuid::from_u128(0xF11E);
+        let blob_key = amk.derive_blob_key(&file_id);
+        let blob = seal_blob(&blob_key, sidecar);
+        let mut c = f.core(Action::Create, None);
+        c.metadata_blob_hash = Some(blob_ciphertext_hash(&blob));
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        (m, blob, blob_key)
+    }
+
+    /// The doc's positive case: a metadata blob decrypts to the byte-identical signed sidecar
+    /// and its content hash equals the manifest's `metadata_blob_hash`.
+    #[test]
+    fn metadata_binding_round_trips() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, blob_key) = sealed_create(&f, sidecar);
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &blob_key, sidecar),
+            MetadataBinding::Bound
+        );
+    }
+
+    /// A one-byte mutation of the *local* sidecar breaks the round-trip: the blob decrypts to
+    /// the original bytes, which no longer match. Quarantined, never persisted.
+    #[test]
+    fn metadata_binding_one_byte_sidecar_mutation_quarantines() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset".to_vec();
+        let (m, blob, blob_key) = sealed_create(&f, &sidecar);
+        let mut tampered = sidecar.clone();
+        tampered[0] ^= 0x01;
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &blob_key, &tampered),
+            MetadataBinding::Quarantine(BindingReject::SidecarMismatch),
+        );
+    }
+
+    /// A one-byte mutation of the *blob* breaks the content-address half first (the key-free
+    /// check the server also runs): the hash no longer matches the committed value.
+    #[test]
+    fn metadata_binding_one_byte_blob_mutation_quarantines() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, blob_key) = sealed_create(&f, sidecar);
+        let mut tampered = blob.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert_eq!(
+            verify_metadata_binding(&m, &tampered, &blob_key, sidecar),
+            MetadataBinding::Quarantine(BindingReject::BlobHashMismatch),
+        );
+    }
+
+    /// The blob hashes correctly but the wrong key can't decrypt it → `Undecryptable`
+    /// (distinct from a hash mismatch — the content address held, the AEAD did not).
+    #[test]
+    fn metadata_binding_undecryptable_under_wrong_key() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, _blob_key) = sealed_create(&f, sidecar);
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &[0u8; 32], sidecar),
+            MetadataBinding::Quarantine(BindingReject::Undecryptable),
+        );
+    }
+
+    /// A manifest that commits to no `metadata_blob_hash` (e.g. a caller mis-invoking on a
+    /// delete) yields `NoManifestCommitment`, never a false `Bound`.
+    #[test]
+    fn metadata_binding_requires_a_manifest_commitment() {
+        let f = Fixture::new();
+        // A delete manifest carries no metadata_blob_hash.
+        let head = hash::hash_bytes(b"prior");
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&f.device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_metadata_binding(&m, b"whatever", &[0u8; 32], b"whatever"),
+            MetadataBinding::Quarantine(BindingReject::NoManifestCommitment),
         );
     }
 }

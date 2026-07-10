@@ -186,19 +186,28 @@ impl AssetManifest {
     /// Structural well-formedness independent of any key:
     /// - `prior_provenance_hash` is null **iff** the action is `create`;
     /// - `retention_until` is set only for `delete`;
-    /// - `wrapped_file_key` is present **iff** `key_mode = wrapped`.
+    /// - `wrapped_file_key` is present **iff** `key_mode = wrapped`;
+    /// - `metadata_blob_hash` is present **iff** the action binds a metadata blob
+    ///   ([`Action::binds_metadata_blob`] — `create | replace | metadata-update`).
     ///
     /// The first two are mirrored by the server envelope; the wrapped-key rule is the
     /// signature-visible presence rule for an adopted web-upload drop, enforced here at
-    /// `verify_asset`. (The `metadata_blob_hash` presence-by-action rule lands with the
-    /// metadata↔manifest binding in S-A3, once the `Workspace` populates the field per the
-    /// sealing order — it cannot be enforced before the field is populated.)
+    /// `verify_asset`. The `metadata_blob_hash` presence-by-action rule closes the deferral
+    /// noted at S-A1 ("field enforcement lands together"): now that the `Workspace` populates
+    /// the field per the [sealing order], `verify_asset` can require its presence exactly on the
+    /// metadata-bearing actions and its absence on the other four. The server mirrors the
+    /// *value* half key-free at [invariant 25]
+    /// ([`check_metadata_blob_envelope`](crate::validation::check_metadata_blob_envelope)).
+    ///
+    /// [sealing order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
+    /// [invariant 25]: https://docs/design/threat-model/validation/#server-side-validation-invariants
     pub fn structural_ok(&self) -> bool {
         let core = &self.core;
         let prior_rule = core.prior_provenance_hash.is_none() == core.action.is_create();
         let retention_rule = core.retention_until.is_none() || core.action == Action::Delete;
         let wrapped_rule = core.wrapped_file_key.is_some() == (core.key_mode == KeyMode::Wrapped);
-        prior_rule && retention_rule && wrapped_rule
+        let blob_hash_rule = core.metadata_blob_hash.is_some() == core.action.binds_metadata_blob();
+        prior_rule && retention_rule && wrapped_rule && blob_hash_rule
     }
 }
 
@@ -330,11 +339,13 @@ mod tests {
     /// pinned by `crate::crypto::encryption::WRAPPED_FILE_KEY_LEN`).
     const WRAPPED_LEN: usize = crate::crypto::encryption::WRAPPED_FILE_KEY_LEN;
 
-    /// A structurally-valid core for `action` (correct prior placement), so tests can perturb
-    /// exactly one field.
+    /// A structurally-valid core for `action` (correct prior placement + `metadata_blob_hash`
+    /// present exactly on the metadata-bearing actions), so tests can perturb exactly one field.
     fn valid_core(action: Action) -> ManifestCore {
         let prior = (!action.is_create()).then(|| Hash32([1; 32]));
-        core(action, prior)
+        let mut c = core(action, prior);
+        c.metadata_blob_hash = action.binds_metadata_blob().then(|| Hash32([0x4D; 32]));
+        c
     }
 
     #[test]
@@ -395,6 +406,43 @@ mod tests {
         c.key_mode = KeyMode::Derived;
         c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; WRAPPED_LEN]));
         assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
+    }
+
+    /// The `metadata_blob_hash` presence-by-action rule (the S-A1 deferral, now enforced with
+    /// S-A3): present exactly on `create | replace | metadata-update`, absent on the other four.
+    #[test]
+    fn structural_rule_metadata_blob_hash_present_iff_action_binds() {
+        for action in [
+            Action::Create,
+            Action::Replace,
+            Action::Delete,
+            Action::MetadataUpdate,
+            Action::DerivativeAdd,
+            Action::DerivativeReplace,
+            Action::TrashRestore,
+        ] {
+            let binds = action.binds_metadata_blob();
+            // The action's canonical presence is well-formed.
+            assert!(
+                valid_core(action)
+                    .sign(&dev(), &wt())
+                    .unwrap()
+                    .structural_ok(),
+                "{action:?} canonical presence must be structurally ok"
+            );
+            // Flip the presence: a metadata-bearing action missing the hash, or a non-bearing
+            // action carrying one, is a structural violation.
+            let mut c = valid_core(action);
+            c.metadata_blob_hash = if binds {
+                None
+            } else {
+                Some(Hash32([0x4D; 32]))
+            };
+            assert!(
+                !c.sign(&dev(), &wt()).unwrap().structural_ok(),
+                "{action:?} with flipped metadata_blob_hash presence must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -476,6 +524,17 @@ mod tests {
         assert!(
             wrapped.is_bytes(),
             "wrapped_file_key must encode as a CBOR byte string"
+        );
+        // A populated `metadata_blob_hash` (create binds a blob) likewise encodes as a byte
+        // string, not an array of integers — the byte-identity vector for the present state.
+        let blob_hash = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("metadata_blob_hash"))
+            .map(|(_, v)| v)
+            .expect("metadata_blob_hash present on a create manifest");
+        assert!(
+            blob_hash.is_bytes(),
+            "metadata_blob_hash must encode as a CBOR byte string"
         );
     }
 }
