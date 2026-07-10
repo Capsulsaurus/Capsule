@@ -88,7 +88,7 @@ its slice.
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
-| S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
+| S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | done    |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | done    |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | done    |
@@ -676,6 +676,11 @@ pass until the gate lifts.
 - **Done when:** the authentication doc's cohort Validation bullets pass (advisory
   behavior under absent/garbage values; grouping; durable map outlives sessions).
 - **Tier:** Unit + Smoke. **Blocks:** S-D11.
+- **Landed:** advisory-only is structural — the value never enters `Claims` (the
+  sole authz input), enforced by a serialization tripwire test; guarded-upsert
+  durable map (`first_seen` pinned, `last_seen` bumped); `GET /devices` now returns
+  `{devices, cohorts}`. Over-long values (>128) treated as absent; TOTP/passkey
+  ceremonies pass no cohort yet (S-D11's client emission decides what rides them).
 
 ### S-C14 — Server integrity scrub
 

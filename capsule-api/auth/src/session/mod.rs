@@ -19,6 +19,13 @@ pub struct Session {
     pub ip_address: Option<String>,
     #[serde(default)]
     pub last_active_at: i64,
+    /// The advisory device-cohort hash asserted at session creation (slice `S-C13`), stored
+    /// verbatim so the listing surface can group this session with others from the same
+    /// physical device. **Advisory-only:** it is never read by any authorization path — the
+    /// JWT [`crate::claims::Claims`] that drive every authz decision carry no cohort field, so
+    /// this record is legibility metadata, never a capability input.
+    #[serde(default)]
+    pub cohort_hash: Option<String>,
 }
 
 #[derive(Clone)]
@@ -54,6 +61,7 @@ impl SessionManager {
         user_id: String,
         user_agent: Option<String>,
         ip_address: Option<String>,
+        cohort_hash: Option<String>,
     ) -> Result<String, InternalServerError> {
         let sid = nanoid::nanoid!();
         let now = jiff::Timestamp::now().as_second();
@@ -63,6 +71,7 @@ impl SessionManager {
             user_agent,
             ip_address,
             last_active_at: now,
+            cohort_hash,
         };
 
         let session_data = serde_json::to_string(&session).map_err(InternalServerError::from)?;

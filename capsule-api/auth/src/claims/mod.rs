@@ -272,6 +272,32 @@ mod tests {
         let _decoded = Claims::decode(&token, &decoding_key).unwrap();
     }
 
+    /// Tripwire (slice `S-C13`): the advisory device-cohort value must never leak into the
+    /// authorization token. `Claims` is the *sole* input to every authz/capability decision
+    /// (`validate_access_token`, `has_scopes`, …), so if it carried a cohort field an authz
+    /// path could read the client-asserted, spoofable value — the exact failure the
+    /// advisory-only invariant forbids. Serializing the full claim set and asserting no
+    /// `cohort` key appears keeps that separation structural: a future field named `cohort*`
+    /// breaks this test at compile-of-intent time.
+    #[test]
+    fn claims_carry_no_cohort_field_tripwire() {
+        let claims = Claims::new(
+            "user1".to_string(),
+            UserRole::User,
+            Duration::from_secs(1000),
+            vec![Scope::AccessToken],
+            Some("sid-123".to_string()),
+        );
+        let json = serde_json::to_value(&claims).expect("claims serialize");
+        let obj = json.as_object().expect("claims are a JSON object");
+        assert!(
+            obj.keys()
+                .all(|k| !k.to_ascii_lowercase().contains("cohort")),
+            "authorization Claims must not carry any cohort field (advisory-only, structural): {:?}",
+            obj.keys().collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn test_has_scopes() {
         let user_id = nanoid::nanoid!().to_string();

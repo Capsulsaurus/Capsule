@@ -10,6 +10,7 @@ mod m20260710_000003_blob_gc;
 mod m20260710_000004_drops;
 mod m20260710_000005_custody_receipts;
 mod m20260710_000006_lifecycle_ops;
+mod m20260710_000007_device_cohorts;
 
 pub struct Migrator;
 
@@ -27,6 +28,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_000004_drops::Migration),
             Box::new(m20260710_000005_custody_receipts::Migration),
             Box::new(m20260710_000006_lifecycle_ops::Migration),
+            Box::new(m20260710_000007_device_cohorts::Migration),
         ]
     }
 }

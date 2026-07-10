@@ -47,6 +47,7 @@ mod tests {
             email: "test@example.com".to_string(),
             password: "Password123!".into(),
             name: "Test User".to_string(),
+            cohort_hash: None,
         };
         assert!(RegistrationValidator::validate(&request).is_ok());
     }

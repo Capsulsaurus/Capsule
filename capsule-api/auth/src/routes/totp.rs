@@ -175,7 +175,7 @@ pub async fn totp_verify_login(
     // Generate full token pair
     match state
         .auth_service
-        .generate_token_pair(user_id, &state.session_manager)
+        .generate_token_pair(user_id, &state.session_manager, None)
         .await
     {
         Ok(tokens) => TotpVerifyLoginResponses::Success(tokens),

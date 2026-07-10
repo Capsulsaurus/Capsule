@@ -58,6 +58,7 @@ impl AuthService {
             name,
             email,
             password,
+            cohort_hash,
         } = request;
 
         // Check duplicates
@@ -91,7 +92,7 @@ impl AuthService {
             }
         })?;
 
-        self.generate_token_pair(&user.id, session_manager)
+        self.generate_token_pair(&user.id, session_manager, cohort_hash)
             .await
             .map_err(RegisterError::Unexpected)
     }
@@ -101,6 +102,7 @@ impl AuthService {
         session_manager: &SessionManager,
         email: &str,
         password: &SecretString,
+        cohort_hash: Option<String>,
     ) -> Result<TokenResponse, LoginError> {
         let user = UserService::Query::find_user_by_email(&self.conn, email)
             .await
@@ -129,7 +131,7 @@ impl AuthService {
             if is_valid {
                 let _ = UserService::Mutation::track_login_success(&self.conn, &user.id).await;
                 return self
-                    .generate_token_pair(&user.id, session_manager)
+                    .generate_token_pair(&user.id, session_manager, cohort_hash)
                     .await
                     .map_err(LoginError::Unexpected);
             }
@@ -145,13 +147,33 @@ impl AuthService {
         Err(LoginError::InvalidCredentials)
     }
 
+    /// Mint an access/refresh token pair for a fresh session.
+    ///
+    /// `cohort_hash` is the **advisory**, client-asserted device-cohort value (slice
+    /// `S-C13`): it rides the session record for the listing surface and is recorded in the
+    /// durable `device_cohorts` map so a later reinstall groups with "a device you've used
+    /// before". It is deliberately kept out of the JWT [`Claims`] — no authorization path can
+    /// read it — and recording it is best-effort: a store failure is logged, never propagated,
+    /// so the auth ceremony behaves identically whether the value is present, absent, or
+    /// garbage.
     pub async fn generate_token_pair(
         &self,
         user_id: &str,
         session_manager: &SessionManager,
+        cohort_hash: Option<String>,
     ) -> Result<TokenResponse, model::errors::InternalServerError> {
+        let cohort_hash = service::cohort::normalize(cohort_hash);
+
+        // Advisory durable-map upsert: pin/bump the (user, cohort) sighting. A failure here
+        // must never fail login — it is legibility metadata, not a capability.
+        if let Some(ref cohort) = cohort_hash
+            && let Err(e) = service::cohort::Mutation::observe(&self.conn, user_id, cohort).await
+        {
+            tracing::warn!("advisory device-cohort observe failed (ignored): {e}");
+        }
+
         let sid = session_manager
-            .create_session(user_id.to_string(), None, None)
+            .create_session(user_id.to_string(), None, None, cohort_hash)
             .await?;
 
         let (access_token, expires_by) = TokenService::create_access_token(
@@ -256,7 +278,7 @@ mod tests {
         let session_manager = SessionManager::new_with_storage(storage, Duration::from_secs(3600));
 
         let result = service
-            .generate_token_pair("user123", &session_manager)
+            .generate_token_pair("user123", &session_manager, None)
             .await;
         assert!(result.is_ok());
 

@@ -233,7 +233,7 @@ pub async fn finish_authentication(
     // Issue new tokens (Renamed from generate_tokens to generate_token_pair)
     let tokens = state
         .auth_service
-        .generate_token_pair(&user_id, &state.session_manager)
+        .generate_token_pair(&user_id, &state.session_manager, None)
         .await
         .map_err(PasskeyAuthFinishResponses::InternalServerError)?;
 

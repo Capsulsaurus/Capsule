@@ -18,6 +18,14 @@ pub struct RegisterRequest {
     #[salvo(schema(value_type = String))]
     #[serde(serialize_with = "crate::models::serialize_secret")]
     pub password: SecretString,
+    /// Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from
+    /// [Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group
+    /// this device's sessions and is never read by any authorization decision — absent or
+    /// garbage values are accepted and behave identically to a valid one.
+    ///
+    /// [Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts
+    #[serde(default)]
+    pub cohort_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
@@ -32,6 +40,14 @@ pub struct LoginRequest {
     #[salvo(schema(value_type = String))]
     #[serde(serialize_with = "crate::models::serialize_secret")]
     pub password: SecretString,
+    /// Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from
+    /// [Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group
+    /// this device's sessions and is never read by any authorization decision — absent or
+    /// garbage values are accepted and behave identically to a valid one.
+    ///
+    /// [Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts
+    #[serde(default)]
+    pub cohort_hash: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]

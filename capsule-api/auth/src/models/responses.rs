@@ -22,6 +22,44 @@ pub struct Device {
     pub user_agent: Option<String>,
     pub ip_address: Option<String>,
     pub is_current: bool,
+    /// The advisory device-cohort hash asserted when this session was created (slice
+    /// `S-C13`), or `None` if the client did not assert one. A grouping aid only — clients
+    /// group the ledger by this value; it carries no authority.
+    #[serde(default)]
+    pub cohort_hash: Option<String>,
+}
+
+/// One entry of the durable device-cohort map surfaced alongside the session listing (slice
+/// `S-C13`). Lets a client label a cohort "a device you've used before (last seen …)" even
+/// when its earlier sessions have expired — the map outlives sessions.
+#[derive(Serialize, Deserialize, ToSchema, Debug)]
+pub struct DeviceCohort {
+    /// The advisory cohort hash (opaque; the client groups its sessions by this).
+    pub cohort_hash: String,
+    /// First time this cohort was seen for the user (Unix seconds).
+    pub first_seen: i64,
+    /// Most recent time this cohort was seen for the user (Unix seconds).
+    pub last_seen: i64,
+}
+
+impl From<service::cohort::CohortObservation> for DeviceCohort {
+    fn from(o: service::cohort::CohortObservation) -> Self {
+        Self {
+            cohort_hash: o.cohort_hash,
+            first_seen: o.first_seen,
+            last_seen: o.last_seen,
+        }
+    }
+}
+
+/// The session-listing surface (slice `S-C13`): the user's active sessions, each carrying its
+/// advisory cohort, plus the durable cohort map. Clients group the ledger by cohort.
+#[derive(Serialize, Deserialize, ToSchema, Debug)]
+pub struct SessionListingResponse {
+    /// Active sessions ("devices"), each annotated with its per-session cohort.
+    pub devices: Vec<Device>,
+    /// The durable cohort map (persists beyond session expiry).
+    pub cohorts: Vec<DeviceCohort>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
@@ -929,7 +967,7 @@ impl EndpointOutRegister for TotpDisableResponses {
 
 #[derive(From, Debug)]
 pub enum GetDevicesResponses {
-    Success(Vec<Device>),
+    Success(SessionListingResponse),
     Unauthorized(ClaimValidationError),
     InternalServerError(InternalServerError),
 }
@@ -938,9 +976,9 @@ pub enum GetDevicesResponses {
 impl Writer for GetDevicesResponses {
     async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
         match self {
-            Self::Success(devices) => {
+            Self::Success(listing) => {
                 res.status_code(StatusCode::OK);
-                res.render(Json(devices));
+                res.render(Json(listing));
             }
             Self::Unauthorized(e) => {
                 res.status_code(StatusCode::UNAUTHORIZED);
@@ -955,9 +993,12 @@ impl EndpointOutRegister for GetDevicesResponses {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
         operation.responses.insert(
             String::from("200"),
-            salvo::oapi::Response::new("Success - returns list of active sessions").add_content(
+            salvo::oapi::Response::new(
+                "Success - returns active sessions (each with its advisory cohort) plus the durable cohort map",
+            )
+            .add_content(
                 "application/json",
-                salvo::oapi::Content::new(Vec::<Device>::to_schema(components)),
+                salvo::oapi::Content::new(SessionListingResponse::to_schema(components)),
             ),
         );
         operation.responses.insert(

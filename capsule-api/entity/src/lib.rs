@@ -5,6 +5,7 @@ pub mod asset_smart_tag;
 pub mod asset_stack;
 pub mod blob_gc;
 pub mod custody_receipt;
+pub mod device_cohort;
 pub mod device_directory;
 pub mod drop_inbox;
 pub mod face;
