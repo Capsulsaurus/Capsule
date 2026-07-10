@@ -2,6 +2,26 @@
 <resources>
     <string name="app_name">Capsule App</string>
     <string name="back">Back</string>
+    <string name="cli_auth_login_email_prompt">Email</string>
+    <string name="cli_auth_login_failed">Login failed: {reason}</string>
+    <string name="cli_auth_login_in_progress">Logging in to Capsule…</string>
+    <string name="cli_auth_login_password_prompt">Password</string>
+    <string name="cli_auth_login_success">Logged in as {email}.</string>
+    <string name="cli_auth_logout_in_progress">Logging out from Capsule…</string>
+    <string name="cli_auth_logout_not_logged_in">You are not logged in.</string>
+    <string name="cli_auth_logout_success">Logged out.</string>
+    <string name="cli_auth_not_authenticated">Not authenticated. Run \'capsule auth login\' first.</string>
+    <string name="cli_list_empty">No assets have synced yet.</string>
+    <string name="cli_list_failed">Failed to list the library: {reason}</string>
+    <string name="cli_list_header">Synced library ({count} asset(s)):</string>
+    <string name="cli_list_row">{asset_id}  album={album_id}  seq={seq}  {state}</string>
+    <string name="cli_list_state_active">active</string>
+    <string name="cli_list_state_awaiting_original">awaiting-original</string>
+    <string name="cli_sync_complete">Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).</string>
+    <string name="cli_sync_dry_run_notice">Dry run: no changes will be persisted.</string>
+    <string name="cli_sync_failed">Sync failed: {reason}</string>
+    <string name="cli_sync_in_progress">Syncing from {endpoint}…</string>
+    <string name="cli_sync_up_to_date">Already up to date.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>

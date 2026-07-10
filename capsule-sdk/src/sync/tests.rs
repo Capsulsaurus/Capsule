@@ -218,3 +218,50 @@ fn per_album_high_water_is_independent_and_cursor_round_trips() {
     assert_eq!(state.high_water(&b), Some(2));
     assert_eq!(state.cursor().as_bytes(), &[0x71u8; 41]);
 }
+
+/// **Persistence round-trip (slice `S-D5`).** A state advanced by a page is torn
+/// down to its persistable parts (cursor + per-album high-water marks) and
+/// rehydrated through [`SyncState::restore`]; the restored state enforces the same
+/// anti-rewind floor — an older authentic cursor's page is still refused — proving
+/// the high-water mark survives a process restart, not just an in-memory run.
+#[test]
+fn restore_rehydrates_cursor_and_high_water_and_still_refuses_rewind() {
+    let a = album(9);
+    let b = album(10);
+    let mut state = SyncState::new(MAX_KNOWN);
+    state
+        .apply_page(&page(
+            vec![
+                entry(&a, 1, "2026-05-31"),
+                entry(&a, 2, "2026-05-31"),
+                entry(&b, 5, "2026-05-31"),
+            ],
+            0x90,
+        ))
+        .unwrap();
+
+    // Snapshot exactly what a client persists to its durable store.
+    let cursor = state.cursor().clone();
+    let marks: Vec<(Vec<u8>, u64)> = state
+        .high_water_marks()
+        .map(|(album, seq)| (album.to_vec(), seq))
+        .collect();
+
+    // Rehydrate as if on the next `capsule sync` run.
+    let mut restored = SyncState::restore(MAX_KNOWN, cursor, marks);
+    assert_eq!(restored.cursor().as_bytes(), &[0x90u8; 41]);
+    assert_eq!(restored.high_water(&a), Some(2));
+    assert_eq!(restored.high_water(&b), Some(5));
+
+    // The restored high-water mark refuses a replayed older page (anti-rewind).
+    let err = restored
+        .apply_page(&page(vec![entry(&a, 1, "2026-05-31")], 0x91))
+        .unwrap_err();
+    assert!(matches!(err, SyncError::Rewind { high_water: 2, .. }));
+    // A genuine forward entry still applies and advances the mark + cursor.
+    restored
+        .apply_page(&page(vec![entry(&a, 3, "2026-05-31")], 0x92))
+        .unwrap();
+    assert_eq!(restored.high_water(&a), Some(3));
+    assert_eq!(restored.cursor().as_bytes(), &[0x92u8; 41]);
+}

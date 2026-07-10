@@ -96,7 +96,7 @@ its slice.
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | done    |
-| S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
+| S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
 | S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
@@ -863,6 +863,13 @@ SDK; they never hand-roll network flows.
   **Done when:** `capsule auth login && capsule sync && capsule list` round-trips
   against a dev server. **Tier:** Smoke + E2E case 1 (auth → sync → client-side
   library query — the CLI round-trip *is* the case).
+- **Landed:** E2E case 1 lives (`cli_login_sync_list_round_trip`, real auth+sync
+  over TCP + testcontainers, incl. persisted-cursor no-op second sync). All
+  commands drive SDK primitives (zero CLI-side reqwest/tonic); session persists as
+  `PersistedSession` JSON at `0600`; per-album high-water marks derive from
+  `MAX(sync_seq)` and rehydrate via the new `SyncState::restore`. CLI became
+  lib + bin so tests drive command fns. `--local/--remote/--force` flags accepted
+  but render the same synced view for now (no separate local-query path yet).
 
 ### S-D6 — Web server gateway
 

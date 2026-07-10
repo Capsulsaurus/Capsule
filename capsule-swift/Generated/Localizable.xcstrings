@@ -21,6 +21,206 @@
         }
       }
     },
+    "cli.auth.login.email_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Email"
+          }
+        }
+      }
+    },
+    "cli.auth.login.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login failed: {reason}"
+          }
+        }
+      }
+    },
+    "cli.auth.login.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logging in to Capsule…"
+          }
+        }
+      }
+    },
+    "cli.auth.login.password_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Password"
+          }
+        }
+      }
+    },
+    "cli.auth.login.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logged in as {email}."
+          }
+        }
+      }
+    },
+    "cli.auth.logout.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logging out from Capsule…"
+          }
+        }
+      }
+    },
+    "cli.auth.logout.not_logged_in": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You are not logged in."
+          }
+        }
+      }
+    },
+    "cli.auth.logout.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logged out."
+          }
+        }
+      }
+    },
+    "cli.auth.not_authenticated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not authenticated. Run 'capsule auth login' first."
+          }
+        }
+      }
+    },
+    "cli.list.empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No assets have synced yet."
+          }
+        }
+      }
+    },
+    "cli.list.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Failed to list the library: {reason}"
+          }
+        }
+      }
+    },
+    "cli.list.header": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synced library ({count} asset(s)):"
+          }
+        }
+      }
+    },
+    "cli.list.row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{asset_id}  album={album_id}  seq={seq}  {state}"
+          }
+        }
+      }
+    },
+    "cli.list.state.active": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "active"
+          }
+        }
+      }
+    },
+    "cli.list.state.awaiting_original": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "awaiting-original"
+          }
+        }
+      }
+    },
+    "cli.sync.complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s)."
+          }
+        }
+      }
+    },
+    "cli.sync.dry_run_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dry run: no changes will be persisted."
+          }
+        }
+      }
+    },
+    "cli.sync.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync failed: {reason}"
+          }
+        }
+      }
+    },
+    "cli.sync.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Syncing from {endpoint}…"
+          }
+        }
+      }
+    },
+    "cli.sync.up_to_date": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already up to date."
+          }
+        }
+      }
+    },
     "error.auth.invalid_credentials": {
       "localizations": {
         "en": {

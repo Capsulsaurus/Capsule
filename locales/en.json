@@ -294,5 +294,85 @@
     "error.drop.not_in_inbox": {
         "message": "This drop is no longer available to adopt.",
         "context": "HTTP 409 on POST /drops/{id}/adopt (web-upload, invariant 32): the manifest's ciphertext_hash does not reference a pending drop in the caller's own inbox."
+    },
+    "cli.auth.login.email_prompt": {
+        "message": "Email",
+        "context": "CLI `capsule auth login` interactive prompt for the account email."
+    },
+    "cli.auth.login.password_prompt": {
+        "message": "Password",
+        "context": "CLI `capsule auth login` interactive prompt for the account password."
+    },
+    "cli.auth.login.in_progress": {
+        "message": "Logging in to Capsule…",
+        "context": "CLI status line printed while `capsule auth login` authenticates."
+    },
+    "cli.auth.login.success": {
+        "message": "Logged in as {email}.",
+        "context": "CLI success line after `capsule auth login`. {email} is the account email."
+    },
+    "cli.auth.login.failed": {
+        "message": "Login failed: {reason}",
+        "context": "CLI failure line for `capsule auth login`. {reason} is a localized or English error detail."
+    },
+    "cli.auth.logout.in_progress": {
+        "message": "Logging out from Capsule…",
+        "context": "CLI status line printed while `capsule auth logout` revokes the session."
+    },
+    "cli.auth.logout.success": {
+        "message": "Logged out.",
+        "context": "CLI success line after `capsule auth logout`."
+    },
+    "cli.auth.logout.not_logged_in": {
+        "message": "You are not logged in.",
+        "context": "CLI line when `capsule auth logout` runs with no stored session."
+    },
+    "cli.auth.not_authenticated": {
+        "message": "Not authenticated. Run 'capsule auth login' first.",
+        "context": "CLI error when a command needs a session but none is stored."
+    },
+    "cli.sync.in_progress": {
+        "message": "Syncing from {endpoint}…",
+        "context": "CLI status line printed while `capsule sync` drains the feed. {endpoint} is the sync server URL."
+    },
+    "cli.sync.dry_run_notice": {
+        "message": "Dry run: no changes will be persisted.",
+        "context": "CLI notice when `capsule sync --dry-run` runs."
+    },
+    "cli.sync.up_to_date": {
+        "message": "Already up to date.",
+        "context": "CLI line when `capsule sync` finds no new feed entries."
+    },
+    "cli.sync.complete": {
+        "message": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).",
+        "context": "CLI summary after `capsule sync`. {applied}, {albums}, {pages} are counts."
+    },
+    "cli.sync.failed": {
+        "message": "Sync failed: {reason}",
+        "context": "CLI failure line for `capsule sync`. {reason} is a localized or English error detail."
+    },
+    "cli.list.empty": {
+        "message": "No assets have synced yet.",
+        "context": "CLI empty-state line for `capsule list` when the sync-fed store is empty."
+    },
+    "cli.list.header": {
+        "message": "Synced library ({count} asset(s)):",
+        "context": "CLI header line for `capsule list`. {count} is the number of assets shown."
+    },
+    "cli.list.row": {
+        "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
+        "context": "CLI one-line rendering of a synced asset in `capsule list`. {state} is a localized status word."
+    },
+    "cli.list.state.active": {
+        "message": "active",
+        "context": "CLI `capsule list` asset state: the original blob is held server-side."
+    },
+    "cli.list.state.awaiting_original": {
+        "message": "awaiting-original",
+        "context": "CLI `capsule list` asset state: the original blob is not yet finalized server-side."
+    },
+    "cli.list.failed": {
+        "message": "Failed to list the library: {reason}",
+        "context": "CLI failure line for `capsule list`. {reason} is an error detail."
     }
 }

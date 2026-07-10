@@ -13,6 +13,7 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod cli_round_trip;
 mod sdk_client;
 
 use std::sync::Once;

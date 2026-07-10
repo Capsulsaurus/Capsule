@@ -7,10 +7,22 @@ edition.workspace = true
 name = "capsule"
 path = "src/main.rs"
 
+[lib]
+name = "capsule_cli"
+path = "src/lib.rs"
+
 [dependencies]
 capsule-cli-entity = { path = "./entity" }
 capsule-cli-migration = { path = "./migration" }
 capsule-core = { path = "../capsule-core" }
+# The CLI is a client: every network flow (auth login/refresh/logout, the sync
+# feed) rides `capsule-sdk`, the sanctioned network path — the CLI never
+# hand-rolls a request (S-D5). `capsule-i18n` supplies the localized user-facing
+# strings; no output string is hardcoded in this crate's new surfaces.
+capsule-sdk = { path = "../capsule-sdk" }
+capsule-i18n = { path = "../capsule-i18n" }
+secrecy = { workspace = true }
+serde_json = { workspace = true }
 base64 = { workspace = true }
 capitalize = "0.3.4"
 jiff = { workspace = true }

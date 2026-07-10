@@ -51,6 +51,17 @@ migration = { path = "../migration", package = "capsule-api-migration" }
 # `tests/sdk_client.rs`). The SDK is a dev-dep so the client and the server it
 # consumes are exercised together end-to-end.
 capsule-sdk = { path = "../../capsule-sdk" }
+# The real `capsule-cli` command functions driving the auth+sync services end to
+# end — the S-D5 CLI round-trip (auth login → sync → list). The CLI is the leaf
+# client, so it is a dev-dep here (not the reverse): keeping the server stack out
+# of the CLI's own dev-deps mirrors how S-D1/S-D2 host their client tests in the
+# server crate. `cli-migration` provisions the CLI's sync-fed SQLite store.
+capsule-cli = { path = "../../capsule-cli" }
+cli-migration = { path = "../../capsule-cli/migration", package = "capsule-cli-migration" }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sea-orm-migration = { workspace = true }

@@ -244,6 +244,36 @@ impl SyncState {
         }
     }
 
+    /// Rehydrate a state from a durably-persisted cursor and per-album high-water
+    /// marks (the client's store loaded at startup), pinned to the client's
+    /// current max-known protocol. The inverse of [`SyncState::cursor`] +
+    /// [`SyncState::high_water_marks`]: a client persists those two after every
+    /// [`apply_page`](SyncState::apply_page) and restores here on the next run so
+    /// the anti-rewind high-water mark survives process restarts (the CLI's
+    /// `capsule sync`, slice `S-D5`). `max_known_protocol` is intentionally *not*
+    /// persisted — it is the running build's own ceiling, so a client that
+    /// upgraded raises it here rather than restoring a stale one.
+    #[must_use]
+    pub fn restore(
+        max_known_protocol: impl Into<String>,
+        cursor: SyncCursor,
+        high_water: impl IntoIterator<Item = (Vec<u8>, u64)>,
+    ) -> Self {
+        Self {
+            max_known_protocol: max_known_protocol.into(),
+            high_water: high_water.into_iter().collect(),
+            cursor,
+        }
+    }
+
+    /// Every applied per-album high-water mark, for persistence across restarts.
+    /// Pair with [`SyncState::cursor`] and reload through [`SyncState::restore`].
+    pub fn high_water_marks(&self) -> impl Iterator<Item = (&[u8], u64)> {
+        self.high_water
+            .iter()
+            .map(|(album, seq)| (album.as_slice(), *seq))
+    }
+
     /// The cursor to hand to the next pull (round-tripped verbatim).
     #[must_use]
     pub fn cursor(&self) -> &SyncCursor {
