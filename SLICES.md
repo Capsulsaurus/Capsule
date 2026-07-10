@@ -124,6 +124,9 @@ its slice.
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | ready   |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
+| S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
+| S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | ready   |
+| S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | ready   |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
@@ -182,6 +185,7 @@ graph LR
   E2 --> E4[S-E4 aggregated albums]
   D2 --> E4
   H3 --> H4[S-H4 group evaluations]
+  I2[S-I2 locale rollout] --> I3[S-I3 readme translate]
 ```
 
 ## In-House and External Library Gates
@@ -988,6 +992,50 @@ its design here.
   AI-namespaced derived state feeding the `role = primary` suggestion.
 - **Depends on:** S-H3 (and the stacking surfaces). **Status: post-v1** — indexed now
   so the sequencing contract has an owner; not part of the v1 cut.
+
+## Lane I — i18n
+
+Catalog + client work over the [i18n contract](capsule-docs/src/content/docs/design/i18n.md);
+no new server surface. The infrastructure (catalogs, codegen, `capsule-i18n`
+runtime, error-code scheme) already ships — this lane is the content and rollout.
+
+### S-I1 — Hardcoded-string migration
+
+- **Contract:** [i18n — Canonical source](capsule-docs/src/content/docs/design/i18n.md);
+  the no-hardcoded-strings rule in `AGENTS.md`.
+- **Deliverable:** every user-facing literal in web JSX, SwiftUI `Text`, and
+  Compose moved onto catalog keys (`locales/en.json` grows the keys;
+  `mise run i18n` regenerates the per-platform files), plus a per-platform
+  lint/grep gate that fails on new user-facing literals so the migration cannot
+  regress.
+- **Done when:** the gate runs clean on all three surfaces; `mise run i18n-check`
+  green; the touched screens render from the catalogs.
+- **Tier:** Unit/Smoke per platform.
+
+### S-I2 — Official language-set rollout
+
+- **Contract:** [i18n — Supported Languages](capsule-docs/src/content/docs/design/i18n.md).
+- **Deliverable:** the twelve locales (`zh-Hans`, `zh-Hant`, `ja`, `ko`, `fr`,
+  `de`, `es`, `pt-BR`, `it`, `ru`, `hi`, `ar`) added to `locales/config.json` +
+  full catalogs (machine-seeded entries flagged for human review in the
+  translator `context` field); fallbacks direct-to-`en` (explicitly **no**
+  `zh-Hant → zh-Hans`); RTL support for `ar` (web `dir` attribute wiring, native
+  layout mirroring).
+- **Done when:** `mise run i18n-check` green with thirteen catalogs carrying the
+  full key set; an RTL smoke renders the web app mirrored under `ar`.
+- **Tier:** Unit + Smoke. **Blocks:** S-I3.
+
+### S-I3 — README translation pipeline
+
+- **Contract:** [i18n — README Translation](capsule-docs/src/content/docs/design/i18n.md).
+- **Deliverable:** `xtask translate-readme` — block segmentation (code/links/badges
+  pass through), glossary-pinned LLM translation, committed `README.<lang>.md`
+  with the do-not-edit banner — plus the key-less structural `--check` drift gate
+  in CI; languages mirror `locales/config.json`.
+- **Depends on:** S-I2 (the locale list it mirrors).
+- **Done when:** every non-source locale has a committed translation; mutating a
+  source segment makes `--check` fail; segmentation has golden tests.
+- **Tier:** Unit (segmentation goldens) + Smoke.
 
 ## Lane X — blocked on upstream
 
