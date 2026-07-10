@@ -207,7 +207,7 @@ pub fn release_owned_original<V: StorageVerifier + ?Sized>(
         ReleaseGate::new(verifier).may_release(asset_id, blob_hashes, verify_asset_accepted);
     if decision.is_release() {
         let _ = fs::remove_file(local_path);
-        db.remove_representation(&asset_id.simple().to_string(), "original")?;
+        db.remove_representation(&asset_id.to_string(), "original")?;
     }
     Ok(decision)
 }
@@ -349,7 +349,7 @@ mod tests {
             std::fs::write(&original, b"only copy").unwrap();
             let db = DatabaseDriver::open_in_memory().unwrap();
             db.upsert_representation(&CachedRepresentationRow {
-                uuid: asset.simple().to_string(),
+                uuid: asset.to_string(),
                 tier: "original".into(),
                 format: Some("jpg".into()),
                 bytes: 9,
@@ -366,7 +366,7 @@ mod tests {
             assert_eq!(decision.is_release(), expect_release);
             assert_eq!(original.exists(), !expect_release, "owned original file");
             assert_eq!(
-                db.representations_for(&asset.simple().to_string())
+                db.representations_for(&asset.to_string())
                     .unwrap()
                     .is_empty(),
                 expect_release,

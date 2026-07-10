@@ -189,6 +189,25 @@ pub struct SignedImportOptions {
     pub stack: Option<StackPlacement>,
 }
 
+/// A streamed import: everything the [streaming window](crate::import::streaming) needs about one
+/// just-imported asset to drive its upload → verify → release step, without exposing workspace
+/// internals. Produced by [`Workspace::import_asset_streaming`], which commits on the signed path
+/// with source release **deferred** to the server-side verify-before-destroy gate (`S-D4`), since
+/// in streaming mode the local bytes are the only copy until the *server* durably holds them.
+#[derive(Debug, Clone)]
+pub struct StreamedImport {
+    /// The imported asset's id.
+    pub asset_id: Uuid,
+    /// The declared blob content-addresses the release gate re-checks: the original ciphertext
+    /// and the sealed metadata blob (the always-present required blobs).
+    pub blob_hashes: Vec<Hash32>,
+    /// The local library original's path — released (its file deleted and owned-original
+    /// representation row dropped) only on a `durable` verdict.
+    pub local_original: PathBuf,
+    /// The external Move-mode source path, if any — deleted only on a `durable` verdict.
+    pub move_source: Option<PathBuf>,
+}
+
 /// An offline Capsule workspace over a client library directory.
 pub struct Workspace {
     root: PathBuf,
@@ -544,6 +563,13 @@ impl Workspace {
     /// The account's default album id (derived from the master key).
     pub fn default_album_id(&self) -> Uuid {
         self.account.master.derive_default_album_id()
+    }
+
+    /// The library root directory this workspace writes through. The streaming executor probes
+    /// its volume's free space ([`available_bytes`](crate::library::available_bytes)) for the
+    /// minimum-headroom check.
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     /// Create a container album: mint AMK_v1 + write-tier + admin keys and an attested
@@ -908,6 +934,50 @@ impl Workspace {
 
         self.assets.insert(asset_id, asset);
         Ok(asset_id)
+    }
+
+    /// Import a file on the signed path for a **streaming** import: identical to
+    /// [`import_asset_with`](Self::import_asset_with) but with `defer_source_release` forced on,
+    /// and returning the [`StreamedImport`] descriptor the streaming window drives its
+    /// per-asset upload → verify → release step from. The local original (and any Move-mode
+    /// source) is left in place — the [streaming executor](crate::import::streaming) releases it
+    /// only after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
+    #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display(), move_source))]
+    pub fn import_asset_streaming(
+        &mut self,
+        album_id: Uuid,
+        src: &Path,
+        move_source: bool,
+        stack: Option<StackPlacement>,
+    ) -> Result<StreamedImport> {
+        let opts = SignedImportOptions {
+            move_source,
+            defer_source_release: true,
+            stack,
+        };
+        let asset_id = self.import_asset_with(album_id, src, &opts)?;
+        let asset = self
+            .assets
+            .get(&asset_id)
+            .expect("asset just inserted by import_asset_with");
+        let head = &asset
+            .chain
+            .records()
+            .last()
+            .expect("provenance chain is never empty")
+            .manifest
+            .core;
+        // The always-present required blobs: original ciphertext + sealed metadata blob.
+        let mut blob_hashes = vec![head.ciphertext_hash];
+        if let Some(h) = head.metadata_blob_hash {
+            blob_hashes.push(h);
+        }
+        Ok(StreamedImport {
+            asset_id,
+            blob_hashes,
+            local_original: self.media_path(asset),
+            move_source: move_source.then(|| src.to_path_buf()),
+        })
     }
 
     /// Run `verify_asset` for a managed asset (regenerating its ciphertext deterministically).

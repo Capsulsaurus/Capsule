@@ -124,6 +124,18 @@ uniffi = { version = "0.31", optional = true }
 # build pulls in the TPM stack. See `crypto::keys::tpm`.
 tss-esapi = { version = "7", optional = true }
 
+# ── Free-space probe (native `library::space`) ─────────────────────────────
+# The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
+# `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)`
+# on Unix (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the
+# Win32 `GetDiskFreeSpaceExW`. Both are host-only — the `library` module is behind `native`,
+# so the wasm32 sealing build (target below) links neither. See the Dependencies design doc.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+
 # On wasm32 the OS CSPRNG has no default backend. `crypto::rng` uses getrandom 0.3 directly
 # (Web Crypto via the `wasm_js` feature + `--cfg getrandom_backend="wasm_js"`, set for this
 # target in `.cargo/config.toml`). The crypto stack (via `rand_core 0.6`) also pulls

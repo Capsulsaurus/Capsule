@@ -32,8 +32,8 @@ pub use receipts::{
     CustodyReceipt, CustodyReceiptCore, ReceiptExpectations, ReceiptRejection, append_receipt,
     load_receipts, verify_receipt,
 };
-pub use space::{available_bytes, streaming_recommended};
+pub use space::{available_bytes, largest_asset_fits, streaming_recommended};
 pub use storage_verify::{
     BlobRole, BlobVerdict, ReleaseDecision, ReleaseGate, RetainReason, StorageVerdict,
-    StorageVerifier, release_is_safe, release_move_source, release_owned_original,
+    StorageVerifier, VerifierError, release_is_safe, release_move_source, release_owned_original,
 };

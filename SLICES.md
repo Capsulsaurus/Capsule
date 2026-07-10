@@ -69,7 +69,7 @@ its slice.
 | S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | done* |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | done    |
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | done    |
-| S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
+| S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | done    |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
 | S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | done    |
 | S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | done    |
@@ -396,6 +396,15 @@ pass until the gate lifts.
   pipeline doc's three streaming Validation bullets pass; `space.rs`'s `#[ignore]`d
   probe test flips.
 - **Tier:** Unit (auto-detect) + Smoke (release gating, halt-on-disconnect).
+- **Landed:** real `available_bytes` probe (rustix/windows-sys, native-gated);
+  planner `total_size` with the recommendation attached at confirmation (planner
+  determinism untouched); `execute_streaming` window over injected
+  `AssetUploader`/`StorageVerifier` seams (core network-free; SDK/CLI supply real
+  ones); halt-on-disconnect resumes via plan re-derivation without re-import.
+  Landing also fixed an S-D4 latent bug this slice exposed: `release_owned_original`
+  keyed representation rows by unhyphenated UUID while the lifecycle writer indexes
+  hyphenated — the release lookup could never match (tests were self-consistently
+  wrong); all sites now use the writer's form.
 
 ### S-B4 — Staged uploads (low-data tier ladder)
 

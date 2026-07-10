@@ -167,7 +167,9 @@ fn execute_candidate(
 }
 
 /// Persist the `asset_stacks` row + its members once the member assets exist in the index.
-fn persist_stack(
+/// Shared with the [streaming executor](crate::import::streaming), which groups multi-file
+/// candidates the same way.
+pub(crate) fn persist_stack(
     workspace: &Workspace,
     candidate: &ImportCandidate,
     stack_id: &str,
