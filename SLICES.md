@@ -68,7 +68,7 @@ its slice.
 | S-A6  | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto     | S-A1             | L    | done    |
 | S-A7  | `gps.datum` sidecar field + BD-09 input fold         | core-crypto     | geocoordinates-rs (fold only) | S | ready |
 | S-B1  | Thumbnail/LQIP generation                            | media/import    | —                | L    | done    |
-| S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | ready   |
+| S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | done    |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
 | S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | ready   |
@@ -354,6 +354,13 @@ pass until the gate lifts.
 - **Done when:** an executor import produces `verify_asset`-accepting assets with
   derivatives; planner determinism suite unchanged.
 - **Tier:** Unit (planner) + Smoke (executor).
+- **Landed:** executor drives `Workspace::import_asset_with` (STREAM → signed
+  sidecar → sealed blob → signed create → self-gate on `verify_asset` + binding);
+  derivatives + LQIP behind `media` via S-B1's encoder seam; EXIF capture/GPS into
+  the signed sidecar; move-mode releases the source only after the verified durable
+  commit; planner suite untouched. The unsigned `AssetSidecar` write path is no
+  longer reachable from the executor (deletion = S-G4). Known gap (pre-existing):
+  album keys are session-scoped — durable key persistence is its own follow-up.
 
 ### S-B3 — Streaming import
 

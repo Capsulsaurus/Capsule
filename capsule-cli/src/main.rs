@@ -1,17 +1,19 @@
 use std::path::Path;
 
 use capitalize::Capitalize;
+use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
 use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::{
     CancellationToken, ImportConfig, ImportOutcome, ImportProgressEvent, execute, plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
+use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
 use clap::Parser;
 use cli::{AuthCommands, Cli, Commands, LibraryCommands};
 use colored::*;
-use dialoguer::Confirm;
+use dialoguer::{Confirm, Password};
 use eyre::{Result, eyre};
 use tracing::trace;
 use tracing_subscriber::prelude::*;
@@ -138,7 +140,20 @@ async fn main() -> Result<()> {
                 .green()
             );
 
-            let lib = open_library_or_err(&library)?;
+            // Open the library as a signed workspace: imports land on the signed lifecycle path
+            // (signed sidecar + manifest + provenance + derivatives), never the legacy unsigned
+            // sidecar (S-B2). A first import initializes the account under the given passphrase.
+            let passphrase = Password::new()
+                .with_prompt("Library passphrase")
+                .interact()
+                .map_err(|e| eyre!("Failed to read passphrase: {e}"))?;
+            let mut ws =
+                Workspace::open(&library, passphrase.as_bytes(), DeviceTier::Normal.params())
+                    .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?;
+            // Album key material is session-scoped for now (durable album-key persistence is a
+            // separate slice); ensure the default album exists to receive this import.
+            let default_album = ws.default_album_id();
+            ws.create_album_with_id(default_album, "Imports");
 
             // Phase 1: Scan
             println!("{}", "Scanning source files...".cyan());
@@ -166,7 +181,7 @@ async fn main() -> Result<()> {
             };
 
             let plan_result =
-                plan(&scan_result, &lib.db, &config).map_err(|e| eyre!("Planning failed: {e}"))?;
+                plan(&scan_result, ws.db(), &config).map_err(|e| eyre!("Planning failed: {e}"))?;
 
             println!(
                 "{}",
@@ -181,8 +196,6 @@ async fn main() -> Result<()> {
 
             if plan_result.counts.to_import == 0 {
                 println!("{}", "Nothing to import.".yellow());
-                lib.close()
-                    .map_err(|e| eyre!("Failed to close library: {e}"))?;
                 return Ok(());
             }
 
@@ -192,7 +205,7 @@ async fn main() -> Result<()> {
 
             let summary = execute(
                 &plan_result,
-                &lib,
+                &mut ws,
                 &config,
                 |event| {
                     if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event {
@@ -232,9 +245,6 @@ async fn main() -> Result<()> {
                 )
                 .green()
             );
-
-            lib.close()
-                .map_err(|e| eyre!("Failed to close library: {e}"))?;
         }
 
         // ── Demo ──────────────────────────────────────────────────────────

@@ -1,39 +1,49 @@
-use std::collections::BTreeMap;
-use std::fs;
-use std::path::{Path, PathBuf};
+//! Phase 4 — execute an import plan onto the **signed lifecycle path** (slice `S-B2`).
+//!
+//! Each `ImportDecision::Import` candidate is imported through
+//! [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with): every member
+//! becomes a signed [`SidecarV1`](crate::sidecar::sidecar_v1::SidecarV1) + signed manifest +
+//! append-only provenance, self-verified through
+//! [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — behind the `media` feature,
+//! when a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is attached to the
+//! workspace — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+//!
+//! This retires the legacy unsigned `AssetSidecar` write path from the executor (that write path
+//! itself is deleted wholesale later, in `S-G4`). The pure planner (`import::planner`) is
+//! unchanged: it still decides *what* to import; the executor decides *how* to commit it.
+
+use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::db::rows::{AssetRow, AssetStackRow, StackMemberRow};
-use crate::domain::MemberRole;
-use crate::exif::extract::extract_exif;
-use crate::exif::timezone::resolve_timezone;
+use crate::db::rows::{AssetStackRow, StackMemberRow};
+use crate::domain::{ImportMode, MemberRole};
 use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
 use crate::import::scan::ImportCandidate;
-use crate::library::library::Library;
-use crate::library::paths::{media_path, sidecar_path, tmp_path};
-use crate::metadata::AssetType;
-use crate::sidecar::asset_sidecar::AssetSidecar;
-use crate::sidecar::io::write_sidecar;
-use crate::sidecar::stack_hint::StackHint;
+use crate::lifecycle::{LifecycleError, SignedImportOptions, StackPlacement, Workspace};
 
-const IMPORTER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const RAWSHIFT_VERSION: &str = "0.0.0";
+type ExecError = Box<dyn std::error::Error + Send + Sync>;
 
-/// Phase 4 — execute the import plan.
+/// Phase 4 — execute the import plan against `workspace`.
 ///
-/// Each `ImportDecision::Import` candidate undergoes a 10-step atomic
-/// two-phase commit. Files are never partially written: every media file and
-/// its sidecar are either fully committed or cleaned up.
+/// Every `ImportDecision::Import` candidate is committed through the signed lifecycle path; skip
+/// decisions are reported verbatim. Assets are written into the album resolved from
+/// `config.target_album_id` (a UUID string) or, when unset, the workspace's default album — which
+/// must already exist in the workspace.
 pub fn execute(
     plan: &ImportActionPlan,
-    library: &Library,
+    workspace: &mut Workspace,
     config: &ImportConfig,
     on_event: impl Fn(ImportProgressEvent),
     cancel: &CancellationToken,
-) -> Result<ImportExecutionSummary, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<ImportExecutionSummary, ExecError> {
+    let album_id = match &config.target_album_id {
+        Some(s) => Uuid::parse_str(s).map_err(|e| format!("invalid target album id {s:?}: {e}"))?,
+        None => workspace.default_album_id(),
+    };
+
     let total = plan.actions.len() as u64;
     let total_files: u64 = plan
         .actions
@@ -62,7 +72,7 @@ pub fn execute(
         });
 
         let outcomes = match decision {
-            ImportDecision::Import => execute_candidate(candidate, library, config)?,
+            ImportDecision::Import => execute_candidate(candidate, workspace, config, album_id)?,
             ImportDecision::SkipDuplicate { existing_uuid } => {
                 vec![(
                     primary_path,
@@ -97,293 +107,103 @@ pub fn execute(
 
 // ── Per-candidate execution ──────────────────────────────────────────────────
 
+/// Import every member of `candidate` through the signed path, then persist its stack grouping
+/// (if any). Move-mode source release and stack placement are handled inside the signed import.
 fn execute_candidate(
     candidate: &ImportCandidate,
-    library: &Library,
+    workspace: &mut Workspace,
     config: &ImportConfig,
-) -> Result<Vec<(PathBuf, ImportOutcome)>, Box<dyn std::error::Error + Send + Sync>> {
-    let now = now_secs();
-    let mut member_commits: Vec<MemberCommit> = Vec::new();
+    album_id: Uuid,
+) -> Result<Vec<(PathBuf, ImportOutcome)>, ExecError> {
+    let move_source = matches!(config.import_mode, ImportMode::Move);
+    // One stack id per multi-file candidate; the primary member stays visible, the rest hidden.
+    let stack_id = candidate
+        .stack_type
+        .map(|_| format!("stack-{}", Uuid::now_v7().simple()));
 
-    // ── Phase A: copy + verify all members ──────────────────────────────────
-    for (source_path, role) in &candidate.members {
-        match commit_member(source_path, *role, candidate, library, config, now) {
-            Ok(commit) => member_commits.push(commit),
-            Err(e) => {
-                // Roll back any already-committed members for this candidate
-                for prev in &member_commits {
-                    let _ = fs::remove_file(&prev.media_final);
-                    let _ = fs::remove_file(&prev.sidecar_final);
-                }
-                let outcome = if e.contains("corrupt_transfer") {
-                    ImportOutcome::CorruptTransfer
-                } else if e.contains("permission") {
-                    ImportOutcome::PermissionDenied(e)
-                } else {
-                    ImportOutcome::CorruptUnreadable(e)
-                };
-                return Ok(vec![(source_path.clone(), outcome)]);
+    let mut outcomes = Vec::new();
+    let mut imported: Vec<(String, MemberRole)> = Vec::new();
+
+    for (seq, (path, role)) in candidate.members.iter().enumerate() {
+        let is_primary = *role == MemberRole::Primary || seq == 0;
+        let stack = stack_id.as_ref().map(|sid| StackPlacement {
+            stack_id: sid.clone(),
+            hidden: !is_primary,
+        });
+        let opts = SignedImportOptions { move_source, stack };
+
+        match workspace.import_asset_with(album_id, path, &opts) {
+            Ok(uuid) => {
+                imported.push((uuid.to_string(), *role));
+                outcomes.push((path.clone(), ImportOutcome::Imported));
             }
+            Err(e) => outcomes.push((path.clone(), import_error_outcome(&e))),
         }
     }
 
-    // ── Phase B: DB inserts + stack ─────────────────────────────────────────
-    let primary_commit = member_commits
-        .iter()
-        .find(|c| c.role == MemberRole::Primary)
-        .or_else(|| member_commits.first());
-
-    let stack_id = if candidate.stack_type.is_some() {
-        let sid = format!("stack-{now}");
-        // Determine primary UUID
-        let primary_uuid = primary_commit
-            .map(|c| c.uuid_str.clone())
-            .unwrap_or_default();
-
-        let stack_row = AssetStackRow {
-            id: sid.clone(),
-            stack_type: candidate.stack_type.map_or_else(
-                || "custom".to_string(),
-                |st| format!("{st:?}").to_lowercase(),
-            ),
-            primary_asset_id: primary_uuid.clone(),
-            cover_asset_id: Some(primary_uuid),
-            is_collapsed: true,
-            is_auto_generated: true,
-            created_at: now,
-            modified_at: now,
-        };
-        let _ = library.db.insert_stack(&stack_row);
-        Some(sid)
-    } else {
-        None
-    };
-
-    let mut outcomes = Vec::new();
-    for (seq, commit) in member_commits.iter().enumerate() {
-        let is_primary = commit.role == MemberRole::Primary || seq == 0;
-
-        let row = AssetRow {
-            uuid: commit.uuid_str.clone(),
-            asset_type: asset_type_str(candidate.detected_type).to_string(),
-            capture_timestamp: commit.capture_utc.unwrap_or(now),
-            capture_utc: commit.capture_utc,
-            capture_tz_source: commit.capture_tz_source.clone(),
-            import_timestamp: now,
-            hash_sha256: commit.hash.clone(),
-            width: commit.width.map(|w| w as i64),
-            height: commit.height.map(|h| h as i64),
-            duration_ms: None,
-            stack_id: stack_id.clone(),
-            is_stack_hidden: !is_primary,
-            chromahash: None,
-            dominant_color: None,
-            album_id: config.target_album_id.clone(),
-            rating: 0,
-            is_deleted: false,
-            deleted_at: None,
-        };
-        library.db.insert_asset(&row)?;
-
-        if let Some(ref sid) = stack_id {
-            let member_row = StackMemberRow {
-                id: format!("{sid}#{seq}"),
-                stack_id: sid.clone(),
-                asset_id: commit.uuid_str.clone(),
-                sequence_order: seq as i64,
-                member_role: role_str(commit.role).to_string(),
-                created_at: now,
-            };
-            let _ = library.db.insert_stack_member(&member_row);
-        }
-
-        // Move mode: delete source file after successful commit
-        if matches!(config.import_mode, crate::domain::ImportMode::Move) {
-            let _ = fs::remove_file(&commit.source_path);
-        }
-
-        outcomes.push((commit.source_path.clone(), ImportOutcome::Imported));
+    if let Some(sid) = &stack_id
+        && !imported.is_empty()
+    {
+        persist_stack(workspace, candidate, sid, &imported)?;
     }
 
     Ok(outcomes)
 }
 
-// ── Per-member atomic commit ─────────────────────────────────────────────────
-
-struct MemberCommit {
-    source_path: PathBuf,
-    uuid_str: String,
-    role: MemberRole,
-    hash: String,
-    media_final: PathBuf,
-    sidecar_final: PathBuf,
-    capture_utc: Option<i64>,
-    capture_tz_source: Option<String>,
-    width: Option<u32>,
-    height: Option<u32>,
-}
-
-fn commit_member(
-    source: &Path,
-    role: MemberRole,
+/// Persist the `asset_stacks` row + its members once the member assets exist in the index.
+fn persist_stack(
+    workspace: &Workspace,
     candidate: &ImportCandidate,
-    library: &Library,
-    config: &ImportConfig,
-    now: i64,
-) -> Result<MemberCommit, String> {
-    // Step 1: Generate UUID
-    let uuid = Uuid::now_v7();
-    let uuid_str = uuid.to_string();
+    stack_id: &str,
+    imported: &[(String, MemberRole)],
+) -> Result<(), ExecError> {
+    let now = now_secs();
+    let primary_uuid = imported
+        .iter()
+        .find(|(_, r)| *r == MemberRole::Primary)
+        .or_else(|| imported.first())
+        .map(|(u, _)| u.clone())
+        .unwrap_or_default();
 
-    // Step 2: EXIF + timezone
-    let exif = extract_exif(source).unwrap_or_default();
-    let tz = resolve_timezone(&exif);
-    let capture_utc = tz.capture_utc;
-    let capture_tz_source = tz
-        .capture_tz_source
-        .map(|s| format!("{s:?}").to_lowercase());
-    let width = exif.width;
-    let height = exif.height;
-
-    let ext = source
-        .extension()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_lowercase();
-
-    // Step 3: Create media dir
-    let final_media = media_path(&library.root, &uuid, &ext, capture_utc);
-    fs::create_dir_all(
-        final_media
-            .parent()
-            .expect("media path always has a parent directory"),
-    )
-    .map_err(|e| format!("mkdir failed: {e}"))?;
-
-    // Step 4: Copy source → tmp
-    let tmp_media = tmp_path(&final_media);
-    fs::copy(source, &tmp_media).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::PermissionDenied {
-            format!("permission denied: {e}")
-        } else {
-            format!("copy failed: {e}")
-        }
-    })?;
-
-    // Step 5: SHA-256 verify
-    let source_bytes = fs::read(source).map_err(|e| format!("read failed: {e}"))?;
-    let source_hash = crate::utils::hash::hash_bytes(&source_bytes);
-    let tmp_bytes = fs::read(&tmp_media).map_err(|e| format!("read tmp failed: {e}"))?;
-    let tmp_hash = crate::utils::hash::hash_bytes(&tmp_bytes);
-    if source_hash != tmp_hash {
-        let _ = fs::remove_file(&tmp_media);
-        return Err("corrupt_transfer".to_string());
-    }
-
-    // Step 6: Build sidecar
-    let stack_hint = candidate.stack_type.map(|st| StackHint {
-        detection_key: candidate
-            .detection_key
-            .clone()
-            .unwrap_or_else(|| uuid_str.clone()),
-        detection_method: candidate
-            .detection_method
-            .unwrap_or(crate::domain::DetectionMethod::FilenameStem),
-        member_role: role,
-        stack_type: st,
-    });
-
-    let original_filename = source
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let sidecar = AssetSidecar {
-        version: 1,
-        uuid: uuid_str.clone(),
-        asset_type: candidate.detected_type,
-        original_filename,
-        import_timestamp: now,
-        modified_timestamp: now,
-        hash_sha256: source_hash.clone(),
-        file_size: source_bytes.len() as u64,
-        is_deleted: false,
-        rating: 0,
-        tags: vec![],
-        import_mode: config.import_mode,
-        importer_version: IMPORTER_VERSION.to_string(),
-        rawshift_version: RAWSHIFT_VERSION.to_string(),
-        capture_timestamp: tz.capture_timestamp,
-        capture_utc,
-        capture_tz: tz.capture_tz,
-        capture_tz_source: tz.capture_tz_source,
-        tz_db_version: tz.tz_db_version,
-        width,
-        height,
-        duration_ms: None,
-        stack_hint,
-        album_id: config.target_album_id.clone(),
-        deleted_at: None,
-        camera_make: exif.make,
-        camera_model: exif.model,
-        gps_lat: exif.gps_lat,
-        gps_lon: exif.gps_lon,
-        unknown_fields: BTreeMap::new(),
+    let stack_row = AssetStackRow {
+        id: stack_id.to_string(),
+        stack_type: candidate.stack_type.map_or_else(
+            || "custom".to_string(),
+            |st| format!("{st:?}").to_lowercase(),
+        ),
+        primary_asset_id: primary_uuid.clone(),
+        cover_asset_id: Some(primary_uuid),
+        is_collapsed: true,
+        is_auto_generated: true,
+        created_at: now,
+        modified_at: now,
     };
+    workspace.db().insert_stack(&stack_row)?;
 
-    // Step 7: Write sidecar tmp
-    let final_sidecar = sidecar_path(&library.root, &uuid, &ext, capture_utc);
-    let tmp_sidecar = tmp_path(&final_sidecar);
-    write_sidecar(&tmp_sidecar, &sidecar).map_err(|e| {
-        let _ = fs::remove_file(&tmp_media);
-        format!("sidecar write failed: {e}")
-    })?;
-
-    // Step 8: Rename media tmp → final (atomic)
-    fs::rename(&tmp_media, &final_media).map_err(|e| {
-        let _ = fs::remove_file(&tmp_media);
-        let _ = fs::remove_file(&tmp_sidecar);
-        format!("rename media failed: {e}")
-    })?;
-
-    // Step 9: Rename sidecar tmp → final (atomic)
-    // Note: write_sidecar already does the tmp→final rename internally,
-    // so final_sidecar already exists. But we wrote to tmp_sidecar above
-    // manually via tmp_path; write_sidecar expects the *destination* path
-    // and handles the .tmp internally. Adjust: write directly to final.
-    // Actually write_sidecar(path, …) writes to path.tmp then renames to path.
-    // So if we called write_sidecar(&tmp_sidecar, …) that wrote to tmp_sidecar.tmp
-    // then renamed to tmp_sidecar. We then need to rename tmp_sidecar → final_sidecar.
-    if tmp_sidecar.exists() {
-        fs::rename(&tmp_sidecar, &final_sidecar).map_err(|e| {
-            let _ = fs::remove_file(&tmp_sidecar);
-            format!("rename sidecar failed: {e}")
-        })?;
+    for (seq, (uuid, role)) in imported.iter().enumerate() {
+        let member_row = StackMemberRow {
+            id: format!("{stack_id}#{seq}"),
+            stack_id: stack_id.to_string(),
+            asset_id: uuid.clone(),
+            sequence_order: seq as i64,
+            member_role: role_str(*role).to_string(),
+            created_at: now,
+        };
+        workspace.db().insert_stack_member(&member_row)?;
     }
-    // If write_sidecar already placed it at the right path, we're done.
-
-    Ok(MemberCommit {
-        source_path: source.to_path_buf(),
-        uuid_str,
-        role,
-        hash: source_hash,
-        media_final: final_media,
-        sidecar_final: final_sidecar,
-        capture_utc,
-        capture_tz_source,
-        width,
-        height,
-    })
+    Ok(())
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-fn asset_type_str(t: AssetType) -> &'static str {
-    match t {
-        AssetType::Photo => "photo",
-        AssetType::Video => "video",
-        AssetType::Sidecar => "sidecar",
+/// Map a signed-import failure to a per-file outcome. Permission errors surface distinctly; the
+/// rest — including the "should never happen" self-verify failures — report as unreadable.
+fn import_error_outcome(e: &LifecycleError) -> ImportOutcome {
+    let msg = e.to_string();
+    if msg.contains("permission") {
+        ImportOutcome::PermissionDenied(msg)
+    } else {
+        ImportOutcome::CorruptUnreadable(msg)
     }
 }
 
@@ -415,108 +235,91 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use tempfile::TempDir;
 
     use super::*;
+    use crate::crypto::primitives::Argon2Params;
+    use crate::crypto::verify_asset::VerifyOutcome;
     use crate::domain::ImportMode;
-    use crate::import::executor_cancellation::CancellationToken;
     use crate::import::planner::{ImportConfig, plan};
     use crate::import::scanner::scan;
-    use crate::library::init::init_library;
 
     fn noop_event(_: ImportProgressEvent) {}
 
+    /// A workspace with fast Argon2 params + its default album created, so imports have a signed
+    /// destination (the executor resolves `target_album_id: None` to the default album).
+    fn signed_workspace(dir: &Path) -> Workspace {
+        let mut ws = Workspace::create_with_params(
+            dir,
+            b"passphrase",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let default = ws.default_album_id();
+        ws.create_album_with_id(default, "Imports");
+        ws
+    }
+
     #[test]
-    fn test_single_file_import() {
+    fn single_file_import_is_verify_asset_accepting() {
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
+        fs::write(src.path().join("test.jpg"), b"fake jpeg content for test").unwrap();
 
-        let photo = src.path().join("test.jpg");
-        fs::write(&photo, b"fake jpeg content for test").unwrap();
-
-        let lib = init_library(lib_dir.path(), "Test").unwrap();
+        let mut ws = signed_workspace(lib_dir.path());
         let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
         let config = ImportConfig::default();
-        let plan_result = plan(&scan_result, &lib.db, &config).unwrap();
-
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
         assert_eq!(plan_result.counts.to_import, 1);
 
         let token = CancellationToken::new();
-        let summary = execute(&plan_result, &lib, &config, noop_event, &token).unwrap();
-
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
         assert_eq!(summary.imported_count(), 1);
 
-        // Verify media file exists in library
-        let media_root = lib_dir.path().join("media");
-        let media_files: Vec<_> = walkdir::WalkDir::new(&media_root)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_file() && !e.path().to_string_lossy().ends_with(".cbor"))
-            .collect();
-        assert_eq!(
-            media_files.len(),
-            1,
-            "exactly one media file should be in library"
-        );
+        // The imported asset lands on the signed path and self-verifies through the chokepoint.
+        let ids = ws.asset_ids();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
 
-        // Verify sidecar exists
-        let sidecar_files: Vec<_> = walkdir::WalkDir::new(&media_root)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map(|x| x == "cbor").unwrap_or(false))
-            .collect();
-        assert_eq!(sidecar_files.len(), 1, "exactly one sidecar should exist");
-
-        // Verify DB has a row
-        let timeline = lib.db.query_timeline(0, 100).unwrap();
-        assert_eq!(timeline.len(), 1);
+        // The queryable index has exactly one visible row.
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
     }
 
     #[test]
-    fn test_corrupt_transfer_detected() {
-        // Test that CorruptTransfer outcome occurs when source and copy diverge.
-        // This is hard to simulate with real fs::copy, so we test the hash comparison logic.
-        let src_bytes = b"source content";
-        let tmp_bytes = b"different content"; // simulates corruption
-        let src_hash = crate::utils::hash::hash_bytes(src_bytes);
-        let tmp_hash = crate::utils::hash::hash_bytes(tmp_bytes);
-        assert_ne!(
-            src_hash, tmp_hash,
-            "hashes should differ for corrupt transfer test"
-        );
-    }
-
-    #[test]
-    fn test_move_mode_deletes_source() {
+    fn move_mode_deletes_source() {
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
-
         let photo = src.path().join("move_me.jpg");
         fs::write(&photo, b"jpeg to move").unwrap();
 
-        let lib = init_library(lib_dir.path(), "Test").unwrap();
+        let mut ws = signed_workspace(lib_dir.path());
         let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
         let config = ImportConfig {
             import_mode: ImportMode::Move,
             ..Default::default()
         };
-        let plan_result = plan(&scan_result, &lib.db, &config).unwrap();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
         let token = CancellationToken::new();
-        execute(&plan_result, &lib, &config, noop_event, &token).unwrap();
+        execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
 
         assert!(
             !photo.exists(),
             "source file should be deleted in move mode"
         );
+        let ids = ws.asset_ids();
+        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
     }
 
     #[test]
-    fn test_cancellation_stops_execution() {
+    fn cancellation_stops_execution() {
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
-
-        // Create 3 files
         for i in 0..3 {
             fs::write(
                 src.path().join(format!("photo_{i}.jpg")),
@@ -525,32 +328,31 @@ mod tests {
             .unwrap();
         }
 
-        let lib = init_library(lib_dir.path(), "Test").unwrap();
+        let mut ws = signed_workspace(lib_dir.path());
         let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
         let config = ImportConfig::default();
-        let plan_result = plan(&scan_result, &lib.db, &config).unwrap();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
 
         let token = CancellationToken::new();
-        token.cancel(); // Cancel before starting
+        token.cancel(); // Cancel before starting.
 
-        let summary = execute(&plan_result, &lib, &config, noop_event, &token).unwrap();
-        // No files should be processed (cancelled before first item)
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
         assert_eq!(
             summary.outcomes.len(),
             0,
             "no files imported after immediate cancellation"
         );
+        assert_eq!(ws.asset_ids().len(), 0);
     }
 
     #[test]
-    fn test_raw_jpeg_stack_import() {
+    fn raw_jpeg_stack_import_hides_secondary() {
         let src = TempDir::new().unwrap();
         let lib_dir = TempDir::new().unwrap();
-
         fs::write(src.path().join("img_0001.jpg"), b"jpeg content").unwrap();
         fs::write(src.path().join("img_0001.ARW"), b"raw content").unwrap();
 
-        let lib = init_library(lib_dir.path(), "Test").unwrap();
+        let mut ws = signed_workspace(lib_dir.path());
         let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
         assert_eq!(
             scan_result.candidates.len(),
@@ -559,22 +361,140 @@ mod tests {
         );
 
         let config = ImportConfig::default();
-        let plan_result = plan(&scan_result, &lib.db, &config).unwrap();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
         let token = CancellationToken::new();
-        let summary = execute(&plan_result, &lib, &config, noop_event, &token).unwrap();
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
 
+        assert_eq!(summary.imported_count(), 2, "both RAW and JPEG imported");
+        // Both members verify on the signed path.
+        for id in ws.asset_ids() {
+            assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+        }
+        // Only the primary is visible in the timeline (the RAW is stack-hidden).
         assert_eq!(
-            summary.imported_count(),
-            2,
-            "both RAW and JPEG should be imported"
+            ws.db().query_timeline(0, 100).unwrap().len(),
+            1,
+            "only the primary member is visible"
+        );
+    }
+
+    /// S-B2: an executor import produces `verify_asset`-accepting assets **with signed
+    /// derivatives** when a `StillEncoder` is attached (behind the `media` feature).
+    #[cfg(feature = "media")]
+    #[test]
+    fn import_generates_signed_derivatives() {
+        use crate::media::image::buffer::{ComponentType, ImageBuffer, PixelFormat};
+        use crate::media::image::derivative::{DerivativeFormat, DerivativeTier, StillEncoder};
+        use crate::media::image::formats::jpeg::JpegImage;
+        use crate::media::image::metadata::ImageMetadata;
+        use crate::media::image::types::ImageFormat;
+        use crate::media::image::{Image, ImageEncode};
+        use crate::media::metadata::ColorSpace;
+
+        /// Deterministic in-test byte encoder standing in for the SDK's per-platform codecs.
+        struct TagEncoder;
+        impl StillEncoder for TagEncoder {
+            fn encode(
+                &self,
+                buffer: &ImageBuffer,
+                format: DerivativeFormat,
+                _tier: DerivativeTier,
+            ) -> Result<Vec<u8>, crate::media::image::buffer::ImageBufferError> {
+                let tag: u8 = match format {
+                    DerivativeFormat::Jxl => 0x4A,
+                    DerivativeFormat::Avif => 0xAF,
+                    DerivativeFormat::WebP => 0x7B,
+                    DerivativeFormat::Original => 0x00,
+                };
+                let mut v = Vec::with_capacity(buffer.data.len() + 1);
+                v.push(tag);
+                v.extend_from_slice(&buffer.data);
+                Ok(v)
+            }
+        }
+
+        // A real, decodable JPEG (512×384 gradient) so the still decode + derivative path runs.
+        fn gradient_jpeg() -> Vec<u8> {
+            let (w, h) = (512usize, 384usize);
+            let mut data = Vec::with_capacity(w * h * 3);
+            for y in 0..h {
+                for x in 0..w {
+                    data.push((x % 256) as u8);
+                    data.push((y % 256) as u8);
+                    data.push(((x + y) % 256) as u8);
+                }
+            }
+            let buffer = ImageBuffer::new(
+                data,
+                w,
+                h,
+                PixelFormat::Rgb,
+                ComponentType::U8,
+                ColorSpace::Srgb,
+            )
+            .unwrap();
+            let meta = ImageMetadata {
+                format: Some(ImageFormat::Jpeg),
+                width: w as u32,
+                height: h as u32,
+                bit_depth: 8,
+                color_space: ColorSpace::Srgb,
+                ..Default::default()
+            };
+            JpegImage::from_raw_parts(buffer, meta)
+                .unwrap()
+                .encode_to_bytes()
+                .unwrap()
+        }
+
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        fs::write(src.path().join("photo.jpg"), gradient_jpeg()).unwrap();
+
+        let mut ws = signed_workspace(lib_dir.path()).with_still_encoder(Box::new(TagEncoder));
+        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+        let config = ImportConfig::default();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+
+        let token = CancellationToken::new();
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+        assert_eq!(summary.imported_count(), 1);
+
+        let ids = ws.asset_ids();
+        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
+
+        // The sidecar carries an LQIP computed from the decoded still.
+        assert!(
+            ws.asset(&ids[0]).unwrap().sidecar.lqip.is_some(),
+            "LQIP should be populated for a decodable still"
         );
 
-        // Timeline should show only 1 asset (JPEG visible, RAW hidden)
-        let timeline = lib.db.query_timeline(0, 100).unwrap();
-        assert_eq!(
-            timeline.len(),
-            1,
-            "only primary should be visible in timeline"
+        // Signed derivatives are persisted: the manifest bundle plus the encoded tiers.
+        let stem = ids[0].simple().to_string();
+        let deriv_files: Vec<_> = walkdir::WalkDir::new(lib_dir.path().join("media"))
+            .into_iter()
+            .filter_map(std::result::Result::ok)
+            .filter(|e| {
+                e.path()
+                    .to_string_lossy()
+                    .contains(&format!("derivatives/{stem}"))
+            })
+            .filter(|e| e.path().is_file())
+            .collect();
+        assert!(
+            deriv_files
+                .iter()
+                .any(|e| e.path().to_string_lossy().ends_with(".derivatives.cbor")),
+            "the signed derivative manifest bundle should exist"
+        );
+        // Thumbnail (>256px → 3 formats) + preview (3 formats) tiers were written to disk.
+        let tier_files = deriv_files
+            .iter()
+            .filter(|e| !e.path().to_string_lossy().ends_with(".derivatives.cbor"))
+            .count();
+        assert!(
+            tier_files >= 2,
+            "expected multiple derivative tier files, got {tier_files}"
         );
     }
 }

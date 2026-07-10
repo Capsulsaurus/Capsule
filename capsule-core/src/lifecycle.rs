@@ -40,8 +40,8 @@ use crate::crypto::encryption::{blob_ciphertext_hash, seal_blob, stream};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{
-    Account, Amk, AmkVersion, DekKeypair, DeviceDirectory, HybridSigningKey, HybridVerifyingKey,
-    Signer,
+    Account, AccountFile, Amk, AmkVersion, DekKeypair, DeviceDirectory, HybridSigningKey,
+    HybridVerifyingKey, Signer,
 };
 use crate::crypto::primitives::{Argon2Params, CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::action::Action;
@@ -60,13 +60,20 @@ use crate::drop::{
     DropDescriptor, DropError, DropId, LinkCaps, PassphraseVerifier, PendingDrop, SealedDrop,
     UploadLink, UploadLinkId, generate_opaque_id as generate_drop_id, open_drop_key,
 };
+use crate::exif::extract::extract_exif;
+use crate::exif::timezone::resolve_timezone;
 use crate::library::Library;
+#[cfg(feature = "media")]
+use crate::media::image::derivative::{
+    DerivativeContext, DerivativeFormat, DerivativeTier, GeneratedDerivative,
+    generate_still_derivatives,
+};
 use crate::metadata::crdt::{AddId, Counter, Lww};
 use crate::sharing::{
     LINK_SECRET_LEN, RevocationRecord, ScopeMaterial, ShareLink, ShareLinkId, ShareLinkIssuer,
     ShareLinkRecord, ShareScope, SharingError, encapsulate_scope, generate_opaque_id,
 };
-use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+use crate::sidecar::sidecar_v1::{Dimensions, Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
 const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
@@ -142,6 +149,32 @@ pub struct AssetState {
     /// metadata-bearing write ([`Action::binds_metadata_blob`]); untouched by `delete` /
     /// `trash-restore`, which mint no new blob.
     pub metadata_blob: Vec<u8>,
+    /// Placement within a multi-file stack (RAW+JPEG, Live Photo, …) when this asset was
+    /// imported as a stack member; `None` for a standalone asset. Drives the queryable index
+    /// row's `stack_id` / `is_stack_hidden` so a hidden secondary member stays out of the
+    /// timeline exactly as the legacy importer arranged.
+    pub stack: Option<StackPlacement>,
+}
+
+/// Placement of a signed asset within an import stack. The executor mints one `stack_id` per
+/// multi-file [`ImportCandidate`](crate::import::scan::ImportCandidate) and marks every
+/// non-primary member `hidden`, so the primary alone surfaces in the timeline.
+#[derive(Debug, Clone)]
+pub struct StackPlacement {
+    /// The shared stack id (the `asset_stacks` row id the members belong to).
+    pub stack_id: String,
+    /// Whether this member is hidden from the timeline (true for every non-primary member).
+    pub hidden: bool,
+}
+
+/// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack)
+/// reproduce the standalone [`Workspace::import_asset`] behaviour.
+#[derive(Debug, Clone, Default)]
+pub struct SignedImportOptions {
+    /// Delete the source file after a durable commit (Move mode).
+    pub move_source: bool,
+    /// Stack placement for a multi-file candidate member.
+    pub stack: Option<StackPlacement>,
 }
 
 /// An offline Capsule workspace over a client library directory.
@@ -177,6 +210,13 @@ pub struct Workspace {
     /// staging store (`capsule-api-media::drops`, S-C5) so the offline core can drive the
     /// full seal → stage → adopt path; a real client fills it from server responses.
     inbox: HashMap<DropId, InboxEntry>,
+    /// The per-platform still-derivative byte encoder (the `capsule-sdk` codec seam). When set
+    /// (behind the `media` feature), a signed import additionally decodes the still, computes its
+    /// LQIP, and generates + signs thumbnail/preview [`DerivativeManifest`]s per S-B1's pipeline.
+    /// `None` leaves imports at signed-original-only, so the default library build stays free of
+    /// the media stack.
+    #[cfg(feature = "media")]
+    still_encoder: Option<Box<dyn crate::media::image::derivative::StillEncoder>>,
 }
 
 /// The issuer-held state for one live upload link. The Drop Key private half is **escrowed**
@@ -212,6 +252,13 @@ struct InboxEntry {
 
 fn now_rfc3339() -> String {
     Timestamp::now().to_string()
+}
+
+/// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
+fn capture_rfc3339(secs: i64) -> String {
+    Timestamp::from_second(secs)
+        .unwrap_or(Timestamp::UNIX_EPOCH)
+        .to_string()
 }
 
 fn content_type_for(ext: &str) -> String {
@@ -279,8 +326,8 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         width: asset.sidecar.dimensions.as_ref().map(|d| d.width as i64),
         height: asset.sidecar.dimensions.as_ref().map(|d| d.height as i64),
         duration_ms: None,
-        stack_id: None,
-        is_stack_hidden: false,
+        stack_id: asset.stack.as_ref().map(|s| s.stack_id.clone()),
+        is_stack_hidden: asset.stack.as_ref().is_some_and(|s| s.hidden),
         chromahash: None,
         dominant_color: None,
         album_id: Some(asset.album_id.to_string()),
@@ -358,6 +405,70 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
+            #[cfg(feature = "media")]
+            still_encoder: None,
+        })
+    }
+
+    /// Attach the per-platform [`StillEncoder`](crate::media::image::derivative::StillEncoder) so
+    /// signed imports generate thumbnail/preview derivatives + LQIP (S-B1 → S-B2). Without it,
+    /// imports are signed-original-only.
+    #[cfg(feature = "media")]
+    #[must_use]
+    pub fn with_still_encoder(
+        mut self,
+        encoder: Box<dyn crate::media::image::derivative::StillEncoder>,
+    ) -> Self {
+        self.still_encoder = Some(encoder);
+        self
+    }
+
+    /// Open an **existing** library at `root` as a signed workspace, unlocking (or, on first use,
+    /// creating + persisting) the account under `passphrase`. `params` sets the Argon2id cost for
+    /// a first-time account and the share-link wrap tier. Album key material is session-scoped
+    /// (minted per run via [`create_album`](Self::create_album)); durable album-key persistence is
+    /// a separate concern tracked in `SLICES.md`.
+    pub fn open(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+    ) -> Result<Self> {
+        let library = crate::library::open_library(root)
+            .map_err(|e| LifecycleError::Io(format!("open library: {e}")))?;
+        let account_path = root.join(".library").join("account.cbor");
+        let account = if account_path.exists() {
+            let bytes = fs::read(&account_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
+            let file: AccountFile =
+                cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+            file.unlock(passphrase)?
+        } else {
+            let account = Account::create();
+            let file = account.to_file_with(passphrase, params)?;
+            let acct_bytes =
+                cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+            fs::write(&account_path, &acct_bytes).map_err(|e| LifecycleError::Io(e.to_string()))?;
+            account
+        };
+
+        let device_signer: Box<dyn Signer> = Box::new(account.device.dsk.clone());
+        let directory = Self::build_directory(&account, device_signer.verifying_key());
+        let counter = Counter::new(account.device.device_id);
+        Ok(Self {
+            root: root.to_path_buf(),
+            account,
+            device_signer,
+            directory,
+            counter,
+            albums: HashMap::new(),
+            authorities: HashMap::new(),
+            assets: HashMap::new(),
+            library,
+            argon2_params: params,
+            share_links: HashMap::new(),
+            upload_links: HashMap::new(),
+            inbox: HashMap::new(),
+            #[cfg(feature = "media")]
+            still_encoder: None,
         })
     }
 
@@ -562,13 +673,54 @@ impl Workspace {
     ///
     /// [sealing order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
+        self.import_asset_with(album_id, src, &SignedImportOptions::default())
+    }
+
+    /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
+    /// (Move-mode source release + stack placement). This is the single signed write path the
+    /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
+    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — behind
+    /// the `media` feature, when a [`StillEncoder`](crate::media::image::derivative::StillEncoder)
+    /// is attached — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+    pub fn import_asset_with(
+        &mut self,
+        album_id: Uuid,
+        src: &Path,
+        opts: &SignedImportOptions,
+    ) -> Result<Uuid> {
         let plaintext = fs::read(src)
             .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
         let ext = src
             .extension()
             .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
         let asset_id = Uuid::now_v7();
-        let capture_utc = Timestamp::now().as_second();
+
+        // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
+        // degrade cleanly (capture → now; dimensions/GPS → absent).
+        let exif = extract_exif(src).unwrap_or_default();
+        let tz = resolve_timezone(&exif);
+        let capture_utc = tz
+            .capture_utc
+            .unwrap_or_else(|| Timestamp::now().as_second());
+        let gps = exif.gps_lat.zip(exif.gps_lon).map(|(lat, lon)| Gps {
+            lat,
+            lon,
+            source: GpsSource::Exif,
+        });
+
+        // Still-derived sidecar metadata (dimensions + LQIP) and the derivatives to persist
+        // after the commit. Behind `media` this decodes the still once and generates the signed
+        // derivatives; without it, dimensions come from EXIF and no derivatives are generated.
+        #[cfg(feature = "media")]
+        let (dimensions, lqip, pending_derivatives) =
+            self.prepare_still(&plaintext, &ext, &exif, asset_id, album_id)?;
+        #[cfg(not(feature = "media"))]
+        let (dimensions, lqip) = (
+            exif.width
+                .zip(exif.height)
+                .map(|(width, height)| Dimensions { width, height }),
+            None::<crate::sidecar::sidecar_v1::Lqip>,
+        );
 
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
@@ -582,11 +734,11 @@ impl Workspace {
             crypto_suite_id: CRYPTO_SUITE_ID,
             uuid: asset_id,
             hash: hash::hash_bytes(&plaintext),
-            capture_timestamp: now_rfc3339(),
+            capture_timestamp: capture_rfc3339(capture_utc),
             import_timestamp: now_rfc3339(),
             content_type: content_type_for(&ext),
-            dimensions: None,
-            lqip: None,
+            dimensions,
+            lqip,
             tags_user: Default::default(),
             tags_ai: Default::default(),
             caption: Default::default(),
@@ -597,7 +749,7 @@ impl Workspace {
             camera_id: None,
             device_id: self.account.device.device_id,
             session_id: Uuid::now_v7(),
-            gps: None,
+            gps,
             provenance_chain_hash: None,
             unknown: BTreeMap::new(),
             signature: None,
@@ -670,10 +822,21 @@ impl Workspace {
             chain,
             sidecar,
             metadata_blob,
+            stack: opts.stack.clone(),
         };
         self.write_asset_files(&asset, &plaintext)?;
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, plaintext.len())?;
+
+        // Persist the signed still derivatives generated pre-commit (media + encoder attached).
+        #[cfg(feature = "media")]
+        self.persist_derivatives(&asset, &pending_derivatives)?;
+
+        // Move mode: release the source only after the durable, self-verified commit.
+        if opts.move_source {
+            let _ = fs::remove_file(src);
+        }
+
         self.assets.insert(asset_id, asset);
         Ok(asset_id)
     }
@@ -948,6 +1111,7 @@ impl Workspace {
                 sidecar,
                 // The artifact preserves the exact sealed blob the manifest committed to.
                 metadata_blob: restored.metadata_blob.clone(),
+                stack: None,
             };
             self.write_asset_files(&asset, &restored.plaintext)?;
             self.index_asset_row(&asset)?;
@@ -1074,6 +1238,139 @@ impl Workspace {
                 })
             }
         }
+    }
+}
+
+/// Still-derivative generation for the signed import path (S-B1 → S-B2). Compiled only with the
+/// `media` feature: decode the still, compute its LQIP, and generate + sign the thumbnail/preview
+/// [`DerivativeManifest`](crate::crypto::provenance::DerivativeManifest)s through the injected
+/// [`StillEncoder`](crate::media::image::derivative::StillEncoder).
+#[cfg(feature = "media")]
+impl Workspace {
+    /// Decode a still into an in-memory pixel buffer, dispatching on extension. Unsupported or
+    /// undecodable bytes yield `None` (the import proceeds signed-original-only).
+    fn decode_still(
+        &self,
+        bytes: &[u8],
+        ext: &str,
+    ) -> Option<crate::media::image::buffer::ImageBuffer> {
+        use crate::media::image::{Image, ImageDecode};
+        match ext {
+            "jpg" | "jpeg" => {
+                crate::media::image::formats::jpeg::JpegImage::decode_from_bytes(bytes)
+                    .ok()
+                    .map(|img| img.get_buffer())
+            }
+            "png" => crate::media::image::formats::png::PngImage::decode_from_bytes(bytes)
+                .ok()
+                .map(|img| img.get_buffer()),
+            _ => None,
+        }
+    }
+
+    /// Compute the sidecar LQIP (chromahash + versioned fallback color) from a decoded buffer.
+    fn lqip_from_buffer(
+        buffer: &crate::media::image::buffer::ImageBuffer,
+    ) -> Option<crate::sidecar::sidecar_v1::Lqip> {
+        let rgba = buffer.to_rgba8().ok()?;
+        let lqip = crate::media::image::lqip::LQIP::from_rgba_buffer(&rgba).ok()?;
+        lqip.to_sidecar().ok()
+    }
+
+    /// Decode the still once and derive: pixel `dimensions`, the sidecar `lqip`, and the signed
+    /// thumbnail/preview derivatives (empty when no encoder is attached). All are attached before
+    /// the sidecar is sealed / after the manifest is signed, per the pipeline's Execute step.
+    fn prepare_still(
+        &self,
+        plaintext: &[u8],
+        ext: &str,
+        exif: &crate::exif::extract::ExifExtract,
+        asset_id: Uuid,
+        album_id: Uuid,
+    ) -> Result<(
+        Option<Dimensions>,
+        Option<crate::sidecar::sidecar_v1::Lqip>,
+        Vec<GeneratedDerivative>,
+    )> {
+        let exif_dimensions = exif
+            .width
+            .zip(exif.height)
+            .map(|(width, height)| Dimensions { width, height });
+
+        let Some(buffer) = self.decode_still(plaintext, ext) else {
+            // Undecodable / unsupported still: EXIF dimensions only, no LQIP or derivatives.
+            return Ok((exif_dimensions, None, Vec::new()));
+        };
+
+        let dimensions = Some(Dimensions {
+            width: buffer.width as u32,
+            height: buffer.height as u32,
+        });
+        let lqip = Self::lqip_from_buffer(&buffer);
+
+        let derivatives = match self.still_encoder.as_ref() {
+            Some(encoder) => {
+                let album = self.album(&album_id)?;
+                let ctx = DerivativeContext {
+                    source_asset_id: asset_id,
+                    crypto_suite_id: CRYPTO_SUITE_ID,
+                    protocol_version: PROTOCOL_VERSION.into(),
+                    amk_version: AmkVersion(album.current_epoch),
+                    generated_by_device: self.account.device.device_id,
+                    generated_by_client: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+                    generated_at: now_rfc3339(),
+                    device_signer: self.device_signer.as_ref(),
+                    write_tier_signer: &album.write_tier,
+                };
+                generate_still_derivatives(
+                    &buffer,
+                    plaintext,
+                    &[DerivativeTier::Thumbnail, DerivativeTier::Preview],
+                    encoder.as_ref(),
+                    &ctx,
+                )
+                .map_err(|e| LifecycleError::Io(format!("derivative generation: {e}")))?
+            }
+            None => Vec::new(),
+        };
+        Ok((dimensions, lqip, derivatives))
+    }
+
+    /// Write the generated derivative bytes + their signed manifest bundle under the asset's
+    /// media directory (`derivatives/{uuid}.{role}.{ext}` and `{uuid}.derivatives.cbor`).
+    fn persist_derivatives(
+        &self,
+        asset: &AssetState,
+        derivatives: &[GeneratedDerivative],
+    ) -> Result<()> {
+        if derivatives.is_empty() {
+            return Ok(());
+        }
+        let dir = media_dir(&self.root, asset.capture_utc).join("derivatives");
+        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
+        let stem = asset.asset_id.simple();
+
+        let mut manifests = Vec::with_capacity(derivatives.len());
+        for d in derivatives {
+            let format_ext = match d.format {
+                DerivativeFormat::Jxl => "jxl",
+                DerivativeFormat::Avif => "avif",
+                DerivativeFormat::WebP => "webp",
+                DerivativeFormat::Original => asset.ext.as_str(),
+            };
+            let role = match d.tier {
+                DerivativeTier::Thumbnail => "thumbnail",
+                DerivativeTier::Preview => "preview",
+            };
+            fs::write(dir.join(format!("{stem}.{role}.{format_ext}")), &d.bytes)
+                .map_err(|e| LifecycleError::Io(e.to_string()))?;
+            manifests.push(d.manifest.clone());
+        }
+        let bundle =
+            cbor::to_canonical_vec(&manifests).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
+        fs::write(dir.join(format!("{stem}.derivatives.cbor")), bundle)
+            .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        Ok(())
     }
 }
 

@@ -28,15 +28,22 @@ impl LQIP {
     where
         T: AsRef<ImageBuffer>,
     {
+        Self::from_rgba_buffer(buffer.as_ref())
+    }
+
+    /// Generate an LQIP (thumbhash) from an RGBA8 [`ImageBuffer`] synchronously.
+    ///
+    /// The thumbhash computation is pure CPU work with no I/O; this is the blocking sibling of
+    /// [`from_image_buffer`](Self::from_image_buffer) for callers already off the async path
+    /// (e.g. the signed import executor). The buffer MUST be RGBA8; it is downsized internally.
+    pub fn from_rgba_buffer(buffer: &ImageBuffer) -> Result<LQIP, LQIPError> {
         // Downsize so the longest edge is at most MAX_SIZE px before hashing.
         const MAX_SIZE: usize = 100;
 
-        let buffer = buffer.as_ref();
         if buffer.format != PixelFormat::Rgba || buffer.component_type != ComponentType::U8 {
             return Err(LQIPError::UnsupportedFormat);
         }
 
-        // Use a Cow-like approach using a variable for ownership
         let resized_buffer;
         let work_buffer = if buffer.width > MAX_SIZE || buffer.height > MAX_SIZE {
             let (new_width, new_height) =
