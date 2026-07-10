@@ -8661,7 +8661,7 @@ checksum = "636f85e5ca6488e96401b61eb7de54f4e44755c988af0f52cf90230c312a1a89"
 name = "xtask"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "eyre",
  "regex",
  "semver",
  "serde_json",

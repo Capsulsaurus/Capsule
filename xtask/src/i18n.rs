@@ -17,7 +17,7 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
 use serde_json::{Map, Value};
 
