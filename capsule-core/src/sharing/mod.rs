@@ -97,13 +97,21 @@ pub enum ScopeMaterial {
 }
 
 impl ScopeMaterial {
-    /// Derive the per-file AES-256 key for `file_id`, written under epoch `amk_version`.
+    /// Derive the per-file AES-256 key for `file_id`, written under epoch `amk_version` with
+    /// the manifest's `nonce_prefix`.
     ///
     /// For an [`Asset`](ScopeMaterial::Asset) scope the key is returned directly (and the
-    /// `file_id` must match); for an [`Album`](ScopeMaterial::Album) scope it is derived
-    /// from the requested epoch's AMK. A file/epoch this material does not cover is
-    /// [`SharingError::ScopeUnavailable`].
-    pub fn file_key_for(&self, file_id: &Uuid, amk_version: u32) -> Result<[u8; 32], SharingError> {
+    /// `file_id` must match) — the grant was minted with the asset's own `nonce_prefix`
+    /// already folded in, so the argument is unused. For an [`Album`](ScopeMaterial::Album)
+    /// scope it is derived from the requested epoch's AMK with `nonce_prefix` folded into the
+    /// salt (the fold is what re-rolls the key per write). A file/epoch this material does not
+    /// cover is [`SharingError::ScopeUnavailable`].
+    pub fn file_key_for(
+        &self,
+        file_id: &Uuid,
+        amk_version: u32,
+        nonce_prefix: &[u8],
+    ) -> Result<[u8; 32], SharingError> {
         match self {
             ScopeMaterial::Asset {
                 file_id: owned,
@@ -113,7 +121,7 @@ impl ScopeMaterial {
                 .ok_or(SharingError::ScopeUnavailable),
             ScopeMaterial::Album { amks, .. } => amks
                 .get(&amk_version)
-                .map(|amk| Amk::from_bytes(*amk).derive_file_key(file_id))
+                .map(|amk| Amk::from_bytes(*amk).derive_file_key(file_id, nonce_prefix))
                 .ok_or(SharingError::ScopeUnavailable),
         }
     }
@@ -474,14 +482,20 @@ mod tests {
             album_id,
             amks: amks.clone(),
         };
-        // Album epoch key matches a direct AMK derivation ...
+        let np = [0xEEu8; 7];
+        // Album epoch key matches a direct AMK derivation under the same folded nonce prefix ...
         assert_eq!(
-            album.file_key_for(&file_id, 1).unwrap(),
-            Amk::from_bytes(amks[&1]).derive_file_key(&file_id),
+            album.file_key_for(&file_id, 1, &np).unwrap(),
+            Amk::from_bytes(amks[&1]).derive_file_key(&file_id, &np),
+        );
+        // ... a distinct nonce prefix re-rolls it (the fold) ...
+        assert_ne!(
+            album.file_key_for(&file_id, 1, &np).unwrap(),
+            album.file_key_for(&file_id, 1, &[0x11u8; 7]).unwrap(),
         );
         // ... and an epoch the material does not cover is unavailable.
         assert_eq!(
-            album.file_key_for(&file_id, 3),
+            album.file_key_for(&file_id, 3, &np),
             Err(SharingError::ScopeUnavailable),
         );
 
@@ -489,10 +503,11 @@ mod tests {
             file_id,
             file_key: [3u8; 32],
         };
-        assert_eq!(asset.file_key_for(&file_id, 1).unwrap(), [3u8; 32]);
+        // An asset grant carries the folded key; the nonce-prefix argument is unused.
+        assert_eq!(asset.file_key_for(&file_id, 1, &np).unwrap(), [3u8; 32]);
         // A different asset id is not covered by a single-asset grant.
         assert_eq!(
-            asset.file_key_for(&Uuid::now_v7(), 1),
+            asset.file_key_for(&Uuid::now_v7(), 1, &np),
             Err(SharingError::ScopeUnavailable),
         );
     }

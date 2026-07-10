@@ -748,15 +748,15 @@ mod tests {
 
     // ── Metadata↔manifest binding (S-A3, invariant 25 client half) ───────────────
 
-    use crate::crypto::encryption::seal_blob;
+    use crate::crypto::encryption::seal_metadata_blob;
 
-    /// Seal `sidecar` under a fixed blob key and produce a create manifest committing to the
-    /// blob's content hash. Returns `(manifest, blob, blob_key)`.
+    /// Seal `sidecar` into a metadata blob (fresh nonce folded into the derived blob key) and
+    /// produce a create manifest committing to the blob's content hash. Returns
+    /// `(manifest, blob, blob_key)`.
     fn sealed_create(f: &Fixture, sidecar: &[u8]) -> (AssetManifest, Vec<u8>, [u8; 32]) {
         let amk = Amk::from_bytes([0x5A; 32]);
         let file_id = Uuid::from_u128(0xF11E);
-        let blob_key = amk.derive_blob_key(&file_id);
-        let blob = seal_blob(&blob_key, sidecar);
+        let (blob, blob_key) = seal_metadata_blob(&amk, &file_id, sidecar, None).unwrap();
         let mut c = f.core(Action::Create, None);
         c.metadata_blob_hash = Some(blob_ciphertext_hash(&blob));
         let m = c.sign(&f.device, &f.write1).unwrap();

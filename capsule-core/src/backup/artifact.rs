@@ -570,7 +570,7 @@ impl BackupArtifact {
                 ))
             })?;
         let amk = Amk::from_bytes(*amk_bytes);
-        let file_key = amk.derive_file_key(&head.core.file_id);
+        let file_key = amk.derive_file_key(&head.core.file_id, &head.core.nonce_prefix);
         let plaintext = stream::decrypt_asset_vec(&file_key, &head.core.nonce_prefix, ct)
             .map_err(|_| BackupError::Auth("asset decryption failed"))?;
 
@@ -634,8 +634,10 @@ mod tests {
         fn asset(&self, asset_id: u128, plaintext: &[u8]) -> BackupAsset {
             let amk = Amk::from_bytes(self.amk);
             let file_id = Uuid::from_u128(asset_id);
-            let file_key = amk.derive_file_key(&file_id);
-            let (enc, ct) = stream::encrypt_asset_vec_full(&file_key, plaintext);
+            // First write: draw the nonce and derive the folded file key together.
+            let (enc, ct, _file_key) =
+                crate::crypto::encryption::encrypt_asset_rekey(&amk, &file_id, plaintext, None)
+                    .unwrap();
 
             let core = MCore {
                 version: ASSET_MANIFEST_VERSION.into(),
@@ -669,10 +671,14 @@ mod tests {
                 album_id: Uuid::from_u128(ALBUM),
                 asset_id: file_id,
                 ciphertext: ct,
-                metadata_blob: crate::crypto::encryption::seal_blob(
-                    &amk.derive_blob_key(&file_id),
+                metadata_blob: crate::crypto::encryption::seal_metadata_blob(
+                    &amk,
+                    &file_id,
                     b"{sidecar}",
-                ),
+                    None,
+                )
+                .unwrap()
+                .0,
                 provenance: vec![record],
                 receipts: Vec::new(),
             }

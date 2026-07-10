@@ -56,9 +56,13 @@ impl SuiteId {
 /// Versioned HKDF `info` labels. Including a version string lets the KDF be rotated
 /// later without a flag day; the SSoT for each label is the doc that derives that key.
 pub mod info {
-    /// Per-file asset key: `HKDF(ikm=AMK, salt=file_id, info=ASSET_FILE_V1)`.
+    /// Per-file asset key: `HKDF(ikm=AMK, salt=file_id || nonce_prefix, info=ASSET_FILE_V1)`.
+    /// The fresh `nonce_prefix` is folded into the salt so a same-epoch `replace` re-rolls
+    /// the key, not merely the nonce (see <https://docs/design/cryptography/encryption/#re-keying-on-rewrite>).
     pub const ASSET_FILE_V1: &[u8] = b"asset-file/v1";
-    /// Per-metadata-blob key: `HKDF(ikm=AMK, salt=blob_id, info=METADATA_BLOB_V1)`.
+    /// Per-metadata-blob key: `HKDF(ikm=AMK, salt=blob_id || nonce, info=METADATA_BLOB_V1)`.
+    /// The blob's fresh `nonce` is folded into the salt, re-rolling the key per write even
+    /// though `blob_id` is constant across a `metadata-update`.
     pub const METADATA_BLOB_V1: &[u8] = b"metadata-blob/v1";
     /// Wrap key for an externally-chosen file key (`key_mode = wrapped`; an adopted
     /// web-upload drop): `HKDF(ikm=AMK, salt=file_id || wrap_nonce, info=ASSET_KEYWRAP_V1)`.

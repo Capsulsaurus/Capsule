@@ -36,7 +36,9 @@ use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::ReferenceAuthority;
 use crate::crypto::encryption::keywrap::seal_file_key;
-use crate::crypto::encryption::{blob_ciphertext_hash, seal_blob, stream};
+use crate::crypto::encryption::{
+    blob_ciphertext_hash, blob_nonce, encrypt_asset_rekey, seal_metadata_blob, stream,
+};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{
@@ -142,10 +144,11 @@ pub struct AssetState {
     /// The signed sidecar.
     pub sidecar: SidecarV1,
     /// The **exact** sealed metadata-blob wire bytes the current metadata-bearing manifest
-    /// commits to via `metadata_blob_hash`. Because [`seal_blob`] draws a fresh nonce per call,
-    /// the blob cannot be regenerated deterministically from the plaintext sidecar (unlike the
-    /// asset ciphertext, which is re-derived from the recorded `nonce_prefix`), so the bytes are
-    /// retained to keep the content address stable across export. Re-sealed on every
+    /// commits to via `metadata_blob_hash`. Because [`seal_metadata_blob`] draws a fresh nonce
+    /// per call (folded into the blob key), the blob cannot be regenerated deterministically
+    /// from the plaintext sidecar (unlike the asset ciphertext, which is re-derived from the
+    /// recorded `nonce_prefix`), so the bytes are retained to keep the content address stable
+    /// across export. Re-sealed on every
     /// metadata-bearing write ([`Action::binds_metadata_blob`]); untouched by `delete` /
     /// `trash-restore`, which mint no new blob.
     pub metadata_blob: Vec<u8>,
@@ -592,12 +595,21 @@ impl Workspace {
         ))
     }
 
-    /// Derive the per-file key under a *specific* epoch's AMK. Callers pass the epoch the asset
-    /// was written under (`amk_version`), never assuming the album's current epoch — so an asset
-    /// imported before a rotation still derives the key it was encrypted with.
-    fn file_key(&self, album: &AlbumKeys, epoch: u32, file_id: &Uuid) -> [u8; 32] {
+    /// Re-derive the per-file key under a *specific* epoch's AMK for a known `nonce_prefix`
+    /// (the value recorded in the manifest). Callers pass the epoch the asset was written
+    /// under (`amk_version`), never assuming the album's current epoch — so an asset imported
+    /// before a rotation still derives the key it was encrypted with. Because the fresh
+    /// `nonce_prefix` is folded into the salt, this is the read/regenerate path; a *fresh*
+    /// write goes through [`encrypt_asset_rekey`], which draws the nonce and derives together.
+    fn file_key(
+        &self,
+        album: &AlbumKeys,
+        epoch: u32,
+        file_id: &Uuid,
+        nonce_prefix: &[u8],
+    ) -> [u8; 32] {
         let amk = Amk::from_bytes(album.amks[&epoch]);
-        amk.derive_file_key(file_id)
+        amk.derive_file_key(file_id, nonce_prefix)
     }
 
     /// Build a signed lifecycle manifest for `asset`, sharing the create manifest's content
@@ -731,8 +743,10 @@ impl Workspace {
 
         let album = self.album(&album_id)?;
         let epoch = album.current_epoch;
-        let file_key = self.file_key(album, epoch, &asset_id);
-        let (enc, ciphertext) = stream::encrypt_asset_vec_full(&file_key, &plaintext);
+        let amk = Amk::from_bytes(album.amks[&epoch]);
+        // First write: draw a fresh nonce prefix and derive the folded file key together
+        // (nothing to replace on a create).
+        let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.
@@ -763,10 +777,10 @@ impl Workspace {
         };
         sidecar.sign(&self.account.user_ik);
 
-        // (3) Seal the sidecar into the metadata blob; compute its content hash.
-        let amk = Amk::from_bytes(album.amks[&epoch]);
-        let blob_key = amk.derive_blob_key(&asset_id);
-        let metadata_blob = seal_blob(&blob_key, &sidecar.to_canonical_vec());
+        // (3) Seal the sidecar into the metadata blob (fresh nonce folded into the blob key;
+        // nothing to replace on a create); compute its content hash.
+        let (metadata_blob, blob_key) =
+            seal_metadata_blob(&amk, &asset_id, &sidecar.to_canonical_vec(), None)?;
         let metadata_blob_hash = blob_ciphertext_hash(&metadata_blob);
 
         // (4) Build + sign the manifest with `prior_provenance_hash = H` (None) and the
@@ -865,7 +879,12 @@ impl Workspace {
             .manifest;
         let plaintext =
             fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-        let file_key = self.file_key(album, head.core.amk_version.0, &head.core.file_id);
+        let file_key = self.file_key(
+            album,
+            head.core.amk_version.0,
+            &head.core.file_id,
+            &head.core.nonce_prefix,
+        );
         let (_, ciphertext) =
             stream::encrypt_asset_vec_with_prefix(&file_key, head.core.nonce_prefix, &plaintext);
 
@@ -909,28 +928,41 @@ impl Workspace {
             .clone();
         let binds = action.binds_metadata_blob();
         let epoch = base.amk_version.0;
-        let blob_key = {
+        let album_amk = {
             let album = self.album(&album_id)?;
-            Amk::from_bytes(album.amks[&epoch]).derive_blob_key(asset_id)
+            Amk::from_bytes(album.amks[&epoch])
         };
+        // Set by the metadata-bearing branch to the freshly derived blob key (nonce-folded),
+        // for the binding self-check below.
+        let mut sealed_blob_key: Option<[u8; 32]> = None;
 
         // Sealing order (2)+(3) for a metadata-bearing action: mutate + re-sign the sidecar with
-        // `provenance_chain_hash = H`, then seal it and compute the fresh blob hash. `delete` /
-        // `trash-restore` mint no new blob, so the sidecar and its stored blob are left as the
-        // last metadata-bearing write produced them (their manifests commit to no blob).
+        // `provenance_chain_hash = H`, then re-seal it under a fresh nonce folded into the blob
+        // key (refusing to reuse the superseded nonce) and compute the fresh blob hash.
+        // `delete` / `trash-restore` mint no new blob, so the sidecar and its stored blob are
+        // left as the last metadata-bearing write produced them (their manifests commit to no
+        // blob).
         let metadata_blob_hash = if binds {
             let add_id = self.counter.issue();
             let asset = self
                 .assets
                 .get_mut(asset_id)
                 .expect("asset_id was validated above");
+            // The nonce of the blob this update supersedes — refused for the fresh draw.
+            let prior_nonce = blob_nonce(&asset.metadata_blob);
             mutate_sidecar(&mut asset.sidecar, add_id);
             asset.sidecar.provenance_chain_hash = prior;
             asset.sidecar.signature = None;
             asset.sidecar.sign(&self.account.user_ik);
-            let blob = seal_blob(&blob_key, &asset.sidecar.to_canonical_vec());
+            let (blob, blob_key) = seal_metadata_blob(
+                &album_amk,
+                asset_id,
+                &asset.sidecar.to_canonical_vec(),
+                prior_nonce,
+            )?;
             let hash = blob_ciphertext_hash(&blob);
             asset.metadata_blob = blob;
+            sealed_blob_key = Some(blob_key);
             Some(hash)
         } else {
             None
@@ -968,7 +1000,7 @@ impl Workspace {
             let binding = verify_metadata_binding(
                 &manifest,
                 &asset.metadata_blob,
-                &blob_key,
+                &sealed_blob_key.expect("the metadata-bearing branch set the blob key"),
                 &asset.sidecar.to_canonical_vec(),
             );
             if binding != MetadataBinding::Bound {
@@ -1045,7 +1077,7 @@ impl Workspace {
             let plaintext =
                 fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
             let epoch = head.core.amk_version.0;
-            let file_key = self.file_key(album, epoch, &head.core.file_id);
+            let file_key = self.file_key(album, epoch, &head.core.file_id, &head.core.nonce_prefix);
             let (_, ciphertext) = stream::encrypt_asset_vec_with_prefix(
                 &file_key,
                 head.core.nonce_prefix,
@@ -1242,7 +1274,9 @@ impl Workspace {
                     .amks
                     .get(&epoch)
                     .ok_or(SharingError::ScopeUnavailable)?;
-                let file_key = Amk::from_bytes(*amk).derive_file_key(&asset_id);
+                // Carry the folded file key: the recipient re-uses the manifest's
+                // `nonce_prefix` to decrypt, so the grant must derive under that same prefix.
+                let file_key = Amk::from_bytes(*amk).derive_file_key(&asset_id, &head.nonce_prefix);
                 Ok(ScopeMaterial::Asset {
                     file_id: asset_id,
                     file_key,
@@ -1675,8 +1709,11 @@ impl crate::drop::DropAdopter for Workspace {
         };
         sidecar.sign(&self.account.user_ik);
 
-        let blob_key = amk.derive_blob_key(&file_id);
-        let metadata_blob = seal_blob(&blob_key, &sidecar.to_canonical_vec());
+        // Seal the sidecar into the metadata blob (fresh nonce folded into the blob key; the
+        // adoption is a create, so there is no prior nonce to refuse).
+        let (metadata_blob, blob_key) =
+            seal_metadata_blob(&amk, &file_id, &sidecar.to_canonical_vec(), None)
+                .map_err(|_| DropError::Crypto("adopted metadata blob seal failed"))?;
         let metadata_blob_hash = blob_ciphertext_hash(&metadata_blob);
 
         // Rewrap K under the album AMK (`asset-keywrap/v1`) — K is *carried* wrapped, not
@@ -1899,9 +1936,10 @@ mod tests {
             st.sidecar.provenance_chain_hash
         );
 
-        // The stored blob round-trips to the signed sidecar under the asset's blob key.
-        let blob_key =
-            Amk::from_bytes(ws.album(&album).unwrap().amks[&epoch]).derive_blob_key(&asset);
+        // The stored blob round-trips to the signed sidecar under the asset's blob key,
+        // re-derived from the blob's own (folded) nonce.
+        let blob_key = Amk::from_bytes(ws.album(&album).unwrap().amks[&epoch])
+            .derive_blob_key(&asset, &blob_nonce(&st.metadata_blob).unwrap());
         assert_eq!(
             verify_metadata_binding(
                 head,
@@ -1932,11 +1970,19 @@ mod tests {
             update.core.prior_provenance_hash,
             st.sidecar.provenance_chain_hash
         );
+        // The re-seal drew a fresh nonce folded into a new blob key — re-derive from the
+        // updated blob's own nonce (the create-era `blob_key` no longer opens it).
+        let update_blob_key = Amk::from_bytes(ws.album(&album).unwrap().amks[&epoch])
+            .derive_blob_key(&asset, &blob_nonce(&st.metadata_blob).unwrap());
+        assert_ne!(
+            update_blob_key, blob_key,
+            "the metadata-update re-rolled the blob key"
+        );
         assert_eq!(
             verify_metadata_binding(
                 update,
                 &st.metadata_blob,
-                &blob_key,
+                &update_blob_key,
                 &st.sidecar.to_canonical_vec()
             ),
             MetadataBinding::Bound
@@ -2185,10 +2231,17 @@ mod tests {
             .core
             .clone();
         let epoch = head.amk_version.0;
-        let recovered = material.file_key_for(&asset_id, epoch).unwrap();
+        let recovered = material
+            .file_key_for(&asset_id, epoch, &head.nonce_prefix)
+            .unwrap();
 
         // The recovered key equals the real per-file key ...
-        let expected = ws.file_key(ws.album(&album_id).unwrap(), epoch, &asset_id);
+        let expected = ws.file_key(
+            ws.album(&album_id).unwrap(),
+            epoch,
+            &asset_id,
+            &head.nonce_prefix,
+        );
         assert_eq!(recovered, expected, "recipient recovers the true file key");
         // ... and it actually decrypts the asset ciphertext back to plaintext.
         let (_, ciphertext) =
@@ -2240,14 +2293,21 @@ mod tests {
         .unwrap();
 
         // The album grant derives the asset's file key under its written epoch.
-        let epoch = ws.asset(&asset_id).unwrap().chain.records()[0]
+        let core = ws.asset(&asset_id).unwrap().chain.records()[0]
             .manifest
             .core
-            .amk_version
-            .0;
+            .clone();
+        let epoch = core.amk_version.0;
         assert_eq!(
-            material.file_key_for(&asset_id, epoch).unwrap(),
-            ws.file_key(ws.album(&album_id).unwrap(), epoch, &asset_id),
+            material
+                .file_key_for(&asset_id, epoch, &core.nonce_prefix)
+                .unwrap(),
+            ws.file_key(
+                ws.album(&album_id).unwrap(),
+                epoch,
+                &asset_id,
+                &core.nonce_prefix
+            ),
         );
     }
 

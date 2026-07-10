@@ -59,4 +59,11 @@ pub enum CryptoError {
     /// A key could not be derived, decoded, or reconstructed from bytes.
     #[error("key error: {0}")]
     Key(&'static str),
+
+    /// A re-keying writer drew a fresh nonce equal to the one it supersedes — refused as
+    /// defense in depth on top of the CSPRNG draw (SSoT: [Encryption § Re-keying on Rewrite]).
+    ///
+    /// [Encryption § Re-keying on Rewrite]: https://docs/design/cryptography/encryption/#re-keying-on-rewrite
+    #[error("refusing to reuse the nonce of the record being replaced")]
+    NonceReuse,
 }

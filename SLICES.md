@@ -61,7 +61,7 @@ its slice.
 | ID    | Slice                                                | Lane            | Depends on       | Size | Status  |
 | ----- | ---------------------------------------------------- | --------------- | ---------------- | ---- | ------- |
 | S-A1  | Wrapped file-key mode (seal/unseal + verify)         | core-crypto     | —                | M    | done    |
-| S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | ready   |
+| S-A2  | Re-key salt fold                                     | core-crypto     | —                | S    | done    |
 | S-A3  | Metadata↔manifest binding (invariant 25, both sides) | core-crypto     | S-A1             | M    | done    |
 | S-A4  | P-256 hybrid DSK variant                             | core-crypto     | —                | L    | ready   |
 | S-A5  | Share-link crypto (`capsule_core::sharing`)          | core-crypto     | —                | M    | done    |
@@ -239,6 +239,13 @@ pass until the gate lifts.
   section pass (same `file_id` + epoch `replace` yields a different key AND nonce);
   existing round-trip vectors unchanged for first encryptions.
 - **Tier:** Unit. **Blocks:** nothing (independent hardening).
+- **Landed:** `derive_file_key(file_id, nonce_prefix)` / `derive_blob_key(blob_id,
+  nonce)` fold per the doc's spec (KATs unchanged — none pinned a derived key
+  against a bare id; the AEAD primitives are untouched); `CryptoError::NonceReuse`
+  writer defense on both paths; every derive call site threaded (lifecycle,
+  sharing scope material, drop adoption, backup restore). File-side re-roll is
+  unit-exercised via `encrypt_asset_rekey` — no lifecycle `replace` re-encryption
+  path exists yet to drive it end-to-end.
 
 ### S-A3 — Metadata↔manifest binding
 
