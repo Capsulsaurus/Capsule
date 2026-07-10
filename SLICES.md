@@ -105,7 +105,7 @@ its slice.
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | done    |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
-| S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
+| S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | done    |
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
@@ -1013,6 +1013,14 @@ SDK; they never hand-roll network flows.
 - **Done when:** the local-gallery doc's unit Validation bullets pass; the NFR1
   no-network-on-read-paths smoke runs with a socket-refusing harness.
 - **Tier:** Unit + Smoke; the airplane-mode E2E case rides the Module Map surface.
+- **Landed:** `LocalAuthGate` uniffi foreign trait + `GateKeeper` (per-view 5-min
+  grace on a monotonic injectable clock; window from original mint); gated
+  `query_recently_deleted` wired. NFR1 proven structurally: capsule-core's
+  transitive closure contains no network crate (non-vacuous — the test asserts
+  those crates DO exist elsewhere in the lock). SR3 placement audit: all writes
+  under the library root; `tempfile` is dev-only. The Hidden view's DB projection
+  doesn't exist yet — the gate governs it at policy level; the projection plugs
+  into the same `GateKeeper` when the Organization work lands it.
 
 ### S-C15 — Custody receipts + signed storage attestation
 

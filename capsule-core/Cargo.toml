@@ -141,3 +141,6 @@ required-features = ["media"]
 
 [dev-dependencies]
 tempfile = "3"
+# Integration tests (e.g. the S-D14 placement audit) build UUIDs to exercise the `library::paths`
+# surface; `uuid` is a normal dependency, so the test crate needs its own dev-dependency on it.
+uuid = { workspace = true }

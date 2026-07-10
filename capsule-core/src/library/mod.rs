@@ -1,3 +1,4 @@
+pub mod auth_gate;
 pub mod cache;
 pub mod error;
 pub mod init;
@@ -13,6 +14,10 @@ pub mod space;
 pub mod storage_verify;
 pub mod trash;
 
+pub use auth_gate::{
+    DEFAULT_GRACE, GateError, GateKeeper, GatedQueryError, GatedView, GraceClock, LocalAuthError,
+    LocalAuthGate, SystemGraceClock, ViewGuard,
+};
 pub use cache::{EvictionReport, cache_sweep};
 pub use error::LibraryError;
 pub use init::init_library;
