@@ -32,6 +32,8 @@ use std::time::Duration;
 use capsule_i18n::error_codes;
 use serde::{Deserialize, Serialize};
 
+use crate::net::{ConnectionClass, RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
+
 // Constants for chunk sizes (4KB aligned)
 const KB: u64 = 1024;
 const CHUNK_SIZE_256KB: u64 = 256 * KB;
@@ -85,6 +87,11 @@ pub struct AdaptiveChunkSizeStrategy {
     /// Recent chunk records for windowed throughput (bytes, duration, timestamp)
     /// Using VecDeque for efficient sliding window
     recent_chunks: VecDeque<(u64, Duration, std::time::Instant)>,
+    /// Pinned to the tier floor under `adverse` (S-D10 chunk-size floor coupling):
+    /// while set, the size stays at `min_size` and adaptive scaling is suppressed,
+    /// so each request is small enough to usually complete between mid-transfer
+    /// resets (networking doc, "Bounded transfer windows under `adverse`").
+    pinned_floor: bool,
 }
 
 impl AdaptiveChunkSizeStrategy {
@@ -109,6 +116,30 @@ impl AdaptiveChunkSizeStrategy {
             bytes_uploaded: 0,
             total_upload_time: Duration::ZERO,
             recent_chunks: VecDeque::with_capacity(32),
+            pinned_floor: false,
+        }
+    }
+
+    /// Couple the chunk size to a detected [`ConnectionClass`] (S-D10). On
+    /// [`ConnectionClass::Adverse`] the strategy pins to the tier floor
+    /// (`min_size`) and suppresses adaptive growth for the rest of the transfer;
+    /// any other class releases the pin and lets the normative adaptive algorithm
+    /// run. The floor is still 4 KiB-aligned and within the protocol bounds by
+    /// construction (it is the tier minimum).
+    #[must_use]
+    pub fn with_connection_class(mut self, class: crate::net::ConnectionClass) -> Self {
+        self.apply_connection_class(class);
+        self
+    }
+
+    /// Apply the connection-class chunk-floor coupling in place (see
+    /// [`with_connection_class`](Self::with_connection_class)).
+    pub fn apply_connection_class(&mut self, class: crate::net::ConnectionClass) {
+        if class == crate::net::ConnectionClass::Adverse {
+            self.pinned_floor = true;
+            self.current_size = self.min_size;
+        } else {
+            self.pinned_floor = false;
         }
     }
 
@@ -175,6 +206,13 @@ impl AdaptiveChunkSizeStrategy {
                     break;
                 }
             }
+        }
+
+        // Under the adverse floor pin, scaling is suppressed: the size stays at the
+        // tier minimum so each request stays small across a hostile path.
+        if self.pinned_floor {
+            self.current_size = self.min_size;
+            return;
         }
 
         // Adaptive scaling based on throughput
@@ -581,12 +619,32 @@ enum ChunkAck {
 #[derive(Clone)]
 pub struct UploadClient {
     transport: UploadTransport,
+    /// The detected connection class, coupling the chunk strategy to the network
+    /// (S-D10): under [`ConnectionClass::Adverse`] the transfer pins to the tier
+    /// chunk floor. Defaults to [`ConnectionClass::Unmetered`].
+    connection: ConnectionClass,
+    /// The backoff sleeper for the shared retry engine's transient-reset retries.
+    /// Real in production; kept as a seam for determinism.
+    sleeper: TokioSleeper,
 }
 
 impl UploadClient {
-    /// Build a client over an authorized [`UploadTransport`].
+    /// Build a client over an authorized [`UploadTransport`], on an unmetered link.
     pub fn new(transport: UploadTransport) -> Self {
-        Self { transport }
+        Self {
+            transport,
+            connection: ConnectionClass::Unmetered,
+            sleeper: TokioSleeper,
+        }
+    }
+
+    /// Set the detected connection class (S-D10 chunk-size floor coupling). On an
+    /// [`ConnectionClass::Adverse`] link the adaptive strategy pins to the tier
+    /// chunk floor for every transfer this client drives.
+    #[must_use]
+    pub fn with_connection_class(mut self, class: ConnectionClass) -> Self {
+        self.connection = class;
+        self
     }
 
     /// Create an upload session (`POST /upload`).
@@ -810,8 +868,9 @@ impl UploadClient {
             }
         };
 
-        let mut strategy =
-            AdaptiveChunkSizeStrategy::for_file_size(request.size).seeded_from_suggested(suggested);
+        let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
+            .seeded_from_suggested(suggested)
+            .with_connection_class(self.connection);
         self.drive(session, request, data, &mut strategy, start_offset)
             .await
     }
@@ -828,7 +887,8 @@ impl UploadClient {
         data: &[u8],
     ) -> Result<UploadOutcome, UploadError> {
         if let Some(info) = self.head(session_id).await? {
-            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size);
+            let mut strategy = AdaptiveChunkSizeStrategy::for_file_size(request.size)
+                .with_connection_class(self.connection);
             tracing::debug!(offset = info.offset, "resuming from authoritative offset");
             self.drive(
                 session_id.to_string(),
@@ -856,6 +916,12 @@ impl UploadClient {
     ) -> Result<UploadOutcome, UploadError> {
         let size = request.size;
         let mut recoveries: u32 = 0;
+        // The shared retry engine, `bulk-transfer` class: exponential backoff with
+        // full jitter, bounded give-up. Instantiated here (as sync/fetch do) so all
+        // three paths share one engine. It governs mid-transfer *transport resets*
+        // (the adverse-network steady state); the code-driven recovery matrix below
+        // stays switched on `error.*` codes.
+        let mut engine: RetryEngine = RetryClass::BulkTransfer.engine();
 
         while offset < size {
             let remaining = size - offset;
@@ -867,9 +933,32 @@ impl UploadClient {
             let chunk = &data[start..end];
 
             let attempt_start = std::time::Instant::now();
-            match self.send_patch(&session_id, chunk, offset).await? {
+            let ack = match self.send_patch(&session_id, chunk, offset).await {
+                Ok(ack) => ack,
+                // A mid-transfer connection reset / silent black-hole: back off
+                // through the shared engine and resume from the SAME offset (the
+                // server holds nothing new, so no bytes are re-sent beyond this
+                // chunk). Bounded give-up prevents a hot loop on a dead path.
+                Err(UploadError::Transport(reason)) => match engine.next_backoff(None) {
+                    RetryDecision::GiveUp => {
+                        return Err(UploadError::RetriesExhausted(format!(
+                            "transport reset unrecovered after {} retries: {reason}",
+                            engine.policy().max_retries
+                        )));
+                    }
+                    RetryDecision::Retry { after } => {
+                        tracing::debug!(offset, ?after, %reason, "mid-transfer reset — backing off and resuming");
+                        self.sleeper.sleep(after).await;
+                        continue;
+                    }
+                },
+                Err(other) => return Err(other),
+            };
+            match ack {
                 ChunkAck::Accepted(new_offset) => {
                     strategy.record_chunk(want, attempt_start.elapsed());
+                    // Real progress resets the transient-reset backoff budget.
+                    engine.reset();
                     offset = new_offset;
                 }
                 ChunkAck::Realign(authoritative) => {

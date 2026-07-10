@@ -26,9 +26,10 @@ tracing = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 
-# Single-flight refresh coordination (Mutex / RwLock / Notify). The async runtime
-# itself is supplied by the caller; the SDK only needs the sync primitives here.
-tokio = { version = "1", features = ["sync"] }
+# Single-flight refresh coordination (Mutex / RwLock / Notify) plus `time` for the
+# shared retry engine's backoff sleeper (`net::TokioSleeper`). The async runtime
+# itself is supplied by the caller; the SDK only needs these primitives here.
+tokio = { version = "1", features = ["sync", "time"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
 reqwest = { version = "0.12", default-features = false, features = [

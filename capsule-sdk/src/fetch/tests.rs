@@ -8,11 +8,13 @@
 #![allow(clippy::unwrap_used)]
 
 use std::collections::{BTreeSet, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
 use super::*;
+use crate::net::{MonotonicClock, Sleeper, StallConfig};
 
 fn sha(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
@@ -42,13 +44,16 @@ struct ChunkedSource {
 }
 
 impl BlobSource for ChunkedSource {
-    async fn get_range(&self, _hash: &str, start: u64) -> RangeOutcome {
+    async fn get_range(&self, _hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
         self.requested_starts.lock().unwrap().push(start);
         let start = start as usize;
         if start >= self.data.len() {
             return RangeOutcome::Complete { bytes: Vec::new() };
         }
-        let end = (start + self.window).min(self.data.len());
+        // Honor a bounded window when the client asks for one, but never exceed the
+        // source's own window.
+        let cap = max_len.map_or(self.window, |m| (m as usize).min(self.window));
+        let end = (start + cap).min(self.data.len());
         let chunk = self.data[start..end].to_vec();
         if end == self.data.len() {
             RangeOutcome::Complete { bytes: chunk }
@@ -65,7 +70,7 @@ struct AlwaysStatus {
 }
 
 impl BlobSource for AlwaysStatus {
-    async fn get_range(&self, _hash: &str, _start: u64) -> RangeOutcome {
+    async fn get_range(&self, _hash: &str, _start: u64, _max_len: Option<u64>) -> RangeOutcome {
         RangeOutcome::Status {
             status: self.status,
             code: self.code.clone(),
@@ -80,7 +85,7 @@ struct GoneThenServes {
 }
 
 impl BlobSource for GoneThenServes {
-    async fn get_range(&self, _hash: &str, start: u64) -> RangeOutcome {
+    async fn get_range(&self, _hash: &str, start: u64, _max_len: Option<u64>) -> RangeOutcome {
         if *self.restored.lock().unwrap() {
             let start = start as usize;
             RangeOutcome::Complete {
@@ -102,7 +107,7 @@ struct ForbiddenThenServes {
 }
 
 impl BlobSource for ForbiddenThenServes {
-    async fn get_range(&self, _hash: &str, start: u64) -> RangeOutcome {
+    async fn get_range(&self, _hash: &str, start: u64, _max_len: Option<u64>) -> RangeOutcome {
         let mut deny = self.deny.lock().unwrap();
         if *deny > 0 {
             *deny -= 1;
@@ -125,7 +130,7 @@ struct CorruptingSource {
 }
 
 impl BlobSource for CorruptingSource {
-    async fn get_range(&self, _hash: &str, _start: u64) -> RangeOutcome {
+    async fn get_range(&self, _hash: &str, _start: u64, _max_len: Option<u64>) -> RangeOutcome {
         RangeOutcome::Complete {
             bytes: vec![0xFF; self.len],
         }
@@ -469,4 +474,148 @@ async fn pending_upload_is_distinct_from_gone() {
             ..
         }
     ));
+}
+
+// ─── Adverse-network stall-cut-resume (S-D10) ────────────────────────────────
+
+/// A mock monotonic clock the source advances; the fetch loop reads the same cell,
+/// so the stall cut is deterministic with no wall-clock sleep.
+#[derive(Clone)]
+struct SharedClock(Arc<Mutex<u64>>);
+
+impl MonotonicClock for SharedClock {
+    fn now_millis(&self) -> u64 {
+        *self.0.lock().unwrap()
+    }
+}
+
+/// A no-op sleeper that records the backoffs it was asked to perform — proving the
+/// loop backed off between stalled attempts without any real sleep.
+#[derive(Clone)]
+struct NoopSleeper(Arc<Mutex<Vec<Duration>>>);
+
+impl Sleeper for NoopSleeper {
+    async fn sleep(&self, dur: Duration) {
+        self.0.lock().unwrap().push(dur);
+    }
+}
+
+/// A source that serves `data` in bounded windows (honoring the client's `max_len`),
+/// but **black-holes** the request that resumes at `blackhole_at` for the first
+/// `blackholes` attempts — returning no bytes while the clock advances — before
+/// finally serving. Records every window it actually serves so the test can prove
+/// zero duplicate bytes.
+struct BlackHoleThenResumes {
+    data: Vec<u8>,
+    clock: SharedClock,
+    tick: u64,
+    blackhole_at: u64,
+    blackholes: Mutex<u32>,
+    served: Mutex<Vec<(u64, usize)>>,
+}
+
+impl BlobSource for BlackHoleThenResumes {
+    async fn get_range(&self, _hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
+        // Every read costs time (the client's stall clock advances off this).
+        {
+            let mut now = self.clock.0.lock().unwrap();
+            *now += self.tick;
+        }
+        // Black-hole the resume point until the budget is spent: no bytes, so the
+        // client resumes from the same offset (which must not re-fetch held bytes).
+        if start == self.blackhole_at {
+            let mut remaining = self.blackholes.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                return RangeOutcome::Partial { bytes: Vec::new() };
+            }
+        }
+        let start_us = start as usize;
+        if start_us >= self.data.len() {
+            return RangeOutcome::Complete { bytes: Vec::new() };
+        }
+        // The client MUST bound the window under adverse; assert it did.
+        let window = max_len.expect("adverse fetch requests a bounded window") as usize;
+        assert!(window > 0);
+        let end = (start_us + window).min(self.data.len());
+        self.served.lock().unwrap().push((start, end - start_us));
+        let chunk = self.data[start_us..end].to_vec();
+        if end == self.data.len() {
+            RangeOutcome::Complete { bytes: chunk }
+        } else {
+            RangeOutcome::Partial { bytes: chunk }
+        }
+    }
+}
+
+/// **Stall-cut-resume with zero duplicate bytes (networking Validation).** On an
+/// `adverse` link the fetcher requests bounded windows; a black-holed window is cut
+/// by the no-bytes-for-T stall detector within its bound, the loop backs off through
+/// the shared retry engine and resumes from the persisted offset — and every byte is
+/// transferred exactly once (zero duplicates). The stall surfaces a
+/// [`TransferSignal::Stall`] that folds into `adverse` promotion.
+#[tokio::test]
+async fn adverse_stall_cut_resumes_with_zero_duplicate_bytes() {
+    let data = bytes(2000);
+    let hash = sha(&data);
+    let window = 512u64; // an explicit small window; the source asserts one is set
+
+    let clock = SharedClock(Arc::new(Mutex::new(0)));
+    let backoffs = Arc::new(Mutex::new(Vec::new()));
+    let source = BlackHoleThenResumes {
+        data: data.clone(),
+        clock: clock.clone(),
+        tick: 100,            // each read advances the stall clock 100 ms
+        blackhole_at: window, // black-hole the request resuming after window 0
+        blackholes: Mutex::new(5),
+        served: Mutex::new(Vec::new()),
+    };
+
+    // Stall bound 500 ms: after window 0 lands (t=100) the black-holes at
+    // t=200..600 cross the bound at t=600 → a cut within the bound.
+    let fetcher = RangedFetcher::from_parts(
+        ConnectionClass::Adverse,
+        StallConfig::new(Duration::from_millis(500)),
+        Some(window),
+        NoopSleeper(backoffs.clone()),
+        clock,
+    );
+
+    let (fetched, signals) = fetcher
+        .fetch_with_signals(&source, &hash, data.len() as u64)
+        .await
+        .expect("stall-cut fetch resumes and completes");
+
+    // Byte-identical result.
+    assert_eq!(fetched, data);
+
+    // The stall detector cut at least once (no-bytes-for-T), surfacing a Stall
+    // signal for adverse promotion; and it backed off through the shared engine.
+    assert!(
+        signals.contains(&TransferSignal::Stall),
+        "a stall must surface for adverse promotion: {signals:?}"
+    );
+    assert!(
+        !backoffs.lock().unwrap().is_empty(),
+        "the loop backed off between stalled attempts"
+    );
+
+    // Zero duplicate bytes: the served windows tile [0, len) contiguously — each
+    // byte delivered exactly once, the black-holed reads served nothing.
+    let served = source.served.lock().unwrap().clone();
+    let mut cursor = 0u64;
+    let mut total = 0usize;
+    for (start, len) in &served {
+        assert_eq!(
+            *start, cursor,
+            "every window resumes from the persisted offset"
+        );
+        cursor += *len as u64;
+        total += *len;
+    }
+    assert_eq!(total, data.len(), "exactly the blob's bytes, none twice");
+    assert!(
+        served.iter().all(|(_, len)| *len as u64 <= window),
+        "every request stayed within the bounded adverse window"
+    );
 }

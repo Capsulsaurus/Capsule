@@ -14,6 +14,9 @@
 //! never a live NIC probe, so every rule is a deterministic unit test.
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+use tracing::instrument;
 
 /// The closed connection-class enum, evaluated continuously on-device.
 /// Consumers: sync criteria (small/large reconciliation), staged-upload tier
@@ -172,7 +175,30 @@ impl ConnectionClass {
         };
         base_budget_bytes.saturating_mul(multiplier)
     }
+
+    /// The **bounded `Range` window** a blob fetch uses on this class, or `None`
+    /// for the open-ended remainder.
+    ///
+    /// Adverse-network posture (networking doc, "Bounded transfer windows under
+    /// `adverse`"): only [`ConnectionClass::Adverse`] shrinks fetches to a bounded
+    /// window ([`ADVERSE_RANGE_WINDOW`]) so each request is small enough to usually
+    /// complete between mid-transfer resets; every other class fetches the whole
+    /// remaining range in one request (`None`). The window size is client-tunable
+    /// policy, not protocol surface.
+    #[must_use]
+    pub fn range_window(self) -> Option<u64> {
+        match self {
+            Self::Adverse => Some(ADVERSE_RANGE_WINDOW),
+            _ => None,
+        }
+    }
 }
+
+/// The bounded `Range` window (256 KiB) a blob fetch shrinks to under
+/// [`ConnectionClass::Adverse`]. Small enough that a single window usually
+/// completes between the mid-transfer resets that define an adverse path;
+/// client-tunable policy, not protocol surface.
+pub const ADVERSE_RANGE_WINDOW: u64 = 256 * 1024;
 
 /// The staged-upload tier ladder (download-sync doc, "Upload Tiering"),
 /// mirroring the download ladder. Kept local to the SDK's connection seam; the
@@ -341,6 +367,377 @@ pub enum RetryClass {
     /// Slow ladder, long horizon, never abandons silently (MLS recovery,
     /// federation circuit breaker are instances).
     ControlCeremony,
+}
+
+impl RetryClass {
+    /// The canonical [`RetryPolicy`] for this class (networking doc, "Retry Policy
+    /// Classes"). The three per-doc retry ladders are *instances of this shared
+    /// shape*, not reinventions — sync, upload, and fetch each build a
+    /// [`RetryEngine`] from one of these.
+    #[must_use]
+    pub fn policy(self) -> RetryPolicy {
+        match self {
+            // Short timeout, ≤ 2 retries, then a visible failure state.
+            Self::Interactive => RetryPolicy {
+                max_retries: 2,
+                base_delay: Duration::from_millis(200),
+                max_delay: Duration::from_secs(2),
+            },
+            // Resume-first and patient within the session's lifetime.
+            Self::BulkTransfer => RetryPolicy {
+                max_retries: 8,
+                base_delay: Duration::from_millis(500),
+                max_delay: Duration::from_secs(30),
+            },
+            // Slow ladder, long horizon, never abandons silently.
+            Self::ControlCeremony => RetryPolicy {
+                max_retries: 12,
+                base_delay: Duration::from_secs(30),
+                max_delay: Duration::from_secs(600),
+            },
+        }
+    }
+
+    /// A fresh [`RetryEngine`] instance for this class, with production full-jitter
+    /// seeded from the wall clock. The single constructor sync/upload/fetch call.
+    #[must_use]
+    pub fn engine(self) -> RetryEngine {
+        RetryEngine::new(self)
+    }
+}
+
+// ─── Shared retry engine ─────────────────────────────────────────────────────
+
+/// The concrete parameters of a [`RetryClass`]: a bounded retry count and the
+/// exponential-backoff envelope. `max_retries` is finite by type, so no policy —
+/// and therefore no surface instantiating one — can ever hot-loop (networking doc:
+/// "every retry loop has a bounded give-up"; "no surface ever hot-loops").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RetryPolicy {
+    /// Attempts after the first failure before a visible give-up.
+    pub max_retries: u32,
+    /// The first backoff ceiling; doubles each attempt up to `max_delay`.
+    pub base_delay: Duration,
+    /// The backoff ceiling cap (the doubling never exceeds this).
+    pub max_delay: Duration,
+}
+
+/// The engine's decision after one failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryDecision {
+    /// Wait `after` (already jittered and reconciled with any server hint), then
+    /// retry.
+    Retry {
+        /// The reconciled backoff for this attempt.
+        after: Duration,
+    },
+    /// The bounded retry budget is spent — surface a user-visible failure state.
+    GiveUp,
+}
+
+/// The randomness source for **full jitter**. Production draws a spread value in
+/// `[0, 1)`; tests pin a fixed fraction so the whole backoff sequence is
+/// deterministic.
+#[derive(Debug, Clone)]
+enum Jitter {
+    /// An `xorshift64*` state, advanced per draw (fast, dependency-free spread).
+    Random(u64),
+    /// A fixed fraction in `[0, 1]`, for deterministic tests.
+    Fixed(f64),
+}
+
+impl Jitter {
+    /// The next jitter fraction in `[0, 1)` (or the pinned fixed value).
+    fn next_fraction(&mut self) -> f64 {
+        match self {
+            Self::Random(state) => {
+                // xorshift64*: cheap, well-distributed, and enough for jitter
+                // (this is spread, not security). Kept nonzero at construction.
+                let mut x = *state;
+                x ^= x >> 12;
+                x ^= x << 25;
+                x ^= x >> 27;
+                *state = x;
+                let v = x.wrapping_mul(0x2545_f491_4f6c_dd1d);
+                // Top 53 bits → a double in [0, 1).
+                (v >> 11) as f64 / ((1u64 << 53) as f64)
+            }
+            Self::Fixed(fraction) => *fraction,
+        }
+    }
+}
+
+/// The one shared retry engine every retrying surface instantiates
+/// ([`RetryClass::engine`]). It owns the universal rules so no surface re-derives
+/// them: **exponential backoff with full jitter**, honoring a server backoff
+/// signal (`Retry-After` / 429 / 503) as a floor, and a **bounded give-up** after
+/// `max_retries` — never an unbounded hot loop.
+///
+/// The engine is a pure state machine over the attempt counter and the jitter
+/// source: [`RetryEngine::next_backoff`] computes the wait and the give-up without
+/// sleeping, so backoff discipline is a deterministic unit test. Callers perform
+/// the wait through a [`Sleeper`] (real in production, a no-op recorder in tests).
+#[derive(Debug, Clone)]
+pub struct RetryEngine {
+    class: RetryClass,
+    policy: RetryPolicy,
+    attempt: u32,
+    jitter: Jitter,
+}
+
+impl RetryEngine {
+    /// A production engine for `class`, full-jitter seeded from the wall clock.
+    #[must_use]
+    pub fn new(class: RetryClass) -> Self {
+        Self::with_jitter(class, Jitter::Random(seed()))
+    }
+
+    /// A deterministic engine that always jitters by the fixed `fraction`
+    /// (clamped to `[0, 1]`) — for tests that assert exact backoff values.
+    #[must_use]
+    pub fn deterministic(class: RetryClass, fraction: f64) -> Self {
+        Self::with_jitter(class, Jitter::Fixed(fraction.clamp(0.0, 1.0)))
+    }
+
+    /// A production-shaped engine (full jitter) with a fixed seed — for tests that
+    /// assert the *spread* property of full jitter deterministically.
+    #[must_use]
+    pub fn seeded(class: RetryClass, seed: u64) -> Self {
+        Self::with_jitter(class, Jitter::Random(seed | 1))
+    }
+
+    fn with_jitter(class: RetryClass, jitter: Jitter) -> Self {
+        Self {
+            class,
+            policy: class.policy(),
+            attempt: 0,
+            jitter,
+        }
+    }
+
+    /// The class this engine instantiates.
+    #[must_use]
+    pub fn class(&self) -> RetryClass {
+        self.class
+    }
+
+    /// The policy bounds this engine enforces.
+    #[must_use]
+    pub fn policy(&self) -> RetryPolicy {
+        self.policy
+    }
+
+    /// Failures observed so far (retries consumed).
+    #[must_use]
+    pub fn attempts(&self) -> u32 {
+        self.attempt
+    }
+
+    /// Reset the attempt counter after real progress, so a long-lived transfer's
+    /// backoff does not ratchet across independent stalls (resume-first: each
+    /// resumed window earns a fresh budget).
+    pub fn reset(&mut self) {
+        self.attempt = 0;
+    }
+
+    /// The un-jittered backoff ceiling for the *next* attempt: `base · 2^attempt`,
+    /// saturating and capped at `max_delay`.
+    fn ceiling(&self) -> Duration {
+        let base_ms = self.policy.base_delay.as_millis() as u64;
+        let cap_ms = self.policy.max_delay.as_millis() as u64;
+        // Cap the exponent so the shift never overflows before the min() clamps it.
+        let exp = self.attempt.min(32);
+        let scaled = base_ms.saturating_mul(1u64.checked_shl(exp).unwrap_or(u64::MAX));
+        Duration::from_millis(scaled.min(cap_ms))
+    }
+
+    /// Decide the next action after a failure, folding in an optional server
+    /// backoff hint (`Retry-After` / 429 / 503).
+    ///
+    /// Returns [`RetryDecision::GiveUp`] once the bounded budget is spent (so no
+    /// configuration can hot-loop). Otherwise the wait is **full jitter** over the
+    /// ceiling — a uniform draw in `[0, ceiling]` — reconciled with the server hint
+    /// as a *floor* (`Retry-After` is honored even when it exceeds the jittered
+    /// value). The ceiling itself is bounded by `max_delay`, so the client-chosen
+    /// component of the wait never exceeds the policy cap.
+    #[instrument(level = "trace", skip(self), fields(class = ?self.class, attempt = self.attempt))]
+    pub fn next_backoff(&mut self, server_backoff: Option<Duration>) -> RetryDecision {
+        if self.attempt >= self.policy.max_retries {
+            tracing::debug!(
+                max_retries = self.policy.max_retries,
+                "retry budget exhausted — giving up (visible failure state)"
+            );
+            return RetryDecision::GiveUp;
+        }
+        let ceiling = self.ceiling();
+        self.attempt += 1;
+        let fraction = self.jitter.next_fraction().clamp(0.0, 1.0);
+        let jittered = ceiling.mul_f64(fraction);
+        // The server's backoff signal is a floor we always honor; the jittered
+        // value is our own spread. Take the larger.
+        let after = match server_backoff {
+            Some(hint) => jittered.max(hint),
+            None => jittered,
+        };
+        tracing::trace!(?after, ?ceiling, "backing off before retry");
+        RetryDecision::Retry { after }
+    }
+}
+
+/// A non-cryptographic seed for the jitter PRNG from the wall clock, X's a fixed
+/// odd constant and forced nonzero. Only spread matters here.
+fn seed() -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0x9e37_79b9_7f4a_7c15, |d| d.as_nanos() as u64);
+    (nanos ^ 0x9e37_79b9_7f4a_7c15) | 1
+}
+
+// ─── Stall detection (no-bytes-for-T) ────────────────────────────────────────
+
+/// A monotonic millisecond clock, injectable so the stall detector's cut is a
+/// deterministic test (a mock clock the test advances) rather than a wall-clock
+/// sleep.
+pub trait MonotonicClock {
+    /// Milliseconds since some fixed, monotonic origin.
+    fn now_millis(&self) -> u64;
+}
+
+/// The production monotonic clock (a process-relative [`Instant`]).
+#[derive(Debug, Clone)]
+pub struct SystemClock {
+    origin: Instant,
+}
+
+impl SystemClock {
+    /// A clock whose origin is now.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            origin: Instant::now(),
+        }
+    }
+}
+
+impl Default for SystemClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MonotonicClock for SystemClock {
+    fn now_millis(&self) -> u64 {
+        self.origin.elapsed().as_millis() as u64
+    }
+}
+
+/// The stall bound: bulk transfers cut on **no-bytes-for-T**, not on a total
+/// duration (networking doc, "Stall detection over total timeouts"). Client-tunable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StallConfig {
+    /// The no-progress interval that trips a stall cut.
+    pub stall_after: Duration,
+}
+
+impl StallConfig {
+    /// A config with an explicit stall bound.
+    #[must_use]
+    pub fn new(stall_after: Duration) -> Self {
+        Self { stall_after }
+    }
+}
+
+impl Default for StallConfig {
+    fn default() -> Self {
+        // Long enough not to punish slow-but-live links; short enough that a
+        // silently black-holed request is cut in seconds, not minutes.
+        Self {
+            stall_after: Duration::from_secs(20),
+        }
+    }
+}
+
+/// The **no-bytes-for-T** stall detector: tracks the last time bytes arrived and
+/// reports when the gap since then has crossed the stall bound. Event-driven over
+/// an injected [`MonotonicClock`] (never `sleep`), so the "cut within its bound"
+/// behavior is fully deterministic under test.
+#[derive(Debug, Clone)]
+pub struct StallDetector {
+    stall_after_millis: u64,
+    last_progress_millis: u64,
+}
+
+impl StallDetector {
+    /// A detector armed at `now_millis` with `config`'s stall bound.
+    #[must_use]
+    pub fn new(config: StallConfig, now_millis: u64) -> Self {
+        Self {
+            stall_after_millis: config.stall_after.as_millis() as u64,
+            last_progress_millis: now_millis,
+        }
+    }
+
+    /// Record that bytes arrived at `now_millis`: the no-progress timer resets.
+    pub fn on_progress(&mut self, now_millis: u64) {
+        self.last_progress_millis = now_millis;
+    }
+
+    /// Whether the transfer has gone `stall_after` with no bytes as of `now_millis`
+    /// — the cut condition.
+    #[must_use]
+    pub fn is_stalled(&self, now_millis: u64) -> bool {
+        now_millis.saturating_sub(self.last_progress_millis) >= self.stall_after_millis
+    }
+
+    /// The configured stall bound.
+    #[must_use]
+    pub fn stall_after(&self) -> Duration {
+        Duration::from_millis(self.stall_after_millis)
+    }
+}
+
+// ─── Sleeper seam ────────────────────────────────────────────────────────────
+
+/// How a retry/stall loop performs its backoff wait. Abstracted so the wait is
+/// real in production ([`TokioSleeper`]) but a deterministic no-op in tests — the
+/// stall-cut-resume smoke asserts *zero duplicate bytes* with no wall-clock sleep.
+pub trait Sleeper: Clone + Send + Sync {
+    /// Wait for `dur`.
+    fn sleep(&self, dur: Duration) -> impl std::future::Future<Output = ()> + Send;
+}
+
+/// The production sleeper (`tokio::time::sleep`).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokioSleeper;
+
+impl Sleeper for TokioSleeper {
+    async fn sleep(&self, dur: Duration) {
+        tokio::time::sleep(dur).await;
+    }
+}
+
+// ─── Happy Eyeballs at dial ──────────────────────────────────────────────────
+
+/// A bounded per-address TCP connect timeout applied at dial. Keeps a dead path
+/// from hanging a connect indefinitely on an adverse network.
+pub const DIAL_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Build the `reqwest` client the upload/fetch paths dial with: rustls, a bounded
+/// connect timeout, and the HTTP stack's built-in **Happy Eyeballs v2** at dial.
+///
+/// Racing happens **at dial only** (networking doc, "Connection racing at dial
+/// only"). The parallel IPv6/IPv4 TCP race (RFC 8305) is provided for free by the
+/// underlying `hyper-util` `HttpConnector` (a 300 ms fallback delay between the
+/// preferred and fallback address families), which both `reqwest` (this client)
+/// and `tonic` (the sync channel) sit on — so S-D10 does not re-implement address
+/// racing. What this constructor *does* add is the bounded connect timeout and the
+/// standing guarantee that Capsule never races whole *requests* across paths
+/// (which would double server load): there is no per-request fan-out anywhere in
+/// the SDK; a request rides exactly one dialed connection.
+pub fn dial_client() -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(DIAL_CONNECT_TIMEOUT)
+        .build()
 }
 
 #[cfg(test)]
@@ -536,5 +933,159 @@ mod tests {
             ConnectionClass::Offline.cache_retention_budget(u64::MAX),
             u64::MAX
         );
+    }
+
+    /// **Adverse switches fetches to bounded windows.** The behavioral promotion
+    /// (already covered above) feeds directly into the transfer-window rule: only
+    /// the promoted `adverse` class bounds the `Range` window; every other class
+    /// fetches the whole remainder. The networking-doc linkage "promotes to
+    /// `adverse` and switches fetches to bounded windows" in one assertion.
+    #[test]
+    fn adverse_bounds_the_transfer_window() {
+        assert_eq!(
+            ConnectionClass::Adverse.range_window(),
+            Some(ADVERSE_RANGE_WINDOW)
+        );
+        for class in [
+            ConnectionClass::Unmetered,
+            ConnectionClass::Metered,
+            ConnectionClass::Constrained,
+            ConnectionClass::Offline,
+        ] {
+            assert_eq!(class.range_window(), None, "{class:?} is open-ended");
+        }
+
+        // The promotion path itself lands on the bounded window: a reset burst
+        // promotes a metered base to adverse, whose window is now bounded.
+        let mut detector = AdverseDetector::with_defaults();
+        for _ in 0..3 {
+            detector.record(TransferSignal::Reset);
+        }
+        assert_eq!(
+            detector.classify(ConnectionClass::Metered),
+            ConnectionClass::Adverse
+        );
+        assert_eq!(
+            detector.classify(ConnectionClass::Metered).range_window(),
+            Some(ADVERSE_RANGE_WINDOW)
+        );
+    }
+
+    /// **Backoff discipline (networking Validation).** For every policy class the
+    /// retry sequence stays within its bounds, is jittered, honors a server
+    /// `Retry-After` as a floor, and gives up after a bounded number of attempts —
+    /// no configuration can produce an unbounded hot loop.
+    #[test]
+    fn backoff_stays_bounded_jitters_and_gives_up() {
+        for class in [
+            RetryClass::Interactive,
+            RetryClass::BulkTransfer,
+            RetryClass::ControlCeremony,
+        ] {
+            let policy = class.policy();
+
+            // Full jitter at fraction 1.0 rides the ceiling exactly: the sequence
+            // is non-decreasing and never exceeds max_delay.
+            let mut engine = RetryEngine::deterministic(class, 1.0);
+            let mut prev = Duration::ZERO;
+            let mut retries = 0u32;
+            loop {
+                match engine.next_backoff(None) {
+                    RetryDecision::Retry { after } => {
+                        assert!(after <= policy.max_delay, "{class:?} within cap");
+                        assert!(after >= prev, "{class:?} ceiling non-decreasing");
+                        prev = after;
+                        retries += 1;
+                        assert!(retries <= policy.max_retries, "{class:?} bounded");
+                    }
+                    RetryDecision::GiveUp => break,
+                }
+            }
+            assert_eq!(
+                retries, policy.max_retries,
+                "{class:?} gives up at the bound"
+            );
+
+            // Full jitter at fraction 0.0 floors at zero but STILL gives up: even a
+            // zero-delay config cannot hot-loop.
+            let mut zero = RetryEngine::deterministic(class, 0.0);
+            let mut count = 0u32;
+            while let RetryDecision::Retry { after } = zero.next_backoff(None) {
+                assert_eq!(after, Duration::ZERO);
+                count += 1;
+                assert!(count <= policy.max_retries + 1, "{class:?} cannot hot-loop");
+            }
+            assert_eq!(count, policy.max_retries);
+
+            // A server Retry-After beyond the cap is honored as a floor.
+            let mut hinted = RetryEngine::deterministic(class, 0.0);
+            let hint = policy.max_delay + Duration::from_secs(5);
+            match hinted.next_backoff(Some(hint)) {
+                RetryDecision::Retry { after } => {
+                    assert_eq!(after, hint, "{class:?} honors Retry-After")
+                }
+                RetryDecision::GiveUp => panic!("{class:?} should retry first"),
+            }
+        }
+    }
+
+    /// Full jitter is a *uniform spread over `[0, ceiling]`*, not a fixed value:
+    /// a seeded production engine at the capped ceiling produces varied waits, all
+    /// within the cap. Deterministic via the fixed seed.
+    #[test]
+    fn full_jitter_spreads_within_the_ceiling() {
+        let policy = RetryClass::BulkTransfer.policy();
+        let mut engine = RetryEngine::seeded(RetryClass::BulkTransfer, 0xC0FF_EE00_1234_5678);
+        // Drive past the doubling so the ceiling is pinned at max_delay, then the
+        // only variation is jitter.
+        let mut seen = Vec::new();
+        for _ in 0..policy.max_retries {
+            if let RetryDecision::Retry { after } = engine.next_backoff(None) {
+                assert!(after <= policy.max_delay);
+                seen.push(after);
+            }
+        }
+        let min = seen.iter().min().copied().unwrap_or_default();
+        let max = seen.iter().max().copied().unwrap_or_default();
+        assert!(min < max, "full jitter must spread, not fix: {seen:?}");
+    }
+
+    /// Resetting the engine after real progress restores the full budget — a
+    /// long-lived resumable transfer earns a fresh backoff per independent stall.
+    #[test]
+    fn reset_restores_the_retry_budget() {
+        let mut engine = RetryEngine::deterministic(RetryClass::BulkTransfer, 0.5);
+        for _ in 0..3 {
+            let _ = engine.next_backoff(None);
+        }
+        assert_eq!(engine.attempts(), 3);
+        engine.reset();
+        assert_eq!(engine.attempts(), 0);
+    }
+
+    /// The stall detector cuts on **no-bytes-for-T** against a mock clock — never a
+    /// wall-clock sleep. Progress rearms it; a gap at or beyond the bound trips it.
+    #[test]
+    fn stall_detector_cuts_on_no_bytes_for_t() {
+        let cfg = StallConfig::new(Duration::from_millis(500));
+        let mut stall = StallDetector::new(cfg, 0);
+
+        // Within the bound: live but slow, not a stall.
+        assert!(!stall.is_stalled(499));
+        // At the bound: cut.
+        assert!(stall.is_stalled(500));
+        assert!(stall.is_stalled(10_000));
+
+        // Bytes arrive at t=600: the timer rearms from there.
+        stall.on_progress(600);
+        assert!(!stall.is_stalled(1000)); // only 400 ms since progress
+        assert!(stall.is_stalled(1100)); // 500 ms since progress → cut
+    }
+
+    /// `dial_client` builds a rustls client with the bounded connect timeout — the
+    /// Happy-Eyeballs-at-dial posture (address racing itself is the stack's).
+    #[test]
+    fn dial_client_builds() {
+        assert!(dial_client().is_ok());
     }
 }

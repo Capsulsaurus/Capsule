@@ -32,6 +32,11 @@ use capsule_i18n::error_codes;
 use sha2::{Digest, Sha256};
 use tracing::instrument;
 
+use crate::net::{
+    ConnectionClass, MonotonicClock, RetryClass, RetryDecision, RetryEngine, Sleeper, StallConfig,
+    StallDetector, SystemClock, TokioSleeper, TransferSignal,
+};
+
 // ─── Representation ladder ───────────────────────────────────────────────────
 
 /// The ladder of an asset's representations, cheapest first. `Ord` is the ladder
@@ -191,10 +196,17 @@ pub enum RangeOutcome {
 /// exercised by deterministic mocks; [`HttpBlobSource`] is the production impl.
 pub trait BlobSource {
     /// Fetch the blob `hash` from byte offset `start` (an HTTP `Range` request).
+    ///
+    /// `max_len` caps how many bytes this one request asks for: `Some(w)` requests
+    /// the bounded window `bytes={start}-{start+w-1}` (the adverse-network posture's
+    /// bounded transfer windows), and `None` requests the open-ended remainder
+    /// `bytes={start}-`. A source may return fewer bytes than requested — the loop
+    /// resumes from wherever it actually reached.
     fn get_range(
         &self,
         hash: &str,
         start: u64,
+        max_len: Option<u64>,
     ) -> impl std::future::Future<Output = RangeOutcome> + Send;
 }
 
@@ -274,80 +286,199 @@ fn classify_status(status: u16, code: Option<String>) -> FetchError {
     }
 }
 
-// ─── Resumable ranged fetch ──────────────────────────────────────────────────
+// ─── Resumable ranged fetch (adverse-hardened) ───────────────────────────────
 
-/// Bounded number of consecutive no-progress ranged attempts before giving up, so
-/// a black-holing source can never hot-loop.
-const MAX_STALLED_ATTEMPTS: u32 = 8;
+/// The resumable ranged-fetch engine (slice `S-D10`): stall-cut-resume, bounded
+/// transfer windows under `adverse`, and the shared [`RetryEngine`] backoff — the
+/// `bulk-transfer` retry class the download-resume ladder instantiates.
+///
+/// Behavior per the networking doc's adverse-network posture:
+/// - **Bounded windows.** Under [`ConnectionClass::Adverse`] each request asks for
+///   a bounded [`Range`](crate::net::ADVERSE_RANGE_WINDOW) window so it usually
+///   completes between mid-transfer resets; other classes fetch the remainder.
+/// - **Stall detection over total timeouts.** A [`StallDetector`] cuts on
+///   *no-bytes-for-T* (never a total-duration timeout); the cut abandons the
+///   in-flight request and resumes from the persisted offset — re-fetching **zero**
+///   bytes already held. A stall emits a [`TransferSignal::Stall`] the caller folds
+///   into `adverse` promotion.
+/// - **Bounded give-up.** No-progress reads consume the `bulk-transfer` retry
+///   budget; a persistently black-holing source gives up
+///   ([`FetchError::Exhausted`]) rather than hot-looping.
+///
+/// The [`MonotonicClock`] and [`Sleeper`] are injected so the whole loop — the
+/// stall cut and the backoff — is a deterministic, sleep-free test.
+#[derive(Debug, Clone)]
+pub struct RangedFetcher<S = TokioSleeper, C = SystemClock> {
+    class: ConnectionClass,
+    stall: StallConfig,
+    window_override: Option<u64>,
+    sleeper: S,
+    clock: C,
+}
+
+impl RangedFetcher {
+    /// A production fetcher for the given connection class (real clock + real
+    /// tokio sleeper). The window is derived from the class:
+    /// [`ConnectionClass::Adverse`] bounds it, others fetch the remainder.
+    #[must_use]
+    pub fn new(class: ConnectionClass) -> Self {
+        Self {
+            class,
+            stall: StallConfig::default(),
+            window_override: None,
+            sleeper: TokioSleeper,
+            clock: SystemClock::new(),
+        }
+    }
+}
+
+impl<S: Sleeper, C: MonotonicClock> RangedFetcher<S, C> {
+    /// Assemble a fetcher from explicit parts — the seam the deterministic
+    /// stall-cut-resume test drives (a mock clock + a no-op recording sleeper).
+    #[must_use]
+    pub fn from_parts(
+        class: ConnectionClass,
+        stall: StallConfig,
+        window_override: Option<u64>,
+        sleeper: S,
+        clock: C,
+    ) -> Self {
+        Self {
+            class,
+            stall,
+            window_override,
+            sleeper,
+            clock,
+        }
+    }
+
+    /// The bounded `Range` window this fetch uses, or `None` for the open-ended
+    /// remainder. An explicit override wins; otherwise the connection class decides.
+    #[must_use]
+    fn window(&self) -> Option<u64> {
+        self.window_override.or_else(|| self.class.range_window())
+    }
+
+    /// Fetch a whole blob, resumable and stall-cut, verifying the reassembled
+    /// ciphertext against its content address.
+    pub async fn fetch<B: BlobSource>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+    ) -> Result<Vec<u8>, FetchError> {
+        Ok(self.run(source, hash, expected_len).await?.0)
+    }
+
+    /// As [`fetch`](Self::fetch), also returning the [`TransferSignal`] trail (clean
+    /// windows and stall cuts) the caller folds into `adverse` promotion.
+    pub async fn fetch_with_signals<B: BlobSource>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+    ) -> Result<(Vec<u8>, Vec<TransferSignal>), FetchError> {
+        self.run(source, hash, expected_len).await
+    }
+
+    #[instrument(skip(self, source), fields(hash, expected_len, class = ?self.class))]
+    async fn run<B: BlobSource>(
+        &self,
+        source: &B,
+        hash: &str,
+        expected_len: u64,
+    ) -> Result<(Vec<u8>, Vec<TransferSignal>), FetchError> {
+        let mut buffer: Vec<u8> = Vec::with_capacity(usize::try_from(expected_len).unwrap_or(0));
+        let mut signals: Vec<TransferSignal> = Vec::new();
+        // The shared retry engine, `bulk-transfer` class: resume-first, patient,
+        // backoff between attempts, bounded give-up.
+        let mut engine: RetryEngine = RetryClass::BulkTransfer.engine();
+        let mut stall = StallDetector::new(self.stall, self.clock.now_millis());
+        let window = self.window();
+
+        while (buffer.len() as u64) < expected_len {
+            let start = buffer.len() as u64;
+            let remaining = expected_len - start;
+            let max_len = window.map(|w| w.min(remaining));
+            let outcome = source.get_range(hash, start, max_len).await;
+            let now = self.clock.now_millis();
+
+            match outcome {
+                // Progress: bytes landed. Rearm the stall timer, refresh the retry
+                // budget (each resumed window earns a fresh one), and continue —
+                // every request resumes from `buffer.len()`, so zero held bytes are
+                // ever re-requested.
+                RangeOutcome::Complete { bytes } | RangeOutcome::Partial { bytes }
+                    if !bytes.is_empty() =>
+                {
+                    stall.on_progress(now);
+                    engine.reset();
+                    signals.push(TransferSignal::Clean);
+                    tracing::trace!(
+                        resumed_from = start,
+                        now = start + bytes.len() as u64,
+                        "range window landed; resuming from persisted offset"
+                    );
+                    buffer.extend_from_slice(&bytes);
+                }
+                // A no-byte read: the request stalled or was black-holed. Cut on
+                // no-bytes-for-T (a stall counts toward `adverse`), back off through
+                // the shared engine, and resume from the SAME offset — the buffer is
+                // untouched, so the resume re-fetches zero duplicate bytes.
+                RangeOutcome::Complete { .. } | RangeOutcome::Partial { .. } => {
+                    if stall.is_stalled(now) {
+                        tracing::debug!(
+                            offset = start,
+                            stall_after = ?stall.stall_after(),
+                            "no-bytes-for-T stall cut; resuming from persisted offset"
+                        );
+                        signals.push(TransferSignal::Stall);
+                    }
+                    match engine.next_backoff(None) {
+                        RetryDecision::GiveUp => {
+                            return Err(FetchError::Exhausted(format!(
+                                "no progress fetching {hash} after {} retries",
+                                engine.policy().max_retries
+                            )));
+                        }
+                        RetryDecision::Retry { after } => self.sleeper.sleep(after).await,
+                    }
+                }
+                RangeOutcome::Status { status, code } => {
+                    return Err(classify_status(status, code));
+                }
+            }
+        }
+
+        // The server can only attest to ciphertext; the client verifies the content
+        // address itself before trusting the bytes.
+        if hash_hex(&buffer) != hash {
+            tracing::warn!(hash, "ciphertext content-hash mismatch; discarding blob");
+            return Err(FetchError::IntegrityFailed {
+                expected: hash.to_string(),
+            });
+        }
+        Ok((buffer, signals))
+    }
+}
 
 /// Fetch a whole blob with resumable `Range` windows, verifying the reassembled
 /// ciphertext against its content address.
 ///
-/// Each request resumes from the current buffer length, so an interruption
-/// (a [`RangeOutcome::Partial`]) re-fetches **zero** bytes already held. On
-/// completion the SHA-256 of the assembled ciphertext must equal `hash` (the
-/// requested content address) or the blob is discarded ([`FetchError::IntegrityFailed`]).
-#[instrument(skip(source), fields(hash, expected_len))]
+/// The unmetered convenience over [`RangedFetcher`]: each request resumes from the
+/// current buffer length, so an interruption re-fetches **zero** bytes already
+/// held, and on completion the SHA-256 of the assembled ciphertext must equal
+/// `hash` or the blob is discarded ([`FetchError::IntegrityFailed`]). A caller on a
+/// detected [`ConnectionClass::Adverse`] link builds `RangedFetcher::new(Adverse)`
+/// instead to get bounded transfer windows.
 pub async fn fetch_blob<S: BlobSource>(
     source: &S,
     hash: &str,
     expected_len: u64,
 ) -> Result<Vec<u8>, FetchError> {
-    let mut buffer: Vec<u8> = Vec::with_capacity(usize::try_from(expected_len).unwrap_or(0));
-    let mut stalled: u32 = 0;
-
-    while (buffer.len() as u64) < expected_len {
-        let start = buffer.len() as u64;
-        match source.get_range(hash, start).await {
-            RangeOutcome::Complete { bytes } => {
-                if bytes.is_empty() {
-                    // A "complete" response with no bytes yet the buffer is short:
-                    // the server disagrees about the length. Treat as transient.
-                    stalled += 1;
-                    guard_stall(stalled, hash)?;
-                } else {
-                    buffer.extend_from_slice(&bytes);
-                }
-            }
-            RangeOutcome::Partial { bytes } => {
-                if bytes.is_empty() {
-                    stalled += 1;
-                    guard_stall(stalled, hash)?;
-                } else {
-                    stalled = 0;
-                    buffer.extend_from_slice(&bytes);
-                    tracing::trace!(
-                        resumed_from = start,
-                        now = buffer.len(),
-                        "range window dropped mid-transfer; resuming from persisted offset"
-                    );
-                }
-            }
-            RangeOutcome::Status { status, code } => {
-                return Err(classify_status(status, code));
-            }
-        }
-    }
-
-    // The server can only attest to ciphertext; the client verifies the content
-    // address itself before trusting the bytes.
-    if hash_hex(&buffer) != hash {
-        tracing::warn!(hash, "ciphertext content-hash mismatch; discarding blob");
-        return Err(FetchError::IntegrityFailed {
-            expected: hash.to_string(),
-        });
-    }
-    Ok(buffer)
-}
-
-fn guard_stall(stalled: u32, hash: &str) -> Result<(), FetchError> {
-    if stalled >= MAX_STALLED_ATTEMPTS {
-        Err(FetchError::Exhausted(format!(
-            "no progress fetching {hash} after {MAX_STALLED_ATTEMPTS} attempts"
-        )))
-    } else {
-        Ok(())
-    }
+    RangedFetcher::new(ConnectionClass::Unmetered)
+        .fetch(source, hash, expected_len)
+        .await
 }
 
 // ─── On-demand open with degrade ladder ──────────────────────────────────────
@@ -494,9 +625,15 @@ impl HttpBlobSource {
 }
 
 impl BlobSource for HttpBlobSource {
-    async fn get_range(&self, hash: &str, start: u64) -> RangeOutcome {
+    async fn get_range(&self, hash: &str, start: u64, max_len: Option<u64>) -> RangeOutcome {
         let url = format!("{}/blob/{hash}", self.base_url);
-        let range = format!("bytes={start}-");
+        // Under `adverse` the fetcher passes a bounded window; otherwise the
+        // open-ended remainder. A zero-length window would be malformed — treat it
+        // as open-ended (the loop never asks for zero when bytes remain).
+        let range = match max_len {
+            Some(len) if len > 0 => format!("bytes={start}-{}", start + len - 1),
+            _ => format!("bytes={start}-"),
+        };
         let response = match self
             .session
             .execute(|http| http.get(&url).header(reqwest::header::RANGE, &range))

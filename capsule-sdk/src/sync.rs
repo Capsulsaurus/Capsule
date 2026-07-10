@@ -36,6 +36,7 @@ use tonic::{Code, Request, Response, Status};
 use tracing::instrument;
 
 use crate::auth::{AuthError, Session};
+use crate::net::{RetryClass, RetryDecision, RetryEngine, Sleeper, TokioSleeper};
 use crate::proto::capsule::sync::v1::sync_service_client::SyncServiceClient;
 use crate::proto::capsule::sync::v1::{
     BlobManifest as ProtoBlobManifest, BlobRef as ProtoBlobRef, ChangeKind as ProtoChangeKind,
@@ -418,20 +419,49 @@ impl SyncConsumer {
         page_size: u32,
     ) -> Result<SyncPage, SyncError> {
         let bearer = self.bearer().await?;
-        let response = match self.call(cursor, page_size, &bearer).await {
-            Ok(response) => response,
-            Err(status) if status.code() == Code::Unauthenticated => match &self.auth {
-                SyncAuth::Session(session) => {
-                    tracing::info!("sync returned Unauthenticated; refreshing once and retrying");
-                    session.refresh().await?;
-                    let bearer = session.bearer().await?.expose_secret().to_string();
-                    self.call(cursor, page_size, &bearer)
-                        .await
-                        .map_err(map_status)?
+        // The shared retry engine, `interactive` class (short timeout, ≤ 2 retries,
+        // then a visible failure). Instantiated here as upload/fetch do, so all
+        // three paths share one engine. It governs transient `Unavailable`
+        // responses — the mid-transfer black-holing an adverse path produces — with
+        // exponential backoff + full jitter and a bounded give-up.
+        let mut engine: RetryEngine = RetryClass::Interactive.engine();
+        let response = loop {
+            match self.call(cursor, page_size, &bearer).await {
+                Ok(response) => break response,
+                Err(status) if status.code() == Code::Unauthenticated => match &self.auth {
+                    SyncAuth::Session(session) => {
+                        tracing::info!(
+                            "sync returned Unauthenticated; refreshing once and retrying"
+                        );
+                        session.refresh().await?;
+                        let bearer = session.bearer().await?.expose_secret().to_string();
+                        break self
+                            .call(cursor, page_size, &bearer)
+                            .await
+                            .map_err(map_status)?;
+                    }
+                    SyncAuth::Static(_) => return Err(map_status(status)),
+                },
+                // A transient server signal (`Unavailable`, incl. the `503` the
+                // salvo bridge maps): back off through the engine and retry, honoring
+                // a `retry-after` metadata hint as a floor. A bounded give-up surfaces
+                // the visible failure state; no configuration hot-loops.
+                Err(status) if status.code() == Code::Unavailable => {
+                    match engine.next_backoff(retry_after(&status)) {
+                        RetryDecision::GiveUp => {
+                            tracing::info!(
+                                "sync unavailable; retry budget spent — surfacing failure"
+                            );
+                            return Err(map_status(status));
+                        }
+                        RetryDecision::Retry { after } => {
+                            tracing::debug!(?after, "sync unavailable; backing off and retrying");
+                            TokioSleeper.sleep(after).await;
+                        }
+                    }
                 }
-                SyncAuth::Static(_) => return Err(map_status(status)),
-            },
-            Err(status) => return Err(map_status(status)),
+                Err(status) => return Err(map_status(status)),
+            }
         };
         let page = decode_response(response)?;
         tracing::Span::current().record("entries", page.entries.len());
@@ -553,6 +583,18 @@ fn map_status(status: Status) -> SyncError {
         code,
         message: status.message().to_string(),
     }
+}
+
+/// Parse a `retry-after` metadata hint (integer seconds) into a backoff floor the
+/// shared retry engine honors. Absent or unparsable ⇒ `None` (engine uses its own
+/// jittered backoff).
+fn retry_after(status: &Status) -> Option<std::time::Duration> {
+    status
+        .metadata()
+        .get("retry-after")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .map(std::time::Duration::from_secs)
 }
 
 /// Lossy UTF-8 of an id byte string, for error display only.

@@ -101,7 +101,7 @@ its slice.
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
 | S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
-| S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | ready   |
+| S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
@@ -951,6 +951,13 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-D1, S-D2. **Done when:** the networking doc's four Validation
   bullets pass (mocked-signal class matrix; promotion/demotion; stall-cut-resume with
   zero duplicate bytes; backoff discipline). **Tier:** Unit + Smoke.
+- **Landed:** one `RetryEngine` instantiated by all three paths (fetch/upload =
+  BulkTransfer, sync = Interactive); stall-cut + bounded windows via
+  `RangedFetcher` (zero-duplicate-bytes proven by exact window tiling);
+  adverse pins the upload chunk floor. Happy Eyeballs: address racing is
+  stack-provided (hyper-util, verified in source); S-D10 adds the per-address
+  dial timeout + the no-request-racing structural guarantee. Jitter is a
+  dependency-free xorshift (no `rand` in the workspace).
 
 ### S-D11 — Client cohort emission + devices grouping UI
 

@@ -77,6 +77,40 @@ fn warmup_defers_scaling_then_doubles_above_5mbps() {
     assert!(s.current_size > CHUNK_SIZE_1MB);
 }
 
+/// **Chunk-size floor coupling (S-D10).** Under `adverse` the strategy pins to the
+/// tier chunk floor and suppresses adaptive growth, so each request stays small
+/// enough to usually complete between mid-transfer resets; releasing the coupling
+/// lets the normative adaptive algorithm grow again.
+#[test]
+fn adverse_pins_chunk_size_to_the_tier_floor() {
+    use crate::net::ConnectionClass;
+
+    let mut adverse = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024) // 4–16 MiB
+        .with_connection_class(ConnectionClass::Adverse);
+    let floor = adverse.min_size;
+    assert_eq!(adverse.current_size, floor, "pinned to the tier floor");
+    assert_eq!(adverse.next_chunk_size(), floor);
+
+    // Even sustained high-throughput chunks that would normally double the size
+    // leave it pinned at the floor while adverse.
+    for _ in 0..10 {
+        adverse.record_chunk(floor, Duration::from_millis(1));
+    }
+    assert_eq!(adverse.current_size, floor, "no growth under adverse");
+
+    // Control: an unmetered client on the same tier is free to grow past the floor.
+    let mut unmetered = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024)
+        .with_connection_class(ConnectionClass::Unmetered);
+    for _ in 0..6 {
+        let cs = unmetered.current_size;
+        unmetered.record_chunk(cs, Duration::from_millis(1));
+    }
+    assert!(
+        unmetered.current_size > floor,
+        "unmetered grows above the floor"
+    );
+}
+
 #[test]
 fn doubling_never_exceeds_the_tier_max_and_stays_aligned() {
     let mut s = AdaptiveChunkSizeStrategy::for_file_size(500 * 1024 * 1024); // 4–16 MiB
