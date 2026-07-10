@@ -1,7 +1,9 @@
 pub mod album;
 pub mod asset;
+pub mod blob_store;
 pub mod directory;
 pub mod friendship;
+pub mod gc;
 pub mod quota;
 pub mod stack;
 pub mod storage;

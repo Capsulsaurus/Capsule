@@ -8,7 +8,11 @@ use crate::state::AppState;
 mod config;
 mod error;
 pub mod routes; // Expose routes module if needed or just functions
+mod service;
 mod state;
+
+#[cfg(test)]
+mod tests;
 
 pub async fn get_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,

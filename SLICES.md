@@ -78,7 +78,7 @@ its slice.
 | S-B9  | Tethered camera import (PTP/IP)                      | media/import    | S-B2, ptpip-rs   | L    | post-v1 |
 | S-C1  | Upload-server hardening (envelope gate + invariants) | server          | —                | L    | done    |
 | S-C2  | Key-free sync feed                                   | server          | S-C1             | L    | done    |
-| S-C3  | Storage-verification endpoint                        | server          | —                | M    | ready   |
+| S-C3  | Storage-verification endpoint                        | server          | —                | M    | done    |
 | S-C4  | Share-link serving endpoints                         | server          | S-A5             | M    | ready   |
 | S-C5  | Drop store, inbox, atomic adoption                   | server          | S-A6, S-C1, S-C6 | L    | ready   |
 | S-C6  | Quota service                                        | server          | —                | M    | done    |
@@ -510,6 +510,12 @@ pass until the gate lifts.
   bullets pass; the stub's `todo!()` is gone. (The signed `StorageAttestation`
   extension of this endpoint is owned by S-C15.) **Tier:** Unit + Smoke.
   **Blocks:** S-D4, S-C15.
+- **Landed:** pure-read endpoint; blob addressing lifted into
+  `service::blob_store` (shared with upload, no fork); `indexed` derives from the
+  S-C2 sync feed; deep re-hash per-hash coalesced + per-user rate-limited (proven
+  with injected hasher gate + mocked clock); GC-grace contract in `service::gc`
+  (`GC_GRACE_WINDOW`, `earliest_byte_deletion`, `blob_gc` table — S-C11 owns the
+  writes and MUST NOT byte-delete before the window elapses).
 
 ### S-C4 — Share-link serving
 

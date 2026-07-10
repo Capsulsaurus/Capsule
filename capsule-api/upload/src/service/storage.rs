@@ -28,14 +28,15 @@ impl StorageService {
         self.config.upload_dir.join(format!("{upload_id}.bin"))
     }
 
-    /// The content-addressed blob store directory.
+    /// The content-addressed blob store directory (shared addressing — the reader half is
+    /// storage verification, slice `S-C3`).
     fn blobs_dir(&self) -> PathBuf {
-        self.config.upload_dir.join("blobs")
+        service::blob_store::blobs_dir(&self.config.upload_dir)
     }
 
     /// The content-addressed path a finalized blob is committed to.
     fn get_blob_path(&self, hash: &str) -> PathBuf {
-        self.blobs_dir().join(format!("{hash}.bin"))
+        service::blob_store::blob_path(&self.config.upload_dir, hash)
     }
 
     /// Atomically commit a verified upload into the content-addressed blob store by renaming

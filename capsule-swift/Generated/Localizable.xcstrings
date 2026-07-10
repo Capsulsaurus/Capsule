@@ -121,6 +121,26 @@
         }
       }
     },
+    "error.storage.deep_rate_limited": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Too many deep storage checks. Please wait and try again."
+          }
+        }
+      }
+    },
+    "error.storage.invalid_request": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The storage-verification request was malformed."
+          }
+        }
+      }
+    },
     "error.sync.cursor_invalid": {
       "localizations": {
         "en": {

@@ -3,6 +3,7 @@ pub mod album_share;
 pub mod asset;
 pub mod asset_smart_tag;
 pub mod asset_stack;
+pub mod blob_gc;
 pub mod device_directory;
 pub mod face;
 pub mod friendship;

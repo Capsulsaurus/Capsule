@@ -3,9 +3,42 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
 };
 
+use super::FeedBlobManifest;
+
 pub struct Query;
 
 impl Query {
+    /// The set of committed blob references for one asset, keyed by content address → role.
+    ///
+    /// This is the `indexed` source of truth for storage verification (slice `S-C3`): every
+    /// finalized blob of the asset appears here because the feed row is minted **inside** the
+    /// upload finalization transaction, atomically with the asset's `uploaded` flip. A blob
+    /// hash absent from this map has no committed, `uploaded = true` row referencing it, so it
+    /// is reported `indexed = false`. Later feed rows (metadata updates) override an earlier
+    /// role for the same hash — the newest committed reference wins.
+    pub async fn asset_blob_index<C: ConnectionTrait>(
+        db: &C,
+        asset_id: &str,
+    ) -> Result<std::collections::HashMap<String, String>, DbErr> {
+        let rows = sync_entry::Entity::find()
+            .filter(sync_entry::Column::AssetId.eq(asset_id))
+            .order_by_asc(sync_entry::Column::FeedSeq)
+            .all(db)
+            .await?;
+
+        let mut index = std::collections::HashMap::new();
+        for row in rows {
+            let manifest: FeedBlobManifest = serde_json::from_value(row.blobs)
+                .map_err(|e| DbErr::Custom(format!("decode feed blobs: {e}")))?;
+            if let Some(original) = manifest.original {
+                index.insert(original.ciphertext_hash, original.role);
+            }
+            for derivative in manifest.derivatives {
+                index.insert(derivative.ciphertext_hash, derivative.role);
+            }
+        }
+        Ok(index)
+    }
     /// One forward-only page of feed entries for `album_ids`, strictly after `after_feed_seq`,
     /// ordered by the global append key. Re-issuing the same `after_feed_seq` returns the same
     /// page (the cursor's idempotency guarantee); the page never regresses.

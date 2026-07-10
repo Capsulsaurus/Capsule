@@ -46,6 +46,12 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.storage.deep_rate_limited`
+    pub const STORAGE_DEEP_RATE_LIMITED: &str = "error.storage.deep_rate_limited";
+
+    /// `error.storage.invalid_request`
+    pub const STORAGE_INVALID_REQUEST: &str = "error.storage.invalid_request";
+
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 
