@@ -89,7 +89,7 @@ its slice.
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | done    |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | done    |
-| S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
+| S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | done    |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | done    |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | done    |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
@@ -730,6 +730,13 @@ pass until the gate lifts.
   audits). **Done when:** the maintenance doc's seeded-corruption matrix passes
   against testcontainer Postgres + a real blob tree; clean-store idempotency holds.
 - **Tier:** Unit + Smoke.
+- **Landed:** `capsule-scrub` binary + `service::scrub`, SELECT-only with a
+  byte-identity no-mutation proof (tree digest + row-set snapshots). Schema-honest
+  mappings: the envelope⇄index chain check walks the `custody_receipts` hash chain
+  (the one materialized envelope-derived chain); the mirrored fact is the declared
+  size held in three copies; debris = flat `{upload_id}.bin` staging, quarantine =
+  the `blob_gc` flag. Fields living only inside the opaque `manifest_cbor` have no
+  second column to disagree with and are not separately checkable today.
 
 ### S-C16 — Generic lifecycle-write endpoint
 

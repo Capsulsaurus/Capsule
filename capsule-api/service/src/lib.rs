@@ -10,6 +10,7 @@ pub mod friendship;
 pub mod gc;
 pub mod moderation;
 pub mod quota;
+pub mod scrub;
 pub mod share;
 pub mod stack;
 pub mod storage;

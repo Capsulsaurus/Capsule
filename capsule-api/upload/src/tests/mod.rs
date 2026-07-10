@@ -19,6 +19,7 @@ mod moderation;
 mod ops;
 mod quota;
 mod receipts;
+mod scrub;
 mod sdk_client;
 mod sync_feed;
 
