@@ -44,6 +44,8 @@ Session TTL, the ≥ 1-hour survival floor, and pressure-discard semantics are s
 
 ### On non-upload writes (lifecycle action manifest, metadata-update, derivative-add/replace, trash-restore)
 
+These checks run at the single lifecycle-write surface, `POST /albums/{album_id}/ops`, owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface) (transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map); slice `S-C16`).
+
 - **16.** `action` is in the closed enum. Otherwise `400`.
 - **17.** `prior_provenance_hash` equals the last accepted manifest's content hash for this `asset_id`. Otherwise `409` (stale-revival).
 - **18.** `amk_version` is monotonic per album (never regresses) **and within the range the album's admin-signed MLS commit chain attests**. The server's stored counter is a structural backstop; the authoritative ceiling is MLS, so a server cannot fabricate a future epoch a client will honor — see [Write Authorization](/design/cryptography/keys/#write-authorization). Otherwise `400`.

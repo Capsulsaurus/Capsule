@@ -83,6 +83,7 @@ Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSi
 | `capsule-api-library::schema::*` (legacy, retiring)  | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
 | `capsule-api-library::loaders` (legacy, retiring)    | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
 | `capsule-api-upload`                                 | [Import — Upload Protocol](/design/import/upload-protocol/)                          | Unit + Smoke + 1 E2E                        |
+| `capsule-api-upload::ops` (planned)                  | [Authorization](/design/authorization/#the-lifecycle-write-surface), [Threat Model — Validation](/design/threat-model/validation/) | Unit + Smoke (+ E2E case 7)                 |
 | `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
 | `capsule-api-media::verify` (planned)                | [Import — Storage Verification](/design/import/storage-verification/) | Unit + Smoke                                |
 | `capsule-api-media::shares` (planned)                | [Share Links](/design/share-links/)                                                  | Unit + Smoke                                |
@@ -124,7 +125,7 @@ Navigation from a design doc back to where the code lives.
 | [MLS Resilience](/design/mls-resilience/)                           | `capsule-core::crypto::mls` (extends main MLS module; blocked with it)                                                        |
 | [Device Enrollment](/design/device-enrollment/)                     | `capsule-core::crypto::keys`, `capsule-api-auth::devices`                                                                     |
 | [Authentication](/design/authentication/)                           | `capsule-api-auth::{oidc,session,claims}`                                                                                     |
-| [Authorization](/design/authorization/)                             | `capsule-api-auth::roles`, `capsule-core::crypto::provenance` (verify_asset)                                                  |
+| [Authorization](/design/authorization/)                             | `capsule-api-auth::roles`, `capsule-core::crypto::provenance` (verify_asset), `capsule-api-upload::ops` (lifecycle-write surface, planned) |
 | [Clients](/design/clients/)                                         | `capsule-sdk` + per-platform native code                                                                                      |
 | [Internationalization](/design/i18n/)                               | `capsule-i18n` (runtime) + `xtask::i18n` (codegen) + `locales/` source + per-platform generated catalogs                     |
 | [Versioning](/design/versioning/)                                   | Cross-cutting: `capsule-api` (header enforcement), `capsule-core::crypto::mls` (upgrade ceremony), `capsule-api-migration`    |

@@ -35,6 +35,19 @@ Authorization is established exactly as for a write:
 
 A `delete` or `replace` is therefore authorized by the same proof as the original `create`: there is no weaker path to destroy data than to add it. Similarly, a `derivative-replace` is authorized as strongly as the original `derivative-add` — a buggy client cannot quietly poison a thumbnail.
 
+## The Lifecycle Write Surface
+
+Every non-upload lifecycle write — `delete`, `metadata-update`, `derivative-add`/`derivative-replace` when the manifest references already-stored blobs, and `trash-restore` — travels through **one generic REST endpoint**: `POST /albums/{album_id}/ops`. (`create` and `replace`, and any derivative action carrying new bytes, ride the [upload protocol](/design/import/upload-protocol/) instead — a write that moves blob bytes is an upload by definition.) The body is the signed manifest bundle: the opaque canonical-CBOR manifest plus the encrypted metadata blob when the action carries one.
+
+The endpoint is deliberately singular — one closed enum, one gate, one transaction shape:
+
+- The structural envelope check above, [invariants 16–18](/design/threat-model/validation/#server-side-validation-invariants) and the metadata-blob binding ([invariant 25](/design/threat-model/validation/#server-side-validation-invariants)), runs **before any row is written**, for every action uniformly. A new action is a manifest-schema change under a new `protocol_version`, never a new endpoint.
+- Accepted ops are **idempotent by content hash**: replaying a manifest whose content hash the server has already accepted returns the byte-identical prior response and writes nothing.
+- The accepted op appends the provenance record and mints the per-album `sync_seq` in **one transaction**, the same finalization rule the [sync feed](/design/import/download-sync/) relies on — an op is visible on the feed exactly when it is durable.
+- Rejections carry an [`error.*` code](/design/i18n/#server-error-codes) and write nothing; the rejection itself is logged.
+
+The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implemented in `capsule-api-upload::ops` (planned — slice `S-C16`, reusing the upload server's envelope gate).
+
 ## The Server Executes But Never Authorizes
 
 Per the principle of [trusting the server for storage, never for authorization](/design/cryptography/), the server **carries out** a remote delete or replace but is **never** the authority that permits it. A server-asserted lifecycle change with no valid write-tier signature is rejected by every client. This bounds the damage a compromised or buggy server can do: it can refuse to store data, but it cannot forge its destruction.

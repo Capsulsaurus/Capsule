@@ -86,6 +86,7 @@ its slice.
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
 | S-C15 | Custody receipts + signed storage attestation        | server          | S-C1, S-C3       | M    | ready   |
+| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | ready   |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | ready   |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | ready   |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
@@ -151,6 +152,7 @@ graph LR
   C3 --> C15
   C15 --> D4
   C1 --> C14[S-C14 integrity scrub]
+  C1 --> C16[S-C16 lifecycle writes]
   D1 --> B3
   D1 --> D5
   D2 --> E3
@@ -517,6 +519,26 @@ pass until the gate lifts.
   audits). **Done when:** the maintenance doc's seeded-corruption matrix passes
   against testcontainer Postgres + a real blob tree; clean-store idempotency holds.
 - **Tier:** Unit + Smoke.
+
+### S-C16 — Generic lifecycle-write endpoint
+
+- **Contract:** [Authorization — The Lifecycle Write Surface](capsule-docs/src/content/docs/design/authorization.md),
+  [Validation invariants 16–18 + 25](capsule-docs/src/content/docs/design/threat-model/validation.md),
+  [API Surfaces — transport row](capsule-docs/src/content/docs/design/api-surfaces.md).
+- **Deliverable:** `POST /albums/{album_id}/ops` in `capsule-api-upload::ops` — the
+  signed manifest bundle (opaque canonical-CBOR manifest + encrypted metadata blob
+  when the action carries one) through S-C1's `EnvelopeGate` before any write;
+  invariants 16 (closed action set), 17 (`prior_provenance_hash` chain match,
+  `409` stale-revival), 18 (monotonic + MLS-attested `amk_version`), and 25
+  (metadata-blob hash binding) each rejecting with its `error.*` code; content-hash
+  replay idempotency returning the byte-identical prior response; provenance append +
+  per-album `sync_seq` mint in one transaction (the sync feed's finalization rule).
+- **Depends on:** S-C1 (envelope gate + finalization transaction shape).
+- **Done when:** invariants 16/17/18 each have a rejecting test (status **and**
+  `error.*` code) against testcontainer Postgres; the replay test returns
+  byte-identical responses; a delete → restore round-trip smoke passes and appears on
+  the sync feed in order.
+- **Tier:** Unit + Smoke + E2E case 7 (with S-C11, S-D2).
 
 ## Lane D — SDK / clients
 
