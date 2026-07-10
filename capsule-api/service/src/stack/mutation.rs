@@ -1,7 +1,7 @@
 use ::entity::asset::{self, Entity as Asset};
 use ::entity::asset_stack::{self, Entity as AssetStack, StackType};
 use ::entity::stack_member::{self, Entity as StackMember, MemberRole};
-use chrono::Utc;
+use ::entity::time;
 use nanoid::nanoid;
 use sea_orm::prelude::Expr;
 use sea_orm::*;
@@ -39,8 +39,8 @@ impl Mutation {
             metadata: Set(metadata_json),
             is_collapsed: Set(true),
             is_auto_generated: Set(true),
-            created_at: Set(Utc::now()),
-            modified_at: Set(Utc::now()),
+            created_at: Set(time::now_entity()),
+            modified_at: Set(time::now_entity()),
         };
         let stack = stack.insert(db).await?;
 
@@ -109,7 +109,7 @@ impl Mutation {
             sequence_order: Set(sequence_order),
             member_role: Set(member_role),
             metadata: Set(metadata_json),
-            created_at: Set(Utc::now()),
+            created_at: Set(time::now_entity()),
         };
         member.insert(db).await
     }
@@ -176,7 +176,7 @@ impl Mutation {
         // Update stack's primary
         let mut stack_active: asset_stack::ActiveModel = stack.into();
         stack_active.primary_asset_id = Set(new_primary_id.to_string());
-        stack_active.modified_at = Set(Utc::now());
+        stack_active.modified_at = Set(time::now_entity());
         stack_active.update(db).await
     }
 
@@ -193,7 +193,7 @@ impl Mutation {
 
         let mut stack_active: asset_stack::ActiveModel = stack.into();
         stack_active.is_collapsed = Set(is_collapsed);
-        stack_active.modified_at = Set(Utc::now());
+        stack_active.modified_at = Set(time::now_entity());
         stack_active.update(db).await
     }
 

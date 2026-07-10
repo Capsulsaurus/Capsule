@@ -97,8 +97,8 @@ impl From<User> for UserProfile {
             email,
             profile_image_url,
             is_admin,
-            created_at: created_at.to_rfc3339(),
-            updated_at: modified_at.to_rfc3339(),
+            created_at: created_at.to_string(),
+            updated_at: modified_at.to_string(),
             registered_via,
         }
     }

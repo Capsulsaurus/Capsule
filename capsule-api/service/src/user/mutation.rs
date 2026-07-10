@@ -74,7 +74,7 @@ impl Mutation {
             .ok_or(DbErr::RecordNotFound("User not found".to_string()))?;
 
         let mut user: user::ActiveModel = user_model.into();
-        user.last_login_at = Set(Some(chrono::Utc::now()));
+        user.last_login_at = Set(Some(::entity::time::now_entity()));
         user.failed_login_attempts = Set(0);
 
         user.update(db).await
@@ -100,7 +100,7 @@ impl Mutation {
         db: &DbConn,
         id: &str,
         token: &str,
-        expires_at: chrono::DateTime<chrono::Utc>,
+        expires_at: jiff::Timestamp,
     ) -> Result<user::Model, DbErr> {
         let user_model = User::find_by_id(id)
             .one(db)
@@ -109,7 +109,7 @@ impl Mutation {
 
         let mut user: user::ActiveModel = user_model.into();
         user.password_reset_token = Set(Some(token.to_string()));
-        user.password_reset_expires_at = Set(Some(expires_at));
+        user.password_reset_expires_at = Set(Some(::entity::time::ts_to_entity(expires_at)));
 
         user.update(db).await
     }

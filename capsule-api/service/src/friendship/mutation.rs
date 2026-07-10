@@ -1,5 +1,5 @@
 use ::entity::friendship::{self, FriendshipStatus};
-use chrono::Utc;
+use ::entity::time;
 use sea_orm::*;
 
 use super::error::{
@@ -45,7 +45,7 @@ impl Mutation {
             user_id: Set(user_id.to_string()),
             friend_id: Set(friend_id.to_string()),
             status: Set(FriendshipStatus::Pending),
-            created_at: Set(Utc::now()),
+            created_at: Set(time::now_entity()),
             ..Default::default()
         };
 
@@ -84,7 +84,7 @@ impl Mutation {
 
         let mut model: friendship::ActiveModel = request.into();
         model.status = Set(FriendshipStatus::Accepted);
-        model.accepted_at = Set(Some(Utc::now()));
+        model.accepted_at = Set(Some(time::now_entity()));
         let updated = model.update(db).await?;
         Ok(AcceptRequestResult::Accepted(updated))
     }

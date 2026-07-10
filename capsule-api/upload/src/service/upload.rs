@@ -1,8 +1,8 @@
 use std::clone::Clone;
 
 use capsule_core::utils::hash::get_file_hash;
-use chrono::Utc;
 use entity::asset;
+use jiff::{SignedDuration, Timestamp};
 use nanoid::nanoid;
 use sea_orm::{DatabaseConnection, TransactionTrait};
 use service::{album as AlbumService, asset as AssetService};
@@ -111,7 +111,7 @@ impl UploadService {
         .await
         .map_err(|e| UploadError::Unknown(e.to_string()))?;
 
-        let now = Utc::now();
+        let now = Timestamp::now();
         let session = UploadSession {
             id: upload_id.clone(),
             asset_id: asset.id.clone(),
@@ -130,7 +130,7 @@ impl UploadService {
             status: UploadSessionStatus::Pending,
             created_at: now,
             last_progress_at: now,
-            expires_at: now + chrono::Duration::hours(24),
+            expires_at: now + SignedDuration::from_hours(24),
         };
 
         // Create session in Redis (atomic HSET)

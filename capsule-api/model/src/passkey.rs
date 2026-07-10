@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,10 +22,10 @@ pub struct Passkey {
     pub name: String,
 
     /// When this key was created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 
     /// When this key was last used, if ever.
-    pub last_used_at: Option<DateTime<Utc>>,
+    pub last_used_at: Option<Timestamp>,
 
     /// The AAGUID identifying the authenticator model.
     pub aaguid: Option<uuid::Uuid>,
@@ -46,8 +46,8 @@ impl From<entity::passkey::Model> for Passkey {
             public_key: model.public_key,
             counter: model.counter,
             name: model.name,
-            created_at: model.created_at,
-            last_used_at: model.last_used_at,
+            created_at: entity::time::entity_to_ts(model.created_at),
+            last_used_at: model.last_used_at.map(entity::time::entity_to_ts),
             aaguid: model.aaguid,
             backup_eligible: model.backup_eligible,
             backup_state: model.backup_state,

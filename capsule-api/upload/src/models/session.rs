@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
@@ -67,14 +67,17 @@ pub(crate) struct UploadSession {
     pub total_size: u64,
     pub status: UploadSessionStatus,
 
-    /// Creation timestamp
-    pub created_at: DateTime<Utc>,
+    /// Creation timestamp (RFC 3339)
+    #[salvo(schema(value_type = String))]
+    pub created_at: Timestamp,
     /// Timestamp of the last accepted chunk (creation time if none). Anchors the
     /// ≥1-hour survival floor; the pressure sweeper (S-C1) evicts
     /// least-recently-progressed first.
-    pub last_progress_at: DateTime<Utc>,
-    /// Expiration timestamp (the 24-hour cap)
-    pub expires_at: DateTime<Utc>,
+    #[salvo(schema(value_type = String))]
+    pub last_progress_at: Timestamp,
+    /// Expiration timestamp (the 24-hour cap, RFC 3339)
+    #[salvo(schema(value_type = String))]
+    pub expires_at: Timestamp,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, ToSchema)]

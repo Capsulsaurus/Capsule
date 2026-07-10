@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub struct CreateAsset {
     pub file_size: i64,
     pub file_hash: String,
     pub content_type: String,
-    pub date: Option<DateTime<Utc>>,
+    pub date: Option<Timestamp>,
     pub uploaded: bool,
 }
 
@@ -49,7 +49,7 @@ pub struct UpdateAsset {
     pub file_size: Option<i64>,
     pub file_hash: Option<i64>,
     pub content_type: Option<String>,
-    pub date: Option<Option<DateTime<Utc>>>,
+    pub date: Option<Option<Timestamp>>,
     pub uploaded: Option<bool>,
-    pub deleted_at: Option<Option<DateTime<Utc>>>,
+    pub deleted_at: Option<Option<Timestamp>>,
 }

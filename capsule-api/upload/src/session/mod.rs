@@ -4,7 +4,7 @@ use std::time::Duration;
 use bb8_redis::RedisConnectionManager;
 use bb8_redis::bb8::Pool;
 use bb8_redis::redis::AsyncCommands;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::error::UploadError;
 use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
@@ -72,12 +72,12 @@ impl UploadSessionManager {
                     .unwrap_or_else(|_| "\"Pending\"".to_string())
                     .into_bytes(),
             ),
-            ("created_at", session.created_at.to_rfc3339().into_bytes()),
+            ("created_at", session.created_at.to_string().into_bytes()),
             (
                 "last_progress_at",
-                session.last_progress_at.to_rfc3339().into_bytes(),
+                session.last_progress_at.to_string().into_bytes(),
             ),
-            ("expires_at", session.expires_at.to_rfc3339().into_bytes()),
+            ("expires_at", session.expires_at.to_string().into_bytes()),
         ];
 
         // Store optional fields if present
@@ -141,7 +141,7 @@ impl UploadSessionManager {
         let mut conn = self.pool.get().await?;
         let key = self.key(upload_id);
         let _: () = conn
-            .hset(&key, "last_progress_at", Utc::now().to_rfc3339())
+            .hset(&key, "last_progress_at", Timestamp::now().to_string())
             .await?;
         Ok(())
     }
@@ -258,15 +258,15 @@ impl UploadSessionManager {
         let status: UploadSessionStatus = serde_json::from_str(&status_str)
             .map_err(|e| UploadError::Unknown(format!("Invalid status '{status_str}': {e}")))?;
 
-        let created_at: DateTime<Utc> = get_string("created_at")?
+        let created_at: Timestamp = get_string("created_at")?
             .parse()
             .map_err(|e| UploadError::Unknown(format!("Invalid created_at: {e}")))?;
 
-        let last_progress_at: DateTime<Utc> = get_string("last_progress_at")?
+        let last_progress_at: Timestamp = get_string("last_progress_at")?
             .parse()
             .map_err(|e| UploadError::Unknown(format!("Invalid last_progress_at: {e}")))?;
 
-        let expires_at: DateTime<Utc> = get_string("expires_at")?
+        let expires_at: Timestamp = get_string("expires_at")?
             .parse()
             .map_err(|e| UploadError::Unknown(format!("Invalid expires_at: {e}")))?;
 
