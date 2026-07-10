@@ -229,7 +229,10 @@ pub fn append_receipt(
     let uuid = Uuid::parse_str(&receipt.core.asset_id)
         .map_err(|e| ReceiptStoreError::Io(format!("receipt asset_id not a UUID: {e}")))?;
     let mut log = load_receipts(root, &uuid, capture_utc)?;
-    if log.iter().any(|r| r.core.receipt_seq == receipt.core.receipt_seq) {
+    if log
+        .iter()
+        .any(|r| r.core.receipt_seq == receipt.core.receipt_seq)
+    {
         return Ok(());
     }
     log.push(receipt.clone());
@@ -341,7 +344,12 @@ mod tests {
         // Client clock is a decade past the receipt's `received_at`.
         let far_future = NOW + 10 * 366 * 24 * 3600;
         assert_eq!(
-            verify_receipt(&receipt, &[key.verifying_key()], &expect(ct, 4096), far_future),
+            verify_receipt(
+                &receipt,
+                &[key.verifying_key()],
+                &expect(ct, 4096),
+                far_future
+            ),
             Err(ReceiptRejection::ClockDrift)
         );
     }

@@ -238,9 +238,9 @@ fn delete_rebuttal_reclassifies_an_elapsed_retention_purge() {
 #[test]
 fn server_signed_receipt_verifies_under_the_client_verifier() {
     use capsule_core::library::{
-        CustodyReceipt as ClientReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
+        BlobRole, CustodyReceipt as ClientReceipt, ReceiptExpectations, ReceiptRejection,
+        verify_receipt,
     };
-    use capsule_core::library::BlobRole;
 
     let kr = keyring("home.tld", 42);
     let receipt = sample_receipt(&kr);

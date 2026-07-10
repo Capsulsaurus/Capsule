@@ -292,7 +292,10 @@ impl StorageVerifyClient {
             .json()
             .await
             .map_err(|e| VerifyError::Malformed(e.to_string()))?;
-        wire.verdicts.into_iter().map(StorageVerdictWire::into_core).collect()
+        wire.verdicts
+            .into_iter()
+            .map(StorageVerdictWire::into_core)
+            .collect()
     }
 
     /// `GET /upload/{id}/receipt`: the session-window custody-receipt fetch (pairs with lost-ACK
@@ -324,7 +327,10 @@ impl StorageVerifyClient {
             .json()
             .await
             .map_err(|e| VerifyError::Malformed(e.to_string()))?;
-        wire.receipts.iter().map(|r| decode_receipt(&r.receipt_cbor)).collect()
+        wire.receipts
+            .iter()
+            .map(|r| decode_receipt(&r.receipt_cbor))
+            .collect()
     }
 
     /// Fetch and pin the server's attestation-key history from
@@ -532,7 +538,10 @@ impl<C: ReleaseClock> ReleaseCoordinator<C> {
             Err(rejection) => {
                 // Every receipt rejection (bad signature, field mismatch, clock drift) refuses
                 // release — the reason surfaced to the caller is the unverified receipt.
-                warn!(?rejection, "custody receipt did not verify; refusing release");
+                warn!(
+                    ?rejection,
+                    "custody receipt did not verify; refusing release"
+                );
                 ReleaseDecision::Retain(RetainReason::ReceiptMissing)
             }
         }

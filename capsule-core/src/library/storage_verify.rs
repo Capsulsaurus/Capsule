@@ -99,12 +99,20 @@ pub enum VerifierError {
 /// data plane calls it; async callers resolve the futures before invoking the gate.
 pub trait StorageVerifier {
     /// Fetch a fresh `/storage/verify` verdict for the asset's declared blob hashes.
-    fn verify(&self, asset_id: Uuid, blob_hashes: &[Hash32]) -> Result<StorageVerdict, VerifierError>;
+    fn verify(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<StorageVerdict, VerifierError>;
 
     /// Whether a custody receipt covering the write is held **and verifies** under the pinned
     /// attestation key with fields matching what the client sent. `false` (not an error) means
     /// missing-or-unverified, which the gate treats as refuse-to-release.
-    fn receipt_verified(&self, asset_id: Uuid, blob_hashes: &[Hash32]) -> Result<bool, VerifierError>;
+    fn receipt_verified(
+        &self,
+        asset_id: Uuid,
+        blob_hashes: &[Hash32],
+    ) -> Result<bool, VerifierError>;
 }
 
 /// Why the gate refused to release. Every variant retains the local bytes.
@@ -165,9 +173,8 @@ impl<'a, V: StorageVerifier + ?Sized> ReleaseGate<'a, V> {
         blob_hashes: &[Hash32],
         verify_asset_accepted: bool,
     ) -> ReleaseDecision {
-        let verdict = match self.verifier.verify(asset_id, blob_hashes) {
-            Ok(v) => v,
-            Err(_) => return ReleaseDecision::Retain(RetainReason::VerifyUnavailable),
+        let Ok(verdict) = self.verifier.verify(asset_id, blob_hashes) else {
+            return ReleaseDecision::Retain(RetainReason::VerifyUnavailable);
         };
         if !release_is_safe(&verdict, verify_asset_accepted) {
             return ReleaseDecision::Retain(RetainReason::NotDurable);
@@ -375,11 +382,13 @@ mod tests {
             let src = dir.path().join("move_me.jpg");
             std::fs::write(&src, b"external").unwrap();
             // Non-durable → source retained.
-            let retain = release_move_source(&MockVerifier::new(false, true), asset, &src, &hashes, true);
+            let retain =
+                release_move_source(&MockVerifier::new(false, true), asset, &src, &hashes, true);
             assert_eq!(retain, ReleaseDecision::Retain(RetainReason::NotDurable));
             assert!(src.exists());
             // Durable + receipt → source deleted.
-            let release = release_move_source(&MockVerifier::new(true, true), asset, &src, &hashes, true);
+            let release =
+                release_move_source(&MockVerifier::new(true, true), asset, &src, &hashes, true);
             assert!(release.is_release());
             assert!(!src.exists());
         }
@@ -396,11 +405,15 @@ mod tests {
                 }
             }
             let decision = ReleaseGate::new(&FailVerifier).may_release(asset, &hashes, true);
-            assert_eq!(decision, ReleaseDecision::Retain(RetainReason::VerifyUnavailable));
+            assert_eq!(
+                decision,
+                ReleaseDecision::Retain(RetainReason::VerifyUnavailable)
+            );
         }
 
         // crypto half (verify_asset rejected) never releases even on a durable+receipt verdict.
-        let decision = ReleaseGate::new(&MockVerifier::new(true, true)).may_release(asset, &hashes, false);
+        let decision =
+            ReleaseGate::new(&MockVerifier::new(true, true)).may_release(asset, &hashes, false);
         assert_eq!(decision, ReleaseDecision::Retain(RetainReason::NotDurable));
     }
 }

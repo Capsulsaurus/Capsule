@@ -394,7 +394,11 @@ async fn reverify_window_reuses_then_refetches() {
     );
 
     assert_eq!(coord.evaluate(&request()).await, ReleaseDecision::Release);
-    assert_eq!(verify_hits.load(Ordering::SeqCst), 1, "first verdict fetched");
+    assert_eq!(
+        verify_hits.load(Ordering::SeqCst),
+        1,
+        "first verdict fetched"
+    );
 
     // A second attempt within the window reuses the cached verdict.
     assert_eq!(coord.evaluate(&request()).await, ReleaseDecision::Release);
