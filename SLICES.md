@@ -104,7 +104,7 @@ its slice.
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | ready   |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
-| S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | ready   |
+| S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
@@ -983,6 +983,12 @@ SDK; they never hand-roll network flows.
   trash — the only destructive step, soft per retention).
 - **Done when:** the flag → filter → sweep loop round-trips on a fixture library;
   concurrent flags from two devices converge. **Tier:** Unit + Smoke.
+- **Landed:** culling engine on `Workspace` (signed metadata-update writes, CRDT
+  sync-apply path, cull-filtered views, derived-never-stored `GroupCullState`,
+  retention-carrying `reject_sweep` + restore reversal); convergence proven both
+  merge orders. CLI surface is the `capsule demo` culling segment — a standalone
+  `capsule cull` awaits user-library open/passphrase plumbing (the durable-key
+  follow-up S-B2 noted). Companion `set_stack_membership` write-through added.
 
 ### S-D14 — Local-gallery security gates
 
