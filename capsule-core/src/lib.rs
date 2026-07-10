@@ -8,6 +8,10 @@ pub mod cbor;
 pub mod crypto;
 pub mod drop;
 
+/// Client build identification — the `client_version` / `generated_by_client` grammar and the
+/// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
+pub mod client_build;
+
 // ── Native surface (`native`, default) ──────────────────────────────────────
 // Everything below drives the on-device library, import, and lifecycle — it links SQLite,
 // the filesystem, and the media stack, none of which the browser sealing path needs. Gated

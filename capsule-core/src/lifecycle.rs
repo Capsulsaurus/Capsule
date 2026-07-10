@@ -196,6 +196,12 @@ pub struct Workspace {
     /// (sealed) but unused for signing when a hardware signer is supplied.
     device_signer: Box<dyn Signer>,
     directory: DeviceDirectory,
+    /// The `client_version` / `generated_by_client` this workspace stamps on every manifest and
+    /// derivative it authors (S-D15). Defaults to the bare-core
+    /// [`capsule-core/{semver}+{commit}`](crate::client_build::core_client_version) identity; an
+    /// app injects its own product id via [`with_client_id`](Self::with_client_id) (CLI) or the
+    /// FFI constructor (native apps) so each client reports itself rather than `capsule-core`.
+    client_version: String,
     counter: Counter,
     albums: HashMap<Uuid, AlbumKeys>,
     authorities: HashMap<Uuid, ReferenceAuthority>,
@@ -405,6 +411,7 @@ impl Workspace {
             account,
             device_signer,
             directory,
+            client_version: crate::client_build::core_client_version(),
             counter,
             albums: HashMap::new(),
             authorities: HashMap::new(),
@@ -417,6 +424,18 @@ impl Workspace {
             #[cfg(feature = "media")]
             still_encoder: None,
         })
+    }
+
+    /// Set the reporting client identity every manifest and derivative this workspace authors
+    /// carries (S-D15): `client_id` names the product (`capsule-cli`, `capsule-ios`, …) and
+    /// `semver` is that client's own version. The build-embedded commit + dirty flag are appended
+    /// per the [`client_version` grammar](crate::client_build), so an in-repo app supplies only
+    /// its id and version. Without this, a workspace reports the bare-core
+    /// `capsule-core/{semver}+{commit}` default.
+    #[must_use]
+    pub fn with_client_id(mut self, client_id: &str, semver: &str) -> Self {
+        self.client_version = crate::client_build::client_version(client_id, semver);
+        self
     }
 
     /// Attach the per-platform [`StillEncoder`](crate::media::image::derivative::StillEncoder) so
@@ -467,6 +486,7 @@ impl Workspace {
             account,
             device_signer,
             directory,
+            client_version: crate::client_build::core_client_version(),
             counter,
             albums: HashMap::new(),
             authorities: HashMap::new(),
@@ -631,6 +651,9 @@ impl Workspace {
             retention_until,
             metadata_blob_hash,
             timestamp: now_rfc3339(),
+            // Each write records the exact client build that produced *this* record (S-D15), not
+            // the creator's — so an edit by a different client identifies itself in the chain.
+            client_version: self.client_version.clone(),
             ..base.clone()
         };
         core.sign(self.device_signer.as_ref(), &album.write_tier)
@@ -804,7 +827,7 @@ impl Workspace {
             metadata_blob_hash: Some(metadata_blob_hash),
             created_by_user: self.account.user_id,
             created_by_device: self.account.device.device_id,
-            client_version: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+            client_version: self.client_version.clone(),
             timestamp: now_rfc3339(),
             action: Action::Create,
             prior_provenance_hash: None,
@@ -1375,7 +1398,7 @@ impl Workspace {
                     protocol_version: PROTOCOL_VERSION.into(),
                     amk_version: AmkVersion(album.current_epoch),
                     generated_by_device: self.account.device.device_id,
-                    generated_by_client: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+                    generated_by_client: self.client_version.clone(),
                     generated_at: now_rfc3339(),
                     device_signer: self.device_signer.as_ref(),
                     write_tier_signer: &album.write_tier,
@@ -1739,7 +1762,7 @@ impl crate::drop::DropAdopter for Workspace {
             metadata_blob_hash: Some(metadata_blob_hash),
             created_by_user: self.account.user_id,
             created_by_device: self.account.device.device_id,
-            client_version: concat!("capsule-core/", env!("CARGO_PKG_VERSION")).into(),
+            client_version: self.client_version.clone(),
             timestamp: now_rfc3339(),
             action: Action::Create,
             prior_provenance_hash: None,
@@ -1801,6 +1824,81 @@ mod tests {
             },
         )
         .unwrap()
+    }
+
+    /// S-D15: an injected `client_id` flows onto every write the workspace authors — the create
+    /// manifest and a later metadata-update record both report the app's identity (not the bare
+    /// `capsule-core` default), and each value parses as the normative grammar.
+    #[test]
+    fn injected_client_id_flows_to_every_write() {
+        use crate::client_build::ClientVersion;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        std::fs::write(&img, b"\xFF\xD8\xFF client-id provenance bytes").unwrap();
+
+        let mut ws = fast_workspace(lib.path()).with_client_id("capsule-ios", "9.9.9");
+        let album = ws.create_album("Trip");
+        let id = ws.import_asset(album, &img).unwrap();
+
+        // The create manifest reports the injected identity, grammar-conformant.
+        let create_cv = ws
+            .asset(&id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .client_version
+            .clone();
+        assert!(create_cv.starts_with("capsule-ios/9.9.9+"), "{create_cv}");
+        let parsed = ClientVersion::parse(&create_cv).expect("create client_version parses");
+        assert_eq!(parsed.client_id, "capsule-ios");
+        assert_eq!(parsed.semver, "9.9.9");
+
+        // A metadata-update mints a fresh record that also carries the producing client.
+        ws.tag_add(&id, "vacation").unwrap();
+        let update_cv = &ws
+            .asset(&id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .client_version;
+        assert!(update_cv.starts_with("capsule-ios/9.9.9+"), "{update_cv}");
+        assert!(ClientVersion::parse(update_cv).is_some());
+    }
+
+    /// The default (un-injected) workspace reports the bare-core identity.
+    #[test]
+    fn default_workspace_reports_capsule_core() {
+        use crate::client_build::ClientVersion;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        std::fs::write(&img, b"\xFF\xD8\xFF default identity bytes").unwrap();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Trip");
+        let id = ws.import_asset(album, &img).unwrap();
+        let cv = &ws
+            .asset(&id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .client_version;
+        assert_eq!(ClientVersion::parse(cv).unwrap().client_id, "capsule-core");
     }
 
     /// S-A6: the full guest-drop path through the `Workspace` — issue an upload link, seal a

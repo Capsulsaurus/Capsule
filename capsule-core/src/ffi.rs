@@ -56,6 +56,18 @@ impl From<VerifyOutcome> for FfiVerifyOutcome {
     }
 }
 
+/// A foreign client's self-reported build identity (S-D15): its product id and own semver. The
+/// git commit + dirty flag come from the core this app links, together composing the
+/// `client_id/semver+commit` [`client_version`](crate::client_build) every manifest carries — so
+/// a defect in a shipped app build is traceable across the assets it produced.
+#[derive(uniffi::Record)]
+pub struct FfiClientBuild {
+    /// The app's product id, e.g. `capsule-ios`.
+    pub client_id: String,
+    /// The app's own semantic version, e.g. `1.4.2`.
+    pub semver: String,
+}
+
 /// An offline Capsule workspace, callable from Kotlin/Swift.
 #[derive(uniffi::Object)]
 pub struct FfiWorkspace {
@@ -78,9 +90,19 @@ impl FfiWorkspace {
     /// Create a brand-new workspace rooted at `root`, guarded by `passphrase` at the Argon2id
     /// cost for `tier`. (Re-opening an existing workspace is a separate core capability still
     /// pending; see `SLICES.md`.)
+    ///
+    /// `client` is the foreign app's own build identity ([`FfiClientBuild`]): every manifest this
+    /// workspace authors then reports `client_id/semver+commit` (S-D15) rather than the bare
+    /// `capsule-core` default. The commit + dirty flag are the ones this core was built from.
     #[uniffi::constructor]
-    pub fn create(root: String, passphrase: Vec<u8>, tier: DeviceTier) -> FfiResult<Arc<Self>> {
-        let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?;
+    pub fn create(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: DeviceTier,
+        client: FfiClientBuild,
+    ) -> FfiResult<Arc<Self>> {
+        let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?
+            .with_client_id(&client.client_id, &client.semver);
         Ok(Arc::new(Self {
             inner: Mutex::new(ws),
         }))
@@ -99,6 +121,7 @@ impl FfiWorkspace {
         hardware: Arc<dyn HardwareSigner>,
         key_alias: String,
         ml_seed: Vec<u8>,
+        client: FfiClientBuild,
     ) -> FfiResult<Arc<Self>> {
         let seed: [u8; 32] = ml_seed
             .as_slice()
@@ -110,7 +133,8 @@ impl FfiWorkspace {
             &passphrase,
             tier.params(),
             Box::new(signer),
-        )?;
+        )?
+        .with_client_id(&client.client_id, &client.semver);
         Ok(Arc::new(Self {
             inner: Mutex::new(ws),
         }))

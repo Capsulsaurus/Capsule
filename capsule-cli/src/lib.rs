@@ -41,6 +41,19 @@ pub mod status;
 pub mod syncstore;
 pub mod utils;
 
+/// The stable product id this CLI reports on every manifest it authors (S-D15). Combined with
+/// this crate's own semver and capsule-core's build-embedded commit, it composes the
+/// `client_version` grammar `capsule-cli/{semver}+{commit}[.dirty]`.
+pub const CLIENT_ID: &str = "capsule-cli";
+
+/// Tag a freshly built workspace with this CLI's build identity so every manifest and derivative
+/// it produces carries `capsule-cli/{semver}+{commit}` (S-D15) rather than the bare
+/// `capsule-core` default. Applied at every workspace construction site in the CLI.
+#[must_use]
+fn as_capsule_cli(ws: Workspace) -> Workspace {
+    ws.with_client_id(CLIENT_ID, env!("CARGO_PKG_VERSION"))
+}
+
 /// Resolve the persisted-session file path, erroring if the config directory
 /// cannot be determined.
 fn session_store() -> Result<session::SessionStore> {
@@ -164,9 +177,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 .with_prompt("Library passphrase")
                 .interact()
                 .map_err(|e| eyre!("Failed to read passphrase: {e}"))?;
-            let mut ws =
+            let mut ws = as_capsule_cli(
                 Workspace::open(&library, passphrase.as_bytes(), DeviceTier::Normal.params())
-                    .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?;
+                    .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
+            );
             // Album key material is session-scoped for now (durable album-key persistence is a
             // separate slice); ensure the default album exists to receive this import.
             let default_album = ws.default_album_id();
@@ -609,4 +623,63 @@ fn open_library_or_err(path: &Path) -> Result<Library> {
         }
         other => eyre!("Failed to open library at {}: {other}", path.display()),
     })
+}
+
+#[cfg(test)]
+mod client_build_wiring_tests {
+    use capsule_core::client_build::ClientVersion;
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::lifecycle::Workspace;
+
+    use super::as_capsule_cli;
+
+    /// S-D15: a workspace built the way the CLI builds one (`as_capsule_cli`, the same wrapper the
+    /// `import`/`demo` paths use) stamps every manifest it authors with
+    /// `capsule-cli/{semver}+{commit}` — proving the CLI reports itself, not the bare
+    /// `capsule-core` default. Uses a fast Argon2 cost so the test never pays the production KDF.
+    #[test]
+    fn cli_workspace_stamps_capsule_cli_client_version() {
+        let dir = std::env::temp_dir().join(format!("capsule-cli-s-d15-{}", nanoid::nanoid!()));
+        let lib = dir.join("lib");
+        std::fs::create_dir_all(&lib).unwrap();
+        let src = dir.join("photo.jpg");
+        std::fs::write(&src, b"\xFF\xD8\xFF cli wiring bytes").unwrap();
+
+        let mut ws = as_capsule_cli(
+            Workspace::create_with_params(
+                &lib,
+                b"pw",
+                Argon2Params {
+                    mem_kib: 64,
+                    t_cost: 1,
+                    p_cost: 1,
+                },
+            )
+            .unwrap(),
+        );
+        let album = ws.default_album_id();
+        ws.create_album_with_id(album, "Imports");
+        let id = ws.import_asset(album, &src).unwrap();
+
+        let cv = ws
+            .asset(&id)
+            .unwrap()
+            .chain
+            .records()
+            .last()
+            .unwrap()
+            .manifest
+            .core
+            .client_version
+            .clone();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            cv.starts_with("capsule-cli/"),
+            "the CLI must author capsule-cli/..., got {cv}"
+        );
+        let parsed = ClientVersion::parse(&cv).expect("CLI client_version must parse the grammar");
+        assert_eq!(parsed.client_id, "capsule-cli");
+        assert_eq!(parsed.semver, env!("CARGO_PKG_VERSION"));
+    }
 }

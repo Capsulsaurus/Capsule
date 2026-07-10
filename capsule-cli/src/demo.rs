@@ -56,8 +56,12 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
 
     // ── 1. Account + device keys ────────────────────────────────────────────
     step(1, "Create account + device keys");
-    let mut ws = Workspace::create_with_params(&source_lib, b"demo-passphrase", DEMO_KDF)
-        .map_err(|e| eyre!("create workspace: {e}"))?;
+    // Tag the demo workspace with this CLI's build identity so every manifest it authors reports
+    // `capsule-cli/{semver}+{commit}` (S-D15), the same as a real `capsule import`.
+    let mut ws = crate::as_capsule_cli(
+        Workspace::create_with_params(&source_lib, b"demo-passphrase", DEMO_KDF)
+            .map_err(|e| eyre!("create workspace: {e}"))?,
+    );
     ok(
         "master key generated; identity (IK), device signing (DSK), and device encryption (DEK) keys created",
     );

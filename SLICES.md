@@ -106,7 +106,7 @@ its slice.
 | S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | ready   |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
-| S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | ready   |
+| S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | ready   |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
@@ -1034,6 +1034,11 @@ SDK; they never hand-roll network flows.
   modified tree). Test fixtures may keep arbitrary strings — the grammar is producer
   discipline, not a verify gate.
 - **Tier:** Unit.
+- **Landed:** dependency-free `build.rs` git probe (12-hex commit + `.dirty`;
+  all-zero sentinel fallback, never a build failure; `rerun-if` watches only
+  HEAD/ref/index so incremental builds stay valid — purely unstaged edits won't
+  re-probe, documented); `Workspace::with_client_id` injection reaches FFI via a
+  `FfiClientBuild` record; all four manifest producers stamp their own build.
 
 ## Lane E — federation / sharing
 
