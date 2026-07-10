@@ -173,6 +173,12 @@ pub struct StackPlacement {
 pub struct SignedImportOptions {
     /// Delete the source file after a durable commit (Move mode).
     pub move_source: bool,
+    /// Defer Move-mode source deletion to the caller's verify-before-destroy gate
+    /// (`S-D4` [`release_move_source`](crate::library::release_move_source)) instead of
+    /// releasing on the local durable commit. Set by online/streaming import (`S-B3`), where
+    /// the source is the only copy until the *server* durably holds it; left `false` for a
+    /// plain offline import, which releases after the self-verified local commit.
+    pub defer_source_release: bool,
     /// Stack placement for a multi-file candidate member.
     pub stack: Option<StackPlacement>,
 }
@@ -832,8 +838,10 @@ impl Workspace {
         #[cfg(feature = "media")]
         self.persist_derivatives(&asset, &pending_derivatives)?;
 
-        // Move mode: release the source only after the durable, self-verified commit.
-        if opts.move_source {
+        // Move mode: release the source only after the durable, self-verified commit — unless
+        // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),
+        // where the source is the only copy until the *server* durably holds it.
+        if opts.move_source && !opts.defer_source_release {
             let _ = fs::remove_file(src);
         }
 
@@ -1042,6 +1050,13 @@ impl Workspace {
                 &plaintext,
             );
             amks.insert((asset.album_id, epoch), album.amks[&epoch]);
+            // The asset's custody-receipt log, if the client has persisted one beside the chain.
+            let receipts = fs::read(crate::library::receipts_path(
+                &self.root,
+                &asset.asset_id,
+                Some(asset.capture_utc),
+            ))
+            .unwrap_or_default();
             assets.push(BackupAsset {
                 album_id: asset.album_id,
                 asset_id: asset.asset_id,
@@ -1050,6 +1065,7 @@ impl Workspace {
                 metadata_blob: asset.metadata_blob.clone(),
                 ciphertext,
                 provenance: asset.chain.records().to_vec(),
+                receipts,
             });
         }
 

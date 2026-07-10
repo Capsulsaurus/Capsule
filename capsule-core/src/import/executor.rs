@@ -130,7 +130,13 @@ fn execute_candidate(
             stack_id: sid.clone(),
             hidden: !is_primary,
         });
-        let opts = SignedImportOptions { move_source, stack };
+        // Offline import: release the Move source on the local durable commit. The online /
+        // streaming path (S-B3) sets `defer_source_release` and gates on the server verdict.
+        let opts = SignedImportOptions {
+            move_source,
+            defer_source_release: false,
+            stack,
+        };
 
         match workspace.import_asset_with(album_id, path, &opts) {
             Ok(uuid) => {

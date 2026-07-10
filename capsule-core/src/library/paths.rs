@@ -70,6 +70,14 @@ pub fn sidecar_path(root: &Path, uuid: &Uuid, _ext: &str, capture_utc: Option<i6
     media_dir(root, year, month).join(format!("{}.cbor", uuid.simple()))
 }
 
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.receipts.cbor` — the client's custody-receipt log for the
+/// asset, appended beside the provenance chain (SSoT: Storage Verification — Custody Receipts).
+/// Evidentiary, not a cache: it is included verbatim in the backup artifact.
+pub fn receipts_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.receipts.cbor", uuid.simple()))
+}
+
 /// `index/thumbnails/{size}/{s1}/{s2}/{uuid}.{format}` where format is "jxl" or "webp"
 pub fn thumbnail_path(root: &Path, uuid: &Uuid, size: ThumbnailSize) -> PathBuf {
     let (s1, s2) = shard_dirs(uuid);

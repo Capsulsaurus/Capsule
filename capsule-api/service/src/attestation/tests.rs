@@ -229,6 +229,53 @@ fn delete_rebuttal_reclassifies_an_elapsed_retention_purge() {
     );
 }
 
+/// Cross-crate byte-compatibility (slice `S-D4`): a receipt this server signs must verify under
+/// the **client's** independent verifier (`capsule_core::library::verify_receipt`) that clients
+/// and the SDK use. The two `CustodyReceiptCore` mirrors serialize to byte-identical canonical
+/// CBOR, so the client re-derives the exact signing bytes and the hybrid signature verifies —
+/// with a matching field check against what the client sent. This is the wire contract the SDK
+/// mock smokes assume; here it is proven against the real server-side signer.
+#[test]
+fn server_signed_receipt_verifies_under_the_client_verifier() {
+    use capsule_core::library::{
+        CustodyReceipt as ClientReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
+    };
+    use capsule_core::library::BlobRole;
+
+    let kr = keyring("home.tld", 42);
+    let receipt = sample_receipt(&kr);
+    let ciphertext_hash = receipt.core.ciphertext_hash;
+    let envelope_hash = receipt.core.envelope_hash;
+
+    // Serialize on the server, decode with the client's independent type.
+    let bytes = receipt.to_canonical_cbor();
+    let client_receipt = ClientReceipt::from_canonical_cbor(&bytes).unwrap();
+
+    // The client pins the server's published attestation key (its active key here).
+    let pinned = kr.history().last().unwrap().public.clone();
+    let now = Timestamp::now().as_second();
+    let expected = ReceiptExpectations {
+        ciphertext_hash,
+        size: 4096,
+        role: BlobRole::Original,
+        envelope_hash,
+    };
+    assert!(
+        verify_receipt(&client_receipt, &[pinned.clone()], &expected, now).is_ok(),
+        "server-signed receipt must verify under the client verifier"
+    );
+
+    // A field the client can check but that the server did not attest to → refuse.
+    let wrong = ReceiptExpectations {
+        size: 4097,
+        ..expected.clone()
+    };
+    assert_eq!(
+        verify_receipt(&client_receipt, &[pinned], &wrong, now),
+        Err(ReceiptRejection::FieldMismatch("size"))
+    );
+}
+
 #[test]
 fn a_still_holding_attestation_is_not_a_loss() {
     let kr = keyring("home.tld", 19);

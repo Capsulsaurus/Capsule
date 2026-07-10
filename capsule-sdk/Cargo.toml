@@ -7,6 +7,14 @@ edition.workspace = true
 # capsule-i18n gives the SDK the canonical `error.*` code constants it switches
 # on (clients localize codes, never bare HTTP statuses — see CLAUDE.md).
 capsule-i18n = { path = "../capsule-i18n" }
+# The verify-before-destroy gate (S-D4) reuses the offline data plane's pure predicate
+# (`library::release_is_safe`), the `StorageVerdict` type, and custody-receipt verification
+# (`library::verify_receipt` under the pinned hybrid attestation key) — all `capsule-core`
+# crypto/library surface, so the SDK does not re-implement signature verification.
+capsule-core = { path = "../capsule-core" }
+# base64 decodes the server's `receipt_cbor` (STANDARD) and the well-known attestation public
+# keys before handing them to capsule-core for verification.
+base64 = { workspace = true }
 log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

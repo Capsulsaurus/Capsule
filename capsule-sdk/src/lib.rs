@@ -16,6 +16,7 @@ pub mod fetch;
 pub mod net;
 pub mod sync;
 pub mod upload;
+pub mod verify;
 
 /// Generated gRPC client stubs for the key-free sync feed
 /// (`capsule.sync.v1.SyncService`). The proto is single-sourced from the sync

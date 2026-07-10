@@ -1453,7 +1453,9 @@ dependencies = [
 name = "capsule-sdk"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
+ "capsule-core",
  "capsule-i18n",
  "hex",
  "jiff",

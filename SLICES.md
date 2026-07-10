@@ -95,7 +95,7 @@ its slice.
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
-| S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | ready   |
+| S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | done    |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | ready   |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
@@ -775,6 +775,13 @@ SDK; they never hand-roll network flows.
   verify-before-release smoke passes; the receipt-gated-release smoke
   (storage-verification doc) passes.
 - **Tier:** Unit + Smoke.
+- **Landed:** `ReleaseGate` fail-closed on all paths (verify unavailable / not
+  durable / receipt missing → retain); owned-original + Move-source releases wired;
+  streaming release left as the documented seam S-B3 consumes
+  (`defer_source_release`). Receipts persist to `{uuid}.receipts.cbor` and ride the
+  backup artifact (round-trip tested). Client `CustodyReceiptCore` is a
+  byte-compatible mirror (canonical CBOR) guarded by a cross-crate test against the
+  real server signer — no dep-direction inversion.
 
 ### S-D5 — CLI auth/sync/list
 
