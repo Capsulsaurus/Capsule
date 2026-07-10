@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+pub mod derivative;
 pub mod presets;
 pub mod types;
 

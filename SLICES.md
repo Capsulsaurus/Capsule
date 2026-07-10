@@ -71,7 +71,7 @@ its slice.
 | S-B2  | Signed-path import-executor rewrite                  | media/import    | S-B1             | L    | done    |
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
-| S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | ready   |
+| S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | done    |
 | S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | done    |
 | S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
@@ -426,6 +426,12 @@ pass until the gate lifts.
 - **Done when:** a fixture video yields both tiers with signed manifests; the
   closed-format rejection covers the video rows of the tier table.
 - **Tier:** Unit + Smoke.
+- **Landed:** `VideoTranscoder` seam mirroring S-B1's encoder architecture; the
+  doc's parameters pinned as types (`H264PreviewParams::CONTRACT` — baseline,
+  1080p cap, CRF 23, 30fps, AAC — always passed by core, never chosen by the
+  transcoder); both tiers signed through the S-B1 manifest chain; closed video
+  format set. Platform transcoders (ffmpeg/AVFoundation/MediaCodec) are the
+  apps' halves, same as the still encoders.
 
 ### S-B6 — Google Takeout importer
 
