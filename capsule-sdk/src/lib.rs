@@ -14,6 +14,7 @@
 pub mod auth;
 pub mod fetch;
 pub mod net;
+pub mod recovery;
 pub mod sync;
 pub mod upload;
 pub mod verify;

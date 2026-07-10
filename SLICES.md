@@ -103,7 +103,7 @@ its slice.
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | ready   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | ready   |
-| S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | ready   |
+| S-D12 | Recovery verification cadence + guided re-wrap       | sdk/clients     | S-C12            | M    | done    |
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | ready   |
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
@@ -980,6 +980,13 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-C12. **Done when:** the backup doc's cadence Validation bullets
   pass (mocked clock; stale-cache rule; re-wrap smoke with unchanged blob hashes).
 - **Tier:** Unit + Smoke.
+- **Landed:** `capsule-sdk::recovery` — pure serde-persistable `RecoveryCadence`
+  (every method takes `now`; `blocks_critical_flow()` is `const false` — the
+  never-blocking rule is compile-time); escrow cache with the
+  refresh-once-on-mismatch stale rule; `guided_rewrap` proven to keep the exact
+  master-key bytes + blob hashes while the old secret unwraps nothing; Shamir
+  re-issue + old-artifact guidance as data. Prompt UX strings are the platform
+  apps' to localize — the engine ships states, not strings.
 
 ### S-D13 — Culling workflow client UX
 
