@@ -93,6 +93,11 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                 Router::with_path("s")
                     .push(media::get_share_router(conn.clone(), &env.server).await?),
             )
+            // Key-free ranged ciphertext serving by content address (slice S-C10).
+            .push(
+                Router::with_path("blob")
+                    .push(media::get_blob_router(conn.clone(), &env.server).await?),
+            )
             // Key-free durability verdicts + signed attestation (slices S-C3 / S-C15).
             .push(
                 Router::with_path("storage")

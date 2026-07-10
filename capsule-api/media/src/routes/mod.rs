@@ -5,6 +5,7 @@ use crate::share_state::ShareState;
 use crate::state::AppState;
 
 mod assets;
+mod blob;
 mod drops;
 mod exports;
 mod receipts;
@@ -26,6 +27,15 @@ pub fn get_router(state: AppState) -> Router {
         )
         // Batch operations
         .push(Router::with_path("batch-download").post(assets::batch_download))
+}
+
+/// Key-free ranged blob-serving router (mounted at `/blob`; slice `S-C10`). `GET /blob/{hash}`
+/// serves opaque ciphertext by content address with HTTP `Range` at the ciphertext stride;
+/// access-token auth is enforced per handler.
+pub fn get_blob_router(state: AppState) -> Router {
+    Router::new()
+        .hoop(affix_state::inject(state))
+        .push(Router::with_path("{hash}").get(blob::get_blob))
 }
 
 /// Public share-link serve router (mounted at `/s`; slice `S-C4`). All three endpoints are

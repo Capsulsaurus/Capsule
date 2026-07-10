@@ -85,7 +85,7 @@ its slice.
 | S-C7  | Device-enrollment endpoints (code + relay channel)   | server          | S-C9             | M    | done    |
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
-| S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
+| S-C10 | Key-free media serving conformance                   | server          | —                | M    | done    |
 | S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | done    |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | done    |
@@ -646,6 +646,14 @@ pass until the gate lifts.
 - **Done when:** ranged reads decrypt correctly at chunk boundaries (the encryption
   doc's ranged-read test against a real server); no plaintext-era route regressions.
 - **Tier:** Unit + Smoke.
+- **Landed:** `GET /blob/{hash}` over the shared blob store; stride cited from core
+  (`CIPHERTEXT_CHUNK` = 65,536); mid-file chunk proven to decrypt in isolation
+  against the real server. Status taxonomy: 404 unknown/malformed; 410 quarantined/
+  mid-GC/dangling (decided before the stat so grace bytes never serve);
+  awaiting-original = 409 + `error.blob.pending_upload` (per the api-surfaces
+  stale-state convention, distinguishable from 410). Album-scoped authz is a
+  carried-but-unconsumed seam (`BlobServeReference.album_id`) — feed-level authz
+  is S-C2's. Legacy plaintext routes untouched (S-G1/G3 own retirement).
 
 ### S-C11 — Refcount GC + retention purge worker
 

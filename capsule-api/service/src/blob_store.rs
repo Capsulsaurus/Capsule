@@ -10,6 +10,22 @@
 
 use std::path::{Path, PathBuf};
 
+/// A SHA-256 ciphertext content address is exactly 64 lowercase-hex characters.
+pub const CONTENT_HASH_LEN: usize = 64;
+
+/// Whether `hash` is a well-formed lowercase-hex ciphertext content address (64 hex chars).
+///
+/// The single shape check every reader validates before interpolating a hash into a path or
+/// a query — a malformed address can address no committed blob, so callers treat a `false`
+/// here as "unknown content address" rather than a server error.
+#[must_use]
+pub fn is_content_hash(hash: &str) -> bool {
+    hash.len() == CONTENT_HASH_LEN
+        && hash
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 /// The content-addressed blob store directory under `upload_dir`.
 #[must_use]
 pub fn blobs_dir(upload_dir: &Path) -> PathBuf {

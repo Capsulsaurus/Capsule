@@ -69,6 +69,27 @@ pub struct FeedBlobManifest {
     pub derivatives: Vec<FeedBlobRef>,
 }
 
+/// The serve-time reverse lookup result for slice `S-C10`: the newest committed feed
+/// reference that names a queried ciphertext content address.
+///
+/// A key-free media serve resolves a bare content hash to *which* asset/album committed it,
+/// its role, and the derived `original_held` completeness fact — the facts the status
+/// taxonomy (`awaiting-original` vs gone) is decided from. The absence of any such reference
+/// is the "unknown hash" case the serve endpoint answers `404` for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobServeReference {
+    /// The album the referencing entry belongs to.
+    pub album_id: String,
+    /// The asset the blob is a part of.
+    pub asset_id: String,
+    /// The blob's role on the asset (`original | metadata | derivative | provenance | backup`).
+    pub role: String,
+    /// Whether the asset's **original** blob is finalized on the server. A missing original
+    /// on an `original_held = false` asset is expected `awaiting-original` staged state, not a
+    /// dangling reference.
+    pub original_held: bool,
+}
+
 /// The prepared payload for one feed entry, handed to [`Mutation::record_finalization`].
 #[derive(Debug, Clone)]
 pub struct FeedEntryInput {

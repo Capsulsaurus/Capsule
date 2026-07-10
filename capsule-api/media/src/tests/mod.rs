@@ -29,6 +29,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod attestation;
+mod blob;
 mod drops;
 mod shares;
 mod verify;
@@ -253,6 +254,48 @@ impl TestCtx {
         self.index_blob(asset_id, role, &hash, bytes.len() as u64)
             .await;
         hash
+    }
+
+    /// A salvo service over the real `GET /blob/{hash}` router (slice `S-C10`; auth + AppState
+    /// wired exactly as the app mounts it at `/blob`).
+    pub(crate) fn blob_service(&self) -> Service {
+        let state = crate::state::AppState::new(self.db.clone(), self.media_config());
+        Service::new(crate::routes::get_blob_router(state))
+    }
+
+    /// Record a committed **original** feed reference with an explicit `original_held` — the
+    /// awaiting-original (`false`) vs held (`true`) discriminator the serve endpoint reads. The
+    /// blob bytes are written separately (or deliberately left absent for the staged/dangling
+    /// cases).
+    pub(crate) async fn index_original(
+        &self,
+        asset_id: &str,
+        hash: &str,
+        size: u64,
+        original_held: bool,
+    ) {
+        let blob_ref = FeedBlobRef {
+            ciphertext_hash: hash.to_string(),
+            role: "original".to_string(),
+            format: "image/jpeg".to_string(),
+            size,
+        };
+        let input = FeedEntryInput {
+            album_id: self.album_id.clone(),
+            protocol_version: PROTOCOL.to_string(),
+            kind: ChangeKind::Created,
+            asset_id: asset_id.to_string(),
+            manifest_cbor: vec![0xa0],
+            metadata_blob: None,
+            blobs: FeedBlobManifest {
+                original: Some(blob_ref),
+                derivatives: Vec::new(),
+            },
+            original_held,
+        };
+        service::sync::Mutation::record_finalization(&self.db, input)
+            .await
+            .expect("record finalization");
     }
 
     /// Mark a blob's GC state — the seam the S-C11 GC worker owns and this endpoint reads.

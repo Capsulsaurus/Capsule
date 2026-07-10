@@ -40,6 +40,15 @@ pub async fn get_share_router<C: Into<MediaServerConfig>>(
     Ok(routes::get_share_router(state))
 }
 
+/// Key-free ranged blob-serving router (`GET /blob/{hash}`). Slice `S-C10`.
+pub async fn get_blob_router<C: Into<MediaServerConfig>>(
+    conn: DatabaseConnection,
+    config: C,
+) -> Result<Router> {
+    let state = AppState::new(conn, config.into());
+    Ok(routes::get_blob_router(state))
+}
+
 /// Storage-verification router (`POST /storage/verify`, incl. signed attestation). Slices
 /// `S-C3` / `S-C15`.
 pub async fn get_storage_router<C: Into<MediaServerConfig>>(
