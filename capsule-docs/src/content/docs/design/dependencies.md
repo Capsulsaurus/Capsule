@@ -31,6 +31,7 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 | HTTP client | `reqwest` (`default-features = false`, `rustls-tls`) | `capsule-sdk` — the sanctioned network path. | — |
 | ORM | `sea-orm` (`sqlx-postgres` on the server, `sqlx-sqlite` in the CLI) | The rebuildable index databases only — sidecars stay canonical per [Principles](/design/principles/). | — |
 | Embedded SQLite | `rusqlite` (`bundled`) | `capsule-core`'s `library.sqlite`. | — |
+| Vector index | `sqlite-vec` (`vec0`) | The client-local embedding index in `capsule-core`'s `library.sqlite` — per-task `vec0` virtual tables under the [embedding-provenance](/design/ai/#embedding-provenance) invariant. Optional + `native`-gated alongside `rusqlite` (registers as a SQLite auto-extension; not `wasm32`). | Server-side vector-DB idioms (pgvector/HNSW) do not apply — the index is client-local SQLite by design. |
 | CBOR | `ciborium` (+ `serde_bytes`, `half`) | All CBOR; the canonical-encoding rules are owned by [Metadata — Canonical CBOR Encoding](/design/metadata/#canonical-cbor-encoding). | — |
 | Serialization | `serde` + `serde_json` | Derives and JSON surfaces. | — |
 | CLI | `clap` (derive) | `capsule-cli`, xtask argument parsing where non-trivial. | — |

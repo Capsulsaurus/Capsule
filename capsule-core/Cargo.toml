@@ -24,7 +24,7 @@ required-features = ["ffi-bindgen"]
 # `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
-native = ["dep:rusqlite"]
+native = ["dep:rusqlite", "dep:sqlite-vec"]
 # `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
 # native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
 # uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
@@ -62,6 +62,10 @@ kamadak-exif = "0.5"
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# The client-local embedding index: `sqlite-vec`'s `vec0` virtual tables over `library.sqlite`.
+# Optional + gated by `native` alongside `rusqlite` (it registers as a SQLite auto-extension and
+# cannot target `wasm32-unknown-unknown`); the WASM sealing build drops it. See `db::vector`.
+sqlite-vec = { version = "0.1.9", optional = true }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }

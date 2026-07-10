@@ -3,7 +3,10 @@
 /// v2: `assets.hash_blake3` renamed to `hash_sha256` — the project moved from
 ///     BLAKE3 to SHA-256 (hardware-accelerated on Apple and modern CPUs).
 ///     Added the client-side `albums` table for user-defined album metadata.
-pub const SCHEMA_VERSION: u32 = 2;
+/// v3: added the `embeddings` provenance companion table (S-H1) — the per-task
+///     `sqlite-vec` `vec0` tables are created at runtime from the model registry
+///     (their vector dimension is registry-declared), so they are not in this DDL.
+pub const SCHEMA_VERSION: u32 = 3;
 
 pub const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -97,4 +100,26 @@ CREATE TABLE IF NOT EXISTS cached_representations (
 
 CREATE INDEX IF NOT EXISTS idx_cache_evict
     ON cached_representations(pinned, is_owned_original, last_accessed_at);
+
+-- Provenance companion to the per-task `sqlite-vec` vec0 tables (created at runtime from the
+-- model registry, since their vector dimension is registry-declared). One row per
+-- (asset, task, platform): the embedding-provenance tuple (model_id, model_version), the
+-- platform partition discriminator, and the vec0 rowid the actual vector lives at. Lets the
+-- index find/replace/delete an asset's embedding and surface which entries are stale (their
+-- model_version trails the canonical row) without scanning the vector store. Derived state:
+-- rebuilt by re-running inference over the originals, never restored from backup.
+-- SSoT: design/ai § Embedding Provenance.
+CREATE TABLE IF NOT EXISTS embeddings (
+    asset_id      TEXT    NOT NULL,
+    task          TEXT    NOT NULL,
+    platform      TEXT    NOT NULL,
+    model_id      TEXT    NOT NULL,
+    model_version TEXT    NOT NULL,
+    vec_rowid     INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    PRIMARY KEY (asset_id, task, platform)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_asset ON embeddings(asset_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_task  ON embeddings(task, platform, model_version);
 ";

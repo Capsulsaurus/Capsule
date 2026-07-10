@@ -122,7 +122,7 @@ its slice.
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | blocked |
-| S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | ready   |
+| S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | ready   |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
@@ -1283,6 +1283,13 @@ its design here.
 - **Deliverable:** the local vector index in `capsule-core::db` with the
   `(model_id, model_version)` insert refusal (unknown models rejected; superseded
   admitted as stale) and per-asset regen. **Blocks:** S-H2, S-H3.
+- **Landed:** mined from `feat/ml-vector-index` and re-landed additively on the
+  current base (the branch's raw diff predates albums/cohort/drop/etc.); its
+  refuse-stale semantics corrected to the finalized ai.md contract (known-but-old
+  admitted as stale-flagged; staleness derived by partition). `ml::Registry` is
+  the known-models seam S-H2 extends (`stale_embedding_assets()` is the regen
+  work-list). `sqlite-vec` added under `native` + its dependencies-doc row (the
+  feat/ml stack never landed one).
 
 ### S-H2 — Model registry + version regen
 

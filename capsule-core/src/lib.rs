@@ -42,6 +42,8 @@ pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]
+pub mod ml;
+#[cfg(feature = "native")]
 pub mod models;
 #[cfg(feature = "native")]
 pub mod sharing;
