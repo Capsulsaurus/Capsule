@@ -72,7 +72,7 @@ its slice.
 | S-B3  | Streaming import (probe, `total_size`, drive mode)   | media/import    | S-D1, S-D4       | L    | ready   |
 | S-B4  | Staged uploads (low-data tier ladder)                | media/import    | S-C1, S-C2, S-D1 | M    | ready   |
 | S-B5  | Video derivatives (first-frame still + H.264 preview) | media/import   | S-B1             | M    | ready   |
-| S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | ready   |
+| S-B6  | Google Takeout importer                              | media/import    | S-B2             | M    | done    |
 | S-B7  | iCloud export importer                               | media/import    | S-B6             | M    | post-v1 |
 | S-B8  | Immich importer                                      | media/import    | S-B6             | M    | post-v1 |
 | S-B9  | Tethered camera import (PTP/IP)                      | media/import    | S-B2, ptpip-rs   | L    | post-v1 |
@@ -421,6 +421,13 @@ pass until the gate lifts.
   a fixture-archive import is deterministic across runs and skips completed work on
   re-run.
 - **Tier:** Unit (mapping table, determinism) + Smoke (end-to-end archive import).
+- **Landed:** `SourceAdapter` trait + `ExtractedImport → to_scan_result()` handoff
+  (the seam S-B7/B8/B9 implement; planner/executor untouched); all four Takeout
+  quirks fixture-covered; determinism + resume proven against the real planner.
+  Adapter operates over extracted directory trees (no zip reader added). Follow-up:
+  the extracted exporter metadata (`ExtractedMetadata`) folds at extraction but the
+  signed sidecar-enrichment write is a documented seam — wiring it means touching
+  the executor, deferred with S-B2's other known gaps.
 
 ### S-B7 — iCloud export importer (post-v1)
 

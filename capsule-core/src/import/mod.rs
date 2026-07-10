@@ -1,6 +1,7 @@
 pub mod executor;
 pub mod executor_cancellation;
 pub mod group;
+pub mod importers;
 pub mod planner;
 pub mod progress;
 pub mod scan;
@@ -10,6 +11,11 @@ pub mod special;
 pub use executor::execute;
 pub use executor_cancellation::CancellationToken;
 pub use group::{PRIMARY_EXTS, RAW_EXTS, VIDEO_EXTS, group_by_stem, is_supported_extension};
+pub use importers::takeout::TakeoutAdapter;
+pub use importers::{
+    AdapterError, ExtractedImport, ExtractedMetadata, FoldSource, GeoPoint, ImportProvider,
+    SourceAdapter, SourceEntry,
+};
 pub use planner::{ImportActionPlan, ImportConfig, ImportDecision, PlanCounts, plan};
 pub use progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
 pub use scan::{ImportCandidate, ScanResult};
