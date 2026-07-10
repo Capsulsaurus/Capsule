@@ -86,7 +86,7 @@ its slice.
 | S-C8  | Moderation hooks                                     | server          | S-C2             | M    | ready   |
 | S-C9  | Device-directory publish/fetch                       | server          | —                | M    | done    |
 | S-C10 | Key-free media serving conformance                   | server          | —                | M    | ready   |
-| S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | ready   |
+| S-C11 | Refcount GC + retention purge worker                 | server          | S-C1             | M    | done    |
 | S-C12 | Backup escrow server surface                         | server          | —                | S    | ready   |
 | S-C13 | Session device-cohort storage + grouping             | server          | —                | S    | ready   |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store)         | server          | S-C1             | M    | ready   |
@@ -642,6 +642,14 @@ pass until the gate lifts.
 - **Depends on:** S-C1. **Done when:** the organization doc's retention smokes pass
   (early purge refused; post-window purge proceeds; hostile-purge defense).
 - **Tier:** Unit + Smoke + E2E case 7 (with S-D2).
+- **Landed:** two-phase mark-and-sweep honoring S-C3's grace contract (byte-delete
+  only past `earliest_byte_deletion`, zero-reference re-confirmed under the row
+  lock; reappearing references cancel marks; quarantine never swept; dangling refs
+  quarantined); keyless retention purge from the signed envelope floor; `capsule-gc`
+  operator binary (`--dry-run`, phase filters). Refcount SSoT = live `assets` rows
+  + the S-C6 `quota_ledger` (the append-only feed would pin blobs forever). Note:
+  blob store is flat `blobs/{hash}.bin` per the landed code, not the doc's nested
+  fanout — doc or store should reconcile eventually.
 
 ### S-C12 — Backup escrow server surface
 

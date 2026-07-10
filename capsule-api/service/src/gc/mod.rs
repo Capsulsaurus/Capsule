@@ -34,6 +34,15 @@
 //! SSoT: [Storage Verification — Verify Before Destroy] and
 //! [Filesystem — Deletion and Garbage Collection].
 //!
+//! ## The write side (`S-C11`)
+//!
+//! The read contract above is consumed by [`worker`] (the two-phase refcount mark-and-sweep
+//! over the blob store plus the orphan/dangling sweep) and [`retention`] (the keyless
+//! retention purge worker that enforces the signed `retention_until` floor). Both are
+//! operator-invokable — no scheduling framework, a plain callable a binary can cron — and
+//! both take a [`Clock`] seam so their time-based behaviour (the grace window, the retention
+//! window) is proven deterministically with an injected clock, never a sleep.
+//!
 //! [`Verify Before Destroy`]: ../../../../capsule-docs/src/content/docs/design/import/storage-verification.md
 //! [Storage Verification — Verify Before Destroy]: ../../../../capsule-docs/src/content/docs/design/import/storage-verification.md
 //! [Filesystem — Deletion and Garbage Collection]: ../../../../capsule-docs/src/content/docs/design/filesystem/server.md
@@ -44,6 +53,37 @@ use ::entity::blob_gc;
 use ::entity::time::entity_tz_to_ts;
 use jiff::{SignedDuration, Timestamp};
 use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
+
+pub mod retention;
+pub mod worker;
+
+pub use retention::{RetentionPurgeWorker, RetentionReport};
+pub use worker::{GcReport, GcWorker, reference_count};
+
+/// A trusted-clock seam so the GC grace window and the retention window are exercised
+/// deterministically (an injected clock in tests, the system clock in production) — never a
+/// sleep. Mirrors the `S-C3` verify service's `Clock` and the `S-D7` pattern.
+///
+/// This is the server's own trusted clock — the authoritative instant for all time-based
+/// deletion policy, per [Filesystem — What the server knows][clk]. It is compared against the
+/// signed `retention_until` and the recorded `collectable_since`; it never trusts a
+/// client-asserted time.
+///
+/// [clk]: ../../../../capsule-docs/src/content/docs/design/filesystem/server.md
+pub trait Clock: Send + Sync {
+    /// The current trusted-server instant.
+    fn now(&self) -> Timestamp;
+}
+
+/// The production [`Clock`], backed by the system wall clock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Timestamp {
+        Timestamp::now()
+    }
+}
 
 /// The standing grace window between a blob becoming collectable and its bytes being
 /// eligible for deletion. Comfortably larger than the client's bounded verify→release

@@ -12,6 +12,7 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod gc;
 mod invariants;
 mod lifecycle;
 mod ops;

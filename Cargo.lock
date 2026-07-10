@@ -1033,6 +1033,7 @@ dependencies = [
  "capsule-api-library",
  "capsule-api-media",
  "capsule-api-migration",
+ "capsule-api-service",
  "capsule-api-sync",
  "capsule-api-upload",
  "clap",
