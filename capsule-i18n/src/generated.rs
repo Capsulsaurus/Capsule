@@ -6,10 +6,26 @@
 pub(crate) const SOURCE_LOCALE: &str = "en";
 
 /// Supported locales, in `locales/config.json` order.
-pub(crate) const SUPPORTED_LOCALES: &[&str] = &["en"];
+pub(crate) const SUPPORTED_LOCALES: &[&str] = &[
+    "en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "de", "es", "pt-BR", "it", "ru", "hi", "ar",
+];
 
 /// `(locale, json)` pairs. Each `json` is a flat `{ key: message }` object.
-pub(crate) const BUNDLES: &[(&str, &str)] = &[("en", include_str!("bundles/en.json"))];
+pub(crate) const BUNDLES: &[(&str, &str)] = &[
+    ("en", include_str!("bundles/en.json")),
+    ("zh-Hans", include_str!("bundles/zh-Hans.json")),
+    ("zh-Hant", include_str!("bundles/zh-Hant.json")),
+    ("ja", include_str!("bundles/ja.json")),
+    ("ko", include_str!("bundles/ko.json")),
+    ("fr", include_str!("bundles/fr.json")),
+    ("de", include_str!("bundles/de.json")),
+    ("es", include_str!("bundles/es.json")),
+    ("pt-BR", include_str!("bundles/pt-BR.json")),
+    ("it", include_str!("bundles/it.json")),
+    ("ru", include_str!("bundles/ru.json")),
+    ("hi", include_str!("bundles/hi.json")),
+    ("ar", include_str!("bundles/ar.json")),
+];
 
 /// Stable error codes — the `error.*` namespace of the message catalog.
 ///

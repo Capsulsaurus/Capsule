@@ -1,0 +1,422 @@
+{
+    "app_name": {
+        "message": "Aplicativo Capsule",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_title": {
+        "message": "Título",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_artist": {
+        "message": "Artista",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_date": {
+        "message": "Data",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_dimensions": {
+        "message": "Dimensões",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_medium": {
+        "message": "Técnica",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_department": {
+        "message": "Departamento",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_repository": {
+        "message": "Acervo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_credits": {
+        "message": "Créditos",
+        "context": "Machine-translated seed pending human review."
+    },
+    "back": {
+        "message": "Voltar",
+        "context": "Machine-translated seed pending human review."
+    },
+    "no_data_available": {
+        "message": "Nenhum dado disponível",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.user_already_exists": {
+        "message": "Já existe uma conta com estes dados.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.invalid_credentials": {
+        "message": "E-mail ou senha inválidos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.rate_limited": {
+        "message": "Muitas tentativas. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.protocol.version_unsupported": {
+        "message": "Esta versão do Capsule não é mais compatível. Atualize o aplicativo.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.exceeded": {
+        "message": "Seu armazenamento está cheio.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.grace_locked": {
+        "message": "Seu armazenamento ficou cheio além do período de tolerância, então as edições estão pausadas até você liberar espaço.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.peer_budget_exceeded": {
+        "message": "Esta fonte atingiu o limite de cache na sua conta.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.pending_upload": {
+        "message": "A foto original ainda não foi enviada do dispositivo dela.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.version_conflict": {
+        "message": "Esta lista de dispositivos está desatualizada. O Capsule vai atualizá-la antes de continuar.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.malformed": {
+        "message": "Não foi possível ler a lista de dispositivos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.escrow.malformed": {
+        "message": "Não foi possível salvar o backup de recuperação.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.local_auth_required": {
+        "message": "Confirme que é você neste dispositivo para adicionar outro.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.rate_limited": {
+        "message": "Muitas tentativas de adicionar dispositivo. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.code_refused": {
+        "message": "Esse código de dispositivo não funcionou. Gere um novo e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.channel_not_found": {
+        "message": "Esta sessão de adição de dispositivo terminou. Comece novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.relay_malformed": {
+        "message": "Não foi possível ler a solicitação de adição de dispositivo.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.account_suspended": {
+        "message": "Sua conta está suspensa. Você não pode enviar nem compartilhar até que ela seja restabelecida.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.server_blocked": {
+        "message": "Este servidor está bloqueado de federar conosco.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_unsigned": {
+        "message": "Não foi possível verificar a denúncia de moderação.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_rate_limited": {
+        "message": "Muitas denúncias desta fonte. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_invalid": {
+        "message": "Não foi possível verificar o acesso a este álbum compartilhado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_expired": {
+        "message": "O acesso a este álbum compartilhado expirou.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_revoked": {
+        "message": "O acesso a este álbum compartilhado foi revogado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.audience_mismatch": {
+        "message": "Esta concessão de acesso é para outro álbum.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.scope_insufficient": {
+        "message": "Esta concessão de acesso não cobre o conteúdo solicitado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.rate_budget_exceeded": {
+        "message": "Esta fonte atingiu o limite de solicitações. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.circuit_open": {
+        "message": "Esta fonte está temporariamente em espera após erros repetidos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.invalid_request": {
+        "message": "A solicitação de verificação de armazenamento está malformada.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.deep_rate_limited": {
+        "message": "Muitas verificações profundas de armazenamento. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.share.rate_limited": {
+        "message": "Muitas tentativas. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.cursor_invalid": {
+        "message": "A sessão de sincronização está desatualizada. O Capsule vai sincronizar novamente do início.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.unauthenticated": {
+        "message": "Faça login novamente para continuar a sincronização.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.malformed_request": {
+        "message": "A solicitação de envio está malformada.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unknown_crypto_suite": {
+        "message": "Esta versão do aplicativo usa um conjunto de criptografia que o servidor não reconhece.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_hash": {
+        "message": "O hash de conteúdo declarado para o envio é inválido.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_size": {
+        "message": "O tamanho declarado para o envio é inválido.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.file_too_large": {
+        "message": "Este arquivo excede o limite de tamanho do servidor.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_content_type": {
+        "message": "Este tipo de arquivo não é compatível.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.album_access_denied": {
+        "message": "Você não tem permissão para adicionar fotos a este álbum.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.device_not_authorized": {
+        "message": "Este dispositivo não está autorizado a enviar. Registre-o novamente e tente de novo.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.timestamp_out_of_range": {
+        "message": "O relógio do seu dispositivo parece estar errado. Verifique a data e a hora.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_mismatch": {
+        "message": "A solicitação de envio contradiz seu manifesto assinado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.owner_not_permitted": {
+        "message": "Você não pode enviar em nome deste usuário.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.duplicate_blob": {
+        "message": "Este arquivo já está armazenado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_media_type": {
+        "message": "Os dados de envio foram enviados em um formato não compatível.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.empty_chunk": {
+        "message": "Um fragmento de envio não pode estar vazio.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_not_aligned": {
+        "message": "Um fragmento de envio tinha o tamanho incorreto.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_too_large": {
+        "message": "Um fragmento de envio excedeu o tamanho máximo de fragmento.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_offset": {
+        "message": "A solicitação de envio estava sem o marcador de posição.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_checksum": {
+        "message": "A solicitação de envio estava sem a soma de verificação de integridade.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.checksum_mismatch": {
+        "message": "Os dados de envio foram corrompidos em trânsito. Tentando novamente…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.offset_mismatch": {
+        "message": "O envio ficou fora de sincronia e está se realinhando.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_conflict": {
+        "message": "O envio enviou dados conflitantes e foi interrompido.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.size_exceeded": {
+        "message": "O envio enviou mais dados do que declarou.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_found": {
+        "message": "A sessão de envio expirou. Recomeçando…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_active": {
+        "message": "Este envio já foi concluído.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.finalize_in_progress": {
+        "message": "Este envio já está sendo finalizado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.receipt_not_available": {
+        "message": "O envio não terminou, então o recibo de armazenamento ainda não está disponível.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.content_hash_mismatch": {
+        "message": "O envio falhou na verificação de integridade e foi descartado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_rejected": {
+        "message": "O manifesto assinado do envio falhou na validação.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.forbidden": {
+        "message": "Você não tem acesso a este envio.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.storage_inconsistent": {
+        "message": "O servidor teve um problema de armazenamento. Tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_action": {
+        "message": "Esta alteração usa uma ação que o álbum não permite.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.stale_revival": {
+        "message": "Esta alteração se baseia em uma versão desatualizada do item.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.amk_regressed": {
+        "message": "Esta alteração faz referência a uma chave de álbum mais antiga do que a registrada pelo servidor.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.cap_exceeded": {
+        "message": "Este link de envio está cheio.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.malformed_descriptor": {
+        "message": "Não foi possível aceitar este envio.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.rate_limited": {
+        "message": "Muitas tentativas. Aguarde e tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.passphrase_required": {
+        "message": "Este link de envio precisa da frase secreta.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.not_in_inbox": {
+        "message": "Este envio não está mais disponível para adoção.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.email_prompt": {
+        "message": "E-mail",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.password_prompt": {
+        "message": "Senha",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.in_progress": {
+        "message": "Entrando no Capsule…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.success": {
+        "message": "Conectado como {email}.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.failed": {
+        "message": "Falha no login: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.in_progress": {
+        "message": "Saindo do Capsule…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.success": {
+        "message": "Sessão encerrada.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.not_logged_in": {
+        "message": "Você não está conectado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.not_authenticated": {
+        "message": "Não autenticado. Execute 'capsule auth login' primeiro.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.in_progress": {
+        "message": "Sincronizando de {endpoint}…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.dry_run_notice": {
+        "message": "Simulação: nenhuma alteração será salva.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.up_to_date": {
+        "message": "Já está atualizado.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.complete": {
+        "message": "Sincronização concluída: {applied} alteração(ões) aplicada(s) em {albums} álbum(ns) ao longo de {pages} página(s).",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.failed": {
+        "message": "Falha na sincronização: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.empty": {
+        "message": "Nenhum recurso foi sincronizado ainda.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.header": {
+        "message": "Biblioteca sincronizada ({count} recurso(s)):",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.row": {
+        "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.active": {
+        "message": "ativo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.awaiting_original": {
+        "message": "aguardando o original",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.failed": {
+        "message": "Falha ao listar a biblioteca: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.previously_used": {
+        "message": "Um dispositivo que você já usou (visto pela última vez em {last_seen})",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.this_device": {
+        "message": "Este dispositivo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.new_device": {
+        "message": "Um novo dispositivo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.support.report": {
+        "message": "Relatar um problema com este agrupamento de dispositivos",
+        "context": "Machine-translated seed pending human review."
+    }
+}

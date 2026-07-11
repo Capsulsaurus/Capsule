@@ -1,0 +1,422 @@
+{
+    "app_name": {
+        "message": "Capsule ऐप",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_title": {
+        "message": "शीर्षक",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_artist": {
+        "message": "कलाकार",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_date": {
+        "message": "तारीख़",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_dimensions": {
+        "message": "आयाम",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_medium": {
+        "message": "माध्यम",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_department": {
+        "message": "विभाग",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_repository": {
+        "message": "संग्रह",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_credits": {
+        "message": "श्रेय",
+        "context": "Machine-translated seed pending human review."
+    },
+    "back": {
+        "message": "वापस",
+        "context": "Machine-translated seed pending human review."
+    },
+    "no_data_available": {
+        "message": "कोई डेटा उपलब्ध नहीं",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.user_already_exists": {
+        "message": "इन विवरणों वाला खाता पहले से मौजूद है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.invalid_credentials": {
+        "message": "ईमेल या पासवर्ड ग़लत है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.rate_limited": {
+        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.protocol.version_unsupported": {
+        "message": "Capsule का यह संस्करण अब समर्थित नहीं है। कृपया ऐप अपडेट करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.exceeded": {
+        "message": "आपका स्टोरेज भर गया है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.grace_locked": {
+        "message": "आपका स्टोरेज छूट अवधि के बाद भी भरा रहा है, इसलिए जब तक आप जगह ख़ाली नहीं करते तब तक संपादन रोक दिए गए हैं।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.peer_budget_exceeded": {
+        "message": "इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.pending_upload": {
+        "message": "मूल फ़ोटो अभी तक उसके डिवाइस से अपलोड नहीं हुई है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.version_conflict": {
+        "message": "यह डिवाइस सूची पुरानी है। Capsule जारी रखने से पहले इसे रीफ़्रेश करेगा।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.malformed": {
+        "message": "डिवाइस सूची पढ़ी नहीं जा सकी।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.escrow.malformed": {
+        "message": "रिकवरी बैकअप सहेजा नहीं जा सका।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.local_auth_required": {
+        "message": "दूसरा डिवाइस जोड़ने के लिए इस डिवाइस पर पुष्टि करें कि यह आप ही हैं।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.rate_limited": {
+        "message": "डिवाइस जोड़ने के बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.code_refused": {
+        "message": "वह डिवाइस कोड काम नहीं आया। नया कोड बनाएँ और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.channel_not_found": {
+        "message": "यह डिवाइस-जोड़ने का सत्र समाप्त हो गया है। फिर से शुरू करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.relay_malformed": {
+        "message": "डिवाइस-जोड़ने का अनुरोध पढ़ा नहीं जा सका।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.account_suspended": {
+        "message": "आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.server_blocked": {
+        "message": "इस सर्वर को हमारे साथ फ़ेडरेट करने से रोका गया है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_unsigned": {
+        "message": "मॉडरेशन रिपोर्ट सत्यापित नहीं की जा सकी।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_rate_limited": {
+        "message": "इस स्रोत से बहुत अधिक रिपोर्ट। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_invalid": {
+        "message": "इस साझा एल्बम की पहुँच सत्यापित नहीं की जा सकी।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_expired": {
+        "message": "इस साझा एल्बम की पहुँच समाप्त हो गई है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_revoked": {
+        "message": "इस साझा एल्बम की पहुँच रद्द कर दी गई है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.audience_mismatch": {
+        "message": "यह पहुँच अनुमति किसी अन्य एल्बम के लिए है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.scope_insufficient": {
+        "message": "यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.rate_budget_exceeded": {
+        "message": "इस स्रोत ने अपनी अनुरोध सीमा पूरी कर ली है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.circuit_open": {
+        "message": "बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.invalid_request": {
+        "message": "स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.deep_rate_limited": {
+        "message": "बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.share.rate_limited": {
+        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.cursor_invalid": {
+        "message": "सिंक सत्र पुराना है। Capsule शुरू से फिर से सिंक करेगा।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.unauthenticated": {
+        "message": "सिंक जारी रखने के लिए कृपया फिर से साइन इन करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.malformed_request": {
+        "message": "अपलोड अनुरोध ग़लत रूप में है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unknown_crypto_suite": {
+        "message": "ऐप का यह संस्करण एक ऐसा एन्क्रिप्शन सूट उपयोग करता है जिसे सर्वर नहीं पहचानता।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_hash": {
+        "message": "अपलोड का घोषित सामग्री हैश अमान्य है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_size": {
+        "message": "अपलोड का घोषित आकार अमान्य है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.file_too_large": {
+        "message": "यह फ़ाइल सर्वर की आकार सीमा से अधिक है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_content_type": {
+        "message": "यह फ़ाइल प्रकार समर्थित नहीं है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.album_access_denied": {
+        "message": "आपके पास इस एल्बम में फ़ोटो जोड़ने की अनुमति नहीं है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.device_not_authorized": {
+        "message": "यह डिवाइस अपलोड के लिए अधिकृत नहीं है। इसे फिर से पंजीकृत करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.timestamp_out_of_range": {
+        "message": "आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_mismatch": {
+        "message": "अपलोड अनुरोध अपने हस्ताक्षरित मैनिफ़ेस्ट का खंडन करता है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.owner_not_permitted": {
+        "message": "आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.duplicate_blob": {
+        "message": "यह फ़ाइल पहले से संग्रहीत है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_media_type": {
+        "message": "अपलोड डेटा असमर्थित प्रारूप में भेजा गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.empty_chunk": {
+        "message": "अपलोड खंड ख़ाली नहीं हो सकता।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_not_aligned": {
+        "message": "अपलोड खंड का आकार ग़लत था।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_too_large": {
+        "message": "अपलोड खंड अधिकतम खंड आकार से अधिक हो गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_offset": {
+        "message": "अपलोड अनुरोध में इसका स्थिति चिह्न नहीं था।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_checksum": {
+        "message": "अपलोड अनुरोध में इसकी अखंडता चेकसम नहीं थी।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.checksum_mismatch": {
+        "message": "अपलोड डेटा ट्रांज़िट में ख़राब हो गया। फिर से प्रयास किया जा रहा है…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.offset_mismatch": {
+        "message": "अपलोड सिंक से बाहर हो गया और फिर से संरेखित हो रहा है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_conflict": {
+        "message": "अपलोड ने परस्पर विरोधी डेटा भेजा और रोक दिया गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.size_exceeded": {
+        "message": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_found": {
+        "message": "अपलोड सत्र समाप्त हो गया। फिर से शुरू किया जा रहा है…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_active": {
+        "message": "यह अपलोड पहले ही पूरा हो चुका है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.finalize_in_progress": {
+        "message": "यह अपलोड पहले से ही अंतिम रूप दिया जा रहा है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.receipt_not_available": {
+        "message": "अपलोड पूरा नहीं हुआ है, इसलिए इसकी स्टोरेज रसीद अभी उपलब्ध नहीं है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.content_hash_mismatch": {
+        "message": "अपलोड अखंडता सत्यापन में विफल रहा और छोड़ दिया गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_rejected": {
+        "message": "अपलोड का हस्ताक्षरित मैनिफ़ेस्ट सत्यापन में विफल रहा।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.forbidden": {
+        "message": "आपके पास इस अपलोड तक पहुँच नहीं है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.storage_inconsistent": {
+        "message": "सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_action": {
+        "message": "यह परिवर्तन एक ऐसी क्रिया का उपयोग करता है जिसकी एल्बम अनुमति नहीं देता।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.stale_revival": {
+        "message": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.amk_regressed": {
+        "message": "यह परिवर्तन सर्वर द्वारा दर्ज की गई एल्बम कुंजी से पुरानी कुंजी को संदर्भित करता है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.cap_exceeded": {
+        "message": "यह अपलोड लिंक भर गया है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.malformed_descriptor": {
+        "message": "यह अपलोड स्वीकार नहीं किया जा सका।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.rate_limited": {
+        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.passphrase_required": {
+        "message": "इस अपलोड लिंक को इसका पासफ़्रेज़ चाहिए।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.not_in_inbox": {
+        "message": "यह ड्रॉप अब अपनाने के लिए उपलब्ध नहीं है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.email_prompt": {
+        "message": "ईमेल",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.password_prompt": {
+        "message": "पासवर्ड",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.in_progress": {
+        "message": "Capsule में लॉग इन हो रहा है…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.success": {
+        "message": "{email} के रूप में लॉग इन किया गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.failed": {
+        "message": "लॉग इन विफल: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.in_progress": {
+        "message": "Capsule से लॉग आउट हो रहा है…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.success": {
+        "message": "लॉग आउट कर दिया गया।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.not_logged_in": {
+        "message": "आप लॉग इन नहीं हैं।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.not_authenticated": {
+        "message": "प्रमाणित नहीं। पहले 'capsule auth login' चलाएँ।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.in_progress": {
+        "message": "{endpoint} से सिंक हो रहा है…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.dry_run_notice": {
+        "message": "ड्राई रन: कोई परिवर्तन सहेजा नहीं जाएगा।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.up_to_date": {
+        "message": "पहले से अद्यतित।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.complete": {
+        "message": "सिंक पूर्ण: {pages} पृष्ठ(ों) में {albums} एल्बम(ों) पर {applied} परिवर्तन लागू किए गए।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.failed": {
+        "message": "सिंक विफल: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.empty": {
+        "message": "अभी तक कोई एसेट सिंक नहीं हुई है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.header": {
+        "message": "सिंक की गई लाइब्रेरी ({count} एसेट):",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.row": {
+        "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.active": {
+        "message": "सक्रिय",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.awaiting_original": {
+        "message": "मूल की प्रतीक्षा में",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.failed": {
+        "message": "लाइब्रेरी सूचीबद्ध करने में विफल: {reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.previously_used": {
+        "message": "एक डिवाइस जिसे आपने पहले उपयोग किया है (अंतिम बार देखा गया {last_seen})",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.this_device": {
+        "message": "यह डिवाइस",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.new_device": {
+        "message": "एक नया डिवाइस",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.support.report": {
+        "message": "इस डिवाइस समूह के साथ समस्या की रिपोर्ट करें",
+        "context": "Machine-translated seed pending human review."
+    }
+}

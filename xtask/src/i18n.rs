@@ -139,15 +139,13 @@ impl Catalogs {
         );
 
         s.push_str("/// Supported locales, in `locales/config.json` order.\n");
-        let locales = self
-            .supported
-            .iter()
-            .map(|l| format!("{l:?}"))
-            .collect::<Vec<_>>()
-            .join(", ");
         let _ = writeln!(
             s,
-            "pub(crate) const SUPPORTED_LOCALES: &[&str] = &[{locales}];\n"
+            "{}\n",
+            str_slice_const(
+                "pub(crate) const SUPPORTED_LOCALES: &[&str] = ",
+                &self.supported,
+            )
         );
 
         s.push_str(
@@ -269,6 +267,32 @@ impl Catalogs {
     }
 }
 
+/// Render `prefix&[<items>];` as a `&[&str]` const declaration the way rustfmt would,
+/// so the generated file stays `cargo fmt`-clean as the locale set grows (rustfmt's
+/// `max_width` is 100). rustfmt keeps the whole declaration on one line when it fits;
+/// otherwise it breaks the brackets and keeps the elements on one indented line if
+/// they fit, falling back to one element per line. `prefix` ends with `= `.
+fn str_slice_const(prefix: &str, items: &[String]) -> String {
+    const MAX_WIDTH: usize = 100;
+    let quoted: Vec<String> = items.iter().map(|i| format!("{i:?}")).collect();
+    let inner = quoted.join(", ");
+    let one_line = format!("{prefix}&[{inner}];");
+    if one_line.len() <= MAX_WIDTH {
+        return one_line;
+    }
+    // Block form: elements on one indented (4-space) line, comma-terminated.
+    if inner.len() + "    ".len() + ",".len() <= MAX_WIDTH {
+        return format!("{prefix}&[\n    {inner},\n];");
+    }
+    // Fallback: one element per line.
+    let mut s = format!("{prefix}&[\n");
+    for q in &quoted {
+        let _ = writeln!(s, "    {q},");
+    }
+    s.push_str("];");
+    s
+}
+
 /// Pretty-print a flat `{ key: message }` bundle (2-space indent, trailing newline).
 fn flat_json(map: &BTreeMap<String, String>) -> Result<String> {
     let mut s = serde_json::to_string_pretty(map).context("serializing message bundle")?;
@@ -370,5 +394,62 @@ fn check_outputs(root: &Path, outputs: &[(PathBuf, String)]) -> Result<()> {
             "i18n generated files are stale; run `mise run i18n`:\n  {}",
             drift.join("\n  ")
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::str_slice_const;
+
+    const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
+
+    fn owned(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// A short list (the source-only build) stays on one line — matching rustfmt and
+    /// the historical single-locale output.
+    #[test]
+    fn single_line_when_it_fits() {
+        let out = str_slice_const(PREFIX, &owned(&["en"]));
+        assert_eq!(out, format!("{PREFIX}&[\"en\"];"));
+        assert!(out.lines().count() == 1);
+    }
+
+    /// The full twelve-locale set overflows `max_width`, so it breaks the brackets but
+    /// keeps every element on one indented line — the exact shape rustfmt produces.
+    #[test]
+    fn block_form_when_elements_fit_on_one_indented_line() {
+        let out = str_slice_const(
+            PREFIX,
+            &owned(&[
+                "en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "de", "es", "pt-BR", "it", "ru",
+                "hi", "ar",
+            ]),
+        );
+        assert_eq!(
+            out,
+            format!(
+                "{PREFIX}&[\n    \"en\", \"zh-Hans\", \"zh-Hant\", \"ja\", \"ko\", \"fr\", \"de\", \
+                 \"es\", \"pt-BR\", \"it\", \"ru\", \"hi\", \"ar\",\n];"
+            )
+        );
+        // Every rendered line stays within rustfmt's max_width.
+        assert!(out.lines().all(|l| l.len() <= 100));
+    }
+
+    /// If even the single indented line would overflow, fall back to one per line.
+    #[test]
+    fn one_per_line_when_too_wide() {
+        let items = owned(&[
+            "aa-very-long-locale-tag",
+            "bb-very-long-locale-tag",
+            "cc-very-long-locale-tag",
+            "dd-very-long-locale-tag",
+            "ee-very-long-locale-tag",
+        ]);
+        let out = str_slice_const(PREFIX, &items);
+        assert!(out.contains("\n    \"aa-very-long-locale-tag\",\n"));
+        assert!(out.lines().all(|l| l.len() <= 100));
     }
 }

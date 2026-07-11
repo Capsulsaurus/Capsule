@@ -1,0 +1,422 @@
+{
+    "app_name": {
+        "message": "Capsule 應用程式",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_title": {
+        "message": "標題",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_artist": {
+        "message": "藝術家",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_date": {
+        "message": "日期",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_dimensions": {
+        "message": "尺寸",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_medium": {
+        "message": "媒材",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_department": {
+        "message": "部門",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_repository": {
+        "message": "館藏",
+        "context": "Machine-translated seed pending human review."
+    },
+    "label_credits": {
+        "message": "致謝",
+        "context": "Machine-translated seed pending human review."
+    },
+    "back": {
+        "message": "返回",
+        "context": "Machine-translated seed pending human review."
+    },
+    "no_data_available": {
+        "message": "沒有可用資料",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.user_already_exists": {
+        "message": "已有使用這些資料的帳戶。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.invalid_credentials": {
+        "message": "電子郵件或密碼無效。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.auth.rate_limited": {
+        "message": "嘗試次數過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.protocol.version_unsupported": {
+        "message": "此版本的 Capsule 已不再受支援。請更新應用程式。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.exceeded": {
+        "message": "您的儲存空間已滿。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.grace_locked": {
+        "message": "您的儲存空間已超過寬限期仍為已滿狀態，因此在您釋放空間前編輯將暫停。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.quota.peer_budget_exceeded": {
+        "message": "此來源在您帳戶上的快取已達上限。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.pending_upload": {
+        "message": "原始照片尚未從其裝置上傳。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.version_conflict": {
+        "message": "此裝置清單已過期。Capsule 會在繼續前重新整理。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.malformed": {
+        "message": "無法讀取裝置清單。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.escrow.malformed": {
+        "message": "無法儲存復原備份。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.local_auth_required": {
+        "message": "請在此裝置上確認是您本人，以新增另一台裝置。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.rate_limited": {
+        "message": "新增裝置的嘗試次數過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.code_refused": {
+        "message": "該裝置代碼無效。請產生新代碼後重試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.channel_not_found": {
+        "message": "此新增裝置的工作階段已結束。請重新開始。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.enrollment.relay_malformed": {
+        "message": "無法讀取新增裝置的請求。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.account_suspended": {
+        "message": "您的帳戶已被停用。在恢復之前，您無法上傳或分享。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.server_blocked": {
+        "message": "此伺服器被禁止與我們聯邦互通。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_unsigned": {
+        "message": "無法驗證此檢舉。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.moderation.report_rate_limited": {
+        "message": "來自此來源的檢舉過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_invalid": {
+        "message": "無法驗證此共享相簿的存取權限。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_expired": {
+        "message": "此共享相簿的存取權限已過期。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.capability_revoked": {
+        "message": "對此共享相簿的存取權限已被撤銷。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.audience_mismatch": {
+        "message": "此存取授權是針對另一個相簿的。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.scope_insufficient": {
+        "message": "此存取授權不涵蓋所請求的內容。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.rate_budget_exceeded": {
+        "message": "此來源已達其請求上限。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.federation.circuit_open": {
+        "message": "此來源在多次出錯後暫時被退避處理。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.invalid_request": {
+        "message": "儲存驗證請求格式不正確。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.storage.deep_rate_limited": {
+        "message": "深度儲存檢查次數過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.share.rate_limited": {
+        "message": "嘗試次數過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.cursor_invalid": {
+        "message": "同步工作階段已過期。Capsule 會從頭重新同步。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.sync.unauthenticated": {
+        "message": "請重新登入以繼續同步。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.malformed_request": {
+        "message": "上傳請求格式不正確。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unknown_crypto_suite": {
+        "message": "此應用程式版本使用了伺服器無法辨識的加密套件。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_hash": {
+        "message": "上傳宣告的內容雜湊無效。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_size": {
+        "message": "上傳宣告的大小無效。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.file_too_large": {
+        "message": "此檔案超過了伺服器的大小限制。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_content_type": {
+        "message": "不支援此檔案類型。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.album_access_denied": {
+        "message": "您無權向此相簿新增照片。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.device_not_authorized": {
+        "message": "此裝置未獲授權上傳。請重新註冊後再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.timestamp_out_of_range": {
+        "message": "您裝置的時鐘似乎不正確。請檢查其日期和時間。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_mismatch": {
+        "message": "上傳請求與其簽章資訊清單相矛盾。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.owner_not_permitted": {
+        "message": "您無法代表此使用者上傳。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.duplicate_blob": {
+        "message": "此檔案已儲存。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.unsupported_media_type": {
+        "message": "上傳資料以不受支援的格式傳送。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.empty_chunk": {
+        "message": "上傳區塊不能為空。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_not_aligned": {
+        "message": "上傳區塊大小不正確。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_too_large": {
+        "message": "上傳區塊超過了最大區塊大小。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_offset": {
+        "message": "上傳請求缺少位置標記。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.missing_checksum": {
+        "message": "上傳請求缺少完整性總和檢查碼。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.checksum_mismatch": {
+        "message": "上傳資料在傳輸中損毀。正在重試…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.offset_mismatch": {
+        "message": "上傳失去同步，正在重新對齊。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.chunk_conflict": {
+        "message": "上傳傳送了衝突資料，已停止。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.size_exceeded": {
+        "message": "上傳傳送的資料超過了其宣告的大小。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_found": {
+        "message": "上傳工作階段已過期。正在重新開始…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.session_not_active": {
+        "message": "此上傳已完成。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.finalize_in_progress": {
+        "message": "此上傳正在完成中。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.receipt_not_available": {
+        "message": "上傳尚未完成，因此其儲存回執尚不可用。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.content_hash_mismatch": {
+        "message": "上傳未通過完整性驗證，已被丟棄。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.envelope_rejected": {
+        "message": "上傳的簽章資訊清單未通過驗證。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.forbidden": {
+        "message": "您無權存取此上傳。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.storage_inconsistent": {
+        "message": "伺服器遇到儲存問題。請重試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_action": {
+        "message": "此變更使用了該相簿不允許的操作。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.stale_revival": {
+        "message": "此變更基於該項目的過時版本。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.amk_regressed": {
+        "message": "此變更引用的相簿金鑰比伺服器記錄的更舊。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.cap_exceeded": {
+        "message": "此上傳連結已滿。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.malformed_descriptor": {
+        "message": "無法接受此上傳。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.rate_limited": {
+        "message": "嘗試次數過多。請稍候再試。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.passphrase_required": {
+        "message": "此上傳連結需要其密碼短語。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.drop.not_in_inbox": {
+        "message": "此投放已無法被採納。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.email_prompt": {
+        "message": "電子郵件",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.password_prompt": {
+        "message": "密碼",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.in_progress": {
+        "message": "正在登入 Capsule…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.success": {
+        "message": "已以 {email} 身分登入。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.login.failed": {
+        "message": "登入失敗：{reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.in_progress": {
+        "message": "正在從 Capsule 登出…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.success": {
+        "message": "已登出。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.logout.not_logged_in": {
+        "message": "您尚未登入。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.auth.not_authenticated": {
+        "message": "未通過身分驗證。請先執行 'capsule auth login'。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.in_progress": {
+        "message": "正在從 {endpoint} 同步…",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.dry_run_notice": {
+        "message": "試執行：不會儲存任何變更。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.up_to_date": {
+        "message": "已是最新。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.complete": {
+        "message": "同步完成：在 {pages} 頁中跨 {albums} 個相簿套用了 {applied} 項變更。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.sync.failed": {
+        "message": "同步失敗：{reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.empty": {
+        "message": "尚未同步任何素材。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.header": {
+        "message": "已同步的資料庫（{count} 項素材）：",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.row": {
+        "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.active": {
+        "message": "使用中",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.state.awaiting_original": {
+        "message": "等待原件",
+        "context": "Machine-translated seed pending human review."
+    },
+    "cli.list.failed": {
+        "message": "無法列出資料庫：{reason}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.previously_used": {
+        "message": "您以前用過的裝置（最後一次出現於 {last_seen}）",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.this_device": {
+        "message": "此裝置",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.label.new_device": {
+        "message": "一台新裝置",
+        "context": "Machine-translated seed pending human review."
+    },
+    "device.cohort.support.report": {
+        "message": "回報此裝置分組的問題",
+        "context": "Machine-translated seed pending human review."
+    }
+}

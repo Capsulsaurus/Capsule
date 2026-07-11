@@ -127,7 +127,7 @@ its slice.
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | done*   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
-| S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | ready   |
+| S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | ready   |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
@@ -1403,6 +1403,13 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
 - **Done when:** `mise run i18n-check` green with thirteen catalogs carrying the
   full key set; an RTL smoke renders the web app mirrored under `ar`.
 - **Tier:** Unit + Smoke. **Blocks:** S-I3.
+- **Landed (done\* — native RTL mirroring + human review owed):** thirteen full
+  catalogs (all 1260 seeded entries flagged `Machine-translated seed pending human
+  review`; placeholders verbatim-verified against `en` — the key set carries no
+  ICU plurals yet); direct-to-`en` fallbacks (no `zh-Hant → zh-Hans`); web
+  `dir`/`lang` wiring + RTL smoke. Generator fixed to emit fmt-clean output for
+  any locale count. Owed: iOS/Android layout mirroring (the apps' half) and human
+  translation review.
 
 ### S-I3 — README translation pipeline
 
