@@ -169,4 +169,59 @@ struct SmokeTests {
         // The private key never leaves the enclave — a throw here fails the test.
         try enclave.assertNonExportable(keyAlias: "device-dsk")
     }
+
+    /// The software **P-256 ECDH** element composed through the hybrid DEK — the always-runnable half
+    /// of the S-F5 smoke (a CI VM has no Secure Enclave). It mirrors ``SecureEnclaveKeyAgreement``'s
+    /// wire contract (65-byte x9.63 public key, raw 32-byte ECDH secret), so a green run here proves
+    /// the whole P-256 hybrid-DEK composition independent of hardware: a secret encapsulated to the
+    /// published hybrid public key is recovered by decapsulating through the element's ECDH.
+    @Test("the software P-256 element composes through the hybrid DEK FFI path")
+    func softwareP256KeyAgreementComposesEndToEnd() throws {
+        let element = SoftwareP256KeyAgreement(seed: Data(repeating: 7, count: 32))
+
+        // Contract self-check before handing it to Rust: SEC1 public key, 32-byte ECDH secret,
+        // honest non-exportability.
+        let pub = try element.enroll(keyAlias: "device-dek")
+        #expect(pub.count == 65, "P-256 x9.63 (uncompressed SEC1) public key is 65 bytes")
+        #expect(pub.first == 0x04, "uncompressed-point tag")
+        let secret = try element.keyAgreement(keyAlias: "device-dek", peerPublic: pub)
+        #expect(secret.count == 32, "raw P-256 ECDH secret is the 32-byte x-coordinate")
+        #expect("software element must report itself exportable") {
+            try element.assertNonExportable(keyAlias: "device-dek")
+        } throws: { error in
+            guard case HardwareSignerError.Exportable = error else { return false }
+            return true
+        }
+
+        let matched = try onLargeStack {
+            try p256HardwareDekRoundTrip(
+                hardware: element,
+                keyAlias: "device-dek",
+                mlSeed: Data(repeating: 9, count: 32)
+            )
+        }
+        #expect(matched, "the P-256 hybrid DEK must recover the encapsulated secret via ECDH")
+    }
+
+    /// The real Secure Enclave ECDH element composed through the hybrid DEK, end to end. Skipped where
+    /// no Secure Enclave is present (CI VMs); runs on Apple-Silicon / T2 Macs and devices. The DEK's
+    /// classical half is an SE-held P-256 key; the shared secret is recovered by ECDH inside the
+    /// enclave, and `assertNonExportable` confirms the key never left it.
+    @Test(
+        "the real Secure Enclave element composes through the hybrid DEK FFI path",
+        .enabled(if: SecureEnclave.isAvailable, "no Secure Enclave on this host")
+    )
+    func secureEnclaveKeyAgreementComposesEndToEnd() throws {
+        let enclave = SecureEnclaveKeyAgreement()
+        let matched = try onLargeStack {
+            try p256HardwareDekRoundTrip(
+                hardware: enclave,
+                keyAlias: "device-dek",
+                mlSeed: Data(repeating: 9, count: 32)
+            )
+        }
+        #expect(matched, "the SE-composed P-256 hybrid DEK must recover the encapsulated secret")
+        // The private key never leaves the enclave — a throw here fails the test.
+        try enclave.assertNonExportable(keyAlias: "device-dek")
+    }
 }

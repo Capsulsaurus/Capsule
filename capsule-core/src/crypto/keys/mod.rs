@@ -12,6 +12,7 @@ pub mod directory;
 pub mod hardware;
 pub mod hybrid_sig;
 pub mod kem;
+pub mod kem_p256;
 pub mod keystore;
 pub mod master;
 pub mod p256;
@@ -22,9 +23,14 @@ pub mod tpm;
 
 pub use album::{Amk, AmkVersion};
 pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
-pub use hardware::{HardwareBackedSigner, HardwareSigner, HardwareSignerError};
+pub use hardware::{
+    HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,
+};
 pub use hybrid_sig::{ClassicalAlgorithm, HybridSignature, HybridSigningKey, HybridVerifyingKey};
 pub use kem::{DEK_CIPHERTEXT_LEN, DEK_PUBLIC_LEN, DekKeypair, encapsulate_to_public};
+pub use kem_p256::{
+    DEK_P256_CIPHERTEXT_LEN, DEK_P256_PUBLIC_LEN, P256HybridDek, encapsulate_to_p256_public,
+};
 pub use keystore::{Account, AccountFile, DeviceKeys};
 pub use master::MasterKey;
 pub use p256::P256HybridSigningKey;

@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 use crate::crypto::keys::{
-    HardwareBackedSigner, HardwareSigner, HybridVerifyingKey, P256HybridSigningKey,
+    HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HybridVerifyingKey, P256HybridDek,
+    P256HybridSigningKey, encapsulate_to_p256_public,
 };
 use crate::crypto::primitives::DeviceTier;
 use crate::crypto::{CryptoError, VerifyOutcome};
@@ -270,6 +271,32 @@ impl FfiWorkspace {
     }
 }
 
+/// Smoke the **hardware-bound P-256 device encryption key** (slice `S-F5`) across the FFI seam:
+/// enroll a P-256 key-agreement key in `hardware` (a native Secure Enclave / StrongBox / TPM
+/// [`HardwareKeyAgreement`]) under `key_alias`, publish the hybrid public key, encapsulate a fresh
+/// shared secret to it **in software** (the sender side), then **decapsulate through the hardware
+/// ECDH**. Returns `true` iff the sender's and the hardware-decapsulated secrets match — proving
+/// the element's ECDH composes into the hybrid KEM without the private scalar ever leaving hardware.
+/// `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half. This is the DEK analogue of the DSK
+/// `create_with_p256_hardware_signer` composition; the DEK is not yet wired into full workspace
+/// creation, so this focused round-trip is the composition's smoke.
+#[uniffi::export]
+pub fn p256_hardware_dek_round_trip(
+    hardware: Arc<dyn HardwareKeyAgreement>,
+    key_alias: String,
+    ml_seed: Vec<u8>,
+) -> FfiResult<bool> {
+    let seed: [u8; 32] = ml_seed
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed("ml_seed must be 32 bytes"))?;
+    let dek = P256HybridDek::enroll(hardware, key_alias, &seed)
+        .map_err(|_| CryptoError::Key("hardware P-256 DEK enrollment failed"))?;
+    let (ciphertext, sender_secret) = encapsulate_to_p256_public(&dek.public_bytes())?;
+    let receiver_secret = dek.decapsulate(&ciphertext)?;
+    Ok(sender_secret == receiver_secret)
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -427,6 +454,30 @@ mod tests {
         assert_eq!(
             ws.read_plaintext(asset).unwrap(),
             b"\xFF\xD8\xFF p256 hw ffi bytes"
+        );
+    }
+
+    /// S-F5 acceptance at the FFI seam: a foreign `HardwareKeyAgreement` element that ECDHs P-256
+    /// (the shape Secure Enclave `P256.KeyAgreement` / StrongBox ECDH produce) composes through the
+    /// hybrid DEK, and a secret encapsulated to the published hybrid public key is recovered by
+    /// decapsulating through the element's ECDH. This is the Rust-side proof the Swift SE smoke
+    /// mirrors natively.
+    #[test]
+    fn ffi_p256_hardware_dek_round_trips() {
+        use crate::crypto::keys::kem_p256::MockP256KeyAgreement;
+
+        let element = Arc::new(MockP256KeyAgreement::new([7; 32], false));
+        assert!(
+            super::p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 32])
+                .unwrap(),
+            "the hardware-composed P-256 hybrid DEK must round-trip a shared secret"
+        );
+
+        // A wrong-length ml_seed is a clean error, not a panic across the boundary.
+        let element = Arc::new(MockP256KeyAgreement::new([7; 32], false));
+        assert!(
+            super::p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 16])
+                .is_err()
         );
     }
 }

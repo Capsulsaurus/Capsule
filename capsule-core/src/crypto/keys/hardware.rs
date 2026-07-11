@@ -47,7 +47,44 @@ pub trait HardwareSigner: Send + Sync {
     fn assert_non_exportable(&self, key_alias: String) -> Result<(), HardwareSignerError>;
 }
 
-/// Failure surfaced by a [`HardwareSigner`] backend.
+/// The per-platform hardware **key-agreement** element — the ECDH analogue of
+/// [`HardwareSigner`], implemented by native code (Swift/Kotlin) over the uniffi foreign-trait
+/// boundary. It backs the hardware-bound classical half of the device **encryption** key (DEK):
+/// shipping secure elements expose **ECDH-P256** (Secure Enclave `P256.KeyAgreement`, StrongBox
+/// ECDH, TPM 2.0 ECDH), so the DEK's X25519 half of [the X-Wing KEM](super::kem) is replaced by a
+/// hardware-held P-256 static key while the ML-KEM-768 half stays software-sealed. The element
+/// holds the P-256 private key and performs the ECDH so it never leaves hardware; Rust drives the
+/// ML-KEM half and the hybrid combiner (SSoT: [Cryptography — Keys § Device Keys], slice `S-F5`).
+///
+/// [Cryptography — Keys § Device Keys]: https://docs/design/cryptography/keys/#device-keys
+#[cfg_attr(feature = "ffi", uniffi::export(with_foreign))]
+pub trait HardwareKeyAgreement: Send + Sync {
+    /// Generate (or bind to) the hardware P-256 key-agreement keypair for `key_alias`, returning
+    /// its public key as **uncompressed SEC1 / x9.63** (`0x04‖x‖y`, 65 bytes — the form Secure
+    /// Enclave and StrongBox emit). Idempotent per alias.
+    fn enroll(&self, key_alias: String) -> Result<Vec<u8>, HardwareSignerError>;
+
+    /// The uncompressed-SEC1 P-256 public key for an already-enrolled `key_alias`.
+    fn public_key(&self, key_alias: String) -> Result<Vec<u8>, HardwareSignerError>;
+
+    /// Perform ECDH against `peer_public` (the sender's ephemeral P-256 public key, uncompressed
+    /// SEC1) with the hardware key for `key_alias`, returning the **raw 32-byte shared secret**
+    /// (the big-endian x-coordinate of the ECDH point — CryptoKit's `SharedSecret` /
+    /// `SecKeyCopyKeyExchangeResult`, before any KDF). The Rust side folds it into the hybrid
+    /// combiner; no KDF is applied inside the element.
+    fn key_agreement(
+        &self,
+        key_alias: String,
+        peer_public: Vec<u8>,
+    ) -> Result<Vec<u8>, HardwareSignerError>;
+
+    /// Non-exportability assertion (mirrors [`HardwareSigner::assert_non_exportable`]): a
+    /// conforming element MUST refuse to reveal the private bytes, returning
+    /// [`HardwareSignerError::Exportable`] if they can be read.
+    fn assert_non_exportable(&self, key_alias: String) -> Result<(), HardwareSignerError>;
+}
+
+/// Failure surfaced by a [`HardwareSigner`] or [`HardwareKeyAgreement`] backend.
 #[derive(Debug, thiserror::Error)]
 #[cfg_attr(feature = "ffi", derive(uniffi::Error), uniffi(flat_error))]
 pub enum HardwareSignerError {

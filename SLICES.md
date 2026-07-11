@@ -115,7 +115,7 @@ its slice.
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | done*   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
-| S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
+| S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | done*   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
@@ -1242,6 +1242,13 @@ SDK; they never hand-roll network flows.
 - **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md).
 - **Deliverable:** the device **encryption** key's classical half hardware-bound
   (P-256 ECDH), mirroring the DSK composition. **Depends on:** S-F2. **Tier:** Smoke.
+- **Landed (done\* — keystore wiring + Kotlin owed):** `HardwareKeyAgreement` seam
+  + `P256HybridDek` mirroring the X-Wing combiner with the classical half swapped
+  (distinct domain label; lengths never alias X25519's, so tagging is structural;
+  X-Wing KAT byte-identical); real SE ECDH ran on this host. Owed: wiring the
+  hardware DEK into full workspace creation/keystore (this slice ships the
+  composition + FFI smoke), and the Kotlin StrongBox ECDH adapter (local Gradle
+  broken).
 
 ### S-F6 — `log` → `tracing` migration
 
