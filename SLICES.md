@@ -132,7 +132,7 @@ its slice.
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
-| S-Z1  | Library-settings document schema (design)            | design          | —                | S    | ready   |
+| S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
 | S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | ready   |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only ordering.
@@ -1423,6 +1423,12 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   a design-doc addition. The scope-override map's rows and grammar are now specified
   in [Organization — Scope Grammar](capsule-docs/src/content/docs/design/organization.md);
   what remains is the smart-album predicate schema and the document's envelope/versioning.
+- **Landed:** `LibrarySettingsV1` envelope owned by Metadata (OGK-keyed, field-wise
+  CRDT merge, refuse-forward-schema, preserve-forward-predicates); the closed
+  versioned predicate grammar owned by Organization (bounded boolean tree over a
+  6-class field set, deterministic sorted evaluation); Federation keeps cover
+  semantics. 10 Validation bullets give the future implementation slice its
+  acceptance contract.
 
 ### S-Z2 — Provider migration user guides
 

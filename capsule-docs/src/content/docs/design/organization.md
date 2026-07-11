@@ -58,7 +58,7 @@ Scope {
 | Desktop | folder / watched dir | library-relative or absolute canonicalized path (symlinks resolved) | |
 | Any | removable volume | volume UUID + relative path | the volume UUID makes a re-mounted card the same scope regardless of mount point |
 
-- **The mapping table lives in the [library-settings document](/design/metadata/#how-operations-travel)** (`scope_id → album_id` rows) — per-owner, E2E-encrypted, synced across devices with the same CRDT semantics as other collaborative metadata (each row an LWW register keyed by `scope_id`). The server never learns what a scope means.
+- **The mapping table lives in the [library-settings document](/design/metadata/#the-library-settings-document)** (its `scope_overrides` and `source_kind_defaults` sections) — per-owner, E2E-encrypted, synced across devices with the same CRDT semantics as other collaborative metadata (each row an LWW register keyed by `scope_id`, resp. `SourceKind`). The server never learns what a scope means.
 - **Resolution order** (first match wins): explicit user pick at import time → `scope_id` override row → per-source-kind default row (e.g. "all screenshots → Screenshots") → the owner's `default_album_id` pointer → the derived de facto album. Deterministic by construction; the planner records which rule fired so a surprising destination is explainable after the fact.
 - **Unmapped sources ask once.** The first import from a new scope surfaces a "where should photos from *X* go?" choice, whose answer is written as the scope's override row — automated imports never silently invent destinations.
 
@@ -67,7 +67,48 @@ Scope {
 View albums are organizational surfaces computed entirely client-side over the assets the user can already decrypt (the union of their container-album memberships), materialized by querying the [local index](/design/filesystem/client/#local-index-staleness). The [aggregated federated album](/design/federation/#federated-shared-albums-aggregated-albums) is a view in exactly this sense — its predicate is an album-group id spanning constituents on different home servers. A view is **not** an MLS group, holds **no** AMK, **owns no assets**, and is **not** a sharing or access-control boundary — sharing happens only at the container tier. Two kinds:
 
 - **System albums** — built-in and implicit. The canonical one is **All** — every asset the user can see; because that is the union over their containers, every asset appears in it (which is exactly why the [default album](#the-default-album) matters: an import always enters *some* container and so shows up in All). [Trash](#recycling) is another system view, over lifecycle state.
-- **Smart / dynamic albums** — user-defined filtered views whose membership is a predicate over sidecar fields and AI-derived attributes ([Metadata](/design/metadata/#sidecar-schema-v1), [AI](/design/ai/)). Membership is **computed**, never stored: editing a smart album, or an asset's attributes, never moves or re-encrypts an asset. A definition (predicate + display name) is user content — stored in the per-owner, E2E-encrypted **library-settings document** declared in [Metadata — How Operations Travel](/design/metadata/#how-operations-travel), synced across the user's devices with the same [CRDT semantics](/design/metadata/#collaborative-metadata) as other collaborative metadata, so the server never learns it. (That document's concrete schema is a design follow-up, tracked as its own slice in the repo-root `SLICES.md`; this doc owns only what it must carry — smart-album definitions and the scope-override map.)
+- **Smart / dynamic albums** — user-defined filtered views whose membership is a predicate over sidecar fields and AI-derived attributes ([Metadata](/design/metadata/#sidecar-schema-v1), [AI](/design/ai/)). Membership is **computed**, never stored: editing a smart album, or an asset's attributes, never moves or re-encrypts an asset. A definition (predicate + display name) is user content — stored in the per-owner, E2E-encrypted **library-settings document** whose envelope, keying, and versioning are owned by [Metadata — The Library-Settings Document](/design/metadata/#the-library-settings-document), synced across the user's devices with the same [CRDT semantics](/design/metadata/#collaborative-metadata) as other collaborative metadata, so the server never learns it. This doc owns the definition's *shape* — the [Smart-Album Definition Schema](#smart-album-definition-schema) below — while that document owns how it is carried and merged.
+
+#### Smart-Album Definition Schema
+
+A smart album's definition is stored as one entry in the library-settings document's `smart_albums` map ([envelope owned by Metadata](/design/metadata/#the-library-settings-document)); this section owns its *shape* — a **closed, versioned, declarative predicate grammar** over the queryable [sidecar](/design/metadata/#sidecar-schema-v1) and [AI-namespaced](/design/ai/#ai-output-containment) fields. It is declarative on purpose: a definition is stored data that syncs to every one of the owner's devices, so it must evaluate identically everywhere and can carry no code, no regex, and no unbounded input.
+
+```rust
+SmartAlbumDefinition {
+  smart_album_id:   UUIDv7,
+  predicate_schema: u16,              // closed-grammar version; a later value gates evaluation on older clients
+  display_name:     Lww<String>,      // ≤ 256 bytes; converges like caption_lww
+  predicate:        Predicate,        // closed tree, below
+  sort:             Option<SortSpec>, // closed key set; default (capture_timestamp, desc)
+}
+
+Predicate =                           // bounded: depth ≤ 8, ≤ 64 terms total
+  | All(Vec<Predicate>)               // AND — empty ⇒ matches every asset
+  | Any(Vec<Predicate>)               // OR  — empty ⇒ matches none
+  | Not(Box<Predicate>)
+  | Term(Term)
+
+Term {
+  field:   QueryField,                // closed enum, below
+  op:      Operator,                  // closed enum; must be valid for the field's type class
+  operand: Operand,                   // typed literal; shape fixed by (field, op)
+}
+```
+
+**Queryable fields (`QueryField`) — closed set, one type class each:**
+
+| Class | Fields | Valid operators | Operand |
+| --- | --- | --- | --- |
+| temporal | `capture_timestamp`, `import_timestamp` | `before`, `after`, `in_range` | RFC 3339 (a half-open `[start, end)` pair for `in_range`) |
+| enum | `content_type`, `media_kind` (image\|video, derived from `content_type`), `gps.datum` | `eq`, `in` | a value / set drawn from the field's own closed enum |
+| numeric | `rating`, `dimensions.width`, `dimensions.height` | `eq`, `gte`, `lte`, `in_range` | `u32` (a `[lo, hi]` pair for `in_range`) |
+| trinary/bool | `cull`, `hidden` | `is` | the field's literal (`pick`\|`neutral`\|`reject`; `true`\|`false`) |
+| set | `tags_user`, `tags_ai`, `stack_type`, `people_cluster`, `album_id` | `contains`, `contains_any`, `contains_all` | a string / id set, ≤ 64 members, each ≤ 256 bytes |
+| presence | `gps`, `camera_id` | `exists` | `bool` |
+
+Adding a field, operator, or operand type is a **new, later-dated `predicate_schema`** (and, where it queries a new sidecar field, a coordinated [sidecar-schema](/design/metadata/#schema-versioning-rules) bump); the value sets are otherwise closed, and a term naming an unknown `field`/`op`, or an `operand` mistyped for its `(field, op)`, is a **structural rejection** at the definition validator — never a "future to ignore." A `tags_ai` or `people_cluster` term names the `(model_id, model_version)` slot it queries and is subject to the [AI staleness rule](/design/ai/#ai-output-containment): a term over a slot whose canonical model changed evaluates as stale-excluded until regenerated, never compared across model versions.
+
+**LWW-safety and convergence.** The whole `SmartAlbumDefinition` is stored as the value of one LWW register keyed by `smart_album_id` (a stamped `None` deletes it), so authoring or editing a smart album is a single stamped write that converges under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) — there is never a partial-predicate merge. **Membership is computed, never stored:** evaluation is a pure function of `(definition, the assets the viewer can decrypt)` processed in sorted `asset_id` order, so recomputation is idempotent and identical across devices — the same determinism the [aggregated album](/design/federation/#membership-and-rendering) and [AI grouping](/design/ai/#ai-output-containment) rely on. Editing a definition, or an asset's attributes, moves and re-encrypts nothing.
 
 ## Asset Stacking
 
@@ -153,5 +194,10 @@ This addresses the damage scenario where a hostile server unilaterally accelerat
 - **Retention-window honor (smoke).** Issue a `delete` with `retention_until = now + 30d`. Mock the server clock to `now + 15d`; assert purge worker refuses. Move to `now + 31d`; assert purge proceeds.
 - **Trash-restore round-trip (smoke).** Delete → restore → assert asset reappears in live set, provenance chain has delete + restore records, original delete record is preserved.
 - **Hostile-server purge defense (smoke).** Mock a server that attempts purge before `retention_until`; assert the purge worker (running the no-key envelope check) refuses.
+- **Closed predicate-grammar rejection (unit).** Build [`SmartAlbumDefinition`](#smart-album-definition-schema) terms with an unknown `field`, an `op` invalid for the field's type class, and an `operand` mistyped for its `(field, op)`; assert each is a structural rejection at the definition validator, not a tolerated unknown.
+- **Predicate bounds (unit).** A predicate exceeding depth 8 or 64 terms, or a set operand over 64 members / 256 bytes per member, is rejected before evaluation.
+- **Predicate evaluation determinism (unit).** Evaluate one definition over a fixed asset set (assets in sorted `asset_id` order) across runs and platforms; assert byte-identical membership — the grouping-convergence guarantee.
+- **Forward `predicate_schema` preserve-not-drop (unit).** A definition with `predicate_schema = N+1` loaded on a `max_known = N` client is preserved verbatim through a sync round-trip and is never evaluated or stripped.
+- **AI-term staleness (unit).** A `tags_ai`/`people_cluster` term whose queried `(model_id, model_version)` slot changed evaluates as stale-excluded, mirroring the `tags_ai` staleness rule.
 
 The cross-module case — full lifecycle including stack creation, member edit, soft delete, restore, and final hard purge — is one bounded E2E case in [Module Map](/design/module-map/#e2e-test-surface).

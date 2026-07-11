@@ -178,7 +178,39 @@ We encrypt the **operations**, not the resulting state. Merges are then commutat
 
 Each operation carries the same `prior_provenance_hash` chain link as any [lifecycle action](/design/authorization/#the-closed-action-set), so a metadata-update is provenance-tracked exactly like a create or delete.
 
-The same encrypted-operation path also carries each album's [album-group assertion](/design/federation/#the-album-group-assertion) (schema owned by Federation) and the per-owner **library-settings document** — [smart-album](/design/organization/#system--smart-albums-views) definitions (predicate + display name) and similar client-authored organizational state — synced and merged across devices like any other collaborative metadata, and never legible to the server. (The [default-album](/design/organization/#the-default-album) *designation* is separate: a non-secret server-side owner pointer, not part of this encrypted document.)
+The same encrypted-operation path also carries each album's [album-group assertion](/design/federation/#the-album-group-assertion) (schema owned by Federation) and the per-owner **library-settings document** — [smart-album](/design/organization/#system--smart-albums-views) definitions (predicate + display name) and similar client-authored organizational state — synced and merged across devices like any other collaborative metadata, and never legible to the server. Its concrete schema is [The Library-Settings Document](#the-library-settings-document) below. (The [default-album](/design/organization/#the-default-album) *designation* is separate: a non-secret server-side owner pointer, not part of this encrypted document.)
+
+### The Library-Settings Document
+
+The per-owner state the [operation path](#how-operations-travel) carries above is one concrete, versioned CBOR document — the **library-settings document**. This doc owns its *envelope, versioning, keying, and merge discipline*; the schema of each section it carries is owned by the domain that owns that surface, linked below and never restated here.
+
+**Logical shape.** The reconciled document is:
+
+```rust
+LibrarySettingsV1 {
+  settings_schema:          u16,  // FIELD 0 — readable before parsing the rest. Currently 1.
+  smart_albums:             Map<UUIDv7,     Lww<Option<SmartAlbumDefinition>>>,  // schema owned by Organization
+  scope_overrides:          Map<scope_id,   Lww<Option<album_id>>>,             // rows + grammar owned by Organization — Scope Grammar
+  source_kind_defaults:     Map<SourceKind, Lww<Option<album_id>>>,             // per-source-kind default rows (Organization — Scope Grammar)
+  aggregated_album_covers:  Map<group_id,   Lww<Option<asset_id>>>,             // per-viewer cover; semantics owned by Federation
+  _unknown:                 Map,   // unknown CBOR keys preserved verbatim, never executed
+}
+```
+
+Every section is a **keyed map of LWW registers over `Option<value>`**: a value sets the entry, a stamped `None` is a tombstone (deleting a smart album, clearing a scope mapping, resetting a cover to its fallback), so every mutation is one LWW write and converges exactly like [`stack_membership`](#collaborative-metadata). Unlike a sidecar the document carries **no** `signature` field of its own — it is not content-addressed by a manifest; each mutation is instead a signed operation on the operation path (below), and the reconciled document is the local source of truth those operations rebuild.
+
+- **`smart_albums`** — each value is a [`SmartAlbumDefinition`](/design/organization/#smart-album-definition-schema) (predicate + display name); the closed predicate grammar and its `predicate_schema` versioning are owned by [Organization](/design/organization/#smart-album-definition-schema).
+- **`scope_overrides` / `source_kind_defaults`** — the `scope_id → album_id` and per-`SourceKind` default rows whose grammar and resolution order are owned by [Organization — Scope Grammar](/design/organization/#scope-grammar-local-source--album-mapping). This document is only their transport and storage.
+- **`aggregated_album_covers`** — a per-viewer `group_id → asset_id` choice for an [aggregated album](/design/federation/#federated-shared-albums-aggregated-albums); `None`/absent falls back to the newest constituent asset. Deliberately per-viewer, never shared state — the rendering semantics are owned by [Federation](/design/federation/#membership-and-rendering).
+
+**Keying (per-owner, not per-album).** The document is readable by all of the owner's devices and owner-set members and by **no** album co-member, so it is keyed under the [Owner Group Key](/design/cryptography/keys/#owner-group-keys-ogks) — *not* an AMK. Its logical identity `settings_doc_id` is derived from the [account master key](/design/cryptography/keys/#key-chain) under a dedicated `info` label — an *identifier*, not a key, the same discipline as the [default album](/design/organization/#the-default-album)'s id — so any enrolled device recomputes it from the master key alone, even after recovery. Operations are sealed with the standalone-AEAD [metadata-blob wire format](/design/cryptography/encryption/#metadata-blob-wire-format), with two substitutions this doc pins: the key is `HKDF-SHA512(ikm = OGK_v{n}, salt = settings_doc_id || nonce, info = "library-settings/v1", length = 32)`, and a server-visible `ogk_version` (big-endian `u32`) precedes the nonce to select the OGK epoch — the OGK analogue of a manifest's `amk_version`. The fresh per-operation `nonce` folded into the salt re-rolls **both** key and nonce on every write (a reused `nonce` is refused), exactly as for a [metadata rewrite](/design/cryptography/encryption/#metadata-blob-wire-format). A member removed from the owner set derives no future OGK epoch and is dropped from future reads/writes by [OGK revocation](/design/cryptography/keys/#owner-group-keys-ogks); a rewrite always uses the current epoch and is never re-encrypted on an epoch bump alone.
+
+**Encoding & versioning.** The plaintext is [canonical CBOR](#canonical-cbor-encoding) — the same byte-exact ruleset as the sidecar, so `settings_schema` sorts first as CBOR field 0 and `_unknown` keys re-sort into canonical order and survive round-trips. Versioning mirrors the [sidecar rules](#schema-versioning-rules):
+
+- A client whose `max_known_settings_schema < settings_schema` **refuses to write** the document (refuse-by-default); reading is allowed only in explicitly opted-in read-only mode. An old client cannot strip-and-rewrite a newer document.
+- Section value schemas version **independently and forward-compatibly**: a `SmartAlbumDefinition` carries its own `predicate_schema` (owned by Organization). A definition whose `predicate_schema` exceeds the reader's maximum is **preserved verbatim and never evaluated** — surfaced as "created by a newer app version," never stripped — so it survives sync round-trips intact (the [never-strip rule](/design/threat-model/schema-rules/#forbidden-client-behaviors)). Unknown top-level keys land in `_unknown` under the same rule.
+
+**How it travels & merges.** The document rides the [operation path](#how-operations-travel): each mutation is a device-signed, OGK-sealed operation naming `(section, key, stamped value)` and carrying the `prior_provenance_hash` chain link, so a settings edit is provenance-tracked like a `metadata-update`. Merge is **field-wise** — each section map merges its entries independently as LWW registers keyed by `(ts, device_id)`, with no cross-field invariants, so any arrival order converges (the [grouping-convergence requirement](#grouping-convergence-requirement)). The server stores only ciphertext plus the server-visible `ogk_version` and never learns any section's meaning.
 
 ### Grouping Convergence (Requirement)
 
@@ -224,6 +256,11 @@ The sidecar schema is the contract; validation focuses on serde determinism + CR
 - **Datum verbatim storage (unit).** A GCJ-02 input round-trips unconverted with `datum = gcj02`; a BD-09 input asserts the exact fold to GCJ-02; a WGS-84 write asserts `datum` is wire-absent and the encoded sidecar is byte-identical to the pre-`datum` vector.
 - **Local–server metadata equivalence (unit).** Seal a sidecar into a metadata blob; assert that decrypting it is byte-identical to the signed sidecar and that the blob's content hash equals the manifest's `metadata_blob_hash`. Mutate the local sidecar by one byte; assert the round-trip check rejects it rather than persisting a divergent copy.
 - **Concurrent-edit reconciliation (smoke).** Two test clients edit the same album offline; merge over MLS; assert convergence with no manual conflict resolution needed.
+- **Library-settings field-0 + refuse-by-default (unit).** Construct a [library-settings document](#the-library-settings-document) with `settings_schema = N+1`; load on a `max_known = N` client; assert write-refusal; assert `settings_schema` decodes as CBOR field 0 before the rest of the map is parsed.
+- **Library-settings OGK keying (unit).** Seal the document under the owner's OGK; assert every owner-set device decrypts it and an album co-member *not* in the owner set cannot; assert a member removed from the owner set cannot derive the post-removal `ogk_version`.
+- **`settings_doc_id` derivation determinism (unit).** Recompute `settings_doc_id` from the master key on a second device and after recovery; assert byte-identical, and that the derivation yields an identifier, never a usable key.
+- **Library-settings wire-format + rewrite re-roll (unit).** Assert the sealed document matches the standalone-AEAD wire format against the shared [canonical-CBOR vectors](#canonical-cbor-encoding); re-seal under the constant `settings_doc_id` and assert both derived key and `nonce` change and a reused `nonce` is refused.
+- **Library-settings field-wise merge convergence (unit).** Generate concurrent edits and delete-tombstones to `smart_albums`, `scope_overrides`, and `aggregated_album_covers` from N devices; merge in every permutation; assert byte-identical reconciled state.
 
 Cross-module case: metadata edited on device A → synced via server → applied on device B with correct CRDT merge. Bounded E2E surface in [Module Map](/design/module-map/#e2e-test-surface).
 
