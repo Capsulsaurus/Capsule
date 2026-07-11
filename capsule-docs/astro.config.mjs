@@ -41,6 +41,7 @@ export default defineConfig({
                             slug: 'guides/getting-started',
                         },
                         { slug: 'guides/self-hosting' },
+                        { slug: 'guides/google-photos-migration' },
                     ],
                 },
                 {

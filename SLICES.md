@@ -133,7 +133,7 @@ its slice.
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
-| S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | ready   |
+| S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | done*   |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only ordering.
 `blocked` = a dependency (or an upstream project) gates the start, not review priority.
@@ -1453,3 +1453,9 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
 - **Done when:** the Google Photos guide is published and its steps round-trip
   against a real Takeout archive; `mise run check-docs` green.
 - **Tier:** docs build.
+- **Landed (done\* — real-archive round-trip owed):** the guide is published,
+  honest about today's surface (generic `capsule import`; originals + embedded
+  EXIF + dedup ship; Google-specific enrichment deferred). The round-trip is
+  fixture-proven (S-B6's 17 tests vs the real planner/executor). Gap surfaced:
+  the S-B6 `TakeoutAdapter` is not wired to any CLI command (no `--provider`) —
+  that wiring + a real-archive round-trip flips this to `done`.
