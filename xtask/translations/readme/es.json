@@ -1,0 +1,346 @@
+[
+  {
+    "source": "# Capsule",
+    "target": "# Capsule"
+  },
+  {
+    "source": "Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.",
+    "target": "Servicio de gestión y uso compartido de fotos de código abierto, federado y cifrado E2E, creado para profesionales y prosumidores."
+  },
+  {
+    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.",
+    "target": "> Aviso: Este proyecto continúa en desarrollo activo. ¡Dale una estrella a este repositorio para recibir las últimas actualizaciones!\n>\n> Estado alfa: La rama `master` es la rama principal de desarrollo. Se publicarán versiones en GitHub una vez que: 1. Las funciones/API se hayan estabilizado internamente; 2. El grupo de pruebas interno las haya probado lo suficiente.\n>\n> Actualización del proyecto (abril de 2026): Estamos migrando al cifrado E2E y a la filosofía offline-first, por lo que faltarán algunos meses más para volver a alcanzar la fase alfa.\n> Actualización del proyecto (junio de 2026): El desarrollador sigue trabajando activamente, pero solo en su tiempo libre. Gran parte del trabajo previo necesario para establecer bibliotecas Rust puras y portables en repositorios independientes ha sido un cuello de botella (por ejemplo, la codificación/decodificación de imágenes, el procesamiento de metadatos, la lógica de geocoordenadas y los modelos de ML en el dispositivo ajustados para casos de uso concretos). Sin embargo, desarrollar estos componentes básicos que faltan en el ecosistema Rust es fundamental para lograr un producto sólido."
+  },
+  {
+    "source": "## Features",
+    "target": "## Características"
+  },
+  {
+    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
+    "target": "- **Nativo y multiplataforma**: Capsule está disponible en todas las plataformas de escritorio y móviles habituales. Son rápidas y nativas en todas ellas."
+  },
+  {
+    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
+    "target": "- **La mayor compatibilidad de formatos**: Capsule admite la mayoría de los formatos de imagen y video, desde los habituales en smartphones hasta los formatos RAW profesionales. ¡Visualiza cualquier contenido en cualquier dispositivo, igual que las fotos y videos de tu smartphone!"
+  },
+  {
+    "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
+    "target": "- **Los datos siempre están optimizados**: Capsule almacena en caché y optimiza rigurosamente cualquier contenido pesado para una entrega fluida (nuestra metodología está [documentada](https://capsule.justinchung.net/design/thumbnails/)). Si algo te parece lento, avísanos."
+  },
+  {
+    "source": "- **Privacy**: Your data is yours and end-to-end encrypted.",
+    "target": "- **Privacidad**: Tus datos son tuyos y están cifrados de extremo a extremo."
+  },
+  {
+    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
+    "target": "- **Acceso con todas las funciones**: Capsule implementa varias funciones potentes, como la visualización en tiempo real, la búsqueda semántica, la organización con IA y mucho más."
+  },
+  {
+    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
+    "target": "- **Federado**: Los usuarios de Capsule pueden compartir sus archivos con usuarios de otros servidores sin problemas. Piénsalo como [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) para fotos."
+  },
+  {
+    "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
+    "target": "- **Código abierto**: Capsule es de código abierto para siempre y puedes alojar tu propio servidor."
+  },
+  {
+    "source": "## Is Capsule for you?",
+    "target": "## ¿Capsule es para ti?"
+  },
+  {
+    "source": "Capsule is highly refined for photographers and prosumers who want to store and share their photos nearly as seamlessly as do cloud photo services that do not necessarily work on all your devices equally as well and own your data.",
+    "target": "Capsule está muy pulido para fotógrafos y prosumidores que quieren almacenar y compartir sus fotos casi con la misma fluidez que los servicios de fotos en la nube, que no necesariamente funcionan igual de bien en todos tus dispositivos y que son dueños de tus datos."
+  },
+  {
+    "source": "We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.",
+    "target": "Implementamos requisitos estrictos de seguridad y privacidad partiendo del supuesto de que cualquier dato almacenado puede ser visto por partes no autorizadas. Por ello, todo se cifra de extremo a extremo y se procesa localmente."
+  },
+  {
+    "source": "However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!",
+    "target": "Sin embargo, es importante señalar que (al menos por ahora) Capsule requiere un servidor **autoalojado**, lo que exige ciertos conocimientos técnicos. No se trata de una solución llave en mano, sino de un proyecto de código abierto capaz y desarrollado activamente. Se creó por pasión, así que yo (como autor) no pido ninguna compensación económica. ¡La mejor forma de compensación son las contribuciones técnicas y los comentarios!"
+  },
+  {
+    "source": "## Screenshots",
+    "target": "## Capturas de pantalla"
+  },
+  {
+    "source": "## Who is Capsule for?",
+    "target": "## ¿Para quién es Capsule?"
+  },
+  {
+    "source": "- **Photographers**: Capsule is designed for photographers who want to store and share their photos with clients and peers.",
+    "target": "- **Fotógrafos**: Capsule está diseñado para fotógrafos que quieren almacenar y compartir sus fotos con clientes y colegas."
+  },
+  {
+    "source": "- **Families and friends**: Capsule is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.",
+    "target": "- **Familias y amigos**: Capsule está diseñado para prosumidores que quieren almacenar y compartir sus fotos y videos entre sí con calidad completa, incluidos los metadatos."
+  },
+  {
+    "source": "- **Organizations**: Organizations can use Capsule to share full-quality photos and videos with their members and clients.",
+    "target": "- **Organizaciones**: Las organizaciones pueden usar Capsule para compartir fotos y videos de calidad completa con sus miembros y clientes."
+  },
+  {
+    "source": "- **People who care about privacy**: Capsule implements the best of privacy and security practices and leaves the data in your hands.",
+    "target": "- **Personas que valoran la privacidad**: Capsule implementa las mejores prácticas de privacidad y seguridad y deja los datos en tus manos."
+  },
+  {
+    "source": "### Who is Capsule not for?",
+    "target": "### ¿Para quién no es Capsule?"
+  },
+  {
+    "source": "This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Capsule might not be for you.",
+    "target": "Esto es una elección personal, pero si estás satisfecho con servicios existentes como Google Photos o iCloud, o con enviar contenido muy comprimido a través de aplicaciones de mensajería, puede que Capsule no sea para ti."
+  },
+  {
+    "source": "## Some similar alternatives",
+    "target": "## Algunas alternativas similares"
+  },
+  {
+    "source": "- **Google Photos or similar**: Google Photos is a great service for storing and sharing photos and videos. However, it compresses and strips metadata from your photos and videos by default, and does not support many more professional or non-smartphone formats.",
+    "target": "- **Google Photos o similares**: Google Photos es un excelente servicio para almacenar y compartir fotos y videos. Sin embargo, de forma predeterminada comprime tus fotos y videos y elimina sus metadatos, y no admite muchos formatos más profesionales o ajenos a los smartphones."
+  },
+  {
+    "source": "- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Capsule should offer a much more comfortable experience.",
+    "target": "- **AirDrop, Quick Share o alguna aplicación de mensajería**: Estas opciones son excelentes para compartir fotos y videos rápidamente, pero comprimen el contenido, tienen límites de tamaño y/o no lo almacenan para un acceso a largo plazo. Si tienes más de unos pocos gigabytes de contenido, Capsule debería ofrecer una experiencia mucho más cómoda."
+  },
+  {
+    "source": "## Getting Started",
+    "target": "## Primeros pasos"
+  },
+  {
+    "source": "[See our docs](https://capsule.justinchung.net/guides/getting-started/).",
+    "target": "[Consulta nuestra documentación](https://capsule.justinchung.net/guides/getting-started/)."
+  },
+  {
+    "source": "### Features Relevant to New Users",
+    "target": "### Funciones relevantes para nuevos usuarios"
+  },
+  {
+    "source": "*Note: This section is being updated on the development branch.*",
+    "target": "*Nota: Esta sección se está actualizando en la rama de desarrollo.*"
+  },
+  {
+    "source": "- Official tools for bulk imports: Capsule was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)",
+    "target": "- Herramientas oficiales para importaciones masivas: Capsule se creó para admitir importaciones masivas (TB+) sobre la marcha. Se encarga de la deduplicación, la organización masiva, etc. por ti. (Sin embargo, para bibliotecas ya existentes, se recomienda usar la CLI)."
+  },
+  {
+    "source": "- Native clients with native features: Sometimes you want to backup your content on particular platforms that require platform-specific APIs (e.g. iOS). If we have a native client for you, it will be using the latest APIs available in that ecosystem.",
+    "target": "- Clientes nativos con funciones nativas: A veces quieres respaldar tu contenido en plataformas concretas que requieren API específicas de esa plataforma (por ejemplo, iOS). Si disponemos de un cliente nativo para ti, este utilizará las API más recientes disponibles en ese ecosistema."
+  },
+  {
+    "source": "- Performance-oriented architecture: Capsule is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.",
+    "target": "- Arquitectura orientada al rendimiento: Capsule se centra en ofrecer un backend robusto y seguro para almacenar tus datos más importantes, y puedes estar seguro de que, sea cual sea la gran colección que tengas, se procesará con todo el hardware que le proporciones."
+  },
+  {
+    "source": "## Development",
+    "target": "## Desarrollo"
+  },
+  {
+    "source": "Components:",
+    "target": "Componentes:"
+  },
+  {
+    "source": "- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)",
+    "target": "- [Capsule API](capsule-api/README.md): Varios servicios de API (HTTP, gRPC, GraphQL, WebSockets, etc.)"
+  },
+  {
+    "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
+    "target": "- [Capsule Web](capsule-web/README.md) (en curso): Cliente web en React"
+  },
+  {
+    "source": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic",
+    "target": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Biblioteca multiplataforma Kotlin compartida para la lógica específica de cada cliente"
+  },
+  {
+    "source": "- [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client",
+    "target": "- [Capsule Desktop](capsule-desktop/README.md) (planeado): Cliente de escritorio para Windows/Linux"
+  },
+  {
+    "source": "- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App",
+    "target": "- [Capsule Android](capsule-android/README.md) (en curso): Aplicación en Jetpack Compose"
+  },
+  {
+    "source": "- [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS",
+    "target": "- [Capsule Swift](capsule-swift/README.md): Cliente en SwiftUI para iOS/macOS"
+  },
+  {
+    "source": "- Capsule Media: media decode/encode utilities, folded into `capsule-core` as the `media` module (behind the `media` feature)",
+    "target": "- Capsule Media: utilidades de decodificación/codificación multimedia, integradas en `capsule-core` como el módulo `media` (detrás de la funcionalidad `media`)"
+  },
+  {
+    "source": "- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)",
+    "target": "- [Capsule Docs](capsule-docs/README.md): Sitio web de documentación en Starlight (Astro)"
+  },
+  {
+    "source": "External dependencies:",
+    "target": "Dependencias externas:"
+  },
+  {
+    "source": "- [PostgreSQL](https://www.postgresql.org/)",
+    "target": "- [PostgreSQL](https://www.postgresql.org/)"
+  },
+  {
+    "source": "- [MinIO](https://min.io/)",
+    "target": "- [MinIO](https://min.io/)"
+  },
+  {
+    "source": "- [RabbitMQ](https://www.rabbitmq.com/)",
+    "target": "- [RabbitMQ](https://www.rabbitmq.com/)"
+  },
+  {
+    "source": "- [Memcached](https://memcached.org/)",
+    "target": "- [Memcached](https://memcached.org/)"
+  },
+  {
+    "source": "- [Envoy](https://github.com/envoyproxy/envoy)",
+    "target": "- [Envoy](https://github.com/envoyproxy/envoy)"
+  },
+  {
+    "source": "- [Istio](https://github.com/istio/istio)",
+    "target": "- [Istio](https://github.com/istio/istio)"
+  },
+  {
+    "source": "Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:",
+    "target": "Dado el conjunto de tecnologías utilizadas, es posible que tengas que cambiar entre varios IDE para desarrollar distintas partes del proyecto. Esto es lo que recomendamos:"
+  },
+  {
+    "source": "- `capsule-android`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-android`: Android Studio o IntelliJ IDEA con complementos"
+  },
+  {
+    "source": "- `capsule-api`: VS Code or similar",
+    "target": "- `capsule-api`: VS Code o similar"
+  },
+  {
+    "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-core-kotlin`: Android Studio o IntelliJ IDEA con complementos"
+  },
+  {
+    "source": "- `capsule-desktop`: VS Code or similar",
+    "target": "- `capsule-desktop`: VS Code o similar"
+  },
+  {
+    "source": "- `capsule-docs`: VS Code or similar",
+    "target": "- `capsule-docs`: VS Code o similar"
+  },
+  {
+    "source": "- `capsule-core` (media module): VS Code or similar",
+    "target": "- `capsule-core` (módulo media): VS Code o similar"
+  },
+  {
+    "source": "- `capsule-swift`: Xcode",
+    "target": "- `capsule-swift`: Xcode"
+  },
+  {
+    "source": "- `capsule-web`: VS Code or similar",
+    "target": "- `capsule-web`: VS Code o similar"
+  },
+  {
+    "source": "### Setup",
+    "target": "### Configuración"
+  },
+  {
+    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) pins the shared dev tooling (`just`, `lefthook`, `convco`) and [just](https://just.systems) is the task runner that ties the per-language tasks together (`just check`, `just build`, etc.). Various tools will need to be setup based on services you need to work on.",
+    "target": "Este es un monorepo políglota (5 o más lenguajes de programación: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), por lo que cada lenguaje usa su propia cadena de herramientas en lugar de un único sistema de compilación unificado. [mise](https://mise.jdx.dev) fija las herramientas de desarrollo compartidas (`just`, `lefthook`, `convco`) y [just](https://just.systems) es el ejecutor de tareas que une las tareas específicas de cada lenguaje (`just check`, `just build`, etc.). Deberás configurar varias herramientas según los servicios en los que necesites trabajar."
+  },
+  {
+    "source": "Setup in the following order:",
+    "target": "Configúralo en el siguiente orden:"
+  },
+  {
+    "source": "- Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.",
+    "target": "- Instala [mise](https://mise.jdx.dev) y ejecuta `mise install` desde la raíz del repositorio para obtener las herramientas compartidas fijadas."
+  },
+  {
+    "source": "- Install the git hooks with `just hooks-install`.",
+    "target": "- Instala los hooks de git con `just hooks-install`."
+  },
+  {
+    "source": "- Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>",
+    "target": "- Configura todas las herramientas necesarias relacionadas con Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>"
+  },
+  {
+    "source": "- Setup each of the following tools in the Development sections of each component's README.",
+    "target": "- Configura cada una de las siguientes herramientas en las secciones de Desarrollo del README de cada componente."
+  },
+  {
+    "source": "### Style and Guidelines",
+    "target": "### Estilo y directrices"
+  },
+  {
+    "source": "- Due to the numerous languages in this monorepo, we use multiple linters/formatters, each native to each language/technology. CI/CD will enforce these and it is recommended to use the same tools in the IDE of your choice to reduce merge conflicts. (Also, all code is standardized to 4 spaces as some languages have specific guidelines while others (e.g. TypeScript) have mixed guides.)",
+    "target": "- Debido a los numerosos lenguajes de este monorepo, usamos múltiples linters/formateadores, cada uno nativo de su lenguaje/tecnología. La CI/CD los hará cumplir, y se recomienda usar las mismas herramientas en el IDE que elijas para reducir los conflictos de fusión. (Además, todo el código está estandarizado a 4 espacios, ya que algunos lenguajes tienen directrices específicas mientras que otros, como TypeScript, tienen guías mixtas)."
+  },
+  {
+    "source": "## Issue Reporting",
+    "target": "## Reporte de incidencias"
+  },
+  {
+    "source": "GitHub Issues is the only accepted method of technical issue reporting. For assistance on setup, we recommend opening a GitHub Discussion (for visibility).",
+    "target": "GitHub Issues es el único método aceptado para reportar incidencias técnicas. Para obtener ayuda con la configuración, recomendamos abrir una GitHub Discussion (para mayor visibilidad)."
+  },
+  {
+    "source": "> Note on third-party clients and scripts: This is outside the scope of the project but if there is missing functionality that led to resorting to external solutions, we highly encourage you to submit a feature request!",
+    "target": "> Nota sobre clientes y scripts de terceros: Esto queda fuera del alcance del proyecto, pero si hay alguna funcionalidad faltante que te llevó a recurrir a soluciones externas, te animamos encarecidamente a enviar una solicitud de función."
+  },
+  {
+    "source": "## FAQ",
+    "target": "## Preguntas frecuentes"
+  },
+  {
+    "source": "**Q: Why may Capsule be more suitable than other open-source solutions?**",
+    "target": "**P: ¿Por qué podría Capsule ser más adecuado que otras soluciones de código abierto?**"
+  },
+  {
+    "source": "A: Capsule is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.",
+    "target": "R: Capsule está diseñado desde cero teniendo en cuenta el rendimiento, la usabilidad y la compatibilidad. Aunque alojarlo requiere cierta configuración inicial (toda ella cuidadosamente documentada), contamos, con diferencia, con la compatibilidad de formatos más completa y con capacidades de visualización en tiempo real. Probamos exhaustivamente las combinaciones de hardware y software compatibles y publicamos nuevas funciones en la versión estable de forma conservadora. Debería ser una excelente opción para quienes tienen grandes cantidades de contenido y quieren un único panel para gestionar todos sus archivos desde cualquier dispositivo."
+  },
+  {
+    "source": "**Q: Why not extend off existing open-source solutions?**",
+    "target": "**P: ¿Por qué no ampliar soluciones de código abierto ya existentes?**"
+  },
+  {
+    "source": "A: While there are multiple great open-source solutions, they lack a lot of the involved functions that professionals and prosumers need. For prosumers interested in an open-source and self-hosted solution, we have a robust, and highly scalable solution. For professionals looking to host all their assets in a seamless and integrated service, we have a solution that may be a better fit than some proprietary options.",
+    "target": "R: Aunque existen varias soluciones de código abierto excelentes, carecen de muchas de las funciones complejas que necesitan los profesionales y los prosumidores. Para los prosumidores interesados en una solución de código abierto y autoalojada, ofrecemos una solución robusta y altamente escalable. Para los profesionales que buscan alojar todos sus archivos en un servicio integrado y sin fricciones, ofrecemos una solución que puede ajustarse mejor que algunas opciones propietarias."
+  },
+  {
+    "source": "Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.\n**Q: For the API, were languages other than Rust considered?**",
+    "target": "Nota adicional: Al autor original le encanta el código abierto y ha contribuido a varios proyectos. El motivo para empezar desde cero es que muchas de las decisiones técnicas necesarias para lograr los objetivos de experiencia de usuario y rendimiento requieren múltiples decisiones de diseño críticas.\n**P: Para la API, ¿se consideraron otros lenguajes además de Rust?**"
+  },
+  {
+    "source": "A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into multiple APIs (GraphQL, REST, gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.",
+    "target": "R: Sí, consideramos muchos lenguajes. Algunos otros lenguajes considerados fueron Go, TypeScript y Kotlin/Java. De hecho, el primer PoC fue una única API REST escrita en TypeScript. Sin embargo, el desarrollo actual ha evolucionado hacia múltiples API (GraphQL, REST, gRPC) con la lógica de procesamiento delegada a los clientes de varias plataformas. Rust ofrece tanto los requisitos de seguridad de memoria y rendimiento como la flexibilidad multiplataforma en la que otros lenguajes también pueden destacar. En cuanto a las API, las bibliotecas de Rust también suelen ser más recientes y permitieron optimizaciones específicas de Linux, como el uso de `io_uring` para E/S asíncrona de alto rendimiento. Además, cabe señalar que se adoptan otros lenguajes con otras fortalezas."
+  },
+  {
+    "source": "**Q: How do bugfixes happen?**",
+    "target": "**P: ¿Cómo se gestionan las correcciones de errores?**"
+  },
+  {
+    "source": "A: Even if the best development practices, rigorous testing, and conservative designs, no software is without bugs. Bug reporting and thoughtful feature requests submitted to the issues page would be much appreciated. Certain types of bugs, such as those affecting data integrity, should be marked with the appropriate tags and will be ironed out ASAP. Patches typically roll out to the latest major version and marked in a notice board separate from CHANGELOGs.",
+    "target": "R: Incluso con las mejores prácticas de desarrollo, pruebas rigurosas y diseños conservadores, ningún software está libre de errores. Agradecemos mucho los reportes de errores y las solicitudes de funciones bien pensadas enviadas a la página de incidencias. Ciertos tipos de errores, como los que afectan a la integridad de los datos, deben marcarse con las etiquetas correspondientes y se resolverán lo antes posible. Los parches suelen publicarse en la última versión mayor y se anotan en un tablón de avisos independiente de los CHANGELOG."
+  },
+  {
+    "source": "## How to contribute",
+    "target": "## Cómo contribuir"
+  },
+  {
+    "source": "Capsule primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.",
+    "target": "¡Capsule se beneficia principalmente de las contribuciones activas y los comentarios! En lugar de una donación, lo que realmente necesitamos es más manos. Consulta [CONTRIBUTING.md](./CONTRIBUTING.md) para más detalles."
+  },
+  {
+    "source": "### Contributor License Agreement (CLA)",
+    "target": "### Acuerdo de licencia de colaborador (CLA)"
+  },
+  {
+    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
+    "target": "Exigimos que todos los colaboradores firmen un CLA. Esto garantiza que el proyecto mantenga la flexibilidad legal necesaria para asegurar financiación futura y un equipo de mantenimiento dedicado, garantizando que el software siga contando con soporte activo y sea autosuficiente durante las próximas décadas."
+  },
+  {
+    "source": "## License",
+    "target": "## Licencia"
+  },
+  {
+    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
+    "target": "Capsule se distribuye bajo la [Licencia AGPL-3.0](LICENSE)."
+  }
+]

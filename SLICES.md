@@ -128,7 +128,7 @@ its slice.
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
-| S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | ready   |
+| S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
 | S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
@@ -1422,6 +1422,12 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
 - **Done when:** every non-source locale has a committed translation; mutating a
   source segment makes `--check` fail; segmentation has golden tests.
 - **Tier:** Unit (segmentation goldens) + Smoke.
+- **Landed:** lossless tiling segmentation (goldens incl. code/link/badge
+  passthrough + protected inline spans); glossary-pinned; `TranslationBackend`
+  seam (`FileBackend` serves committed per-locale data; `--api` is the hermetic
+  future-LLM hook); twelve committed `README.<lang>.md` with fingerprint banners;
+  `translate-readme-check` wired into `check-rust` after `i18n-check`;
+  drift proven end-to-end (source mutation → exit 1).
 
 ## Lane X — blocked on upstream
 

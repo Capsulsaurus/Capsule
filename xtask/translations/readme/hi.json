@@ -1,0 +1,346 @@
+[
+  {
+    "source": "# Capsule",
+    "target": "# Capsule"
+  },
+  {
+    "source": "Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.",
+    "target": "पेशेवरों और प्रोज़्यूमर के लिए बनाई गई एक ओपन-सोर्स, फ़ेडरेटेड, E2E एन्क्रिप्टेड फ़ोटो प्रबंधन और साझाकरण सेवा।"
+  },
+  {
+    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.",
+    "target": "> अस्वीकरण: यह प्रोजेक्ट अभी भी सक्रिय विकास में है। नवीनतम अपडेट पाने के लिए इस रिपॉज़िटरी को स्टार करें!\n>\n> अल्फा स्थिति: `master` ब्रांच मुख्य डेवलपमेंट ब्रांच है। GitHub पर रिलीज़ तभी की जाएंगी जब: 1. फ़ीचर्स/API आंतरिक रूप से स्थिर हो चुके हों; 2. आंतरिक परीक्षण समूह ने पर्याप्त परीक्षण कर लिया हो।\n>\n> प्रोजेक्ट अपडेट (अप्रैल 2026): हम E2E एन्क्रिप्शन और ऑफ़लाइन-फर्स्ट दर्शन की ओर पोर्ट कर रहे हैं, इसलिए अल्फा तक फिर से पहुँचने में अभी कुछ और महीने लगेंगे।\n> प्रोजेक्ट अपडेट (जून 2026): डेवलपर अभी भी सक्रिय रूप से काम कर रहा है, लेकिन केवल खाली समय में। अलग रिपॉज़िटरी में पोर्टेबल, शुद्ध Rust लाइब्रेरी स्थापित करने से जुड़े कई नए आवश्यक कार्यों ने रुकावट पैदा की है (जैसे इमेज एन्कोडिंग/डिकोडिंग, मेटाडेटा प्रोसेसिंग, जियोकोऑर्डिनेट लॉजिक, उपयोग के मामलों के लिए फाइन-ट्यून किए गए ऑन-डिवाइस ML मॉडल)। हालांकि, Rust इकोसिस्टम में इन गायब बिल्डिंग ब्लॉक्स को विकसित करना एक मज़बूत उत्पाद के लिए सर्वोपरि है।"
+  },
+  {
+    "source": "## Features",
+    "target": "## विशेषताएं"
+  },
+  {
+    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
+    "target": "- **नेटिव और क्रॉस-प्लेटफ़ॉर्म**: Capsule सभी सामान्य डेस्कटॉप और मोबाइल प्लेटफ़ॉर्म पर उपलब्ध है। यह सभी पर तेज़ और नेटिव है।"
+  },
+  {
+    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
+    "target": "- **सबसे व्यापक फ़ॉर्मेट समर्थन**: Capsule सामान्य स्मार्टफ़ोन में उपयोग होने वाले फ़ॉर्मेट से लेकर पेशेवर RAW फ़ॉर्मेट तक, अधिकांश इमेज और वीडियो फ़ॉर्मेट का समर्थन करता है। किसी भी डिवाइस पर किसी भी कंटेंट को अपने स्मार्टफ़ोन की फ़ोटो और वीडियो की तरह ही देखें!"
+  },
+  {
+    "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
+    "target": "- **डेटा हमेशा ऑप्टिमाइज़्ड है**: निर्बाध डिलीवरी के लिए Capsule किसी भी भारी कंटेंट को कठोरता से कैश और ऑप्टिमाइज़ करता है (हमारी पद्धति [दस्तावेज़ीकृत](https://capsule.justinchung.net/design/thumbnails/) है)। यदि कुछ धीमा लगे, तो हमें बताएं।"
+  },
+  {
+    "source": "- **Privacy**: Your data is yours and end-to-end encrypted.",
+    "target": "- **गोपनीयता**: आपका डेटा आपका है और एंड-टू-एंड एन्क्रिप्टेड है।"
+  },
+  {
+    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
+    "target": "- **पूर्ण-सुविधा युक्त पहुंच**: Capsule रीयल-टाइम व्यूइंग, सिमेंटिक सर्च, AI ऑर्गनाइज़ेशन और भी बहुत कुछ जैसी कई शक्तिशाली सुविधाएं लागू करता है।"
+  },
+  {
+    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
+    "target": "- **फ़ेडरेटेड**: Capsule उपयोगकर्ता अपनी संपत्तियों को अन्य सर्वरों के उपयोगकर्ताओं के साथ निर्बाध रूप से साझा कर सकते हैं। इसे फ़ोटो के लिए [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) की तरह समझें।"
+  },
+  {
+    "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
+    "target": "- **ओपन-सोर्स**: Capsule हमेशा के लिए ओपन-सोर्स है और आप अपना खुद का सर्वर होस्ट कर सकते हैं।"
+  },
+  {
+    "source": "## Is Capsule for you?",
+    "target": "## क्या Capsule आपके लिए है?"
+  },
+  {
+    "source": "Capsule is highly refined for photographers and prosumers who want to store and share their photos nearly as seamlessly as do cloud photo services that do not necessarily work on all your devices equally as well and own your data.",
+    "target": "Capsule उन फ़ोटोग्राफ़रों और प्रोज़्यूमर के लिए अत्यधिक परिष्कृत है जो अपनी फ़ोटो को उतनी ही निर्बाध रूप से संग्रहीत और साझा करना चाहते हैं जितना क्लाउड फ़ोटो सेवाएं करती हैं, जो ज़रूरी नहीं कि आपके सभी डिवाइस पर समान रूप से अच्छी तरह काम करें और जो आपके डेटा की मालिक होती हैं।"
+  },
+  {
+    "source": "We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.",
+    "target": "हम इस मान्यता के साथ सख्त सुरक्षा और गोपनीयता आवश्यकताएं लागू करते हैं कि संग्रहीत कोई भी डेटा अनधिकृत पक्षों द्वारा देखा जा सकता है। इसलिए, सब कुछ एंड-टू-एंड एन्क्रिप्टेड है और स्थानीय रूप से प्रोसेस किया जाता है।"
+  },
+  {
+    "source": "However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!",
+    "target": "हालांकि, यह ध्यान रखना महत्वपूर्ण है कि (कम से कम अभी के लिए) Capsule को एक **सेल्फ़-होस्टेड** सर्वर की आवश्यकता होती है जिसके लिए कुछ तकनीकी ज्ञान चाहिए। यह कोई टर्न-की समाधान नहीं है, बल्कि एक सक्षम और सक्रिय रूप से विकसित हो रहा ओपन-सोर्स प्रोजेक्ट है। यह जुनून से बनाया गया था, इसलिए मैं (लेखक के रूप में) किसी भी आर्थिक मुआवज़े की मांग नहीं करता। मुआवज़े का सबसे अच्छा रूप तकनीकी योगदान और फ़ीडबैक है!"
+  },
+  {
+    "source": "## Screenshots",
+    "target": "## स्क्रीनशॉट"
+  },
+  {
+    "source": "## Who is Capsule for?",
+    "target": "## Capsule किसके लिए है?"
+  },
+  {
+    "source": "- **Photographers**: Capsule is designed for photographers who want to store and share their photos with clients and peers.",
+    "target": "- **फ़ोटोग्राफ़र**: Capsule उन फ़ोटोग्राफ़रों के लिए डिज़ाइन किया गया है जो अपनी फ़ोटो को क्लाइंट और साथियों के साथ संग्रहीत और साझा करना चाहते हैं।"
+  },
+  {
+    "source": "- **Families and friends**: Capsule is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.",
+    "target": "- **परिवार और दोस्त**: Capsule उन प्रोज़्यूमर के लिए डिज़ाइन किया गया है जो अपनी फ़ोटो और वीडियो को एक-दूसरे के साथ पूरी गुणवत्ता में, मेटाडेटा सहित, संग्रहीत और साझा करना चाहते हैं।"
+  },
+  {
+    "source": "- **Organizations**: Organizations can use Capsule to share full-quality photos and videos with their members and clients.",
+    "target": "- **संगठन**: संगठन अपने सदस्यों और क्लाइंट के साथ पूरी गुणवत्ता वाली फ़ोटो और वीडियो साझा करने के लिए Capsule का उपयोग कर सकते हैं।"
+  },
+  {
+    "source": "- **People who care about privacy**: Capsule implements the best of privacy and security practices and leaves the data in your hands.",
+    "target": "- **गोपनीयता की परवाह करने वाले लोग**: Capsule सर्वश्रेष्ठ गोपनीयता और सुरक्षा प्रथाओं को लागू करता है और डेटा को आपके हाथों में छोड़ देता है।"
+  },
+  {
+    "source": "### Who is Capsule not for?",
+    "target": "### Capsule किसके लिए नहीं है?"
+  },
+  {
+    "source": "This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Capsule might not be for you.",
+    "target": "यह एक व्यक्तिगत विकल्प है, लेकिन यदि आप Google Photos या iCloud जैसी मौजूदा सेवाओं से, या मैसेजिंग ऐप्स पर अत्यधिक संपीड़ित कंटेंट भेजने से खुश हैं, तो Capsule आपके लिए नहीं हो सकता।"
+  },
+  {
+    "source": "## Some similar alternatives",
+    "target": "## कुछ समान विकल्प"
+  },
+  {
+    "source": "- **Google Photos or similar**: Google Photos is a great service for storing and sharing photos and videos. However, it compresses and strips metadata from your photos and videos by default, and does not support many more professional or non-smartphone formats.",
+    "target": "- **Google Photos या समान**: Google Photos फ़ोटो और वीडियो को संग्रहीत और साझा करने के लिए एक शानदार सेवा है। हालांकि, यह डिफ़ॉल्ट रूप से आपकी फ़ोटो और वीडियो को संपीड़ित करता है और उनका मेटाडेटा हटा देता है, और कई अन्य पेशेवर या गैर-स्मार्टफ़ोन फ़ॉर्मेट का समर्थन नहीं करता।"
+  },
+  {
+    "source": "- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Capsule should offer a much more comfortable experience.",
+    "target": "- **AirDrop, Quick Share या कोई मैसेजिंग ऐप**: ये विकल्प फ़ोटो और वीडियो को जल्दी साझा करने के लिए बेहतरीन हैं, लेकिन ये कंटेंट को संपीड़ित करते हैं, आकार की सीमाएं रखते हैं, और/या इसे दीर्घकालिक पहुंच के लिए संग्रहीत नहीं करते। यदि आपके पास कुछ गीगाबाइट से अधिक कंटेंट है, तो Capsule को कहीं अधिक आरामदायक अनुभव प्रदान करना चाहिए।"
+  },
+  {
+    "source": "## Getting Started",
+    "target": "## शुरुआत करें"
+  },
+  {
+    "source": "[See our docs](https://capsule.justinchung.net/guides/getting-started/).",
+    "target": "[हमारे दस्तावेज़ देखें](https://capsule.justinchung.net/guides/getting-started/)।"
+  },
+  {
+    "source": "### Features Relevant to New Users",
+    "target": "### नए उपयोगकर्ताओं के लिए प्रासंगिक सुविधाएं"
+  },
+  {
+    "source": "*Note: This section is being updated on the development branch.*",
+    "target": "*नोट: यह सेक्शन डेवलपमेंट ब्रांच पर अपडेट किया जा रहा है।*"
+  },
+  {
+    "source": "- Official tools for bulk imports: Capsule was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)",
+    "target": "- बल्क इम्पोर्ट के लिए आधिकारिक टूल: Capsule को बड़े पैमाने पर (TB+) इम्पोर्ट को तुरंत सपोर्ट करने के लिए बनाया गया था। यह आपके लिए डुप्लिकेशन हटाना, बल्क ऑर्गनाइज़ेशन आदि संभालता है। (मौजूदा लाइब्रेरी के लिए, हालांकि, CLI का उपयोग करने की सलाह दी जाती है।)"
+  },
+  {
+    "source": "- Native clients with native features: Sometimes you want to backup your content on particular platforms that require platform-specific APIs (e.g. iOS). If we have a native client for you, it will be using the latest APIs available in that ecosystem.",
+    "target": "- नेटिव सुविधाओं वाले नेटिव क्लाइंट: कभी-कभी आप अपने कंटेंट का बैकअप ऐसे विशेष प्लेटफ़ॉर्म पर लेना चाहते हैं जिनके लिए प्लेटफ़ॉर्म-विशिष्ट API की आवश्यकता होती है (जैसे iOS)। यदि हमारे पास आपके लिए एक नेटिव क्लाइंट है, तो वह उस इकोसिस्टम में उपलब्ध नवीनतम API का उपयोग करेगा।"
+  },
+  {
+    "source": "- Performance-oriented architecture: Capsule is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.",
+    "target": "- प्रदर्शन-उन्मुख आर्किटेक्चर: Capsule आपके सबसे महत्वपूर्ण डेटा को संग्रहीत करने के लिए एक मज़बूत और सुरक्षित बैकएंड प्रदान करने पर केंद्रित है, और आप सुनिश्चित हो सकते हैं कि आपका जो भी बड़ा संग्रह है, उसे आपके द्वारा दिए गए सभी हार्डवेयर के साथ प्रोसेस किया जाएगा।"
+  },
+  {
+    "source": "## Development",
+    "target": "## डेवलपमेंट"
+  },
+  {
+    "source": "Components:",
+    "target": "घटक:"
+  },
+  {
+    "source": "- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)",
+    "target": "- [Capsule API](capsule-api/README.md): विभिन्न API सेवाएं (HTTP, gRPC, GraphQL, WebSockets, आदि)"
+  },
+  {
+    "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
+    "target": "- [Capsule Web](capsule-web/README.md) (निर्माणाधीन): React में वेब क्लाइंट"
+  },
+  {
+    "source": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic",
+    "target": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): क्लाइंट-विशिष्ट लॉजिक के लिए साझा कोर Kotlin मल्टीप्लेटफ़ॉर्म लाइब्रेरी"
+  },
+  {
+    "source": "- [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client",
+    "target": "- [Capsule Desktop](capsule-desktop/README.md) (योजनाबद्ध): Windows/Linux डेस्कटॉप क्लाइंट"
+  },
+  {
+    "source": "- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App",
+    "target": "- [Capsule Android](capsule-android/README.md) (निर्माणाधीन): Jetpack Compose ऐप"
+  },
+  {
+    "source": "- [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS",
+    "target": "- [Capsule Swift](capsule-swift/README.md): iOS/macOS के लिए SwiftUI क्लाइंट"
+  },
+  {
+    "source": "- Capsule Media: media decode/encode utilities, folded into `capsule-core` as the `media` module (behind the `media` feature)",
+    "target": "- Capsule Media: मीडिया डिकोड/एन्कोड यूटिलिटीज़, जिन्हें `capsule-core` में `media` मॉड्यूल के रूप में समाहित किया गया है (`media` फ़ीचर के पीछे)"
+  },
+  {
+    "source": "- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)",
+    "target": "- [Capsule Docs](capsule-docs/README.md): Starlight (Astro) में डॉक्यूमेंटेशन वेबसाइट"
+  },
+  {
+    "source": "External dependencies:",
+    "target": "बाहरी निर्भरताएं:"
+  },
+  {
+    "source": "- [PostgreSQL](https://www.postgresql.org/)",
+    "target": "- [PostgreSQL](https://www.postgresql.org/)"
+  },
+  {
+    "source": "- [MinIO](https://min.io/)",
+    "target": "- [MinIO](https://min.io/)"
+  },
+  {
+    "source": "- [RabbitMQ](https://www.rabbitmq.com/)",
+    "target": "- [RabbitMQ](https://www.rabbitmq.com/)"
+  },
+  {
+    "source": "- [Memcached](https://memcached.org/)",
+    "target": "- [Memcached](https://memcached.org/)"
+  },
+  {
+    "source": "- [Envoy](https://github.com/envoyproxy/envoy)",
+    "target": "- [Envoy](https://github.com/envoyproxy/envoy)"
+  },
+  {
+    "source": "- [Istio](https://github.com/istio/istio)",
+    "target": "- [Istio](https://github.com/istio/istio)"
+  },
+  {
+    "source": "Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:",
+    "target": "उपयोग की गई सभी तकनीकों को देखते हुए, आपको प्रोजेक्ट के विभिन्न हिस्सों को डेवलप करने के लिए IDE के बीच स्विच करना पड़ सकता है। हम यह सुझाव देते हैं:"
+  },
+  {
+    "source": "- `capsule-android`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-android`: प्लगइन्स के साथ Android Studio या IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-api`: VS Code or similar",
+    "target": "- `capsule-api`: VS Code या समान"
+  },
+  {
+    "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-core-kotlin`: प्लगइन्स के साथ Android Studio या IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-desktop`: VS Code or similar",
+    "target": "- `capsule-desktop`: VS Code या समान"
+  },
+  {
+    "source": "- `capsule-docs`: VS Code or similar",
+    "target": "- `capsule-docs`: VS Code या समान"
+  },
+  {
+    "source": "- `capsule-core` (media module): VS Code or similar",
+    "target": "- `capsule-core` (media मॉड्यूल): VS Code या समान"
+  },
+  {
+    "source": "- `capsule-swift`: Xcode",
+    "target": "- `capsule-swift`: Xcode"
+  },
+  {
+    "source": "- `capsule-web`: VS Code or similar",
+    "target": "- `capsule-web`: VS Code या समान"
+  },
+  {
+    "source": "### Setup",
+    "target": "### सेटअप"
+  },
+  {
+    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) pins the shared dev tooling (`just`, `lefthook`, `convco`) and [just](https://just.systems) is the task runner that ties the per-language tasks together (`just check`, `just build`, etc.). Various tools will need to be setup based on services you need to work on.",
+    "target": "यह एक पॉलीग्लॉट मोनोरेपो है (5+ प्रोग्रामिंग भाषाएं: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), इसलिए एक एकीकृत बिल्ड सिस्टम के बजाय हर भाषा अपने नेटिव टूलचेन का उपयोग करती है। [mise](https://mise.jdx.dev) साझा डेव टूलिंग (`just`, `lefthook`, `convco`) को पिन करता है और [just](https://just.systems) वह टास्क रनर है जो प्रति-भाषा टास्क को आपस में जोड़ता है (`just check`, `just build`, आदि)। आपको जिन सेवाओं पर काम करना है, उनके आधार पर विभिन्न टूल सेटअप करने होंगे।"
+  },
+  {
+    "source": "Setup in the following order:",
+    "target": "निम्नलिखित क्रम में सेटअप करें:"
+  },
+  {
+    "source": "- Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.",
+    "target": "- [mise](https://mise.jdx.dev) इंस्टॉल करें और पिन की गई साझा टूलिंग प्राप्त करने के लिए रिपॉज़िटरी रूट से `mise install` चलाएं।"
+  },
+  {
+    "source": "- Install the git hooks with `just hooks-install`.",
+    "target": "- `just hooks-install` के साथ git हुक्स इंस्टॉल करें।"
+  },
+  {
+    "source": "- Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>",
+    "target": "- Kotlin Multiplatform से संबंधित सभी आवश्यक टूल सेटअप करें: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>"
+  },
+  {
+    "source": "- Setup each of the following tools in the Development sections of each component's README.",
+    "target": "- प्रत्येक घटक के README के डेवलपमेंट सेक्शन में दिए गए निम्नलिखित प्रत्येक टूल को सेटअप करें।"
+  },
+  {
+    "source": "### Style and Guidelines",
+    "target": "### शैली और दिशानिर्देश"
+  },
+  {
+    "source": "- Due to the numerous languages in this monorepo, we use multiple linters/formatters, each native to each language/technology. CI/CD will enforce these and it is recommended to use the same tools in the IDE of your choice to reduce merge conflicts. (Also, all code is standardized to 4 spaces as some languages have specific guidelines while others (e.g. TypeScript) have mixed guides.)",
+    "target": "- इस मोनोरेपो में कई भाषाओं के कारण, हम कई लिंटर/फॉर्मेटर का उपयोग करते हैं, जो हर भाषा/तकनीक के लिए नेटिव हैं। CI/CD इन्हें लागू करेगा, और मर्ज कॉन्फ़्लिक्ट कम करने के लिए अपनी पसंद के IDE में समान टूल का उपयोग करने की सलाह दी जाती है। (साथ ही, सभी कोड को 4 स्पेस पर मानकीकृत किया गया है, क्योंकि कुछ भाषाओं के विशिष्ट दिशानिर्देश हैं जबकि अन्य (जैसे TypeScript) के मिश्रित दिशानिर्देश हैं।)"
+  },
+  {
+    "source": "## Issue Reporting",
+    "target": "## समस्या रिपोर्टिंग"
+  },
+  {
+    "source": "GitHub Issues is the only accepted method of technical issue reporting. For assistance on setup, we recommend opening a GitHub Discussion (for visibility).",
+    "target": "तकनीकी समस्या रिपोर्ट करने का एकमात्र स्वीकृत तरीका GitHub Issues है। सेटअप में सहायता के लिए, हम GitHub Discussion खोलने की सलाह देते हैं (दृश्यता के लिए)।"
+  },
+  {
+    "source": "> Note on third-party clients and scripts: This is outside the scope of the project but if there is missing functionality that led to resorting to external solutions, we highly encourage you to submit a feature request!",
+    "target": "> थर्ड-पार्टी क्लाइंट और स्क्रिप्ट पर नोट: यह प्रोजेक्ट के दायरे से बाहर है, लेकिन यदि कोई गायब सुविधा है जिसके कारण आपको बाहरी समाधानों का सहारा लेना पड़ा, तो हम आपको फ़ीचर रिक्वेस्ट सबमिट करने के लिए दृढ़ता से प्रोत्साहित करते हैं!"
+  },
+  {
+    "source": "## FAQ",
+    "target": "## अक्सर पूछे जाने वाले प्रश्न (FAQ)"
+  },
+  {
+    "source": "**Q: Why may Capsule be more suitable than other open-source solutions?**",
+    "target": "**प्रश्न: Capsule अन्य ओपन-सोर्स समाधानों की तुलना में अधिक उपयुक्त क्यों हो सकता है?**"
+  },
+  {
+    "source": "A: Capsule is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.",
+    "target": "उत्तर: Capsule को प्रदर्शन, उपयोगिता और संगतता को ध्यान में रखते हुए शुरू से डिज़ाइन किया गया है। हालांकि होस्टिंग के लिए कुछ प्रारंभिक सेटअप आवश्यक है (जिसका पूरी तरह से सावधानीपूर्वक दस्तावेज़ीकरण किया गया है), हमारे पास अब तक का सबसे व्यापक फ़ॉर्मेट समर्थन और रीयल-टाइम व्यूइंग क्षमताएं हैं। हम समर्थित हार्डवेयर और सॉफ़्टवेयर संयोजनों का पूरी तरह से परीक्षण करते हैं और नई सुविधाओं को सतर्कतापूर्वक स्थिर संस्करण में लाते हैं। यह उन लोगों के लिए एक बेहतरीन विकल्प होना चाहिए जिनके पास बड़ी मात्रा में कंटेंट है और जो किसी भी डिवाइस से अपनी सभी संपत्तियों को प्रबंधित करने के लिए एक ही जगह चाहते हैं।"
+  },
+  {
+    "source": "**Q: Why not extend off existing open-source solutions?**",
+    "target": "**प्रश्न: मौजूदा ओपन-सोर्स समाधानों को ही आगे क्यों नहीं बढ़ाया गया?**"
+  },
+  {
+    "source": "A: While there are multiple great open-source solutions, they lack a lot of the involved functions that professionals and prosumers need. For prosumers interested in an open-source and self-hosted solution, we have a robust, and highly scalable solution. For professionals looking to host all their assets in a seamless and integrated service, we have a solution that may be a better fit than some proprietary options.",
+    "target": "उत्तर: हालांकि कई शानदार ओपन-सोर्स समाधान मौजूद हैं, उनमें पेशेवरों और प्रोज़्यूमर को चाहिए होने वाले कई जटिल फ़ंक्शन की कमी है। ओपन-सोर्स और सेल्फ़-होस्टेड समाधान में रुचि रखने वाले प्रोज़्यूमर के लिए, हमारे पास एक मज़बूत और अत्यधिक स्केलेबल समाधान है। अपनी सभी संपत्तियों को एक निर्बाध और एकीकृत सेवा में होस्ट करना चाहने वाले पेशेवरों के लिए, हमारे पास एक ऐसा समाधान है जो कुछ प्रोप्राइटरी विकल्पों की तुलना में बेहतर हो सकता है।"
+  },
+  {
+    "source": "Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.\n**Q: For the API, were languages other than Rust considered?**",
+    "target": "साइड नोट: मूल लेखक को ओपन-सोर्स से प्रेम है और उसने विभिन्न प्रोजेक्ट्स में योगदान दिया है। शुरू से शुरुआत करने का कारण यह है कि उपयोगकर्ता अनुभव और प्रदर्शन के साथ लक्ष्यों को प्राप्त करने के लिए कई तकनीकी निर्णयों में कई महत्वपूर्ण डिज़ाइन निर्णय आवश्यक हैं।\n**प्रश्न: API के लिए, क्या Rust के अलावा अन्य भाषाओं पर विचार किया गया था?**"
+  },
+  {
+    "source": "A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into multiple APIs (GraphQL, REST, gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.",
+    "target": "उत्तर: हां, हमने कई भाषाओं पर विचार किया। विचार की गई कुछ अन्य भाषाओं में Go, TypeScript, Kotlin/Java शामिल थीं। दरअसल, पहला PoC TypeScript में लिखे गए एक ही REST API के रूप में था। हालांकि, वर्तमान विकास कई API (GraphQL, REST, gRPC) में विकसित हो चुका है और प्रोसेसिंग लॉजिक विभिन्न प्लेटफ़ॉर्म के क्लाइंट पर स्थानांतरित कर दिया गया है। Rust मेमोरी-सुरक्षा और प्रदर्शन दोनों आवश्यकताओं के साथ-साथ वह क्रॉस-प्लेटफ़ॉर्म लचीलापन भी प्रदान करता है जिसमें कुछ अन्य भाषाएं समान रूप से उत्कृष्ट हो सकती हैं। API के मामले में, Rust लाइब्रेरी भी अक्सर नई होती हैं और उच्च-प्रदर्शन असिंक्रोनस I/O के लिए `io_uring` जैसे Linux-विशिष्ट अनुकूलन की अनुमति देती हैं। इसके अतिरिक्त, ध्यान दें कि अन्य शक्तियों वाली कई अन्य भाषाओं को भी अपनाया गया है।"
+  },
+  {
+    "source": "**Q: How do bugfixes happen?**",
+    "target": "**प्रश्न: बगफ़िक्स कैसे होते हैं?**"
+  },
+  {
+    "source": "A: Even if the best development practices, rigorous testing, and conservative designs, no software is without bugs. Bug reporting and thoughtful feature requests submitted to the issues page would be much appreciated. Certain types of bugs, such as those affecting data integrity, should be marked with the appropriate tags and will be ironed out ASAP. Patches typically roll out to the latest major version and marked in a notice board separate from CHANGELOGs.",
+    "target": "उत्तर: सर्वश्रेष्ठ डेवलपमेंट प्रथाओं, कठोर परीक्षण और सतर्क डिज़ाइन के बावजूद, कोई भी सॉफ़्टवेयर बग से मुक्त नहीं होता। issues पेज पर सबमिट की गई बग रिपोर्ट और सोच-समझकर बनाए गए फ़ीचर रिक्वेस्ट की बहुत सराहना की जाएगी। कुछ खास प्रकार के बग, जैसे डेटा अखंडता को प्रभावित करने वाले, उपयुक्त टैग के साथ चिह्नित किए जाने चाहिए और जितनी जल्दी हो सके ठीक किए जाएंगे। पैच आमतौर पर नवीनतम मेजर संस्करण में जारी किए जाते हैं और CHANGELOG से अलग एक नोटिस बोर्ड में चिह्नित किए जाते हैं।"
+  },
+  {
+    "source": "## How to contribute",
+    "target": "## योगदान कैसे करें"
+  },
+  {
+    "source": "Capsule primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.",
+    "target": "Capsule को मुख्य रूप से सक्रिय योगदान और फ़ीडबैक से लाभ होता है! दान के बजाय हमें वास्तव में अधिक हाथों की ज़रूरत है। विवरण के लिए [CONTRIBUTING.md](./CONTRIBUTING.md) देखें।"
+  },
+  {
+    "source": "### Contributor License Agreement (CLA)",
+    "target": "### योगदानकर्ता लाइसेंस समझौता (CLA)"
+  },
+  {
+    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
+    "target": "हमें सभी योगदानकर्ताओं को CLA पर हस्ताक्षर करने की आवश्यकता है। यह सुनिश्चित करता है कि प्रोजेक्ट भविष्य की फंडिंग और एक समर्पित रखरखाव टीम सुरक्षित करने के लिए आवश्यक कानूनी लचीलापन बनाए रखे, जिससे यह गारंटी मिलती है कि सॉफ़्टवेयर आने वाले दशकों तक सक्रिय रूप से समर्थित और आत्मनिर्भर बना रहे।"
+  },
+  {
+    "source": "## License",
+    "target": "## लाइसेंस"
+  },
+  {
+    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
+    "target": "Capsule को [AGPL-3.0 लाइसेंस](LICENSE) के तहत लाइसेंस प्राप्त है।"
+  }
+]

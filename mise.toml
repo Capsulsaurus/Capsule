@@ -76,6 +76,7 @@ run = [
   "mise run format-check-rust",
   "mise run lint-check-rust",
   "mise run i18n-check",
+  "mise run translate-readme-check",
   "mise run build-rust",
   "mise run build-ffi",
   "mise run lint-check-ffi",
@@ -144,6 +145,23 @@ run = "cargo run -q -p xtask -- i18n"
 [tasks.i18n-check]
 description = "Verify generated i18n is in sync with locales/"
 run = "cargo run -q -p xtask -- i18n --check"
+
+# Regenerate the translated README.<lang>.md files from README.md and the committed
+# per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.
+[tasks.translate-readme]
+description = "Generate README.<lang>.md from README.md + translation data"
+run = "cargo run -q -p xtask -- translate-readme"
+
+# Structural drift gate for the README translations: fails when a source block changed
+# but the translations were not regenerated. Key-less and API-free (runs in CI).
+[tasks.translate-readme-check]
+description = "Verify README translations are in sync with README.md"
+run = "cargo run -q -p xtask -- translate-readme --check"
+
+# Scaffold/refresh a locale's translation-data file from the current README blocks.
+[tasks.translate-readme-extract]
+description = "Print README translatable blocks as a translation-data scaffold"
+run = "cargo run -q -p xtask -- translate-readme --extract"
 
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
 # Two uniffi surfaces behind their crates' `ffi` feature (one pinned uniffi 0.31.1

@@ -9,8 +9,13 @@
 //! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
 //!   platform's native localization format (see [`i18n`]). `--check` verifies the
 //!   committed files are up to date instead of writing them.
+//! - `translate-readme [--check | --extract]` regenerates the translated
+//!   `README.<lang>.md` files from the repo-root `README.md` (see
+//!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a
+//!   locale's translation-data file.
 
 mod i18n;
+mod translate_readme;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,7 +25,8 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check]>";
+const USAGE: &str =
+    "usage: xtask <set-version <X.Y.Z> | i18n [--check] | translate-readme [--check | --extract]>";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -34,6 +40,18 @@ fn main() -> Result<()> {
         Some("i18n") => {
             let check = args.next().as_deref() == Some("--check");
             i18n::run(&repo_root(), check)
+        }
+        Some("translate-readme") => {
+            let mode = match args.next().as_deref() {
+                None => translate_readme::Mode::Generate { api: false },
+                Some("--api") => translate_readme::Mode::Generate { api: true },
+                Some("--check") => translate_readme::Mode::Check,
+                Some("--extract") => translate_readme::Mode::Extract,
+                Some(other) => bail!(
+                    "unknown flag `{other}`; usage: xtask translate-readme [--check | --extract | --api]"
+                ),
+            };
+            translate_readme::run(&repo_root(), mode)
         }
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),
