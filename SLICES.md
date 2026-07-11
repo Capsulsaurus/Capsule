@@ -110,7 +110,7 @@ its slice.
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | done    |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
-| S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | ready   |
+| S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | done    |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | ready   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
@@ -1169,6 +1169,12 @@ SDK; they never hand-roll network flows.
   the federation doc's aggregated-album Validation bullets pass (composition,
   injection-refusal, partial view, leave propagation, LWW rename convergence).
 - **Tier:** Unit + Smoke.
+- **Landed:** all five bullets tested; `AlbumGroupAssertion` (device-signed, LWW
+  name, hint-union merge) rides the op path AMK-sealed (server-opaque, proven);
+  inclusion = member-of ∧ asserts-group ∧ not-blocked; per-origin degraded/partial
+  view; zero server surface confirmed. Cover override is a renderer parameter —
+  reading it from the S-Z1 settings document rides that schema's implementation
+  slice; multi-user invites still ride S-X2.
 
 ## Lane F — platform / FFI
 

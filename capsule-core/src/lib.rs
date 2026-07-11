@@ -32,6 +32,8 @@ pub mod domain;
 #[cfg(feature = "native")]
 pub mod exif;
 #[cfg(feature = "native")]
+pub mod federation;
+#[cfg(feature = "native")]
 pub mod import;
 #[cfg(feature = "native")]
 pub mod library;
