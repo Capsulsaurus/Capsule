@@ -114,7 +114,7 @@ its slice.
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | done*   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
-| S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
+| S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | done*   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | done*   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
@@ -1236,6 +1236,12 @@ SDK; they never hand-roll network flows.
 - **Deliverable:** the TBS-path `HardwareSigner` (the tss-esapi reference covers
   Linux), P-256 composed. **Depends on:** S-A4. **Done when:** the Windows smoke
   mirrors the TPM reference adapter's. **Tier:** Smoke.
+- **Landed (done\* — Windows CI run owed):** raw-TBS adapter hand-marshalling the
+  reference lifecycle; pure wire codec host-tested (10 tests, incl. raw-r‖s→DER);
+  bare x‖y publics + DER sigs plug into `P256HybridSigningKey` unchanged;
+  `cargo check --target x86_64-pc-windows-msvc --no-default-features` green
+  (`windows-sys` TBS feature, doc row added). Owed to Windows CI: full ffi build
+  (MSVC C toolchain for bundled SQLite), windows-target clippy, real-TPM smoke.
 
 ### S-F5 — Hardware DEK binding
 

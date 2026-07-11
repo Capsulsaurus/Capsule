@@ -18,6 +18,11 @@ pub mod master;
 pub mod p256;
 pub mod signer;
 pub mod software;
+// The Windows TPM 2.0 `HardwareSigner` over TBS (slice `S-F4`). The pure wire codec compiles on
+// any host under `cfg(test)` (host-runnable mock tests); the TBS transport + signer are Windows
+// only. Unlike `tpm` (the tss-esapi Linux reference), TBS needs no external crate — it links
+// `tbs.dll` via `windows-sys`.
+pub mod tbs;
 #[cfg(feature = "tpm")]
 pub mod tpm;
 
@@ -36,5 +41,7 @@ pub use master::MasterKey;
 pub use p256::P256HybridSigningKey;
 pub use signer::Signer;
 pub use software::SoftwareSigner;
+#[cfg(windows)]
+pub use tbs::TbsTpmSigner;
 #[cfg(feature = "tpm")]
 pub use tpm::TpmSigner;

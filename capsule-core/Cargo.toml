@@ -134,8 +134,18 @@ tss-esapi = { version = "7", optional = true }
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1", features = ["fs"] }
 
+# `Win32_System_TpmBaseServices` adds the TBS (TPM Base Services) surface —
+# `Tbsi_Context_Create` / `Tbsip_Submit_Command` / `Tbsi_Is_Tpm_Present` — the Windows path of
+# the desktop TPM 2.0 `HardwareSigner` (`crypto::keys::tbs`, slice S-F4). TBS is the raw TPM
+# command channel the tss-esapi reference (`crypto::keys::tpm`) wraps on Linux; on Windows the
+# adapter marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib —
+# no import library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.60", features = ["Win32_Storage_FileSystem", "Win32_Foundation"] }
+windows-sys = { version = "0.60", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_TpmBaseServices",
+] }
 
 # On wasm32 the OS CSPRNG has no default backend. `crypto::rng` uses getrandom 0.3 directly
 # (Web Crypto via the `wasm_js` feature + `--cfg getrandom_backend="wasm_js"`, set for this
