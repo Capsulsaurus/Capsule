@@ -124,7 +124,7 @@ its slice.
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | blocked |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | done    |
-| S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
+| S-H3  | Semantic/face features                               | ML              | S-H1             | L    | done*   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | ready   |
@@ -1324,6 +1324,14 @@ its design here.
 - **Deliverable:** the v1-committed slots (MobileCLIP-B, YOLOv10, SCRFD,
   InsightFace-AdaFace) on the deterministic execution path with the platform-partition
   fallback; `tags_ai` population. **Depends on:** S-H1. **Blocks:** S-G3.
+- **Landed (done\* — real runner gated):** `ModelRunner` seam + deterministic
+  execution (mined from feat/ml-orchestration); bit-exact known-answer partition
+  resolution (fallback vectors never merge into the canonical partition, proven);
+  `tags_ai` OR-set write-through as signed metadata updates mirroring `set_cull`
+  (promote copies to `tags_user`, dismiss keeps AI entry). The real CLIP runner
+  (feat/ml-clip-runner, default-off `inference` feature) stays follow-up — it
+  downloads weights at runtime, which this landing environment forbids.
+  Post-v1 `video`/`reid` deliberately excluded.
 
 ### S-H4 — Group-scoped evaluations (post-v1)
 

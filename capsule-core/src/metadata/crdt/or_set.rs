@@ -91,6 +91,17 @@ impl<T: Ord + Clone> OrSet<T> {
     pub fn observed(&self, add_id: &AddId) -> bool {
         self.adds.contains_key(add_id)
     }
+
+    /// The live `(add_id, element)` pairs — those not tombstoned. Unlike [`value`](Self::value)
+    /// this preserves each element's `add_id`, so a caller can surface elements (e.g. AI tags) and
+    /// later target a specific one by `add_id` (dismiss, promote).
+    pub fn entries(&self) -> Vec<(AddId, T)> {
+        self.adds
+            .iter()
+            .filter(|(id, _)| !self.removes.contains(id))
+            .map(|(id, el)| (*id, el.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
