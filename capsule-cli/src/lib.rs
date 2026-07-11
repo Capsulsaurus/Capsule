@@ -209,6 +209,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 },
                 force_reimport_duplicates: force,
                 target_album_id: None,
+                ..Default::default()
             };
 
             let plan_result =

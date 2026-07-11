@@ -9,13 +9,14 @@
 //! [`ConnectionClass`], layers the behavioral **`adverse` promotion/demotion**
 //! ([`AdverseDetector`]) on top, and exposes the two gate surfaces the class
 //! feeds — the **staged-upload tier gates** ([`ConnectionClass::permits_tier`],
-//! over [`StagedTier`]) and the **cache-eviction byte budget**
+//! over the canonical [`UploadTier`]) and the **cache-eviction byte budget**
 //! ([`ConnectionClass::cache_retention_budget`]). Detection is signal-driven,
 //! never a live NIC probe, so every rule is a deterministic unit test.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use capsule_core::import::upload::UploadTier;
 use tracing::instrument;
 
 /// The closed connection-class enum, evaluated continuously on-device.
@@ -133,10 +134,10 @@ impl ConnectionClass {
     /// user-consented `force_sync`, which overrides the metered/Wi-Fi criteria but
     /// never resurrects an offline path.
     #[must_use]
-    pub fn permits_tier(self, tier: StagedTier, force_sync: bool) -> bool {
+    pub fn permits_tier(self, tier: UploadTier, force_sync: bool) -> bool {
         match tier {
-            StagedTier::Index => self.is_usable(),
-            StagedTier::Preview | StagedTier::Original => {
+            UploadTier::Index => self.is_usable(),
+            UploadTier::Preview | UploadTier::Original => {
                 self.is_usable() && (self.is_non_metered() || force_sync)
             }
         }
@@ -199,21 +200,6 @@ impl ConnectionClass {
 /// completes between the mid-transfer resets that define an adverse path;
 /// client-tunable policy, not protocol surface.
 pub const ADVERSE_RANGE_WINDOW: u64 = 256 * 1024;
-
-/// The staged-upload tier ladder (download-sync doc, "Upload Tiering"),
-/// mirroring the download ladder. Kept local to the SDK's connection seam; the
-/// canonical import-side skeleton is `capsule_core::import::upload::UploadTier`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum StagedTier {
-    /// T0 — signed manifest + metadata blob (embedded LQIP): the index that makes
-    /// an asset visible (`awaiting-original`) on other devices.
-    Index,
-    /// T1 — thumbnail + preview derivative blobs.
-    Preview,
-    /// T2 — the original blob; its finalization flips `original_held` and unlocks
-    /// every release path.
-    Original,
-}
 
 /// The size class of a pending reconciliation (sync criteria). Scales with the
 /// total upload + download transfer amount.
@@ -873,7 +859,7 @@ mod tests {
     #[test]
     fn connection_class_tier_and_reconciliation_matrix() {
         use ConnectionClass::{Adverse, Constrained, Metered, Offline, Unmetered};
-        use StagedTier::{Index, Original, Preview};
+        use UploadTier::{Index, Original, Preview};
 
         // (class, T0, T1, T2, small, large) with force_sync = false.
         let matrix = [
@@ -904,11 +890,11 @@ mod tests {
     /// large reconciliations, but never resurrects an offline path.
     #[test]
     fn force_sync_overrides_metered_but_not_offline() {
-        assert!(ConnectionClass::Metered.permits_tier(StagedTier::Original, true));
-        assert!(ConnectionClass::Constrained.permits_tier(StagedTier::Preview, true));
+        assert!(ConnectionClass::Metered.permits_tier(UploadTier::Original, true));
+        assert!(ConnectionClass::Constrained.permits_tier(UploadTier::Preview, true));
         assert!(ConnectionClass::Adverse.permits_reconciliation(ReconciliationClass::Large, true));
 
-        assert!(!ConnectionClass::Offline.permits_tier(StagedTier::Index, true));
+        assert!(!ConnectionClass::Offline.permits_tier(UploadTier::Index, true));
         assert!(!ConnectionClass::Offline.permits_reconciliation(ReconciliationClass::Small, true));
     }
 

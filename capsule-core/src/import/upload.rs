@@ -1,101 +1,133 @@
-// Related documentations:
-// - https://capsule.justinchung.net/design/upload/
+//! Staged-upload contract types — the **one canonical** `UploadPolicy`/`UploadTier`
+//! set (slice `S-B4` in the repo-root `SLICES.md`; SSoT:
+//! [Download & Sync — Upload Tiering (Staged Uploads)](https://docs/design/import/download-sync/#upload-tiering-staged-uploads)).
+//!
+//! Uploads used to be all-or-nothing; **staged uploads** add the upload-direction
+//! ladder for low-data situations (a metered plan, weeks from Wi-Fi) where what
+//! matters most is that the *index* of what exists escapes the device. This module
+//! owns the two closed contract enums and the one pure invariant they carry — the
+//! **staged × streaming exclusion**. Everything network-facing (the scheduler that
+//! opens sessions in tier order, gated by the connection class) lives in the SDK
+//! half (`capsule_sdk::staged`); `capsule-core` stays network-free.
+//!
+//! The policy is **client-side session ordering only** — the server has zero mode
+//! branches (download-sync doc). Under [`UploadPolicy::Staged`] the scheduler opens
+//! each asset's sessions in [`UploadTier`] order, gating each tier on the sync
+//! connection criteria; under [`UploadPolicy::Full`] all sessions open eagerly.
 
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
-
-use crate::import::ImportExecutionPlan;
-
-/// Per-device upload policy (contract type for slice `S-B4`, staged uploads;
-/// SSoT: download-sync design doc, "Upload Tiering (Staged Uploads)").
+/// The per-device upload policy: a closed enum with exactly two members.
 ///
-/// The policy is client-side **session ordering only** — the server has zero
-/// mode branches. Under [`UploadPolicy::Staged`] the scheduler opens each
-/// asset's sessions in [`UploadTier`] order, gating each tier on the sync
-/// connection criteria; under [`UploadPolicy::Full`] all sessions open eagerly.
+/// The choice is *ordering*, not a distinct code path — the same `POST /upload`
+/// sessions, bundle mechanics, and finalization run under both; `staged` simply
+/// hasn't opened the higher-tier sessions yet.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum UploadPolicy {
-    /// Every session of an asset's bundle opens eagerly (default).
+    /// Every session of an asset's bundle opens eagerly, in any order (today's
+    /// behavior, and the default).
     #[default]
     Full,
-    /// Sessions open in tier order (index → preview → original), each tier
-    /// gated by connection class. Mutually exclusive with streaming import.
+    /// Sessions open in tier order (index → preview → original) per asset, each
+    /// tier gated by the connection class. Mutually exclusive with streaming
+    /// import ([`ensure_streaming_compatible`]).
     Staged,
 }
 
-/// The upload tier ladder, mirroring the download ladder. Tiers map onto
-/// existing blob roles — no new blob kind exists for staging.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum UploadTier {
-    /// T0: signed manifest + metadata blob (embedded LQIP) — the index that
-    /// makes the asset visible (`awaiting-original`) on other devices.
-    Index,
-    /// T1: thumbnail + preview derivative blobs.
-    Preview,
-    /// T2: the original blob; its finalization flips `original_held` on the
-    /// sync feed and unlocks every release path (verify-before-destroy).
-    Original,
-}
-
-pub struct UploadExecutionPlan(pub Vec<PathBuf>);
-
-pub struct UploadPriorityConfig {
-    /// Whether to prioritize smaller files first
-    pub prioritize_smaller_files: bool,
-    /// Whether to prioritize newer files first
-    pub prioritize_newer_files: bool,
-    /// Whether to prioritize files with lower directory depth first
-    pub prioritize_lower_depth: bool,
-}
-
-impl Default for UploadPriorityConfig {
-    fn default() -> Self {
-        UploadPriorityConfig {
-            prioritize_smaller_files: true,
-            prioritize_newer_files: true,
-            prioritize_lower_depth: true,
-        }
+impl UploadPolicy {
+    /// Whether this policy stages sessions in tier order (vs. opening eagerly).
+    #[must_use]
+    pub fn is_staged(self) -> bool {
+        matches!(self, Self::Staged)
     }
 }
 
-pub fn get_upload_ordering(
-    plan: &ImportExecutionPlan,
-    priority_config: Option<UploadPriorityConfig>,
-) -> UploadExecutionPlan {
-    // Prioritization strategy:
-    // - Lowest directory depth first
-    // - Last modified times (newest first), grouped by day, associated files
-    // - File size (smallest first)
-
-    let priority_config: UploadPriorityConfig = priority_config.unwrap_or_default();
-
-    let uploadable_paths: HashSet<PathBuf> = plan.get_uploadable_paths().collect();
-
-    // Bucket by directory depth
-    let _buckets_by_depth: Vec<Vec<PathBuf>> = {
-        if !priority_config.prioritize_lower_depth {
-            vec![uploadable_paths.into_iter().collect::<Vec<_>>()]
-        } else {
-            let mut map: HashMap<usize, Vec<PathBuf>> = HashMap::new();
-            for path in uploadable_paths.into_iter() {
-                let depth = path.components().count();
-                map.entry(depth).or_default().push(path);
-            }
-
-            // TODO: Convert into Vec sorted by key (depth)
-            let mut vec: Vec<_> = map.into_iter().collect();
-            vec.sort_by_key(|(depth, _)| *depth);
-            vec.into_iter().map(|(_, paths)| paths).collect()
-        }
-    };
-
-    // For each bucket, bucket by date modified to the day
-    // TODO
-    // if priority_config.prioritize_newer_files { ... } else { ... }
-
-    todo!()
+/// The upload tier ladder, mirroring the download ladder. Tiers map directly onto
+/// existing blob roles — **no new blob kind exists for staging**. The derived
+/// `Ord` is the ladder order (`Index < Preview < Original`), so a scheduler emits
+/// sessions strictly T0 → T1 → T2 by sorting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum UploadTier {
+    /// T0: signed manifest + metadata blob (embedded LQIP) — the index that makes
+    /// the asset visible (`awaiting-original`) on other devices. A few KB per
+    /// asset; escapes on any usable connection.
+    Index,
+    /// T1: thumbnail + preview derivative blobs. Needs a non-metered link
+    /// (small-reconciliation rule).
+    Preview,
+    /// T2: the original blob; its finalization flips `original_held` on the sync
+    /// feed and unlocks every release path (verify-before-destroy). Needs unmetered
+    /// Wi-Fi (large-reconciliation rule) or explicit force-sync.
+    Original,
 }
 
-// TODO: This function uses a lot of overhead memory by design. Need to trace entire call tree and make sure none of the data is excessively large (e.g. 1M+ file paths).
+impl UploadTier {
+    /// The tiers in strict ladder order (T0 → T1 → T2) — the ordering input a
+    /// staged scheduler iterates.
+    pub const LADDER: [UploadTier; 3] = [Self::Index, Self::Preview, Self::Original];
+}
+
+/// Raised when a staged upload policy is combined with a storage-constrained
+/// streaming import for the same run — the combination the planner rejects
+/// outright (download-sync doc: "Staged and streaming import are mutually
+/// exclusive per import").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "staged upload policy is mutually exclusive with streaming import: streaming releases local \
+     bytes quickly, staged defers exactly the upload release depends on"
+)]
+pub struct StagedStreamingConflict;
+
+/// The pure staged × streaming exclusion invariant.
+///
+/// Streaming exists to release local bytes as quickly as possible; staged defers
+/// exactly the T2 (original) upload that release depends on. Combining them is a
+/// contradiction, so it is refused at confirmation and — belt and braces — the
+/// streaming executor refuses a staged policy by construction. Returns
+/// [`StagedStreamingConflict`] iff `policy` is [`UploadPolicy::Staged`] and
+/// `streaming` is set.
+pub fn ensure_streaming_compatible(
+    policy: UploadPolicy,
+    streaming: bool,
+) -> Result<(), StagedStreamingConflict> {
+    if policy.is_staged() && streaming {
+        Err(StagedStreamingConflict)
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tier ladder is strictly ordered T0 < T1 < T2, so sorting yields ladder
+    /// order — the property a staged scheduler relies on to open sessions in order.
+    #[test]
+    fn tier_ladder_is_strictly_ordered() {
+        assert!(UploadTier::Index < UploadTier::Preview);
+        assert!(UploadTier::Preview < UploadTier::Original);
+        let mut shuffled = [UploadTier::Original, UploadTier::Index, UploadTier::Preview];
+        shuffled.sort_unstable();
+        assert_eq!(shuffled, UploadTier::LADDER);
+    }
+
+    /// `Full` is the default policy (today's eager behavior).
+    #[test]
+    fn full_is_the_default_policy() {
+        assert_eq!(UploadPolicy::default(), UploadPolicy::Full);
+        assert!(!UploadPolicy::Full.is_staged());
+        assert!(UploadPolicy::Staged.is_staged());
+    }
+
+    /// **Staged × streaming exclusion (pure).** Only the exact `staged + streaming`
+    /// combination is refused; every other pairing is compatible.
+    #[test]
+    fn only_staged_plus_streaming_is_refused() {
+        assert_eq!(
+            ensure_streaming_compatible(UploadPolicy::Staged, true),
+            Err(StagedStreamingConflict)
+        );
+        assert!(ensure_streaming_compatible(UploadPolicy::Staged, false).is_ok());
+        assert!(ensure_streaming_compatible(UploadPolicy::Full, true).is_ok());
+        assert!(ensure_streaming_compatible(UploadPolicy::Full, false).is_ok());
+    }
+}

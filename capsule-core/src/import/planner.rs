@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::db::DatabaseDriver;
 use crate::domain::ImportMode;
 use crate::import::scan::{ImportCandidate, ScanResult};
+use crate::import::upload::{StagedStreamingConflict, UploadPolicy, ensure_streaming_compatible};
 use crate::library::{LibraryError, available_bytes};
 
 /// Configuration for an import run.
@@ -12,6 +13,13 @@ pub struct ImportConfig {
     pub target_album_id: Option<String>,
     /// If true, import even if a file with the same SHA-256 hash already exists.
     pub force_reimport_duplicates: bool,
+    /// The per-device upload policy (staged uploads, slice `S-B4`). `Full` (the
+    /// default) opens every bundle session eagerly; `Staged` opens them in tier
+    /// order gated by the connection class, and is **mutually exclusive** with a
+    /// streaming import — the planner rejects the combination at confirmation
+    /// ([`ImportActionPlan::confirm_upload_policy`]) and the streaming executor
+    /// refuses it by construction.
+    pub upload_policy: UploadPolicy,
 }
 
 impl Default for ImportConfig {
@@ -20,6 +28,7 @@ impl Default for ImportConfig {
             import_mode: ImportMode::Copy,
             target_album_id: None,
             force_reimport_duplicates: false,
+            upload_policy: UploadPolicy::Full,
         }
     }
 }
@@ -107,6 +116,25 @@ impl ImportActionPlan {
         );
         self.streaming_recommended = Some(recommended);
         recommended
+    }
+
+    /// **Confirmation-time upload-policy gate** (staged uploads, slice `S-B4`).
+    ///
+    /// A [`UploadPolicy::Staged`] run and a streaming import are mutually exclusive
+    /// per import (download-sync doc): streaming exists to release local bytes
+    /// quickly, staged defers exactly the T2 upload release depends on. This is the
+    /// planner's single rejection point — call it at confirmation with the run's
+    /// `policy` and whether a streaming import was chosen (`use_streaming`); a
+    /// conflicting combination returns [`StagedStreamingConflict`] instead of ever
+    /// entering the executor. Delegates to the pure
+    /// [`ensure_streaming_compatible`](crate::import::upload::ensure_streaming_compatible)
+    /// invariant so the rule lives in one place.
+    pub fn confirm_upload_policy(
+        &self,
+        policy: UploadPolicy,
+        use_streaming: bool,
+    ) -> Result<(), StagedStreamingConflict> {
+        ensure_streaming_compatible(policy, use_streaming)
     }
 }
 
@@ -346,6 +374,38 @@ mod tests {
         // Constrained volume: total_size + headroom (1_000 + 100) meets/exceeds available (1_050).
         assert!(plan.set_streaming_recommendation(1_050, 100));
         assert_eq!(plan.streaming_recommended, Some(true));
+    }
+
+    /// **Planner staged × streaming exclusion (unit).** A plan confirmed with both a
+    /// staged upload policy and a streaming import is rejected at confirmation; every
+    /// other combination is accepted. (SSoT: download-sync doc — Validation.)
+    #[test]
+    fn staged_and_streaming_is_rejected_at_confirmation() {
+        let tmp = TempDir::new().unwrap();
+        let db = make_db();
+        fs::write(tmp.path().join("a.jpg"), vec![0u8; 100]).unwrap();
+        let plan = plan(
+            &scan(&[tmp.path().to_path_buf()]).unwrap(),
+            &db,
+            &ImportConfig::default(),
+        )
+        .unwrap();
+
+        // The one rejected combination.
+        assert_eq!(
+            plan.confirm_upload_policy(UploadPolicy::Staged, true),
+            Err(StagedStreamingConflict)
+        );
+        // Every compatible combination confirms.
+        assert!(
+            plan.confirm_upload_policy(UploadPolicy::Staged, false)
+                .is_ok()
+        );
+        assert!(plan.confirm_upload_policy(UploadPolicy::Full, true).is_ok());
+        assert!(
+            plan.confirm_upload_policy(UploadPolicy::Full, false)
+                .is_ok()
+        );
     }
 
     #[test]

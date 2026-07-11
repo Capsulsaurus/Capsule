@@ -16,6 +16,7 @@ pub mod cohort;
 pub mod fetch;
 pub mod net;
 pub mod recovery;
+pub mod staged;
 pub mod sync;
 pub mod upload;
 pub mod verify;

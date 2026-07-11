@@ -8,6 +8,7 @@ pub mod scan;
 pub mod scanner;
 pub mod special;
 pub mod streaming;
+pub mod upload;
 
 pub use executor::execute;
 pub use executor_cancellation::CancellationToken;
@@ -26,3 +27,4 @@ pub use streaming::{
     AssetUploader, StreamHalt, StreamedOutcome, StreamedState, StreamingError, StreamingEvent,
     StreamingReport, UploadHalt, execute_streaming,
 };
+pub use upload::{StagedStreamingConflict, UploadPolicy, UploadTier, ensure_streaming_compatible};

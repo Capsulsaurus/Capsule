@@ -144,6 +144,44 @@ pub struct FeedEntry {
     pub original_held: bool,
 }
 
+/// The derived per-asset **original availability** — the badge a client's timeline
+/// reads (staged uploads, slice `S-B4`; download-sync doc, "The `awaiting-original`
+/// state"). It is **always derived** from the feed's `original_held` fact, never
+/// stored as a second source of truth: an asset whose original has not yet landed
+/// on the server shows in the timeline immediately (LQIP, then T1 tiers as they
+/// arrive) with an "original still on device" badge, and its full-resolution fetch
+/// returns the transient `error.blob.pending_upload` rather than a failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OriginalAvailability {
+    /// The original is finalized on the server; full resolution is fetchable.
+    Held,
+    /// The original has not landed yet — the `awaiting-original` state. Show the
+    /// badge, keep the asset listed, and re-fetch when the feed flips `original_held`.
+    AwaitingOriginal,
+}
+
+impl FeedEntry {
+    /// The derived [`OriginalAvailability`] badge state for this asset — a pure
+    /// projection of [`original_held`](Self::original_held), so the "awaiting-original"
+    /// badge is never a stored second source of truth (staged uploads).
+    #[must_use]
+    pub fn original_availability(&self) -> OriginalAvailability {
+        if self.original_held {
+            OriginalAvailability::Held
+        } else {
+            OriginalAvailability::AwaitingOriginal
+        }
+    }
+
+    /// Whether this asset is in the derived **awaiting-original** state (its original
+    /// is still on the source device). The UI shows the "original still on *device*"
+    /// badge while this holds and never removes the asset's metadata or index entry.
+    #[must_use]
+    pub fn is_awaiting_original(&self) -> bool {
+        !self.original_held
+    }
+}
+
 /// A decoded page of the feed plus the cursor for the next page.
 #[derive(Debug, Clone)]
 pub struct SyncPage {

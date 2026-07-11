@@ -96,6 +96,15 @@ pub enum StreamingError {
     #[error("free-space probe: {0}")]
     Probe(#[from] crate::library::LibraryError),
 
+    /// The run was configured with a [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy)
+    /// policy, which is mutually exclusive with streaming import (staged uploads,
+    /// slice `S-B4`). Streaming releases local bytes quickly; staged defers exactly
+    /// the T2 upload release depends on — so a staged policy can never enter the
+    /// streaming window. Surfaced *before* any file is imported, mirroring the
+    /// planner's confirmation-time rejection.
+    #[error(transparent)]
+    StagedPolicyConflict(#[from] crate::import::upload::StagedStreamingConflict),
+
     /// A signed-path import failed hard enough to abort the run (not a per-file skip).
     #[error("streamed import: {0}")]
     Import(String),
@@ -247,6 +256,14 @@ where
     U: AssetUploader,
     V: StorageVerifier,
 {
+    // ── Exclusion: a staged upload policy can never enter the streaming window ───
+    // Streaming exists to release local bytes as fast as possible; staged uploads
+    // defer exactly the T2 (original) upload that release depends on. The planner
+    // rejects the combination at confirmation; this is the by-construction backstop
+    // so a staged policy cannot reach `execute_streaming` even if a caller skips
+    // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
+    crate::import::upload::ensure_streaming_compatible(config.upload_policy, true)?;
+
     let album_id = match &config.target_album_id {
         Some(s) => Uuid::parse_str(s)
             .map_err(|e| StreamingError::Import(format!("invalid target album id {s:?}: {e}")))?,
@@ -913,6 +930,60 @@ mod tests {
             ws.asset_ids().len(),
             0,
             "no file imported when headroom is insufficient"
+        );
+    }
+
+    /// **Staged × streaming exclusion (by construction).** A run configured with the
+    /// [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy) policy can never
+    /// enter the streaming window: `execute_streaming` refuses it *before* any file
+    /// is imported, mirroring the planner's confirmation-time rejection. (SSoT:
+    /// download-sync doc — staged uploads are mutually exclusive with streaming.)
+    #[test]
+    fn staged_policy_cannot_enter_the_streaming_window() {
+        use crate::import::upload::{StagedStreamingConflict, UploadPolicy};
+
+        let src = TempDir::new().unwrap();
+        let lib = TempDir::new().unwrap();
+        write_sources(src.path(), 2);
+        let mut ws = signed_workspace(lib.path());
+        let config = ImportConfig {
+            upload_policy: UploadPolicy::Staged,
+            ..Default::default()
+        };
+        let plan = plan(
+            &scan(&[src.path().to_path_buf()]).unwrap(),
+            ws.db(),
+            &config,
+        )
+        .unwrap();
+
+        let err = execute_streaming(
+            &plan,
+            &mut ws,
+            &config,
+            &OkUploader,
+            &MockVerifier {
+                durable: true,
+                receipt: true,
+            },
+            0,
+            noop_event,
+            &CancellationToken::new(),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(
+                err,
+                StreamingError::StagedPolicyConflict(StagedStreamingConflict)
+            ),
+            "a staged policy must be refused before the window, got {err:?}"
+        );
+        // The refusal is before any import — no local growth, no partial run.
+        assert_eq!(
+            ws.asset_ids().len(),
+            0,
+            "no file imported when the staged policy is refused"
         );
     }
 }
