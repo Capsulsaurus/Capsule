@@ -601,6 +601,35 @@ impl BackupArtifact {
     pub fn exporter_device(&self) -> Uuid {
         self.core.exporter_device
     }
+
+    /// The `(asset_id, head_hash)` provenance heads the artifact carries — the same list
+    /// [`restore`](Self::restore) reconciles against local state. Exposed so a chain-aware
+    /// consumer (LAN peering, slice `S-E3`) can decide *forward-update vs. stale* per asset
+    /// before restoring, rather than treating every differing head as an opaque conflict.
+    pub fn provenance_heads(&self) -> &[(Uuid, Hash32)] {
+        &self.core.provenance_heads
+    }
+
+    /// The full provenance chain (oldest first) the artifact carries for `asset_id`, decoded
+    /// from its `provenance/{asset_id}` entry. `None` when the artifact carries no such asset.
+    ///
+    /// Peering walks this chain to distinguish a **forward** artifact (whose chain contains the
+    /// receiver's current head as an ancestor — safe to adopt) from a **stale** one (whose head
+    /// the receiver has already superseded — quarantined, never applied). The per-entry content
+    /// hashes were already verified by [`open`](Self::open), so the bytes here are authentic.
+    pub fn provenance_chain(
+        &self,
+        asset_id: &Uuid,
+    ) -> Result<Option<Vec<ProvenanceRecord>>, BackupError> {
+        match self.files.get(&format!("provenance/{asset_id}")) {
+            Some(bytes) => {
+                let chain: Vec<ProvenanceRecord> =
+                    cbor::from_slice(bytes).map_err(|e| BackupError::Format(e.to_string()))?;
+                Ok(Some(chain))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]

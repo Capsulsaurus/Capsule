@@ -109,7 +109,7 @@ its slice.
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
 | S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | done    |
-| S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | ready   |
+| S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | done*   |
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | done    |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | ready   |
@@ -1152,6 +1152,14 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-D2 (cursor model + transport plumbing), S-C7 (enrolled same-user
   devices). **Done when:** the peering doc's six Validation bullets pass; E2E case 5
   lives. **Tier:** Unit + Smoke per platform.
+- **Landed (done\* — live mDNS responder owed):** all six bullets + the in-process
+  E2E case 5; CA-less real mTLS (rustls, ring pinned, ephemeral rcgen leaf) with
+  the hybrid check bound to the RFC 5705 session exporter (stronger than
+  SPKI-equality — a re-terminating MITM can't forge the proof); opaque rotating
+  advertisement is pure + unit-tested behind the `Discovery` seam; delta-scoped
+  transfer structurally can't ship held assets; stale revival quarantines. Owed:
+  the live `mdns-sd` responder (non-deterministic in CI — its dependencies-doc
+  row is written).
 
 ### S-E4 — Aggregated federated albums (album-group view)
 

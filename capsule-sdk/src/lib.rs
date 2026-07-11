@@ -15,6 +15,7 @@ pub mod auth;
 pub mod cohort;
 pub mod fetch;
 pub mod net;
+pub mod peering;
 pub mod recovery;
 pub mod staged;
 pub mod sync;
