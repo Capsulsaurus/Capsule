@@ -19,6 +19,39 @@ struct SmokeTests {
         return dir.path
     }
 
+    /// Write a minimal JPEG-magic file and return its path.
+    private func freshImage() throws -> String {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("capsule-swift-img-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let img = dir.appendingPathComponent("photo.jpg")
+        try Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)).write(to: img)
+        return img.path
+    }
+
+    /// Drive a full offline lifecycle (create → import → verify → read) over a P-256
+    /// hardware-composed workspace, returning the verify outcome and the read-back bytes. Runs on
+    /// the large stack because workspace creation triggers ML-DSA-65 key generation.
+    private func p256RoundTrip(_ hardware: HardwareSigner) throws -> (FfiVerifyOutcome, Data) {
+        try onLargeStack {
+            let workspace = try FfiWorkspace.createWithP256HardwareSigner(
+                root: try self.freshRoot(),
+                passphrase: Data("correct horse".utf8),
+                tier: .normal,
+                hardware: hardware,
+                keyAlias: "device-dsk",
+                mlSeed: Data(repeating: 9, count: 32),
+                client: self.client
+            )
+            // Import into a session album (the default album has no session key material minted).
+            let album = try workspace.createAlbum(name: "P-256 Trip")
+            let asset = try workspace.importAsset(albumId: album, src: try self.freshImage())
+            let outcome = try workspace.verify(assetId: asset)
+            let bytes = try workspace.readPlaintext(assetId: asset)
+            return (outcome, bytes)
+        }
+    }
+
     /// Run `body` on a dedicated thread with an ample stack and return its result.
     ///
     /// swift-testing executes test bodies on the Swift-concurrency cooperative pool, whose worker
@@ -89,19 +122,51 @@ struct SmokeTests {
         #expect(!userId.isEmpty)
     }
 
-    /// The real Secure Enclave adapter. Skipped where no Secure Enclave is present (CI VMs); runs
-    /// on Apple-Silicon / T2 Macs and devices. Verifies the P-256 key lifecycle + non-export.
+    /// The software **P-256** element composed through `P256HybridSigningKey` into a real
+    /// workspace — the always-runnable half of the S-F2 smoke (a CI VM has no Secure Enclave). It
+    /// mirrors ``SecureEnclaveSigner``'s wire contract (65-byte x9.63 public key, DER ECDSA
+    /// signature), so a green run here proves the whole P-256 FFI composition independent of
+    /// hardware. Import + verify exercises sign/verify of a manifest through the composed key.
+    @Test("the software P-256 element composes through the P-256 hybrid FFI path")
+    func softwareP256ComposesEndToEnd() throws {
+        let signer = SoftwareP256Signer(seed: Data(repeating: 7, count: 32))
+
+        // Contract self-check before handing it to Rust: SEC1 public key, DER signature, honest
+        // non-exportability.
+        let pub = try signer.enroll(keyAlias: "device-dsk")
+        #expect(pub.count == 65, "P-256 x9.63 (uncompressed SEC1) public key is 65 bytes")
+        #expect(pub.first == 0x04, "uncompressed-point tag")
+        let sig = try signer.signClassical(keyAlias: "device-dsk", msg: Data("m".utf8))
+        #expect(sig.first == 0x30, "DER SEQUENCE tag — not raw r‖s")
+        #expect("software signer must report itself exportable") {
+            try signer.assertNonExportable(keyAlias: "device-dsk")
+        } throws: { error in
+            guard case HardwareSignerError.Exportable = error else { return false }
+            return true
+        }
+
+        let (outcome, bytes) = try p256RoundTrip(signer)
+        #expect({ if case .accept = outcome { return true } else { return false } }(),
+                 "a manifest signed by the P-256 hybrid must verify through verify_asset")
+        #expect(bytes == Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)))
+    }
+
+    /// The real Secure Enclave adapter composed through the P-256 hybrid, end to end. Skipped where
+    /// no Secure Enclave is present (CI VMs); runs on Apple-Silicon / T2 Macs and devices. The
+    /// device directory and the imported asset's manifest are signed by the SE-held P-256 key + the
+    /// software ML-DSA-65 half; verify proves both halves check, and `assertNonExportable` confirms
+    /// the key never left the enclave.
     @Test(
-        "the real Secure Enclave adapter round-trips its P-256 key lifecycle",
+        "the real Secure Enclave adapter composes through the P-256 hybrid FFI path",
         .enabled(if: SecureEnclave.isAvailable, "no Secure Enclave on this host")
     )
-    func secureEnclaveSignerOnDevice() throws {
+    func secureEnclaveComposesEndToEnd() throws {
         let enclave = SecureEnclaveSigner()
-        let pub = try enclave.enroll(keyAlias: "se-dsk")
-        #expect(pub.count == 65, "P-256 x9.63 public key is 65 bytes")
-        let sig = try enclave.signClassical(keyAlias: "se-dsk", msg: Data("hello".utf8))
-        #expect(sig.count == 64, "P-256 ECDSA r‖s is 64 bytes")
-        // A throw here fails the test — the swift-testing analogue of XCTAssertNoThrow.
-        try enclave.assertNonExportable(keyAlias: "se-dsk")
+        let (outcome, bytes) = try p256RoundTrip(enclave)
+        #expect({ if case .accept = outcome { return true } else { return false } }(),
+                 "a manifest signed by the SE-composed P-256 hybrid must verify")
+        #expect(bytes == Data([0xFF, 0xD8, 0xFF] + Array("se p256 smoke bytes".utf8)))
+        // The private key never leaves the enclave — a throw here fails the test.
+        try enclave.assertNonExportable(keyAlias: "device-dsk")
     }
 }

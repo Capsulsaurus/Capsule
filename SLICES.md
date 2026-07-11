@@ -112,7 +112,7 @@ its slice.
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | done*   |
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | done    |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
-| S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | ready   |
+| S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | done*   |
 | S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
@@ -1215,6 +1215,13 @@ SDK; they never hand-roll network flows.
 - **Done when:** `capsule-core-swift`'s `swift test` exercises the real Secure Enclave
   path with the P-256 composition; the Kotlin harness mirrors it. **Tier:** Smoke per
   platform; enables E2E case 12.
+- **Landed (done\* — Kotlin run owed):** `createWithP256HardwareSigner` FFI
+  constructor (Ed25519 path untouched); the real Secure Enclave RAN on this host —
+  SE-held P-256 + ML-DSA halves signed a directory + manifest, verified through
+  `verify_asset`, non-exportability asserted. Two adapter bugs fixed en route
+  (Swift returned raw r‖s instead of DER; Kotlin returned SPKI instead of SEC1).
+  The Kotlin mirror is written but unexecuted (local Gradle broken) — platform CI
+  owes the run.
 
 ### S-F3 — App binding wiring + on-device CI
 
