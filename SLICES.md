@@ -117,7 +117,7 @@ its slice.
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | ready   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
-| S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | ready   |
+| S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
@@ -1256,6 +1256,12 @@ SDK; they never hand-roll network flows.
 - **Done when:** `swift test` in `capsule-core-swift` runs green with no
   `import XCTest` outside UI-automation targets.
 - **Tier:** Smoke per platform.
+- **Landed:** 3 tests migrated 1:1 (`@Suite`/`@Test`, `.enabled(if:)` for the
+  SE-on-device gate); zero `import XCTest` remains. Two migration findings:
+  the suite needed S-D15's `FfiClientBuild` arg (it predated the API), and
+  ML-DSA-65 keygen overflows swift-testing's small worker stacks — solved with a
+  64 MiB-stack thread helper (`onLargeStack`), a pattern future FFI-driven
+  swift-testing suites will need.
 
 ## Lane G — legacy retirement (frozen until preconditions)
 
