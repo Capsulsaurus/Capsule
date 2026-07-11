@@ -11,7 +11,7 @@ A Capsule account has one or more devices, each holding a hardware-bound DSK + D
 
 These are distinct from **[cross-device recovery](/design/backup-recovery/#default-mechanisms)** (which is also a way to bring up a new device, but in the recovery context — the user has lost their other devices and is using the recovery passphrase + master-key escrow to restore).
 
-Implementation lives in `capsule-core::crypto::keys` (key generation and wrapping — implemented) and `capsule-api-auth::devices` (the device directory and enrollment authentication surface — planned). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are blocked upstream — see the [MLS status note](/design/cryptography/mls/).
+Implementation lives in `capsule-core::crypto::keys` (key generation and wrapping — implemented) and `capsule-api-auth::devices` (the device directory and enrollment authentication surface — planned). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are pending the MLS implementation — see the [MLS status note](/design/cryptography/mls/).
 
 ## First-Device Enrollment
 

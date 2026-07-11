@@ -123,7 +123,7 @@ This is **the** contract every consumer of `capsule-core::crypto` depends on. It
 Two implementations exist or are planned:
 
 - **`ReferenceAuthority` (implemented).** An admin-signed epoch ledger: each epoch entry (AMK version + write-tier public key) is attested by the album admin key, and the ledger serializes to a `SignedEpochLedger` whose admin chain is re-verified on load. This is the shipped offline authority — it powers multi-epoch rotation (`Workspace::rotate_epoch`) and the exhaustive `verify_asset` negative-case suite today, with no MLS dependency.
-- **`OpenMlsAuthority` (blocked).** The design-target authority backed by live MLS group state — the admin-signed commit chain described throughout this doc. It is blocked on an upstream OpenMLS backend for the chosen ciphersuite (see the [status note in Cryptography — MLS](/design/cryptography/mls/)) and drops in behind the same interface without touching `verify_asset`.
+- **`OpenMlsAuthority` (planned — buildable).** The design-target authority backed by live MLS group state — the admin-signed commit chain described throughout this doc. The chosen ciphersuite ships in OpenMLS today (see the [status note in Cryptography — MLS](/design/cryptography/mls/)), so this is scheduled implementation work, not an upstream wait; it drops in behind the same interface without touching `verify_asset`.
 
 Everywhere this doc says an epoch or write-tier key is "MLS-attested", the code-level statement is "attested by the album's `AlbumAuthority`"; MLS is how that attestation is *produced and distributed* once live.
 

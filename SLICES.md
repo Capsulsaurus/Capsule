@@ -99,7 +99,7 @@ its slice.
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
-| S-D8  | spargen REST client integration                      | blocked-external | in-house spargen | M   | blocked |
+| S-D8  | spargen REST client integration                      | sdk/clients     | in-house spargen | M    | blocked |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | done*   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | done*   |
@@ -129,9 +129,9 @@ its slice.
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
-| S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | blocked-external | upstream        | L    | blocked |
-| S-X2  | MLS membership + Welcome/history delivery            | blocked-external | S-X1            | L    | blocked |
-| S-X3  | Album upgrade ceremony + MLS resilience              | blocked-external | S-X2            | L    | blocked |
+| S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | ready   |
+| S-X2  | MLS membership + Welcome/history delivery            | crypto/mls      | S-X1             | L    | blocked |
+| S-X3  | Album upgrade ceremony + MLS resilience              | crypto/mls      | S-X2             | L    | blocked |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
 | S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | done*   |
 
@@ -200,10 +200,10 @@ pass until the gate lifts.
 | Library | Status | Gates |
 | --- | --- | --- |
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
-| `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
+| `spargen` (in-house OpenAPI **3.1** client generator) | in-house, imminent | S-D8 (typed REST client + `AuthenticatedClient` revival). Capsule-controlled, not an open-ended external gate — 3.1-native, unblocking soon; the only wait is our own release, tracked against spargen's repo milestones. Progenitor is gone — we do not downgrade schemas to 3.0. |
 | `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
 | `ptpip-rs` (in-house PTP/IP camera protocol; repo not yet created) | planned | S-B9 (post-v1). Portable Rust PTP/IP (ISO 15740 over TCP/IP) with a vendor-extension seam (Sony first) — see [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md). |
-| `openmls` X-Wing/SHA-512 ciphersuite (codepoint pending) | blocked upstream | S-X1 → S-X2 → S-X3 (tracked in Lane X). |
+| `openmls` (RFC 9420 MLS; X-Wing suite `0x004D` via the libcrux provider) | available — no longer a gate | S-X1 adopts `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`), which OpenMLS ships today. Capsule is a closed deployment (all clients are Capsule's; federation is Capsule↔Capsule), so an IANA codepoint — a third-party-interop concern — is not required; a private/experimental codepoint is sufficient. X-Wing is off the WG standards track (the WG's `draft-ietf-mls-pq-ciphersuites` moved to direct ML-KEM hybrid; X-Wing-in-MLS is the non-adopted `draft-mahy-mls-xwing`), so if Capsule ever needs the ratified suite it migrates via the S-X3 upgrade ceremony + `crypto_suite_id`. Lane X (S-X1 → S-X2 → S-X3) is now ordinary sequenced work, not upstream-blocked. |
 
 ## Lane A — core crypto
 
@@ -949,9 +949,10 @@ SDK; they never hand-roll network flows.
 
 - **Contract:** [API Surfaces — Why Two Transports](capsule-docs/src/content/docs/design/api-surfaces.md);
   the parked wrapper in `capsule-sdk/src/lib.rs`.
-- **Blocked on:** in-house `spargen` (OpenAPI 3.1 client generator) reaching usable
-  stability **and** the server's OpenAPI schema stabilizing post-S-C1. Unblock check:
-  spargen repo milestones; re-evaluate monthly.
+- **Gated on (internal, imminent):** in-house `spargen` (OpenAPI 3.1 client generator)
+  reaching usable stability **and** the server's OpenAPI schema stabilizing post-S-C1.
+  Capsule-controlled — not an external gate; the wait is our own release, tracked against
+  spargen's repo milestones (re-evaluate monthly).
 - **Deliverable:** generate the typed REST client from the OpenAPI 3.1 schema (no 3.0
   downgrade, ever), revive `AuthenticatedClient` over it (composing S-D7's token
   store), and delete the parked comment blocks.
@@ -1171,7 +1172,7 @@ SDK; they never hand-roll network flows.
   capture-time ordering, per-origin partial-view indicator), leave = assertion
   removal (+ optional unshare), per-origin moderation drop. Zero new server surface —
   buildable against `ReferenceAuthority` fixtures while MLS membership (S-X2) is
-  blocked; user-facing multi-user invites ride S-X2 (same caveat as organization's
+  pending; user-facing multi-user invites ride S-X2 (same caveat as organization's
   invitation surface).
 - **Depends on:** S-E2 (cross-server read path), S-D2 (feed consumer). **Done when:**
   the federation doc's aggregated-album Validation bullets pass (composition,
@@ -1442,28 +1443,34 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   `translate-readme-check` wired into `check-rust` after `i18n-check`;
   drift proven end-to-end (source mutation → exit 1).
 
-## Lane X — blocked on upstream
+## Lane X — MLS group layer
 
 ### S-X1 — OpenMLS backend → `OpenMlsAuthority`
 
 - **Contract:** [Cryptography — MLS](capsule-docs/src/content/docs/design/cryptography/mls.md)
   (status note), [Keys — Write Authority Interface](capsule-docs/src/content/docs/design/cryptography/keys.md).
-- **Blocked on:** the deliberate hold in the MLS status note — the target suite
-  `MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519` has no IANA codepoint (non-final
-  `draft-ietf-mls-pq-ciphersuites`) and no shipping OpenMLS backend (openmls#1940 is
-  open with no PR; today's libcrux provider ships only the superseded SHA-256
-  variant). **Unblock check:** openmls release notes + draft status; re-evaluate the
-  suite pin itself, not just backend availability; quarterly.
+- **Approach (unblocked 2026-07):** adopt `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
+  (`0x004D`), the X-Wing suite OpenMLS ships today via its libcrux provider — dropping the
+  earlier SHA-512 re-pin (only the MLS-internal transcript hash changes; ChaCha20 + Ed25519
+  are unchanged, so the ChaCha20 and Ed25519/ML-DSA-identity-layer rationale in
+  [MLS](capsule-docs/src/content/docs/design/cryptography/mls.md) still holds). Capsule is a
+  closed deployment, so the missing IANA codepoint is not a blocker; a future migration to a
+  WG-standardized ML-KEM-hybrid suite rides S-X3 + `crypto_suite_id`. No longer gated on
+  upstream — this is implementation effort now.
 - **Deliverable:** `OpenMlsAuthority` behind `&dyn AlbumAuthority` — drops in without
   touching `verify_asset`; the `ReferenceAuthority` epoch ledger stays as the offline
-  and test authority.
+  and test authority. One real coupling to unwind during implementation: `WorkspaceState`
+  stores `authorities: HashMap<Uuid, ReferenceAuthority>` (`lifecycle.rs`) and `drop/mod.rs`
+  names the concrete type — both move to `Box<dyn AlbumAuthority>` (or an enum/generic) so
+  the live backend can be swapped in.
 
 ### S-X2 — MLS membership + Welcome/history delivery
 
 - **Deliverable:** the four membership ceremonies, `AlbumKeyDistribution`, history
-  policies. **Depends on:** S-X1. Enables organization's invitation surface,
-  moderation's per-user block, enrollment's group joins (their docs carry the status
-  note).
+  policies. **Depends on:** S-X1 (sequenced internal work now — no longer upstream-blocked;
+  the MLS backend is available once S-X1 lands `OpenMlsAuthority`). Enables organization's
+  invitation surface, moderation's per-user block, enrollment's group joins (their docs
+  link to the MLS note).
 
 ### S-X3 — Album upgrade ceremony + MLS resilience
 
@@ -1471,7 +1478,10 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   (state divergence, lost commits, the re-keying ceremony, `ReconcileOutcome`),
   [Versioning](capsule-docs/src/content/docs/design/versioning.md) (upgrade ceremony).
 - **Deliverable:** the tombstone-plus-fork ceremony, re-keying, reconciliation
-  (`ReconcileOutcome`). **Depends on:** S-X2; E2E case 8.
+  (`ReconcileOutcome`) — and, as the general suite-migration path, the vehicle for a future
+  move off the `0x004D` X-Wing suite to a WG-standardized ML-KEM-hybrid suite should Capsule
+  ever need it. **Depends on:** S-X2 (sequenced internal work — not upstream-blocked); E2E
+  case 8.
 
 ## Lane Z — design follow-ups (docs, not code)
 
