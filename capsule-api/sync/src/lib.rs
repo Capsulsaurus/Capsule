@@ -2,27 +2,13 @@ use std::convert::Infallible;
 
 use config::SyncServerConfig;
 use eyre::Result;
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use http_body_util::BodyStream;
-use proto::photolibrary::metadata::v1::photo_library_metadata_service_server::{
-    PhotoLibraryMetadataService, PhotoLibraryMetadataServiceServer,
-};
-use proto::photolibrary::metadata::v1::{
-    CreateAlbumRequest, CreateAlbumResponse, CreatePhotoMetadataRequest,
-    CreatePhotoMetadataResponse, CreateTagRequest, CreateTagResponse, DeleteAlbumRequest,
-    DeleteAlbumResponse, DeletePhotoRequest, DeletePhotoResponse, DeleteTagRequest,
-    DeleteTagResponse, GetAlbumRequest, GetAlbumResponse, GetPhotoRequest, GetPhotoResponse,
-    GetTagRequest, GetTagResponse, ListAlbumsRequest, ListAlbumsResponse, ListPhotosRequest,
-    ListPhotosResponse, ListTagsRequest, ListTagsResponse, SyncMetadataRequest,
-    SyncMetadataResponse, UpdateAlbumRequest, UpdateAlbumResponse, UpdatePhotoMetadataRequest,
-    UpdatePhotoMetadataResponse,
-};
 use salvo::cors::{AllowOrigin, Cors};
 use salvo::http::{Method, ResBody, StatusError};
 use salvo::prelude::*;
 use salvo::{BoxedError, hyper};
 use sea_orm::DatabaseConnection;
-use tonic::{Request, Response, Status};
 use tower::{Layer, Service};
 
 pub mod config;
@@ -36,17 +22,6 @@ mod tests;
 pub use feed::SyncFeedService;
 
 pub mod proto {
-    // LEGACY-PLAINTEXT (frozen): SLICES.md S-G2 — the pre-E2EE metadata service. It
-    // models plaintext photos/albums/tags the key-free server never sees; it is kept
-    // compiling but frozen, and retires once `capsule.sync.v1` reaches parity.
-    pub mod photolibrary {
-        pub mod metadata {
-            pub mod v1 {
-                tonic::include_proto!("photolibrary.metadata.v1");
-            }
-        }
-    }
-
     /// The key-free sync feed (contract skeleton — slice `S-C2` in the repo-root
     /// `SLICES.md`; SSoT: <https://docs/design/import/download-sync/>).
     pub mod capsule {
@@ -58,127 +33,7 @@ pub mod proto {
     }
 }
 
-// LEGACY-PLAINTEXT (frozen): SLICES.md S-G2 — see the proto module note above.
-#[derive(Default, Debug, Clone)]
-pub struct CapsuleMetadataService {
-    // Inject DB or Config here if needed
-}
-
-type SyncMetadataStream =
-    std::pin::Pin<Box<dyn Stream<Item = Result<SyncMetadataResponse, Status>> + Send + 'static>>;
-
-#[tonic::async_trait]
-impl PhotoLibraryMetadataService for CapsuleMetadataService {
-    async fn list_photos(
-        &self,
-        _request: Request<ListPhotosRequest>,
-    ) -> Result<Response<ListPhotosResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn get_photo(
-        &self,
-        _request: Request<GetPhotoRequest>,
-    ) -> Result<Response<GetPhotoResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn create_photo_metadata(
-        &self,
-        _request: Request<CreatePhotoMetadataRequest>,
-    ) -> Result<Response<CreatePhotoMetadataResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn update_photo_metadata(
-        &self,
-        _request: Request<UpdatePhotoMetadataRequest>,
-    ) -> Result<Response<UpdatePhotoMetadataResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn delete_photo(
-        &self,
-        _request: Request<DeletePhotoRequest>,
-    ) -> Result<Response<DeletePhotoResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn list_albums(
-        &self,
-        _request: Request<ListAlbumsRequest>,
-    ) -> Result<Response<ListAlbumsResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn get_album(
-        &self,
-        _request: Request<GetAlbumRequest>,
-    ) -> Result<Response<GetAlbumResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn create_album(
-        &self,
-        _request: Request<CreateAlbumRequest>,
-    ) -> Result<Response<CreateAlbumResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn update_album(
-        &self,
-        _request: Request<UpdateAlbumRequest>,
-    ) -> Result<Response<UpdateAlbumResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn delete_album(
-        &self,
-        _request: Request<DeleteAlbumRequest>,
-    ) -> Result<Response<DeleteAlbumResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn list_tags(
-        &self,
-        _request: Request<ListTagsRequest>,
-    ) -> Result<Response<ListTagsResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn get_tag(
-        &self,
-        _request: Request<GetTagRequest>,
-    ) -> Result<Response<GetTagResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn create_tag(
-        &self,
-        _request: Request<CreateTagRequest>,
-    ) -> Result<Response<CreateTagResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    async fn delete_tag(
-        &self,
-        _request: Request<DeleteTagRequest>,
-    ) -> Result<Response<DeleteTagResponse>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-
-    type SyncMetadataStream = SyncMetadataStream;
-
-    async fn sync_metadata(
-        &self,
-        _request: Request<SyncMetadataRequest>,
-    ) -> Result<Response<Self::SyncMetadataStream>, Status> {
-        Err(Status::unimplemented("Not implemented yet"))
-    }
-}
-
-/// A Salvo handler that wraps a tonic gRPC service (the legacy metadata service and the
-/// key-free `SyncService` both ride it).
+/// A Salvo handler that wraps a tonic gRPC service (the key-free `SyncService` rides it).
 #[derive(Clone)]
 pub struct GrpcHandler<S> {
     service: S,
@@ -258,8 +113,8 @@ pub async fn get_router<C: Into<SyncServerConfig>>(
 ) -> Result<Router> {
     let config = config.into();
 
-    // The key-free sync feed (SLICES.md S-C2). Mounted at its explicit service path BEFORE
-    // the legacy catch-all so it wins matching. The `tonic_web::GrpcWebLayer` wrap lets the
+    // The key-free sync feed (SLICES.md S-C2). Mounted at its explicit service path. The
+    // `tonic_web::GrpcWebLayer` wrap lets the
     // SAME service also answer browser gRPC-web calls (slice S-D6: the web gateway can only
     // speak gRPC-web, not native gRPC) — a key-free enabling wrap that neither forks the
     // service nor changes what it serves (the manifest/metadata stay opaque). Native gRPC
@@ -295,21 +150,14 @@ pub async fn get_router<C: Into<SyncServerConfig>>(
         ])
         .into_handler();
 
-    // LEGACY-PLAINTEXT (frozen): SLICES.md S-G2.
-    let service = CapsuleMetadataService::default();
-    let grpc_service = PhotoLibraryMetadataServiceServer::new(service);
-    let handler = GrpcHandler::new(grpc_service);
-
     // gRPC routes match the full path including the service name. Salvo wildcards use the
-    // `{**rest}` wisp syntax; the sync service path is matched BEFORE the legacy catch-all so
-    // it wins. (The tonic server does its own per-method dispatch under this prefix.)
-    let router = Router::new()
-        .push(
-            Router::with_path("capsule.sync.v1.SyncService/{**rest}")
-                .hoop(cors)
-                .goal(sync_feed),
-        )
-        .push(Router::with_path("{**rest}").goal(handler));
+    // `{**rest}` wisp syntax; the tonic server does its own per-method dispatch under this
+    // prefix.
+    let router = Router::new().push(
+        Router::with_path("capsule.sync.v1.SyncService/{**rest}")
+            .hoop(cors)
+            .goal(sync_feed),
+    );
 
     Ok(router)
 }

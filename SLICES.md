@@ -119,7 +119,7 @@ its slice.
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
-| S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
+| S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | done    |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | done    |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
@@ -1360,6 +1360,12 @@ keeps compiling and takes no new surface.
 
 - **Deliverable:** delete `photolibrary.metadata.v1` (proto + `CapsuleMetadataService`)
   once `capsule.sync.v1` serves clients. **Depends on:** S-C2, S-D2.
+- **Landed:** deleted the proto (337 lines), its `build.rs` compilation,
+  `CapsuleMetadataService` (all-`unimplemented` stub), the `include_proto!`
+  module, and the legacy catch-all router mount — only `capsule.sync.v1`'s
+  `SyncService` is mounted now; `GrpcHandler` retained (the key-free feed rides
+  it). Repo-wide sweep confirmed no consumers of the generated types outside the
+  sync crate.
 
 ### S-G3 — Plaintext entity retirement
 
