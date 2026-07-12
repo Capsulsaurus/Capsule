@@ -10,14 +10,23 @@ Implemented in `capsule-api-auth`: OIDC handler (`oidc`), session ledger (`sessi
 
 ## Design Principles
 
-- **Minimal surface.** The full OpenID Connect specification is implemented so identity is offloaded to an external provider where the user prefers it.
+- **Two first-class auth paths.** Local auth (password + TOTP, passkeys) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth ships today.
 - **Cryptographic binding.** The user's identity is cryptographically bound to their master key. The server never sees the plaintext master key.
 
 ## Account Types
 
-- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP or passkeys, which cryptographically bind the user to their master key.
+- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP, passkeys, or OIDC ([Choosing an Auth Path](#choosing-an-auth-path)); the login credential authenticates the session while the master key stays cryptographically bound to the user.
 - **Delegated/sponsored accounts.** Encrypted with keys derived from a registered account's master key. They do not have their own identity and rely on the registered account for authentication and key management. Owners of the sponsored account have full access. See [Cryptography — Keys: Delegated/Sponsored accounts](/design/cryptography/keys/#delegatedsponsored-accounts) for the key derivation.
 - **Non-registered accounts.** No associated identity or master key — used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link, and for [web-upload links](/design/web-upload/), where a guest seals contributions to a link-scoped key without read access.
+
+## Choosing an Auth Path
+
+Both paths mint the same Capsule [sessions](#session-and-access-tokens) and bind identity to the master key the same way; the difference is who verifies the login credential (decision 2026-07-12):
+
+- **Local auth** (password + TOTP, or passkeys) — recommended for personal and self-hosted single-user or household servers: no external dependency, the server is self-contained.
+- **OIDC** (external identity provider, authorization-code + PKCE) — recommended for enterprise and organizational deployments that already run an IdP, and for anyone wanting SSO. Capsule is a relying party only; account lifecycle policy lives at the IdP.
+
+A deployment may enable either or both. Neither path weakens the cryptographic binding: the IdP (or password) authenticates the *session*; the master key never derives from, and is never visible to, the credential verifier.
 
 ## Identity and Discovery
 
@@ -40,8 +49,13 @@ Every well-known path Capsule serves, in one census. Each path's record format i
 | `.well-known/capsule/moved/{user}`   | The IK-signed moved certificate for a migrated account.                                                                          | this doc ([Account Portability](#account-portability))                                                  |
 | `.well-known/capsule/revoked-jti`    | Federation capability revocation list (bounded to ≤ 24 h of revocations).                                                        | [Federation](/design/federation/#token-lifecycle-and-chain-of-trust)                                    |
 | `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
+| `.well-known/capsule/attestation-keys` | The server's storage-attestation public keys + append-only key history.                                                        | [Storage Verification](/design/import/storage-verification/)                                              |
+
+**Status note.** v1 serves `attestation-keys` today; `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability).
 
 ## Account Portability
+
+**Status: post-v1** (decision 2026-07-12). No moved-certificate route or migration flow ships in v1; the contract below is normative for when it lands.
 
 A user must be able to move servers without losing their identity. Capsule does **not** need a separate DID system: the user identity key (User IK — see [Cryptography — Keys](/design/cryptography/keys/#user-identity-keys-user-iks)) is *already* a server-independent root of trust. Only the `user@server.tld` handle is host-bound.
 

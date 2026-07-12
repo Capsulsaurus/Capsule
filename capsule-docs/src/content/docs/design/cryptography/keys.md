@@ -71,6 +71,8 @@ A device key can be revoked without affecting the user's identity or other devic
 
 ### Owner Group Keys (OGKs)
 
+**Status: designed, implementation deferred post-v1** (decision 2026-07-12). Nothing implements the owner MLS group yet. Deferring it also defers what it gates: the [library-settings document](/design/metadata/#the-library-settings-document)'s keying, the OGK-escrow recovery path, and the Drop-Key multi-device re-wrap ([Web Upload](/design/web-upload/)). Master-key escrow remains the v1 recovery path.
+
 Assets' `owner_id` maps to a set of users; treat each owner as an MLS group.
 
 - **Type:** Symmetric AES-256 root key of an MLS group whose members are the owner's user set.

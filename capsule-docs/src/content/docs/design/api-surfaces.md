@@ -12,15 +12,15 @@ Capsule's server exposes exactly **two** wire transports, chosen per surface: **
 | --------------------------------------------------------- | -------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------- |
 | Authentication (sessions, passkeys, TOTP, OIDC)           | REST                                         | `capsule-api-auth`                   | [Authentication](/design/authentication/)                              |
 | Resumable upload (`POST/HEAD/PATCH /upload`)              | REST                                         | `capsule-api-upload`                 | [Import — Upload Protocol](/design/import/upload-protocol/)            |
-| Lifecycle writes (`POST /albums/{album_id}/ops`)          | REST                                         | `capsule-api-upload::ops` (planned)  | [Authorization](/design/authorization/#the-lifecycle-write-surface)    |
+| Lifecycle writes (`POST /albums/{album_id}/ops`)          | REST                                         | `capsule-api-upload::ops`  | [Authorization](/design/authorization/#the-lifecycle-write-surface)    |
 | Blob fetch (`GET /blob/{hash}`, HTTP `Range`)             | REST                                         | `capsule-api-media`                  | [Import — Download & Sync](/design/import/download-sync/)              |
-| Share serving (`/s/{opaque-id}`)                          | REST                                         | `capsule-api-media::shares` (planned) | [Share Links](/design/share-links/)                                    |
-| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption)      | REST                                         | `capsule-api-media::drops` (planned) | [Web Upload](/design/web-upload/)                                      |
-| Storage verification (`POST /storage/verify`)             | REST                                         | `capsule-api-media::verify` (planned) | [Import — Storage Verification](/design/import/storage-verification/)  |
-| Device enrollment (`/auth/devices/enroll…`)               | REST                                         | `capsule-api-auth::devices` (planned) | [Device Enrollment](/design/device-enrollment/)                        |
+| Share serving (`/s/{opaque-id}`)                          | REST                                         | `capsule-api-media::shares` | [Share Links](/design/share-links/)                                    |
+| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption)      | REST                                         | `capsule-api-media::drops` | [Web Upload](/design/web-upload/)                                      |
+| Storage verification (`POST /storage/verify`)             | REST                                         | `capsule-api-media::verify` | [Import — Storage Verification](/design/import/storage-verification/)  |
+| Device enrollment (`/auth/devices/enroll…`)               | REST                                         | `capsule-api-auth::devices` | [Device Enrollment](/design/device-enrollment/)                        |
 | Version/handshake surface                                 | REST                                         | `capsule-api`                        | [Threat Model — Validation](/design/threat-model/validation/)          |
-| **Sync feed** (change discovery after a cursor)           | **gRPC** — `capsule.sync.v1.SyncService`     | `capsule-api-sync` (stub today)      | [Import — Download & Sync](/design/import/download-sync/)              |
-| **Federation pull** (peer server fetches an album's feed) | **gRPC** — same service, capability-gated    | `capsule-api-sync::federation` (planned) | [Federation](/design/federation/)                                      |
+| **Sync feed** (change discovery after a cursor)           | **gRPC** — `capsule.sync.v1.SyncService`     | `capsule-api-sync`      | [Import — Download & Sync](/design/import/download-sync/)              |
+| **Federation pull** (peer server fetches an album's feed) | **gRPC** — same service, capability-gated    | `capsule-api-sync::federation` (gRPC capability gate: `S-E5`) | [Federation](/design/federation/)                                      |
 | Library queries (timeline, albums, search)                | **none — client-side** over `library.sqlite` | `capsule-core::library` + `db`       | [Organization](/design/organization/#system--smart-albums-views)       |
 
 Two consequences worth stating plainly:
@@ -28,9 +28,11 @@ Two consequences worth stating plainly:
 - **Blob bytes always ride REST.** Ranged, resumable byte transfer is what HTTP is best at (`Range`, caches, proxies); gRPC has no ranged-read idiom. The gRPC surface carries only the small, typed feed — content hashes, envelopes, encrypted metadata blobs — never original or derivative bytes.
 - **Rich queries have no server surface at all.** The server is key-free and cannot evaluate a content predicate; every timeline, filter, and smart-album query runs client-side against the rebuildable local index. What the server offers is exactly the feed needed to *build* that index.
 
+**Status note (web client).** The browser's authenticated read path is a key-free projection of the sync feed (ids, membership, blob addresses); the Worker-hosted WASM decode/verify boundary that would fill decrypted titles/thumbnails is **post-v1** (decision 2026-07-12). v1's web surfaces are the guest drop and the share-link viewer.
+
 ## Why Two Transports
 
-- **REST + OpenAPI** for every request/response surface: the OpenAPI **3.1** schema is the machine-readable contract that generates `capsule-sdk`'s typed REST client via `spargen`, our in-house generator (in development; SLICES.md `S-D8`). Progenitor was dropped because it consumes OpenAPI 3.0 only, forcing a lossy 3.1→3.0 down-conversion — we do not downgrade schemas. A plain HTTP surface stays debuggable with nothing but `curl` — which matters for a self-hosted product.
+- **REST + OpenAPI** for every request/response surface: the OpenAPI **3.1** schema is the machine-readable contract that generates `capsule-sdk`'s typed REST client via `spargen`, our in-house generator (released; integrated per SLICES.md `S-D8`). Progenitor was dropped because it consumes OpenAPI 3.0 only, forcing a lossy 3.1→3.0 down-conversion — we do not downgrade schemas. A plain HTTP surface stays debuggable with nothing but `curl` — which matters for a self-hosted product.
 - **gRPC** only where a typed, paged feed contract earns it: the sync feed and its federation twin are one proto contract consumed by every client and every peer server, with the signed manifest traveling as opaque canonical CBOR inside it (never re-modeled as proto fields — re-encoding would detach it from its signatures).
 
 ## Legacy: GraphQL (removed)

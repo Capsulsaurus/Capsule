@@ -62,6 +62,8 @@ Scope {
 - **Resolution order** (first match wins): explicit user pick at import time → `scope_id` override row → per-source-kind default row (e.g. "all screenshots → Screenshots") → the owner's `default_album_id` pointer → the derived de facto album. Deterministic by construction; the planner records which rule fired so a surprising destination is explainable after the fact.
 - **Unmapped sources ask once.** The first import from a new scope surfaces a "where should photos from *X* go?" choice, whose answer is written as the scope's override row — automated imports never silently invent destinations.
 
+**Status note.** The settings-document-backed rows (`scope_overrides`, `source_kind_defaults`) are deferred post-v1 with the [library-settings document](/design/metadata/#the-library-settings-document); v1 ships the base resolution — explicit user pick → the owner's `default_album_id` pointer → the derived de facto album, with the fired rule recorded (slice `S-B12`).
+
 ### System & Smart Albums (Views)
 
 View albums are organizational surfaces computed entirely client-side over the assets the user can already decrypt (the union of their container-album memberships), materialized by querying the [local index](/design/filesystem/client/#local-index-staleness). The [aggregated federated album](/design/federation/#federated-shared-albums-aggregated-albums) is a view in exactly this sense — its predicate is an album-group id spanning constituents on different home servers. A view is **not** an MLS group, holds **no** AMK, **owns no assets**, and is **not** a sharing or access-control boundary — sharing happens only at the container tier. Two kinds:
@@ -70,6 +72,8 @@ View albums are organizational surfaces computed entirely client-side over the a
 - **Smart / dynamic albums** — user-defined filtered views whose membership is a predicate over sidecar fields and AI-derived attributes ([Metadata](/design/metadata/#sidecar-schema-v1), [AI](/design/ai/)). Membership is **computed**, never stored: editing a smart album, or an asset's attributes, never moves or re-encrypts an asset. A definition (predicate + display name) is user content — stored in the per-owner, E2E-encrypted **library-settings document** whose envelope, keying, and versioning are owned by [Metadata — The Library-Settings Document](/design/metadata/#the-library-settings-document), synced across the user's devices with the same [CRDT semantics](/design/metadata/#collaborative-metadata) as other collaborative metadata, so the server never learns it. This doc owns the definition's *shape* — the [Smart-Album Definition Schema](#smart-album-definition-schema) below — while that document owns how it is carried and merged.
 
 #### Smart-Album Definition Schema
+
+**Status: designed, implementation deferred post-v1** with the [library-settings document](/design/metadata/#the-library-settings-document) that carries it (decision 2026-07-12). System views (All, Trash) ship in v1; user-defined smart albums wait on that document. The grammar below is normative as written.
 
 A smart album's definition is stored as one entry in the library-settings document's `smart_albums` map ([envelope owned by Metadata](/design/metadata/#the-library-settings-document)); this section owns its *shape* — a **closed, versioned, declarative predicate grammar** over the queryable [sidecar](/design/metadata/#sidecar-schema-v1) and [AI-namespaced](/design/ai/#ai-output-containment) fields. It is declarative on purpose: a definition is stored data that syncs to every one of the owner's devices, so it must evaluate identically everywhere and can carry no code, no regex, and no unbounded input.
 
@@ -113,6 +117,8 @@ Adding a field, operator, or operand type is a **new, later-dated `predicate_sch
 ## Asset Stacking
 
 Related files often belong together — RAW+JPEG pairs, bursts, a video and its external audio track. Rather than clutter the library with near-identical entries, Capsule groups them into one stack via best-effort auto-detection.
+
+**Status note.** v1 auto-detection covers RAW+JPEG pairing (plus XMP sidecar attachment) only; detectors for the remaining [stack types](#stack-types) are post-v1. The schema and LWW semantics below are normative for every type now, and manual stacking of any type is unaffected.
 
 **Stacking is metadata-only.** A stack edit modifies the `stack_membership` field of each member asset's sidecar — an LWW register over `Option<StackMembership>` (leaving a stack is a stamped `None`), so concurrent stack edits from different devices converge order-independently under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) — and emits a `metadata-update` provenance record per affected asset. It **never** deletes, rewrites, or merges the underlying asset bytes — even a "best photo" choice within a burst is just the `role = primary` pointer in metadata, not a destructive operation. A buggy or malicious stack edit therefore cannot lose original bytes. The full atomicity rule (stage all `.tmp` files, rename together, discard on any rename failure) lives in [Filesystem — Atomic Writes](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery) and [Threat Model — Atomicity Invariants](/design/threat-model/validation/#atomicity-invariants).
 

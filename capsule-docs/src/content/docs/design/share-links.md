@@ -35,6 +35,8 @@ These are **normative** — the security-relevant decisions are committed; only 
 - **Home-server-only serving.** A share link is served **only by the album's [home server](/design/federation/#album-ownership-v1-single-home-server)**. A federated peer never serves a share; a share-scoped request at a peer returns a **structured `{ home_server }` JSON pointer** the client resolves — explicitly *not* an HTTP redirect, to avoid an open-redirect surface — never content. This keeps revocation and rate-limiting at a single authoritative point.
 - **Revocation cache.** Home-server-only serving still leaves *intra-server* staleness: the serve path may run on several processes or replicas of the one home server, which consult revocation state through a **short-TTL cache (default 60 s)** rather than an authoritative read per request. The posture is fail-closed, matching the [federation revocation list](/design/federation/#token-lifecycle-and-chain-of-trust): a serving process that cannot confirm a link is still live past the TTL refuses rather than serving on stale-allowed state. (A single-process deployment reads revocation state directly and the cache is a no-op.)
 
+**Status note.** v1's two rate limiters are per-process, under a single-replica deployment assumption; a shared (Valkey-backed) limiter for multi-replica home servers is post-v1. The revocation cache's fail-closed rule is implemented as specified.
+
 ## Contract Skeleton
 
 The surfaces consuming code needs; the security policies they enforce are fixed by the [Security Contract](#security-contract) above.

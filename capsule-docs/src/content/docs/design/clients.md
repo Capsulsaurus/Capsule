@@ -19,6 +19,8 @@ The offline-first requirement set every native client must satisfy — the local
 
 Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/import/download-sync/#auto-syncing) on platforms where the necessary APIs are not available.
 
+**Status note.** Background upload and push-driven auto-sync (e.g. iOS `BGTaskScheduler`) are post-v1 (decision 2026-07-12); v1 sync and upload are foreground-initiated.
+
 ## Client Validation Duties
 
 Clients are not trusted to enforce their own correctness — but they **are** responsible for **refusing to apply** state they cannot validate. The full client-side validation checklist is owned by [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants); the duties are summarized here so client implementations have a single in-doc reference for what they must do:
@@ -46,6 +48,8 @@ A client routinely encounters state a *newer* client wrote: unknown CBOR keys in
 This is the resolution of the former "new client UI surface" question: forward-written state is legible and safe, never silently dropped and never destructively rewritten.
 
 ## Sandboxed Decoder
+
+**Status: contract fixed, platform implementations post-v1** (decision 2026-07-12). Until a platform's sandbox lands, a client decoding remote-origin bytes in-process is running a documented deviation of this contract — the isolation requirement stands and is tracked in the post-v1 register (`SLICES.md`).
 
 Capsule's server never holds plaintext, so server-side image/video decoding is impossible by design. **Decoding happens on the client**, and the decode path is the largest remaining attack surface — image-format CVEs (libjpeg, libwebp, libheif, libavif have all shipped exploits in recent years) reach the client directly with attacker-controlled bytes.
 

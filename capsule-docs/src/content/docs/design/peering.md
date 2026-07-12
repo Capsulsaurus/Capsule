@@ -42,6 +42,8 @@ Discovery is **LAN-only** — there is no relay, no internet-wide rendezvous. mD
 
 If no peer answers, discovery fails silently and the device proceeds with ordinary server sync.
 
+**Status note.** The live mDNS responder (`mdns-sd`) is post-v1 — it is non-deterministic under CI; v1 ships the pure rotating-advertisement logic behind the `Discovery` seam with the in-process E2E (case 5). Peering is an accelerator: its absence never blocks sync.
+
 ## Establishing the Channel
 
 A peer connection is HTTP over a **mutually authenticated TLS 1.3** channel. The certificates presented are the **device keys themselves** — there is no CA. Concretely: the TLS handshake authenticates with the device key's **classical half** (as a raw public key or self-signed certificate — TLS 1.3 has no ML-DSA certificate path), and the **hybrid** check — that the presented key carries a valid hybrid signature chaining to the shared User IK, covering both halves per the [signature scheme](/design/cryptography/primitives/#signature-scheme), exactly as published in the [device directory](/design/cryptography/keys/#device-directory) — runs at the application layer over the established channel, before any payload byte. The directory *is* the trust anchor; a device not in it cannot complete the handshake.

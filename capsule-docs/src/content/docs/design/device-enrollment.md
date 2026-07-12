@@ -31,6 +31,8 @@ Two design points:
 
 ## Cross-Device Add
 
+**Status note.** The server surface (code issue/redeem, relay channel, directory update) is implemented; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
+
 When an existing signed-in device adds a new device to the same account:
 
 1. **Initiate from the existing device.** The user opens "Add another device" on device A (already signed in). Initiating an add requires a **fresh local device authorization** on A (biometric or device passcode) — a valid session token alone is **not** sufficient, so an attacker holding only a stolen session token cannot enroll a rogue device without physical control of A. Device A then generates a one-time **enrollment code** — **single-use, valid 10 minutes**, scoped to this one ceremony, collision-checked at generation, rate-limited at redemption, and deleted by the server on redemption or expiry; the QR payload carries **≥64 bits of entropy** (the text fallback may be shorter — see the presentation note below) — and displays it as a QR code (with a text fallback).

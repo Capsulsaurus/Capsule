@@ -25,8 +25,7 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 ├── incoming/
 │   └── {upload_id}.bin             # in-progress append-only upload, pre-verification
 ├── blobs/
-│   └── {hash[0:2]}/{hash[2:4]}/
-│       └── {hash}                  # finalized blob, content-addressed
+│   └── {hash}.bin                  # finalized blob, content-addressed
 └── .server/
     ├── version                     # server filesystem schema version
     └── config                      # server-wide configuration
@@ -34,7 +33,7 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 
 - **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
 - **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
-- **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/); the two-level hex-prefix shard keeps directory sizes bounded for multi-million-blob stores. A finalized blob is immutable.
+- **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix, in a single flat directory — amended 2026-07-12 to the landed layout: no hot path enumerates the directory, and modern filesystems handle multi-million-entry directories. If directory scaling ever bites, the pre-agreed migration is a two-level hex-prefix shard (`{hash[0:2]}/{hash[2:4]}/{hash}`) behind a `.server/version` bump. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
 
 ## Uniform, Opaque Blobs
@@ -107,7 +106,7 @@ Clients need to confirm an asset is *safely stored* before they discard their on
 
 ## Validation
 
-- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash[0:2]}/{hash[2:4]}/{hash}` on disk. Recompute the hash from disk; assert match.
+- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash}.bin` on disk. Recompute the hash from disk; assert match.
 - **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
 - **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
