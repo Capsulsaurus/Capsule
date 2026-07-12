@@ -131,7 +131,7 @@ its slice.
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | done    |
 | S-X2  | MLS membership + Welcome/history delivery            | crypto/mls      | S-X1             | L    | done    |
-| S-X3  | Album upgrade ceremony + MLS resilience              | crypto/mls      | S-X2             | L    | blocked |
+| S-X3  | Album upgrade ceremony + MLS resilience              | crypto/mls      | S-X2             | L    | done    |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
 | S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | done*   |
 
@@ -1543,6 +1543,24 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   move off the `0x004D` X-Wing suite to a WG-standardized ML-KEM-hybrid suite should Capsule
   ever need it. **Depends on:** S-X2 (sequenced internal work — not upstream-blocked); E2E
   case 8.
+- **Landed:** suite-parametric tombstone-plus-fork upgrade
+  (`UpgradeIntent`/`AlbumTombstone`/`fork_upgrade`: DSK-hybrid-signed intent
+  verified against the device directory, quiescence + pending-write queue,
+  `frozen_state_hash` recompute-and-abort on the receive side, `upgraded_from`
+  lineage, `intent_id`-keyed crash-resume through `export_state`); group re-keying
+  (`rekey_group` + two-phase `begin`/`finish`/`resume` — fresh AMK + write-tier,
+  assets not re-encrypted, prior AMKs retained for reads); reconciliation
+  (`reconcile_with_server(ServerChainView) → ReconcileOutcome`, all four variants,
+  + `LostCommitTracker` 30s/2m/10m retry); E2E case 8 in the in-process
+  multi-participant shape (incl. mid-ceremony crash-resume). Tombstoned albums
+  refuse every write ceremony; the tombstoned-member-cannot-write-into-fork
+  negative rides the fork's fresh write-tier key (terminal-reject through the
+  existing `verify_asset`, untouched). 14 new tests, one per Validation bullet
+  across mls-resilience.md + versioning.md; no new dependencies. Owed
+  (server-side halves, modeled outside per the no-server-changes guard): the
+  server-clock deadline evaluation (`is_expired` ships as the pure predicate),
+  `409` on stale upload sessions during quiescence, in-flight session drain, and
+  the manifest-layer wiring of `upgraded_from` for joiners.
 
 ## Lane Z — design follow-ups (docs, not code)
 

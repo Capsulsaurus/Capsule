@@ -781,3 +781,797 @@ fn export_import_state_round_trips_and_can_continue() {
     let next = restored.advance_epoch(true).unwrap();
     assert_eq!(next, AmkVersion(ceiling.0 + 1));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// S-X3 — album upgrade ceremony (tombstone-plus-fork) + MLS resilience
+//
+// Every Validation bullet from versioning.md § Validation (upgrade-ceremony bullets) and
+// mls-resilience.md § Validation gets a test here, driven through real OpenMLS state with the
+// two-plus in-process participants the module already uses. Server-side concerns (the server-clock
+// deadline, `409` on stale sessions, the drain of in-flight uploads) are modelled outside the
+// authority per the slice's scope guards.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// An album-state summary carrying a single synthetic manifest hash, so two members can be made to
+/// agree or disagree on the frozen state deterministically.
+fn summary(tag: u8) -> AlbumStateSummary {
+    AlbumStateSummary {
+        manifest_hashes: vec![hash::Hash32([tag; 32])],
+        provenance_head: Some(hash::Hash32([tag ^ 0x5A; 32])),
+    }
+}
+
+/// Sign a fresh `Create` manifest for `album` at `epoch` under `write_tier`, returning it with the
+/// author device's directory (the authorization check resolves the device DSK through it).
+fn signed_manifest(
+    album: Uuid,
+    epoch: AmkVersion,
+    write_tier: &HybridSigningKey,
+) -> (
+    crate::crypto::provenance::manifest::AssetManifest,
+    DeviceDirectory,
+) {
+    let device = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+    let user = Uuid::from_u128(0x05E2);
+    let dev_id = Uuid::from_u128(0xD1);
+    let directory = directory_for(user, dev_id, &device);
+    let manifest = create_manifest_core(album, epoch, user, dev_id)
+        .sign(&device, write_tier)
+        .unwrap();
+    (manifest, directory)
+}
+
+// ── Upgrade ceremony (versioning.md § Validation) ──────────────────────────────
+
+/// **Upgrade ceremony idempotency (smoke).** Run the ceremony; inject a crash *after* the tombstone
+/// commit (step 4) by exporting/reloading; assert the same `intent_id` produces no second fork — the
+/// reloaded admin is already tombstoned, so a second `commit_tombstone` is refused, and a duplicate
+/// `AlbumTombstone` delivered to a member is a no-op at the MLS layer.
+#[test]
+fn upgrade_idempotency_no_second_fork_after_resume() {
+    let album = Uuid::from_u128(0x0F0F);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+
+    // Steps 1–2: propose + quiesce.
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let intent_id = proposal.signed_intent.intent.intent_id;
+    bob.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory())
+        .unwrap();
+
+    // Step 4: tombstone. Both members share the same summary → hashes agree.
+    let sm = summary(0x11);
+    let tomb = admin.commit_tombstone(&sm).unwrap();
+    assert_eq!(tomb.intent_id, intent_id);
+    bob.process_tombstone(to_in(tomb.commit.clone()), &sm)
+        .unwrap();
+    assert_eq!(admin.is_tombstoned(), Some(intent_id));
+    assert_eq!(bob.is_tombstoned(), Some(intent_id));
+
+    // Crash after step 4: export/reload the admin. It comes back already tombstoned.
+    let restored = OpenMlsAuthority::import_state(&admin.export_state().unwrap()).unwrap();
+    assert_eq!(restored.is_tombstoned(), Some(intent_id));
+    assert!(restored.has_completed_intent(intent_id));
+    let mut restored = restored;
+    // Resuming: a second tombstone under the same intent is refused — no second cutover, no fork #2.
+    assert!(matches!(
+        restored.commit_tombstone(&sm),
+        Err(OpenMlsAuthorityError::Tombstoned(_))
+    ));
+    // A duplicate AlbumTombstone re-delivered to bob is rejected at the MLS layer (stale epoch).
+    assert!(bob.process_tombstone(to_in(tomb.commit), &sm).is_err());
+    assert_eq!(bob.epoch_ceiling(), admin.epoch_ceiling());
+}
+
+/// **Divergent member state aborts the upgrade (versioning.md step 4).** A member whose recomputed
+/// `frozen_state_hash` differs from the proposer's rejects the tombstone; the abort is clean (the
+/// member is *not* tombstoned and the album returns to normal operation).
+#[test]
+fn upgrade_aborts_on_divergent_frozen_state() {
+    let album = Uuid::from_u128(0x0D1F);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    bob.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory())
+        .unwrap();
+
+    // Admin commits over summary A; bob's view diverges (summary B) → hash mismatch → abort.
+    let tomb = admin.commit_tombstone(&summary(0xA1)).unwrap();
+    let err = bob.process_tombstone(to_in(tomb.commit), &summary(0xB2));
+    assert!(matches!(
+        err,
+        Err(OpenMlsAuthorityError::FrozenStateMismatch)
+    ));
+    assert_eq!(
+        bob.is_tombstoned(),
+        None,
+        "aborted member is not tombstoned"
+    );
+    // Bob's group returned to normal: it can still author a write ceremony.
+    assert!(bob.rotate_epoch().is_ok());
+}
+
+/// **Stranded write queue (versioning.md smoke) + fork continuity.** During quiescence a member
+/// queues a write locally; the upgrade completes (tombstone → fork); the queued write is re-encoded
+/// against the fork and replayed — asserting **no write is lost**, the fork carries the
+/// `upgraded_from` continuity pointer, and (suite-parametric) the lineage records the target suite.
+#[test]
+fn upgrade_forks_and_replays_stranded_writes() {
+    let album = Uuid::from_u128(0x0F0C);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let bob_dev = Device::new(0x2, 0x22, 2);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &bob_dev, HistoryPolicy::Full);
+
+    // Steps 1–2: propose + quiesce. A hypothetical *target* crypto_suite_id proves the ceremony is
+    // suite-parametric even though only 0x0001 is implemented today.
+    const TARGET_SUITE: u16 = 0x0002;
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            TARGET_SUITE,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let intent_id = proposal.signed_intent.intent.intent_id;
+    bob.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory())
+        .unwrap();
+
+    // Bob queues a write locally during quiescence (not sent to the server).
+    let stranded_file = Uuid::from_u128(0xF11E);
+    bob.queue_pending_write(stranded_file.as_bytes().to_vec())
+        .unwrap();
+
+    // Step 4: tombstone (both agree).
+    let sm = summary(0x33);
+    let tomb = admin.commit_tombstone(&sm).unwrap();
+    bob.process_tombstone(to_in(tomb.commit), &sm).unwrap();
+
+    // Step 5: fork — a fresh album group at the target version.
+    let new_album = Uuid::now_v7();
+    let lineage = UpgradeLineage {
+        old_album_id: album,
+        intent_id,
+        frozen_state_hash: tomb.frozen_state_hash,
+        from_suite_id: CRYPTO_SUITE_ID,
+        to_suite_id: TARGET_SUITE,
+    };
+    let mut fork_admin = OpenMlsAuthority::fork_upgrade(
+        admin_dev.identity(),
+        new_album,
+        lineage,
+        HistoryPolicy::Full,
+    )
+    .unwrap();
+    assert_eq!(fork_admin.upgraded_from().unwrap().old_album_id, album);
+    assert_eq!(
+        fork_admin.upgraded_from().unwrap().to_suite_id,
+        TARGET_SUITE
+    );
+    assert_eq!(
+        fork_admin.epoch_ceiling(),
+        AmkVersion(1),
+        "fork mints AMK_v1"
+    );
+    // Members migrate into the fork (standard add/join).
+    let bob_fork = add_and_join(&mut fork_admin, &bob_dev, HistoryPolicy::Full);
+
+    // Step 6: replay the stranded write, re-encoded against the fork. Assert none was lost.
+    let queued = bob.take_pending_writes();
+    assert_eq!(
+        queued.len(),
+        1,
+        "the quiesced write survived to be replayed"
+    );
+    assert_eq!(queued[0], stranded_file.as_bytes().to_vec());
+    let fork_epoch = bob_fork.epoch_ceiling();
+    let write_tier = bob_fork.write_tier_signing_key(fork_epoch).unwrap();
+    let (manifest, directory) = signed_manifest(new_album, fork_epoch, write_tier);
+    assert_eq!(
+        verify_asset(&manifest, CIPHERTEXT, &directory, &fork_admin, None),
+        VerifyOutcome::Accept,
+        "the replayed write verifies in the fork"
+    );
+}
+
+/// **Version-mismatched-client damage / tombstone freeze (versioning.md).** After the tombstone, the
+/// old album refuses every write ceremony; and a member on the frozen album cannot write into the
+/// fork without processing the ceremony — its old-album write-tier key does not verify at the fork's
+/// fresh epoch.
+#[test]
+fn tombstoned_album_refuses_writes_and_old_keys_do_not_verify_in_fork() {
+    let album = Uuid::from_u128(0x0DEF);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let old_write_tier = admin
+        .write_tier_signing_key(admin.epoch_ceiling())
+        .unwrap()
+        .clone();
+
+    admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let tomb = admin.commit_tombstone(&summary(0x44)).unwrap();
+
+    // Every write ceremony on the frozen album now refuses.
+    assert!(matches!(
+        admin.rotate_epoch(),
+        Err(OpenMlsAuthorityError::Tombstoned(_))
+    ));
+    assert!(matches!(
+        admin.advance_epoch(true),
+        Err(OpenMlsAuthorityError::Tombstoned(_))
+    ));
+    assert!(matches!(
+        admin.begin_rekey(RekeyReason::AdminInitiated),
+        Err(OpenMlsAuthorityError::Tombstoned(_))
+    ));
+
+    // Fork the album; a stale write signed with the OLD album's write-tier key does not verify at
+    // the fork's fresh epoch (the fork attested a different, freshly-minted write-tier public key).
+    let new_album = Uuid::now_v7();
+    let lineage = UpgradeLineage {
+        old_album_id: album,
+        intent_id: tomb.intent_id,
+        frozen_state_hash: tomb.frozen_state_hash,
+        from_suite_id: CRYPTO_SUITE_ID,
+        to_suite_id: CRYPTO_SUITE_ID,
+    };
+    let fork_admin = OpenMlsAuthority::fork_upgrade(
+        admin_dev.identity(),
+        new_album,
+        lineage,
+        HistoryPolicy::Full,
+    )
+    .unwrap();
+    let (stale, directory) =
+        signed_manifest(new_album, fork_admin.epoch_ceiling(), &old_write_tier);
+    assert!(
+        matches!(
+            verify_asset(&stale, CIPHERTEXT, &directory, &fork_admin, None),
+            VerifyOutcome::TerminalReject(_)
+        ),
+        "old-album write-tier key must not authorize a write into the fork"
+    );
+}
+
+/// **Hostile / stale proposal defence (versioning.md step 1).** An `UpgradeIntent` whose proposer
+/// signature does not verify against the device directory is rejected; and a *second* intent under a
+/// different `intent_id` is rejected while one is already in flight (only one upgrade per album).
+#[test]
+fn upgrade_intent_signature_and_single_flight_are_enforced() {
+    let album = Uuid::from_u128(0x0517);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+
+    // A directory publishing a *different* DSK for the proposer device → the hybrid signature over
+    // the intent does not verify. Checked directly on the signed intent (decoupled from MLS
+    // message consumption, which is single-use per the secret-tree ratchet).
+    let wrong_dsk = HybridSigningKey::from_seed_bytes(&[0x9; 32], &[0x9; 32]);
+    let tampered_dir = DirectoryCore {
+        user_id: admin_dev.user_id,
+        directory_version: 1,
+        updated_at: "2026-05-30T00:00:00Z".into(),
+        devices: vec![DeviceEntry {
+            device_id: admin_dev.device_id,
+            dsk_public: wrong_dsk.verifying_key(),
+            added_at: "2026-05-30T00:00:00Z".into(),
+            revoked_at: None,
+        }],
+    }
+    .sign(&HybridSigningKey::from_seed_bytes(&[7; 32], &[7; 32]));
+    assert!(matches!(
+        proposal.signed_intent.verify(&tampered_dir),
+        Err(OpenMlsAuthorityError::Upgrade(_))
+    ));
+    assert!(
+        proposal
+            .signed_intent
+            .verify(&admin_dev.directory())
+            .is_ok()
+    );
+
+    // Bob accepts the genuine intent, entering quiescence.
+    bob.receive_upgrade_intent(to_in(proposal.message), &admin_dev.directory())
+        .unwrap();
+    // A different intent (new intent_id), correctly signed by the admin DSK, is rejected while one
+    // is in flight.
+    let intent2 = UpgradeIntent {
+        intent_id: Uuid::now_v7(),
+        from_protocol_version: PROTOCOL_VERSION.into(),
+        to_protocol_version: "2028-01-01".into(),
+        from_suite_id: CRYPTO_SUITE_ID,
+        to_suite_id: CRYPTO_SUITE_ID,
+        proposer_user: admin_dev.user_id,
+        proposer_device: admin_dev.device_id,
+        deadline_secs: 3600,
+    };
+    let sig2 = admin_dev.dsk.sign(&intent2.signing_bytes().unwrap());
+    let signed2 = SignedUpgradeIntent {
+        intent: intent2,
+        proposer_sig: sig2,
+    };
+    let m2 = admin
+        .create_app_message(&super::messages::MlsAppPayload::Upgrade(signed2))
+        .unwrap();
+    assert!(matches!(
+        bob.receive_upgrade_intent(to_in(m2), &admin_dev.directory()),
+        Err(OpenMlsAuthorityError::Upgrade(_))
+    ));
+
+    // And the proposer itself rejects a second propose while quiescing.
+    assert!(matches!(
+        admin.propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2028-01-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        ),
+        Err(OpenMlsAuthorityError::Upgrade(_))
+    ));
+}
+
+/// The upgrade deadline is a **duration** evaluated against a trusted (server) clock — a member
+/// clock cannot extend or shorten the window. `is_expired` is that pure predicate.
+#[test]
+fn upgrade_intent_expiry_is_a_pure_clock_predicate() {
+    let intent = UpgradeIntent {
+        intent_id: Uuid::now_v7(),
+        from_protocol_version: PROTOCOL_VERSION.into(),
+        to_protocol_version: "2027-01-01".into(),
+        from_suite_id: CRYPTO_SUITE_ID,
+        to_suite_id: CRYPTO_SUITE_ID,
+        proposer_user: Uuid::from_u128(1),
+        proposer_device: Uuid::from_u128(2),
+        deadline_secs: 7 * 24 * 3600,
+    };
+    let received = jiff::Timestamp::from_second(1_760_000_000).unwrap();
+    // One hour later: not expired.
+    let soon = received
+        .checked_add(jiff::SignedDuration::from_hours(1))
+        .unwrap();
+    assert!(!intent.is_expired(received, soon));
+    // Eight days later: expired.
+    let later = received
+        .checked_add(jiff::SignedDuration::from_hours(8 * 24))
+        .unwrap();
+    assert!(intent.is_expired(received, later));
+}
+
+// ── MLS resilience (mls-resilience.md § Validation) ────────────────────────────
+
+/// **State-divergence detection + reconciliation (unit).** A member behind the server chain
+/// reconciles by replaying the missed commits, converging on the server-authoritative state; the
+/// outcome names each applied commit.
+#[test]
+fn state_divergence_is_detected_and_reconciled_from_the_chain() {
+    let album = Uuid::from_u128(0x0D11);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+    let start = admin.mls_epoch();
+    assert_eq!(start, bob.mls_epoch());
+
+    // Admin advances twice; bob misses both commits (network divergence).
+    let r1 = admin.rotate_epoch().unwrap();
+    let r2 = admin.rotate_epoch().unwrap();
+    assert_eq!(admin.mls_epoch(), start + 2);
+
+    // Up-to-date view is a no-op.
+    assert_eq!(
+        admin
+            .reconcile_with_server(ServerChainView::UpToDate)
+            .unwrap(),
+        ReconcileOutcome::UpToDate
+    );
+
+    // Bob reconciles by replaying the server's chain.
+    let missed = vec![r1.commit.to_bytes().unwrap(), r2.commit.to_bytes().unwrap()];
+    let outcome = bob
+        .reconcile_with_server(ServerChainView::Behind {
+            server_epoch: admin.mls_epoch(),
+            missed_commits: missed.clone(),
+        })
+        .unwrap();
+    match outcome {
+        ReconcileOutcome::Reconciled { applied_commits } => {
+            assert_eq!(applied_commits.len(), 2);
+            assert_eq!(applied_commits[0], CommitHash(hash::hash_bytes(&missed[0])));
+        }
+        other => panic!("expected Reconciled, got {other:?}"),
+    }
+    assert_eq!(
+        bob.mls_epoch(),
+        admin.mls_epoch(),
+        "converged on server state"
+    );
+}
+
+/// **Divergence never silently merges.** A member *ahead* of the server (a lost local commit)
+/// surfaces `Diverged` (user action / quarantine) when the absence is honestly-lost, and
+/// `Unrecoverable` (re-bootstrap) when it is a provable fork.
+#[test]
+fn local_ahead_diverges_or_is_unrecoverable_never_silently_merged() {
+    let album = Uuid::from_u128(0x0A4D);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+    let server_epoch = admin.mls_epoch();
+
+    // Bob commits locally; the server never persists it (bob is now ahead).
+    bob.rotate_epoch().unwrap();
+    assert_eq!(bob.mls_epoch(), server_epoch + 1);
+
+    // Honestly-lost commit → Diverged (surfaced, not merged).
+    assert_eq!(
+        bob.reconcile_with_server(ServerChainView::LocalAhead {
+            server_epoch,
+            provable_fork: false,
+        })
+        .unwrap(),
+        ReconcileOutcome::Diverged {
+            local_epoch: bob.mls_epoch(),
+            server_epoch,
+        }
+    );
+    // Provable fork → Unrecoverable (re-bootstrap).
+    assert_eq!(
+        bob.reconcile_with_server(ServerChainView::LocalAhead {
+            server_epoch,
+            provable_fork: true,
+        })
+        .unwrap(),
+        ReconcileOutcome::Unrecoverable
+    );
+}
+
+/// **Lost-commit recovery (smoke).** A commit lost to a member is recovered by replaying the server
+/// chain; the replay is idempotent (a re-delivered commit that already landed is rejected, with no
+/// duplicate epoch), and two independent members applying the same commit converge identically.
+#[test]
+fn lost_commit_recovery_is_idempotent_and_converges() {
+    let album = Uuid::from_u128(0x0105);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+
+    // A second, independent view of bob at the same epoch (via persistence round-trip).
+    let mut bob2 = OpenMlsAuthority::import_state(&bob.export_state().unwrap()).unwrap();
+
+    // Admin commits; the commit is "lost" to both bob views.
+    let rot = admin.rotate_epoch().unwrap();
+    let bytes = rot.commit.to_bytes().unwrap();
+
+    // Each bob recovers by replaying — both converge on the admin's epoch (order/instance
+    // independent, the deterministic replay).
+    for b in [&mut bob, &mut bob2] {
+        let outcome = b
+            .reconcile_with_server(ServerChainView::Behind {
+                server_epoch: admin.mls_epoch(),
+                missed_commits: vec![bytes.clone()],
+            })
+            .unwrap();
+        assert!(matches!(outcome, ReconcileOutcome::Reconciled { .. }));
+        assert_eq!(b.mls_epoch(), admin.mls_epoch());
+    }
+    // Idempotency: re-delivering the same commit that already landed is rejected, epoch unchanged.
+    let epoch = bob.mls_epoch();
+    assert!(bob.process_commit(to_in(rot.commit)).is_err());
+    assert_eq!(
+        bob.mls_epoch(),
+        epoch,
+        "no duplicate epoch from a replayed commit"
+    );
+}
+
+/// The lost-commit **backoff schedule** matches the doc defaults (30 s → 2 min → 10 min, 3 attempts,
+/// 30 s detection timeout), and the retry budget exhausts cleanly.
+#[test]
+fn lost_commit_tracker_follows_the_backoff_schedule() {
+    let mut tracker = LostCommitTracker::new();
+    assert_eq!(
+        tracker.detection_timeout(),
+        jiff::SignedDuration::from_secs(30)
+    );
+    assert_eq!(tracker.max_attempts(), 3);
+    assert!(!tracker.is_exhausted());
+    assert_eq!(
+        tracker.record_attempt(),
+        Some(jiff::SignedDuration::from_secs(30))
+    );
+    assert_eq!(
+        tracker.record_attempt(),
+        Some(jiff::SignedDuration::from_secs(120))
+    );
+    assert_eq!(
+        tracker.record_attempt(),
+        Some(jiff::SignedDuration::from_secs(600))
+    );
+    assert_eq!(tracker.record_attempt(), None, "budget exhausted");
+    assert!(tracker.is_exhausted());
+}
+
+/// **Concurrent rotation (smoke).** Two members rotate the same epoch; MLS commit ordering
+/// serializes them (one wins), and the loser re-proposes against the winner's result — both converge
+/// on one write-tier key per epoch with no group split.
+#[test]
+fn concurrent_rotation_serializes_and_loser_replays() {
+    let album = Uuid::from_u128(0x0C07);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+    let start = admin.mls_epoch();
+
+    // Both stage a rotation against the same epoch; the delivery service picks the admin's.
+    let admin_commit = admin.stage_self_update().unwrap();
+    let _bob_commit = bob.stage_self_update().unwrap();
+    admin.merge_pending().unwrap();
+    bob.discard_pending_and_process(to_in(admin_commit.clone()))
+        .unwrap();
+
+    // Deliver the winner's key material so bob's ledger is complete for the converged epoch.
+    let converged = admin.epoch_ceiling();
+    bob.process_key_delivery(to_in(admin.build_key_distribution(converged).unwrap()))
+        .unwrap();
+    bob.process_key_delivery(to_in(
+        admin.build_write_tier_distribution(converged).unwrap(),
+    ))
+    .unwrap();
+
+    assert_eq!(
+        admin.mls_epoch(),
+        start + 1,
+        "one rotation serialized onto the chain"
+    );
+    assert_converged(&[&admin, &bob]);
+}
+
+/// **Group re-keying: pre-compromise keys become useless.** A full re-key mints a fresh AMK +
+/// write-tier key for the whole group; a manifest signed with a *pre-rekey* write-tier key does not
+/// verify at the post-rekey epoch, and the fresh AMK differs from the compromised one.
+#[test]
+fn rekey_group_makes_precompromise_keys_useless() {
+    let album = Uuid::from_u128(0x0BAD);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &Device::new(0x2, 0x22, 2), HistoryPolicy::Full);
+
+    let compromised_epoch = admin.epoch_ceiling();
+    let compromised_key = admin
+        .write_tier_signing_key(compromised_epoch)
+        .unwrap()
+        .clone();
+    let compromised_amk = admin.amk(compromised_epoch).unwrap();
+
+    // Full re-key (suspected compromise response).
+    let outcome = admin.rekey_group(RekeyReason::SuspectedCompromise).unwrap();
+    bob.process_commit(to_in(outcome.commit)).unwrap();
+    for m in outcome.key_delivery {
+        bob.process_key_delivery(to_in(m)).unwrap();
+    }
+    let fresh_epoch = admin.epoch_ceiling();
+    assert_eq!(fresh_epoch, AmkVersion(compromised_epoch.0 + 1));
+    assert_ne!(
+        admin.amk(fresh_epoch).unwrap(),
+        compromised_amk,
+        "fresh AMK minted"
+    );
+    assert_converged(&[&admin, &bob]);
+
+    // A write signed with the pre-rekey (compromised) write-tier key does not verify at the fresh
+    // epoch — the fresh epoch attested a different, freshly-minted write-tier public key.
+    let (stale, directory) = signed_manifest(album, fresh_epoch, &compromised_key);
+    assert!(matches!(
+        verify_asset(&stale, CIPHERTEXT, &directory, &admin, None),
+        VerifyOutcome::TerminalReject(_)
+    ));
+}
+
+/// **Re-keying atomicity (smoke).** Inject a crash mid-rekey (between the commit and the broadcast)
+/// by exporting/reloading; the ceremony resumes on restart and completes the broadcast without
+/// advancing the epoch a second time (the `intent_id` keeps it idempotent).
+#[test]
+fn rekey_atomicity_resumes_after_a_mid_ceremony_crash() {
+    let album = Uuid::from_u128(0x0A70);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+
+    // Phase 1 only: the re-key commit merges (epoch advances) but the broadcast has not happened.
+    let (intent_id, _commit) = admin.begin_rekey(RekeyReason::ScheduledRotation).unwrap();
+    let epoch_after_commit = admin.mls_epoch();
+    assert!(admin.rekey_in_progress());
+
+    // Crash + restart: the resume state is durable.
+    let mut restored = OpenMlsAuthority::import_state(&admin.export_state().unwrap()).unwrap();
+    assert!(restored.rekey_in_progress());
+    assert_eq!(restored.mls_epoch(), epoch_after_commit);
+
+    // Resume completes phase 2 (broadcast) without a second epoch advance.
+    let delivery = restored
+        .resume_rekey()
+        .unwrap()
+        .expect("a re-key was pending");
+    assert_eq!(delivery.len(), 2, "AMK + write-tier broadcast");
+    assert_eq!(
+        restored.mls_epoch(),
+        epoch_after_commit,
+        "no second epoch advance"
+    );
+    assert!(!restored.rekey_in_progress());
+    assert!(restored.has_completed_intent(intent_id));
+    // Resuming again is a no-op.
+    assert!(restored.resume_rekey().unwrap().is_none());
+}
+
+/// **E2E case 8 — album upgrade ceremony (in-process shape).** Multi-member album; admin initiates
+/// the upgrade → quiesce → drain (modelled: no in-flight sessions) → tombstone → fork → queued
+/// writes replay, **including one resume-from-crash mid-ceremony**. This is the Module-Map E2E case
+/// 8 in the established in-process multi-participant shape (the server/client-UI halves are out of
+/// this slice's scope); it exercises `capsule-core::crypto::mls` end-to-end for the ceremony.
+#[test]
+fn e2e_case_8_album_upgrade_ceremony() {
+    let album = Uuid::from_u128(0x0E8E);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let bob_dev = Device::new(0x2, 0x22, 2);
+    let carol_dev = Device::new(0x3, 0x33, 3);
+
+    // A three-member album at some history.
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let mut bob = add_and_join(&mut admin, &bob_dev, HistoryPolicy::Full);
+    // Add Carol; existing member Bob processes the commit + deliveries.
+    let carol_identity = carol_dev.identity();
+    let add = admin
+        .add_member(
+            carol_identity.key_package().unwrap(),
+            &carol_dev.directory(),
+        )
+        .unwrap();
+    bob.process_commit(to_in(add.commit.clone())).unwrap();
+    for m in &add.key_delivery {
+        bob.process_key_delivery(to_in(m.clone())).unwrap();
+    }
+    let history: Vec<MlsMessageIn> = add.key_delivery.into_iter().map(to_in).collect();
+    let mut carol = OpenMlsAuthority::join_via_welcome(
+        carol_identity,
+        to_in(add.welcome),
+        history,
+        HistoryPolicy::Full,
+    )
+    .unwrap();
+    assert_converged(&[&admin, &bob, &carol]);
+
+    // Step 1–2: admin initiates the upgrade; both members quiesce.
+    let proposal = admin
+        .propose_upgrade(
+            PROTOCOL_VERSION,
+            CRYPTO_SUITE_ID,
+            "2027-06-01",
+            CRYPTO_SUITE_ID,
+            DEFAULT_UPGRADE_DEADLINE,
+        )
+        .unwrap();
+    let intent_id = proposal.signed_intent.intent.intent_id;
+    let msg_bytes = proposal.message.to_bytes().unwrap();
+    for m in [&mut bob, &mut carol] {
+        let msg = MlsMessageIn::tls_deserialize_exact(msg_bytes.as_slice()).unwrap();
+        m.receive_upgrade_intent(msg, &admin_dev.directory())
+            .unwrap();
+    }
+    assert_eq!(bob.quiescing_intent(), Some(intent_id));
+
+    // Step 3 (drain): modelled — no in-flight upload sessions (server concern). Carol queues a write.
+    let carol_file = Uuid::now_v7();
+    carol
+        .queue_pending_write(carol_file.as_bytes().to_vec())
+        .unwrap();
+
+    // Step 4: tombstone. Every member recomputes the frozen-state hash over the shared summary.
+    let sm = summary(0x88);
+    let tomb = admin.commit_tombstone(&sm).unwrap();
+
+    // Inject a crash on Bob right after the tombstone commit is broadcast but before he processes
+    // it: he exports, reloads, and resumes processing the tombstone — the ceremony is resumable.
+    let tomb_bytes = tomb.commit.to_bytes().unwrap();
+    let mut bob = OpenMlsAuthority::import_state(&bob.export_state().unwrap()).unwrap();
+    bob.process_tombstone(
+        MlsMessageIn::tls_deserialize_exact(tomb_bytes.as_slice()).unwrap(),
+        &sm,
+    )
+    .unwrap();
+    carol
+        .process_tombstone(
+            MlsMessageIn::tls_deserialize_exact(tomb_bytes.as_slice()).unwrap(),
+            &sm,
+        )
+        .unwrap();
+    assert_eq!(admin.is_tombstoned(), Some(intent_id));
+    assert_eq!(bob.is_tombstoned(), Some(intent_id));
+    assert_eq!(carol.is_tombstoned(), Some(intent_id));
+
+    // Step 5: fork at the target version; all members migrate.
+    let new_album = Uuid::now_v7();
+    let lineage = UpgradeLineage {
+        old_album_id: album,
+        intent_id,
+        frozen_state_hash: tomb.frozen_state_hash,
+        from_suite_id: CRYPTO_SUITE_ID,
+        to_suite_id: CRYPTO_SUITE_ID,
+    };
+    let mut fork_admin = OpenMlsAuthority::fork_upgrade(
+        admin_dev.identity(),
+        new_album,
+        lineage,
+        HistoryPolicy::Full,
+    )
+    .unwrap();
+    let _fork_bob = add_and_join(&mut fork_admin, &bob_dev, HistoryPolicy::Full);
+    let fork_carol = add_and_join(&mut fork_admin, &carol_dev, HistoryPolicy::Full);
+    // The `upgraded_from` continuity pointer is held by the fork founder (a manifest-layer link,
+    // not MLS group state that joiners inherit).
+    assert_eq!(fork_admin.upgraded_from().unwrap().intent_id, intent_id);
+
+    // Step 6: Carol's stranded write is replayed into the fork and verifies — no write lost.
+    let queued = carol.take_pending_writes();
+    assert_eq!(queued.len(), 1);
+    let fork_epoch = fork_carol.epoch_ceiling();
+    let (manifest, directory) = signed_manifest(
+        new_album,
+        fork_epoch,
+        fork_carol.write_tier_signing_key(fork_epoch).unwrap(),
+    );
+    assert_eq!(
+        verify_asset(&manifest, CIPHERTEXT, &directory, &fork_admin, None),
+        VerifyOutcome::Accept
+    );
+}

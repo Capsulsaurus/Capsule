@@ -32,9 +32,11 @@ mod openmls_authority;
 
 #[cfg(feature = "mls")]
 pub use openmls_authority::{
-    AddOutcome, AlbumHistoryBundle, AlbumKeyDistribution, AmkHistoryEntry, HistoryPolicy,
-    MlsDeviceIdentity, OpenMlsAuthority, OpenMlsAuthorityError, PINNED_CIPHERSUITE_ID,
-    RemoveOutcome, WriteTierDistribution,
+    AddOutcome, AlbumHistoryBundle, AlbumKeyDistribution, AlbumStateSummary, AmkHistoryEntry,
+    CommitHash, DEFAULT_UPGRADE_DEADLINE, HistoryPolicy, LostCommitTracker, MlsDeviceIdentity,
+    OpenMlsAuthority, OpenMlsAuthorityError, PINNED_CIPHERSUITE_ID, ReconcileOutcome, RekeyOutcome,
+    RekeyReason, RemoveOutcome, ServerChainView, SignedUpgradeIntent, TombstoneOutcome,
+    UpgradeIntent, UpgradeLineage, UpgradeProposal, WriteTierDistribution,
 };
 pub use reference::ReferenceAuthority;
 use uuid::Uuid;

@@ -32,6 +32,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::upgrade::SignedUpgradeIntent;
 use super::{AMK_LEN, WRITE_TIER_SEED_LEN};
 use crate::crypto::keys::HybridVerifyingKey;
 
@@ -145,6 +146,11 @@ pub(crate) enum MlsAppPayload {
     WriteTier(WriteTierDistribution),
     /// A join-time history batch (read-only prior epochs).
     History(AlbumHistoryBundle),
+    /// A hybrid-signed album [upgrade](super::upgrade) intent (S-X3). Processed via
+    /// [`receive_upgrade_intent`](super::OpenMlsAuthority::receive_upgrade_intent), **not** the
+    /// key-delivery path — [`process_key_delivery`](super::OpenMlsAuthority::process_key_delivery)
+    /// rejects it.
+    Upgrade(SignedUpgradeIntent),
 }
 
 impl MlsAppPayload {

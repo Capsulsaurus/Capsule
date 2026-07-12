@@ -27,15 +27,29 @@
 //!   [import](OpenMlsAuthority::import_state) blob over an owned, serializable storage
 //!   [provider].
 //!
-//! The album **upgrade ceremony** and **resilience** (re-keying after partition, tombstone-fork,
-//! `ReconcileOutcome`) are slice **S-X3** and are deliberately left as seams here.
+//! **Slice S-X3** (this module's [upgrade] and [resilience] submodules) lands the album **upgrade
+//! ceremony** and **MLS resilience**:
+//!
+//! - the **tombstone-plus-fork** upgrade ceremony ([upgrade]): a version-pinned album is frozen by
+//!   an `AlbumTombstone` commit and re-founded as a fork at a target `protocol_version` /
+//!   `crypto_suite_id`, with an `upgraded_from` continuity pointer. Suite-parametric (the general
+//!   vehicle for a future move off the `0x004D` X-Wing suite), `intent_id`-keyed and resumable;
+//! - the **group re-keying ceremony** ([resilience]): a compromise/scheduled response that mints a
+//!   fresh AMK + write-tier key for every member as one `intent_id`-keyed, resumable operation;
+//! - **reconciliation** ([`ReconcileOutcome`](resilience::ReconcileOutcome)): the single
+//!   "bring-me-current" entry point over the server-authoritative commit chain, plus the
+//!   lost-commit retry primitive.
 //!
 //! SSoT: [Cryptography — MLS](https://docs/design/cryptography/mls/),
-//! [Keys — Write Authority](https://docs/design/cryptography/keys/#write-authorization).
+//! [Keys — Write Authority](https://docs/design/cryptography/keys/#write-authorization),
+//! [MLS Resilience](https://docs/design/mls-resilience/),
+//! [Versioning — Album Upgrade Ceremony](https://docs/design/versioning/#album-upgrade-ceremony).
 
 mod identity;
 mod messages;
 mod provider;
+mod resilience;
+mod upgrade;
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -54,8 +68,17 @@ use openmls::prelude::{
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_traits::OpenMlsProvider;
 use provider::CapsuleMlsProvider;
+use resilience::RekeyState;
+pub use resilience::{
+    CommitHash, LostCommitTracker, ReconcileOutcome, RekeyOutcome, RekeyReason, ServerChainView,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use upgrade::Quiescence;
+pub use upgrade::{
+    AlbumStateSummary, DEFAULT_UPGRADE_DEADLINE, SignedUpgradeIntent, TombstoneOutcome,
+    UpgradeIntent, UpgradeLineage, UpgradeProposal,
+};
 use uuid::Uuid;
 
 use super::AlbumAuthority;
@@ -136,6 +159,22 @@ pub enum OpenMlsAuthorityError {
     /// Durable group-state export/import failed.
     #[error("mls persistence: {0}")]
     Persist(String),
+    /// A write / ceremony was attempted on a **tombstoned** (frozen) album: the album has been
+    /// upgraded and all activity has moved to the fork. Reads are unaffected — only writes refuse.
+    #[error("album is tombstoned under upgrade intent {0}")]
+    Tombstoned(Uuid),
+    /// A step of the [tombstone-plus-fork upgrade ceremony](upgrade) failed (intent signature,
+    /// quiescence conflict, or fork construction).
+    #[error("album upgrade ceremony: {0}")]
+    Upgrade(String),
+    /// A received `AlbumTombstone`'s `frozen_state_hash` disagrees with this member's own recomputed
+    /// hash — at least one member's album view diverges. The upgrade aborts and the album returns to
+    /// normal operation (each member independently).
+    #[error("frozen-state hash mismatch: at least one member's album view diverges")]
+    FrozenStateMismatch,
+    /// A [resilience](resilience) operation (reconciliation / re-keying) failed.
+    #[error("mls resilience: {0}")]
+    Resilience(String),
 }
 
 type Result<T> = std::result::Result<T, OpenMlsAuthorityError>;
@@ -183,6 +222,27 @@ struct WriteTierAttestation {
     amk_version: u32,
     /// The write-tier public key minted for that epoch.
     write_tier_pub: HybridVerifyingKey,
+}
+
+/// The authenticated-data payload every epoch-advancing commit carries. Always attests the fresh
+/// epoch's write-tier public key; on the single `AlbumTombstone` commit of an upgrade ceremony it
+/// **also** carries the [`TombstoneMark`](upgrade::TombstoneMark) so every receiving member can
+/// recompute and check the `frozen_state_hash` before adopting the freeze. Wrapping the two in one
+/// enum keeps a single commit-processing path — [`process_commit`](OpenMlsAuthority::process_commit)
+/// dispatches on the variant.
+#[derive(Serialize, Deserialize)]
+enum CommitAad {
+    /// An ordinary epoch-advancing commit (add / remove / self-update / rotation / re-key).
+    WriteTier(WriteTierAttestation),
+    /// The `AlbumTombstone` commit that freezes the album for an upgrade ceremony. Still attests the
+    /// terminal epoch's write-tier (so ingestion is uniform), plus the tombstone mark.
+    Tombstone {
+        /// The terminal epoch's write-tier attestation (unused for signing — the group is frozen —
+        /// but ingested so the epoch ledger stays well-formed).
+        write_tier: WriteTierAttestation,
+        /// The freeze marker recomputed and checked by every receiving member.
+        mark: upgrade::TombstoneMark,
+    },
 }
 
 /// The outcome of an [`add_member`](OpenMlsAuthority::add_member) ceremony: the artifacts the
@@ -237,6 +297,28 @@ pub struct OpenMlsAuthority {
     /// [`discard_pending_and_process`](Self::discard_pending_and_process) (lost). Transient — not
     /// persisted (a pending commit does not survive a restart either).
     staged_write_tier: Option<HybridSigningKey>,
+    // ── S-X3: upgrade ceremony + resilience state ────────────────────────────
+    /// If this group is a **fork** produced by an upgrade ceremony, the continuity pointer back to
+    /// the album it forked from (the manifest `upgraded_from` field). `None` for an original album.
+    upgraded_from: Option<UpgradeLineage>,
+    /// Set once this album has been **tombstoned** (frozen by an `AlbumTombstone` commit) — carries
+    /// the upgrade `intent_id`. A tombstoned album refuses new write ceremonies (see
+    /// [`ensure_not_tombstoned`](Self::ensure_not_tombstoned)); reads/`verify_asset` are unaffected.
+    tombstoned: Option<Uuid>,
+    /// Upgrade **quiescence**: set on issuing/receiving an [`UpgradeIntent`], so a second intent
+    /// under a *different* `intent_id` is rejected (only one upgrade in flight) and new writes are
+    /// queued locally rather than sent.
+    quiescence: Option<Quiescence>,
+    /// Writes queued locally during upgrade quiescence (`pending_until_upgrade`), replayed into the
+    /// fork after cutover. Opaque encoded payloads — the caller owns the manifest re-encode against
+    /// `to_version` (an application-layer concern outside this authority).
+    pending_writes: Vec<Vec<u8>>,
+    /// Idempotency ledger of completed ceremony `intent_id`s (re-key, upgrade fork). A duplicate
+    /// intent is a no-op — the crash-resume guarantee both ceremonies share.
+    completed_intents: BTreeSet<Uuid>,
+    /// An in-flight re-keying ceremony's resume state (two-phase: commit, then broadcast). Persisted
+    /// so a crash between the two phases resumes on restart.
+    rekey_pending: Option<RekeyState>,
 }
 
 impl OpenMlsAuthority {
@@ -270,6 +352,12 @@ impl OpenMlsAuthority {
             amk_held: BTreeSet::new(),
             ceiling: 0,
             staged_write_tier: None,
+            upgraded_from: None,
+            tombstoned: None,
+            quiescence: None,
+            pending_writes: Vec::new(),
+            completed_intents: BTreeSet::new(),
+            rekey_pending: None,
         };
         // The founder mints the genesis epoch's write-tier keypair (committer role).
         authority
@@ -304,6 +392,7 @@ impl OpenMlsAuthority {
         key_package: openmls::prelude::KeyPackage,
         joiner_directory: &DeviceDirectory,
     ) -> Result<AddOutcome> {
+        self.ensure_not_tombstoned()?;
         // Gate: the joining leaf must be identity-bound to a device in the joiner's directory.
         let (user_id, device_id) = identity::verify_leaf_binding(
             key_package.leaf_node().credential(),
@@ -361,6 +450,7 @@ impl OpenMlsAuthority {
     /// remaining members (SSoT: MLS § Remove user).
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, from_epoch = self.ceiling, leaf = leaf.u32()))]
     pub fn remove_member(&mut self, leaf: LeafNodeIndex) -> Result<RemoveOutcome> {
+        self.ensure_not_tombstoned()?;
         // Mint the re-keyed epoch's write-tier keypair; the removed member never receives its
         // private half (it cannot even decrypt the distribution — it is evicted by the commit).
         let minted = HybridSigningKey::generate();
@@ -408,6 +498,7 @@ impl OpenMlsAuthority {
     /// the fresh AMK to the other members, use [`rotate_epoch`](Self::rotate_epoch).
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, amk_present))]
     pub fn advance_epoch(&mut self, amk_present: bool) -> Result<AmkVersion> {
+        self.ensure_not_tombstoned()?;
         let minted = HybridSigningKey::generate();
         self.set_write_tier_aad(&minted)?;
         self.group
@@ -429,6 +520,7 @@ impl OpenMlsAuthority {
     /// commit and the fresh epoch's [`AlbumKeyDistribution`] for the other members.
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id))]
     pub fn rotate_epoch(&mut self) -> Result<RemoveOutcome> {
+        self.ensure_not_tombstoned()?;
         let minted = HybridSigningKey::generate();
         self.set_write_tier_aad(&minted)?;
         // The self-update stages a pending commit; capture it for the other members before merge.
@@ -470,6 +562,7 @@ impl OpenMlsAuthority {
     /// keypair is dropped with the commit).
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, epoch = self.ceiling))]
     pub fn stage_self_update(&mut self) -> Result<MlsMessageOut> {
+        self.ensure_not_tombstoned()?;
         let minted = HybridSigningKey::generate();
         self.set_write_tier_aad(&minted)?;
         let commit = self
@@ -541,12 +634,14 @@ impl OpenMlsAuthority {
         let aad = processed.aad().to_vec();
         match processed.into_content() {
             ProcessedMessageContent::StagedCommitMessage(staged) => {
-                let attestation: WriteTierAttestation =
-                    crate::cbor::from_slice(&aad).map_err(|e| {
-                        OpenMlsAuthorityError::ProcessMessage(format!(
-                            "commit carries no valid write-tier attestation: {e}"
-                        ))
-                    })?;
+                let attestation = match parse_commit_aad(&aad)? {
+                    CommitAad::WriteTier(a) => a,
+                    CommitAad::Tombstone { .. } => {
+                        return Err(OpenMlsAuthorityError::Upgrade(
+                            "AlbumTombstone commit must be processed via process_tombstone".into(),
+                        ));
+                    }
+                };
                 let staged: StagedCommit = *staged;
                 self.group
                     .merge_staged_commit(&self.identity.provider, staged)
@@ -600,6 +695,9 @@ impl OpenMlsAuthority {
                         }
                         Ok(())
                     }
+                    MlsAppPayload::Upgrade(_) => Err(OpenMlsAuthorityError::Upgrade(
+                        "upgrade intent must be processed via receive_upgrade_intent".into(),
+                    )),
                 }
             }
             other => Err(OpenMlsAuthorityError::UnexpectedMessage(format!(
@@ -653,6 +751,12 @@ impl OpenMlsAuthority {
             amk_held: BTreeSet::new(),
             ceiling: 0,
             staged_write_tier: None,
+            upgraded_from: None,
+            tombstoned: None,
+            quiescence: None,
+            pending_writes: Vec::new(),
+            completed_intents: BTreeSet::new(),
+            rekey_pending: None,
         };
         // The joiner is a full member at the current epoch: derive + hold its AMK. This also sets
         // the monotonic ceiling from the (chain-attested) group epoch. The epoch's write-tier key
@@ -665,6 +769,18 @@ impl OpenMlsAuthority {
             authority.process_key_delivery(message)?;
         }
         Ok(authority)
+    }
+
+    // ── Write-path guard ─────────────────────────────────────────────────────
+
+    /// Refuse a write-producing ceremony on a [tombstoned](Self::is_tombstoned) (frozen) album. The
+    /// album has been upgraded; all new activity belongs on the fork. Reads are never gated here —
+    /// only commit-producing entry points call this, so `verify_asset` stays byte-for-byte untouched.
+    fn ensure_not_tombstoned(&self) -> Result<()> {
+        match self.tombstoned {
+            Some(intent_id) => Err(OpenMlsAuthorityError::Tombstoned(intent_id)),
+            None => Ok(()),
+        }
     }
 
     // ── Epoch ingestion + derivation ─────────────────────────────────────────
@@ -707,15 +823,32 @@ impl OpenMlsAuthority {
     /// current version is `epoch + 1`, the commit bumps it by one). Must be called immediately
     /// before the commit-building operation — OpenMLS consumes and resets the AAD per operation.
     fn set_write_tier_aad(&mut self, minted: &HybridSigningKey) -> Result<()> {
+        self.set_commit_aad(&CommitAad::WriteTier(
+            self.next_write_tier_attestation(minted)?,
+        ))
+    }
+
+    /// The [`WriteTierAttestation`] for the epoch the next commit will advance the group to
+    /// (`current mls_epoch + 2` in `amk_version` terms).
+    fn next_write_tier_attestation(
+        &self,
+        minted: &HybridSigningKey,
+    ) -> Result<WriteTierAttestation> {
         let next_version = u32::try_from(self.group.epoch().as_u64() + 2).map_err(|_| {
             OpenMlsAuthorityError::Export("mls epoch overflows u32 amk_version".into())
         })?;
-        let attestation = WriteTierAttestation {
+        Ok(WriteTierAttestation {
             amk_version: next_version,
             write_tier_pub: minted.verifying_key(),
-        };
-        let bytes = crate::cbor::to_canonical_vec(&attestation)
-            .map_err(|e| OpenMlsAuthorityError::Message(format!("attestation encode: {e}")))?;
+        })
+    }
+
+    /// Encode a [`CommitAad`] into the group's pending-commit authenticated data. Must be called
+    /// immediately before the commit-building operation — OpenMLS consumes and resets the AAD per
+    /// operation.
+    fn set_commit_aad(&mut self, aad: &CommitAad) -> Result<()> {
+        let bytes = crate::cbor::to_canonical_vec(aad)
+            .map_err(|e| OpenMlsAuthorityError::Message(format!("commit aad encode: {e}")))?;
         self.group.set_aad(bytes);
         Ok(())
     }
@@ -1012,6 +1145,16 @@ impl OpenMlsAuthority {
             storage_blob: serde_bytes::ByteBuf::from(self.identity.provider.export_bytes()?),
             epochs,
             ceiling: self.ceiling,
+            upgraded_from: self.upgraded_from.clone(),
+            tombstoned: self.tombstoned,
+            quiescence: self.quiescence.clone(),
+            pending_writes: self
+                .pending_writes
+                .iter()
+                .map(|w| serde_bytes::ByteBuf::from(w.clone()))
+                .collect(),
+            completed_intents: self.completed_intents.iter().copied().collect(),
+            rekey_pending: self.rekey_pending.clone(),
         };
         crate::cbor::to_canonical_vec(&persisted)
             .map_err(|e| OpenMlsAuthorityError::Persist(format!("encode: {e}")))
@@ -1077,6 +1220,16 @@ impl OpenMlsAuthority {
             // A pending (staged, unmerged) commit does not survive a restart; neither does the
             // write-tier keypair minted for it.
             staged_write_tier: None,
+            upgraded_from: persisted.upgraded_from,
+            tombstoned: persisted.tombstoned,
+            quiescence: persisted.quiescence,
+            pending_writes: persisted
+                .pending_writes
+                .into_iter()
+                .map(serde_bytes::ByteBuf::into_vec)
+                .collect(),
+            completed_intents: persisted.completed_intents.into_iter().collect(),
+            rekey_pending: persisted.rekey_pending,
         })
     }
 }
@@ -1111,6 +1264,13 @@ struct PersistedState {
     storage_blob: serde_bytes::ByteBuf,
     epochs: Vec<PersistedEpoch>,
     ceiling: u32,
+    // ── S-X3 ceremony state ──────────────────────────────────────────────────
+    upgraded_from: Option<UpgradeLineage>,
+    tombstoned: Option<Uuid>,
+    quiescence: Option<Quiescence>,
+    pending_writes: Vec<serde_bytes::ByteBuf>,
+    completed_intents: Vec<Uuid>,
+    rekey_pending: Option<RekeyState>,
 }
 
 /// Recover an album [`Uuid`] from an MLS [`GroupId`] set to the album id's 16 bytes.
@@ -1138,6 +1298,16 @@ fn describe_content(content: &ProcessedMessageContent) -> &'static str {
 fn protocol_message(message: MlsMessageIn) -> Result<openmls::prelude::ProtocolMessage> {
     message.try_into_protocol_message().map_err(|e| {
         OpenMlsAuthorityError::UnexpectedMessage(format!("not a protocol message: {e:?}"))
+    })
+}
+
+/// Decode a commit's authenticated data into the [`CommitAad`] the committer attached, or a typed
+/// error if the commit carries no valid Capsule attestation (never expected on a well-formed chain).
+fn parse_commit_aad(aad: &[u8]) -> Result<CommitAad> {
+    crate::cbor::from_slice(aad).map_err(|e| {
+        OpenMlsAuthorityError::ProcessMessage(format!(
+            "commit carries no valid Capsule attestation: {e}"
+        ))
     })
 }
 
