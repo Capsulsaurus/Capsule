@@ -7,6 +7,7 @@
 
 import { KeyRoundIcon } from 'lucide-react';
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -23,6 +24,7 @@ interface PasskeyRegisterProps {
 }
 
 export function PasskeyRegister({ onSuccess, onCancel }: PasskeyRegisterProps) {
+    const intl = useIntl();
     const [name, setName] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -40,14 +42,20 @@ export function PasskeyRegister({ onSuccess, onCancel }: PasskeyRegisterProps) {
             if (err instanceof ApiError) {
                 setError(err.message);
             } else if (err instanceof Error && err.name === 'NotAllowedError') {
-                setError('Passkey registration was cancelled.');
+                setError(
+                    intl.formatMessage({ id: 'mfa.passkey.reg_cancelled' }),
+                );
             } else if (
                 err instanceof Error &&
                 err.name === 'InvalidStateError'
             ) {
-                setError('A passkey for this device is already registered.');
+                setError(
+                    intl.formatMessage({
+                        id: 'mfa.passkey.already_registered',
+                    }),
+                );
             } else {
-                setError('Passkey registration failed.');
+                setError(intl.formatMessage({ id: 'mfa.passkey.reg_failed' }));
             }
         } finally {
             setLoading(false);
@@ -57,16 +65,19 @@ export function PasskeyRegister({ onSuccess, onCancel }: PasskeyRegisterProps) {
     return (
         <form onSubmit={handleRegister} className="space-y-4">
             <p className="text-sm text-muted-foreground">
-                Passkeys use your device's biometrics or PIN to sign in securely
-                without a password.
+                <FormattedMessage id="mfa.passkey.description" />
             </p>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <div className="grid gap-2">
-                <Label htmlFor="passkey-name">Passkey Name (optional)</Label>
+                <Label htmlFor="passkey-name">
+                    <FormattedMessage id="mfa.passkey.name_label" />
+                </Label>
                 <Input
                     id="passkey-name"
                     type="text"
-                    placeholder="My MacBook"
+                    placeholder={intl.formatMessage({
+                        id: 'mfa.passkey.name_placeholder',
+                    })}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     disabled={loading}
@@ -75,10 +86,14 @@ export function PasskeyRegister({ onSuccess, onCancel }: PasskeyRegisterProps) {
             <div className="flex gap-2">
                 <Button type="submit" disabled={loading}>
                     <KeyRoundIcon className="mr-2 h-4 w-4" />
-                    {loading ? 'Registering…' : 'Create Passkey'}
+                    {loading ? (
+                        <FormattedMessage id="mfa.passkey.registering" />
+                    ) : (
+                        <FormattedMessage id="mfa.passkey.create" />
+                    )}
                 </Button>
                 <Button variant="ghost" type="button" onClick={onCancel}>
-                    Cancel
+                    <FormattedMessage id="common.cancel" />
                 </Button>
             </div>
         </form>

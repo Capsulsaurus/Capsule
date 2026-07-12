@@ -1,0 +1,13 @@
+# i18n-guard allowlist (slice S-I1)
+#
+# The `xtask i18n-guard` gate fails the build when it finds a hardcoded, user-facing
+# string literal in the web (JSX), SwiftUI, or Compose surfaces that is not a catalog
+# key. This file lists the rare, intentionally-untranslated exceptions so the gate
+# stays at zero false positives.
+#
+# Format: one exception per line, `<repo-relative-path>\t<exact captured string>`
+# (TAB separated). `#` comments and blank lines are ignored. Prefer migrating a
+# string to a `locales/en.json` key over allowlisting it — only allowlist text that
+# is genuinely not translatable (brand names shown verbatim, sample data, etc.).
+#
+# Keep this list SHORT and justify each entry with a comment above it.

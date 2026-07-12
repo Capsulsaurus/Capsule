@@ -1,4 +1,5 @@
 import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import { FormattedMessage } from 'react-intl';
 import { AssetGrid } from '@/components/asset-grid';
 import { Card } from '@/components/ui/card';
 import { useAlbums, useAssets } from '@/data/hooks';
@@ -19,12 +20,14 @@ function Explore() {
         <div className="p-4 md:p-8 space-y-8">
             <section>
                 <div className="flex items-center justify-between mb-4">
-                    <h2 className="text-2xl font-bold">Featured Albums</h2>
+                    <h2 className="text-2xl font-bold">
+                        <FormattedMessage id="explore.featured_albums" />
+                    </h2>
                     <Link
                         to="/albums"
                         className="text-sm text-primary hover:underline"
                     >
-                        View All
+                        <FormattedMessage id="explore.view_all" />
                     </Link>
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -48,7 +51,12 @@ function Explore() {
                                                 {album.title}
                                             </h3>
                                             <p className="text-xs text-white/80">
-                                                {album.assetCount} items
+                                                <FormattedMessage
+                                                    id="common.item_count"
+                                                    values={{
+                                                        count: album.assetCount,
+                                                    }}
+                                                />
                                             </p>
                                         </div>
                                     </div>
@@ -60,7 +68,9 @@ function Explore() {
             </section>
 
             <section>
-                <h2 className="text-2xl font-bold mb-4">Trending Photos</h2>
+                <h2 className="text-2xl font-bold mb-4">
+                    <FormattedMessage id="explore.trending_photos" />
+                </h2>
                 <AssetGrid
                     assets={featuredAssets}
                     onAssetClick={(asset) => console.info('Clicked', asset)}

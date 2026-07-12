@@ -42,7 +42,7 @@ public struct PlacesMapView: View {
                 }
             }
         }
-        .navigationTitle("Places")
+        .navigationTitle("ios.places.title")
         .navigationBarTitleDisplayMode(.inline)
         .overlay { overlay }
         .task { await model.load() }
@@ -76,9 +76,9 @@ public struct PlacesMapView: View {
             ProgressView()
         } else if model.clusters.isEmpty {
             ContentUnavailableView(
-                "No Places",
+                "ios.places.empty.title",
                 systemImage: "mappin.slash",
-                description: Text("Photos with location data will appear here.")
+                description: Text("ios.places.empty.description")
             )
         }
     }
@@ -158,7 +158,7 @@ struct PlacesClusterGrid: View {
             onSelect: openViewer
         )
         .ignoresSafeArea(edges: .bottom)
-        .navigationTitle("Location")
+        .navigationTitle("ios.common.location")
         .navigationBarTitleDisplayMode(.inline)
         .fullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(

@@ -2,6 +2,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,6 +16,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, resetPassword } from '@/lib/api';
+import { APP_NAME } from '@/lib/constant';
 
 const resetPasswordSearchSchema = z.object({
     token: z.string().optional(),
@@ -26,6 +28,7 @@ export const Route = createFileRoute('/reset-password')({
 });
 
 function ResetPassword() {
+    const intl = useIntl();
     const { token } = Route.useSearch();
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -38,9 +41,11 @@ function ResetPassword() {
             <div className="flex flex-col items-center justify-center min-h-screen bg-muted/40 p-4">
                 <Card className="w-full max-w-sm">
                     <CardHeader>
-                        <CardTitle className="text-2xl">Invalid Link</CardTitle>
+                        <CardTitle className="text-2xl">
+                            <FormattedMessage id="auth.reset.invalid_title" />
+                        </CardTitle>
                         <CardDescription>
-                            This password reset link is invalid or has expired.
+                            <FormattedMessage id="auth.reset.invalid_body" />
                         </CardDescription>
                     </CardHeader>
                     <CardFooter>
@@ -48,7 +53,7 @@ function ResetPassword() {
                             to="/forgot-password"
                             className="text-sm underline"
                         >
-                            Request a new reset link
+                            <FormattedMessage id="auth.reset.request_new" />
                         </Link>
                     </CardFooter>
                 </Card>
@@ -60,11 +65,11 @@ function ResetPassword() {
         e.preventDefault();
         if (!token) return;
         if (newPassword !== confirmPassword) {
-            setError('Passwords do not match.');
+            setError(intl.formatMessage({ id: 'auth.reset.mismatch' }));
             return;
         }
         if (newPassword.length < 8) {
-            setError('Password must be at least 8 characters.');
+            setError(intl.formatMessage({ id: 'common.password_min' }));
             return;
         }
         setError(null);
@@ -76,7 +81,7 @@ function ResetPassword() {
             if (err instanceof ApiError) {
                 setError(err.message);
             } else {
-                setError('Something went wrong. Please try again.');
+                setError(intl.formatMessage({ id: 'common.error.generic' }));
             }
         } finally {
             setLoading(false);
@@ -87,15 +92,21 @@ function ResetPassword() {
         <div className="flex flex-col items-center justify-center min-h-screen bg-muted/40 p-4">
             <Link to="/" className="mb-8 flex items-center gap-2">
                 <MountainIcon className="h-8 w-8 text-primary" />
-                <span className="text-2xl font-bold text-primary">Capsule</span>
+                <span className="text-2xl font-bold text-primary">
+                    {APP_NAME}
+                </span>
             </Link>
             <Card className="w-full max-w-sm">
                 <CardHeader>
-                    <CardTitle className="text-2xl">Reset Password</CardTitle>
+                    <CardTitle className="text-2xl">
+                        <FormattedMessage id="auth.reset.title" />
+                    </CardTitle>
                     <CardDescription>
-                        {success
-                            ? 'Your password has been reset.'
-                            : 'Enter your new password.'}
+                        {success ? (
+                            <FormattedMessage id="auth.reset.success_desc" />
+                        ) : (
+                            <FormattedMessage id="auth.reset.description" />
+                        )}
                     </CardDescription>
                 </CardHeader>
                 {!success ? (
@@ -108,7 +119,7 @@ function ResetPassword() {
                             )}
                             <div className="grid gap-2">
                                 <Label htmlFor="new-password">
-                                    New Password
+                                    <FormattedMessage id="auth.new_password" />
                                 </Label>
                                 <Input
                                     id="new-password"
@@ -124,7 +135,7 @@ function ResetPassword() {
                             </div>
                             <div className="grid gap-2">
                                 <Label htmlFor="confirm-password">
-                                    Confirm Password
+                                    <FormattedMessage id="auth.confirm_password" />
                                 </Label>
                                 <Input
                                     id="confirm-password"
@@ -144,14 +155,20 @@ function ResetPassword() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Resetting…' : 'Reset password'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.reset.resetting" />
+                                ) : (
+                                    <FormattedMessage id="auth.reset.submit" />
+                                )}
                             </Button>
                         </CardFooter>
                     </form>
                 ) : (
                     <CardFooter className="flex flex-col gap-3 pt-4">
                         <Link to="/login">
-                            <Button className="w-full">Sign in</Button>
+                            <Button className="w-full">
+                                <FormattedMessage id="common.sign_in" />
+                            </Button>
                         </Link>
                     </CardFooter>
                 )}

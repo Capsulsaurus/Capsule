@@ -1,5 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { MoreHorizontal, Play, Share2 } from 'lucide-react';
+import { FormattedMessage } from 'react-intl';
 import { AssetGrid } from '@/components/asset-grid';
 import { Button } from '@/components/ui/button';
 import { useAlbum, useAlbumAssets } from '@/data/hooks';
@@ -18,7 +19,7 @@ function Album() {
     if (!album) {
         return (
             <div className="flex h-full items-center justify-center text-muted-foreground">
-                Album not found
+                <FormattedMessage id="album.not_found" />
             </div>
         );
     }
@@ -38,13 +39,16 @@ function Album() {
                             {album.title}
                         </h1>
                         <p className="text-muted-foreground">
-                            {album.assetCount} items
+                            <FormattedMessage
+                                id="common.item_count"
+                                values={{ count: album.assetCount }}
+                            />
                         </p>
                     </div>
                     <div className="flex gap-2">
                         <Button>
                             <Play className="w-4 h-4 mr-2" />
-                            Slideshow
+                            <FormattedMessage id="album.slideshow" />
                         </Button>
                         <Button variant="secondary" size="icon">
                             <Share2 className="w-4 h-4" />

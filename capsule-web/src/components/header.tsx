@@ -1,5 +1,6 @@
 import { Link, useNavigate } from '@tanstack/react-router';
 import { BellIcon, MountainIcon, UploadIcon } from 'lucide-react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,6 +19,7 @@ import { UploadDialog } from './upload-dialog';
 export const Header = () => {
     const { user, isAuthenticated, logout } = useAuth();
     const navigate = useNavigate();
+    const intl = useIntl();
 
     const initials = user
         ? (user.name || user.username)
@@ -45,7 +47,9 @@ export const Header = () => {
                 <div className="flex flex-1 items-center justify-center px-4">
                     <Input
                         type="text"
-                        placeholder="Search your photos..."
+                        placeholder={intl.formatMessage({
+                            id: 'nav.search_placeholder',
+                        })}
                         className="w-full max-w-md rounded-md bg-muted px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                     />
                 </div>
@@ -53,12 +57,16 @@ export const Header = () => {
                     <UploadDialog>
                         <Button variant="ghost" size="icon">
                             <UploadIcon className="h-5 w-5" />
-                            <span className="sr-only">Upload</span>
+                            <span className="sr-only">
+                                <FormattedMessage id="common.upload" />
+                            </span>
                         </Button>
                     </UploadDialog>
                     <Button variant="ghost" size="icon">
                         <BellIcon className="h-5 w-5" />
-                        <span className="sr-only">Notifications</span>
+                        <span className="sr-only">
+                            <FormattedMessage id="nav.notifications" />
+                        </span>
                     </Button>
                     <ModeToggle />
                     <div className="w-2" />
@@ -88,11 +96,13 @@ export const Header = () => {
                                     </>
                                 )}
                                 <DropdownMenuItem asChild>
-                                    <Link to="/settings">Profile</Link>
+                                    <Link to="/settings">
+                                        <FormattedMessage id="nav.profile" />
+                                    </Link>
                                 </DropdownMenuItem>
                                 <DropdownMenuItem asChild>
                                     <Link to="/settings/security">
-                                        Security
+                                        <FormattedMessage id="nav.security" />
                                     </Link>
                                 </DropdownMenuItem>
                                 <DropdownMenuSeparator />
@@ -100,13 +110,15 @@ export const Header = () => {
                                     className="text-destructive"
                                     onSelect={handleLogout}
                                 >
-                                    Logout
+                                    <FormattedMessage id="nav.logout" />
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
                     ) : (
                         <Link to="/login">
-                            <Button size="sm">Sign in</Button>
+                            <Button size="sm">
+                                <FormattedMessage id="common.sign_in" />
+                            </Button>
                         </Link>
                     )}
                 </div>

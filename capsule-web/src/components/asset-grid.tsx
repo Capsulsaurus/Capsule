@@ -1,6 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Check, FolderInput, PlayCircle, Share, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { toast } from 'sonner';
 import {
     ContextMenu,
@@ -61,6 +62,7 @@ interface RowData {
 }
 
 export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
+    const intl = useIntl();
     const { ref: containerRef, size } = useElementSize<HTMLDivElement>();
     const { data: albums = [] } = useAlbums();
 
@@ -134,12 +136,22 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
 
     // Actions
     const handleMoveToAlbum = (albumTitle: string) => {
-        toast.success(`Moved ${selectedIds.size} items to ${albumTitle}`);
+        toast.success(
+            intl.formatMessage(
+                { id: 'assets.moved_to_album' },
+                { count: selectedIds.size, album: albumTitle },
+            ),
+        );
         setSelectedIds(new Set());
     };
 
     const handleDelete = () => {
-        toast.success(`Deleted ${selectedIds.size} items`);
+        toast.success(
+            intl.formatMessage(
+                { id: 'assets.deleted' },
+                { count: selectedIds.size },
+            ),
+        );
         setSelectedIds(new Set());
     };
 
@@ -243,7 +255,7 @@ export const AssetGrid = ({ assets, onAssetClick }: AssetGridProps) => {
 
                 {assets.length === 0 && (
                     <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                        No photos found
+                        <FormattedMessage id="assets.empty" />
                     </div>
                 )}
             </div>
@@ -350,6 +362,7 @@ const AssetCard = ({
     onMoveToAlbum,
     onDelete,
 }: AssetCardProps) => {
+    const intl = useIntl();
     return (
         <ContextMenu>
             <ContextMenuTrigger asChild>
@@ -363,7 +376,7 @@ const AssetCard = ({
                     <LazyImage
                         src={asset.url}
                         thumbhash={asset.thumbhash}
-                        alt="Asset"
+                        alt={intl.formatMessage({ id: 'assets.alt' })}
                         className={`transition-transform duration-300 group-hover:scale-105 ${selected ? 'scale-105' : ''}`}
                     />
 
@@ -412,7 +425,7 @@ const AssetCard = ({
                 <ContextMenuSub>
                     <ContextMenuSubTrigger>
                         <FolderInput className="w-4 h-4 mr-2" />
-                        Move to Album
+                        <FormattedMessage id="assets.move_to_album" />
                     </ContextMenuSubTrigger>
                     <ContextMenuSubContent className="w-48">
                         {albums.map((album) => (
@@ -428,7 +441,7 @@ const AssetCard = ({
                 <ContextMenuSeparator />
                 <ContextMenuItem>
                     <Share className="w-4 h-4 mr-2" />
-                    Share
+                    <FormattedMessage id="common.share" />
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem
@@ -436,7 +449,7 @@ const AssetCard = ({
                     onClick={onDelete}
                 >
                     <Trash2 className="w-4 h-4 mr-2" />
-                    Delete
+                    <FormattedMessage id="common.delete" />
                 </ContextMenuItem>
             </ContextMenuContent>
         </ContextMenu>

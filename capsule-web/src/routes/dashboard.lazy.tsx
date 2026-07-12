@@ -2,6 +2,7 @@ import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import { filesize } from 'filesize';
 import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -19,6 +20,7 @@ export const Route = createLazyFileRoute('/dashboard')({
 });
 
 const Dashboard = () => {
+    const intl = useIntl();
     const [fetching, setFetching] = useState(false);
     const { data: assets = [] } = useAssets();
     const { data: albums = [] } = useAlbums();
@@ -34,7 +36,9 @@ const Dashboard = () => {
         <div className="flex flex-col w-full min-h-screen bg-background">
             <main className="flex flex-col gap-8 p-4 md:p-10">
                 <div className="flex items-center justify-between gap-4">
-                    <h1 className="text-3xl font-bold">Dashboard</h1>
+                    <h1 className="text-3xl font-bold">
+                        <FormattedMessage id="dashboard.title" />
+                    </h1>
                     <button
                         type="button"
                         onClick={async () => {
@@ -43,7 +47,11 @@ const Dashboard = () => {
                                 setTimeout(resolve, 1000),
                             );
                             setFetching(false);
-                            toast.success('Data fetched successfully');
+                            toast.success(
+                                intl.formatMessage({
+                                    id: 'dashboard.fetch_success',
+                                }),
+                            );
                         }}
                         className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 border border-input bg-background hover:bg-accent hover:text-accent-foreground h-10 w-10"
                     >
@@ -59,7 +67,7 @@ const Dashboard = () => {
                         <Card className="transition-colors hover:bg-muted/50">
                             <CardHeader className="flex flex-row items-center justify-between pb-2">
                                 <CardTitle className="text-sm font-medium">
-                                    Photos
+                                    <FormattedMessage id="nav.photos" />
                                 </CardTitle>
                                 <Image className="w-4 h-4 text-muted-foreground" />
                             </CardHeader>
@@ -75,7 +83,7 @@ const Dashboard = () => {
                         <Card className="transition-colors hover:bg-muted/50">
                             <CardHeader className="flex flex-row items-center justify-between pb-2">
                                 <CardTitle className="text-sm font-medium">
-                                    Albums
+                                    <FormattedMessage id="nav.albums" />
                                 </CardTitle>
                                 <Album className="w-4 h-4 text-muted-foreground" />
                             </CardHeader>
@@ -91,7 +99,7 @@ const Dashboard = () => {
                         <Card className="transition-colors hover:bg-muted/50">
                             <CardHeader className="flex flex-row items-center justify-between pb-2">
                                 <CardTitle className="text-sm font-medium">
-                                    Storage Used
+                                    <FormattedMessage id="dashboard.storage_used" />
                                 </CardTitle>
                                 <HardDrive className="w-4 h-4 text-muted-foreground" />
                             </CardHeader>
@@ -107,21 +115,29 @@ const Dashboard = () => {
                     </Link>
                 </div>
 
-                <h2 className="text-2xl">Recent Activity (Mock)</h2>
+                <h2 className="text-2xl">
+                    <FormattedMessage id="dashboard.recent_activity" />
+                </h2>
                 <Card>
                     <Table>
                         <TableHeader>
                             <TableRow>
                                 <TableHead className="w-[200px]">
-                                    Timestamp
+                                    <FormattedMessage id="dashboard.col_timestamp" />
                                 </TableHead>
-                                <TableHead>Activity</TableHead>
+                                <TableHead>
+                                    <FormattedMessage id="dashboard.col_activity" />
+                                </TableHead>
                             </TableRow>
                         </TableHeader>
                         <TableBody>
                             <TableRow>
-                                <TableCell>Just now</TableCell>
-                                <TableCell>Mock activity log...</TableCell>
+                                <TableCell>
+                                    <FormattedMessage id="dashboard.just_now" />
+                                </TableCell>
+                                <TableCell>
+                                    <FormattedMessage id="dashboard.mock_log" />
+                                </TableCell>
                             </TableRow>
                         </TableBody>
                     </Table>

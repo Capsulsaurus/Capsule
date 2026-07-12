@@ -618,5 +618,1213 @@
     "drop.error.generic": {
         "message": "Something went wrong uploading this file. Please try again.",
         "context": "Guest drop uploader: generic per-file upload failure message."
+    },
+    "common.email": {
+        "message": "Email",
+        "context": "Form label for the email field (login, forgot-password, settings)."
+    },
+    "common.password": {
+        "message": "Password",
+        "context": "Form label for the password field on login."
+    },
+    "common.username": {
+        "message": "Username",
+        "context": "Form label for the username field in profile settings."
+    },
+    "common.sign_in": {
+        "message": "Sign in",
+        "context": "Sign-in button/link (header, login, reset-password)."
+    },
+    "common.back": {
+        "message": "Back",
+        "context": "Back button (login TOTP step, TOTP enroll)."
+    },
+    "common.cancel": {
+        "message": "Cancel",
+        "context": "Generic cancel button across dialogs and forms."
+    },
+    "common.close": {
+        "message": "Close",
+        "context": "sr-only label on the dialog close (X) button."
+    },
+    "common.share": {
+        "message": "Share",
+        "context": "Asset context-menu share action."
+    },
+    "common.delete": {
+        "message": "Delete",
+        "context": "Asset context-menu delete action."
+    },
+    "common.upload": {
+        "message": "Upload",
+        "context": "Upload action label (header sr-only, upload dialog button)."
+    },
+    "common.remove": {
+        "message": "Remove",
+        "context": "Button to remove a registered passkey."
+    },
+    "common.refresh": {
+        "message": "Refresh",
+        "context": "Refresh button in the storage cleanup list."
+    },
+    "common.loading": {
+        "message": "Loading...",
+        "context": "Generic loading placeholder (storage overview and asset lists)."
+    },
+    "common.saving": {
+        "message": "Saving…",
+        "context": "Save button label while a profile save is in progress."
+    },
+    "common.save_changes": {
+        "message": "Save changes",
+        "context": "Save button label for the profile form."
+    },
+    "common.email_placeholder": {
+        "message": "m@example.com",
+        "context": "Example email hint text in email inputs."
+    },
+    "common.code_placeholder": {
+        "message": "123456",
+        "context": "Example 6-digit code hint in TOTP code inputs."
+    },
+    "common.password_min": {
+        "message": "Password must be at least 8 characters.",
+        "context": "Validation error when a new password is too short."
+    },
+    "common.error.generic": {
+        "message": "Something went wrong. Please try again.",
+        "context": "Generic fallback error message (forgot/reset password)."
+    },
+    "common.item_count": {
+        "message": "{count, plural, one {# item} other {# items}}",
+        "context": "Count of items in an album, pluralized."
+    },
+    "common.toggle_theme": {
+        "message": "Toggle theme",
+        "context": "sr-only label on the light/dark theme toggle button."
+    },
+    "mode.light": {
+        "message": "Light",
+        "context": "Theme menu option: light mode."
+    },
+    "mode.dark": {
+        "message": "Dark",
+        "context": "Theme menu option: dark mode."
+    },
+    "mode.system": {
+        "message": "System",
+        "context": "Theme menu option: follow system theme."
+    },
+    "nav.photos": {
+        "message": "Photos",
+        "context": "Navigation/label for the Photos section (sidebar, dashboard card)."
+    },
+    "nav.explore": {
+        "message": "Explore",
+        "context": "Sidebar link to the Explore section."
+    },
+    "nav.sharing": {
+        "message": "Sharing",
+        "context": "Sidebar link and heading for the Sharing section."
+    },
+    "nav.favorites": {
+        "message": "Favorites",
+        "context": "Sidebar link to the Favorites library."
+    },
+    "nav.albums": {
+        "message": "Albums",
+        "context": "Navigation/heading for the Albums section (sidebar, dashboard, albums page)."
+    },
+    "nav.archive": {
+        "message": "Archive",
+        "context": "Navigation/heading for the Archive library."
+    },
+    "nav.trash": {
+        "message": "Trash",
+        "context": "Navigation/heading for the Trash library."
+    },
+    "nav.library": {
+        "message": "Library",
+        "context": "Sidebar section header grouping library links."
+    },
+    "nav.storage_usage": {
+        "message": "15 GB used of 2 TB",
+        "context": "Sidebar storage meter placeholder text."
+    },
+    "nav.search_placeholder": {
+        "message": "Search your photos...",
+        "context": "Placeholder in the header search input."
+    },
+    "nav.notifications": {
+        "message": "Notifications",
+        "context": "sr-only label on the header notifications bell button."
+    },
+    "nav.profile": {
+        "message": "Profile",
+        "context": "Header account menu link to profile settings."
+    },
+    "nav.security": {
+        "message": "Security",
+        "context": "Header account menu link to security settings."
+    },
+    "nav.logout": {
+        "message": "Logout",
+        "context": "Header account menu logout action."
+    },
+    "home.title": {
+        "message": "Welcome to Capsule",
+        "context": "Landing page hero heading."
+    },
+    "home.subtitle": {
+        "message": "Your professional asset management solution.",
+        "context": "Landing page hero subtitle."
+    },
+    "home.cta_dashboard": {
+        "message": "Go to Dashboard",
+        "context": "Landing page button to the dashboard."
+    },
+    "home.cta_photos": {
+        "message": "View Photos",
+        "context": "Landing page button to the photos view."
+    },
+    "upload.title": {
+        "message": "Upload Photos",
+        "context": "Upload dialog title."
+    },
+    "upload.description": {
+        "message": "Drag and drop photos here or click to browse.",
+        "context": "Upload dialog description."
+    },
+    "upload.uploading": {
+        "message": "Uploading...",
+        "context": "Upload dropzone status while uploading."
+    },
+    "upload.select_files": {
+        "message": "Click to select files",
+        "context": "Upload dropzone prompt to pick files."
+    },
+    "dashboard.fetch_success": {
+        "message": "Data fetched successfully",
+        "context": "Toast shown after the dashboard refresh mock completes."
+    },
+    "dashboard.title": {
+        "message": "Dashboard",
+        "context": "Dashboard page heading."
+    },
+    "dashboard.storage_used": {
+        "message": "Storage Used",
+        "context": "Dashboard stat card title for storage."
+    },
+    "dashboard.recent_activity": {
+        "message": "Recent Activity (Mock)",
+        "context": "Dashboard section heading for the mock activity table."
+    },
+    "dashboard.col_timestamp": {
+        "message": "Timestamp",
+        "context": "Dashboard activity table column header."
+    },
+    "dashboard.col_activity": {
+        "message": "Activity",
+        "context": "Dashboard activity table column header."
+    },
+    "dashboard.just_now": {
+        "message": "Just now",
+        "context": "Dashboard mock activity table cell (timestamp)."
+    },
+    "dashboard.mock_log": {
+        "message": "Mock activity log...",
+        "context": "Dashboard mock activity table cell (activity)."
+    },
+    "explore.featured_albums": {
+        "message": "Featured Albums",
+        "context": "Explore page section heading."
+    },
+    "explore.view_all": {
+        "message": "View All",
+        "context": "Explore page link to all albums."
+    },
+    "explore.trending_photos": {
+        "message": "Trending Photos",
+        "context": "Explore page section heading."
+    },
+    "album.not_found": {
+        "message": "Album not found",
+        "context": "Shown when an album id does not resolve."
+    },
+    "album.slideshow": {
+        "message": "Slideshow",
+        "context": "Album detail button to start a slideshow."
+    },
+    "assets.moved_to_album": {
+        "message": "Moved {count} items to {album}",
+        "context": "Toast after moving selected assets into an album."
+    },
+    "assets.deleted": {
+        "message": "Deleted {count} items",
+        "context": "Toast after deleting selected assets."
+    },
+    "assets.empty": {
+        "message": "No photos found",
+        "context": "Empty state in the asset grid."
+    },
+    "assets.move_to_album": {
+        "message": "Move to Album",
+        "context": "Asset context-menu submenu trigger."
+    },
+    "assets.alt": {
+        "message": "Asset",
+        "context": "Alt text for an asset thumbnail image."
+    },
+    "library.archive.description": {
+        "message": "Archived photos are hidden from your main photos view.",
+        "context": "Archive page description."
+    },
+    "library.archive.empty": {
+        "message": "No archived photos",
+        "context": "Archive page empty state."
+    },
+    "library.trash.description": {
+        "message": "Items in trash will be permanently deleted after 30 days.",
+        "context": "Trash page description."
+    },
+    "library.trash.empty_button": {
+        "message": "Empty Trash",
+        "context": "Trash page button to empty the trash."
+    },
+    "library.trash.empty": {
+        "message": "Trash is empty",
+        "context": "Trash page empty state."
+    },
+    "library.favorites.placeholder": {
+        "message": "Hello \"/library/favorites\"!",
+        "context": "Favorites route stub placeholder text."
+    },
+    "auth.error.unexpected": {
+        "message": "An unexpected error occurred.",
+        "context": "Login fallback error for non-API failures."
+    },
+    "auth.passkey.cancelled": {
+        "message": "Passkey authentication was cancelled.",
+        "context": "Login error when the user cancels the passkey prompt."
+    },
+    "auth.passkey.failed": {
+        "message": "Passkey authentication failed.",
+        "context": "Login error when passkey authentication fails."
+    },
+    "auth.login.title": {
+        "message": "Login",
+        "context": "Login card title."
+    },
+    "auth.login.description": {
+        "message": "Enter your email below to login to your account.",
+        "context": "Login card description."
+    },
+    "auth.signing_in": {
+        "message": "Signing in…",
+        "context": "Login submit button label while signing in."
+    },
+    "auth.or": {
+        "message": "or",
+        "context": "Divider text between password login and passkey login."
+    },
+    "auth.sign_in_passkey": {
+        "message": "Sign in with Passkey",
+        "context": "Login button to authenticate with a passkey."
+    },
+    "auth.no_account": {
+        "message": "Don't have an account?",
+        "context": "Login prompt preceding the sign-up link."
+    },
+    "auth.sign_up": {
+        "message": "Sign up",
+        "context": "Login link to the registration page."
+    },
+    "auth.forgot_password_link": {
+        "message": "Forgot password?",
+        "context": "Login link to the forgot-password page."
+    },
+    "auth.totp.title": {
+        "message": "Two-Factor Auth",
+        "context": "Login TOTP step card title."
+    },
+    "auth.totp.description": {
+        "message": "Enter the 6-digit code from your authenticator app.",
+        "context": "Login TOTP step card description."
+    },
+    "auth.totp.code_label": {
+        "message": "Authenticator Code",
+        "context": "Login TOTP code input label."
+    },
+    "auth.verifying": {
+        "message": "Verifying…",
+        "context": "Button label while verifying a TOTP code (login and TOTP enroll)."
+    },
+    "auth.verify": {
+        "message": "Verify",
+        "context": "Login TOTP submit button label."
+    },
+    "auth.forgot.title": {
+        "message": "Forgot Password",
+        "context": "Forgot-password card title."
+    },
+    "auth.forgot.description_sent": {
+        "message": "Check your email for instructions.",
+        "context": "Forgot-password description after submission."
+    },
+    "auth.forgot.description": {
+        "message": "Enter your email and we'll send you a reset link.",
+        "context": "Forgot-password card description before submission."
+    },
+    "auth.forgot.sending": {
+        "message": "Sending…",
+        "context": "Forgot-password submit button while sending."
+    },
+    "auth.forgot.send": {
+        "message": "Send reset link",
+        "context": "Forgot-password submit button label."
+    },
+    "auth.back_to_login": {
+        "message": "Back to login",
+        "context": "Link back to the login page from forgot-password."
+    },
+    "auth.forgot.confirmation": {
+        "message": "If an account with that email exists, you'll receive a reset link shortly.",
+        "context": "Forgot-password confirmation message."
+    },
+    "auth.reset.mismatch": {
+        "message": "Passwords do not match.",
+        "context": "Reset-password validation error."
+    },
+    "auth.reset.invalid_title": {
+        "message": "Invalid Link",
+        "context": "Reset-password card title when the token is missing/invalid."
+    },
+    "auth.reset.invalid_body": {
+        "message": "This password reset link is invalid or has expired.",
+        "context": "Reset-password invalid-link description."
+    },
+    "auth.reset.request_new": {
+        "message": "Request a new reset link",
+        "context": "Reset-password link to request a new reset link."
+    },
+    "auth.reset.title": {
+        "message": "Reset Password",
+        "context": "Reset-password card title."
+    },
+    "auth.reset.success_desc": {
+        "message": "Your password has been reset.",
+        "context": "Reset-password description after success."
+    },
+    "auth.reset.description": {
+        "message": "Enter your new password.",
+        "context": "Reset-password card description."
+    },
+    "auth.new_password": {
+        "message": "New Password",
+        "context": "Label for the new-password input (reset-password and settings)."
+    },
+    "auth.confirm_password": {
+        "message": "Confirm Password",
+        "context": "Reset-password confirm-password input label."
+    },
+    "auth.reset.resetting": {
+        "message": "Resetting…",
+        "context": "Reset-password submit button while resetting."
+    },
+    "auth.reset.submit": {
+        "message": "Reset password",
+        "context": "Reset-password submit button label."
+    },
+    "settings.profile_updated": {
+        "message": "Profile updated.",
+        "context": "Success message after saving profile."
+    },
+    "settings.profile_update_failed": {
+        "message": "Failed to update profile.",
+        "context": "Error message when saving profile fails."
+    },
+    "settings.password_mismatch": {
+        "message": "New passwords do not match.",
+        "context": "Settings validation error for mismatched new passwords."
+    },
+    "settings.password_updated": {
+        "message": "Password updated.",
+        "context": "Success message after changing password."
+    },
+    "settings.password_update_failed": {
+        "message": "Failed to update password.",
+        "context": "Error message when changing password fails."
+    },
+    "settings.title": {
+        "message": "Profile Settings",
+        "context": "Profile settings page heading."
+    },
+    "settings.security_link": {
+        "message": "Security settings →",
+        "context": "Link from profile settings to security settings."
+    },
+    "settings.profile.title": {
+        "message": "Profile Information",
+        "context": "Profile settings card title."
+    },
+    "settings.profile.description": {
+        "message": "Update your username and email address.",
+        "context": "Profile settings card description."
+    },
+    "settings.password.title": {
+        "message": "Change Password",
+        "context": "Change-password card title in settings."
+    },
+    "settings.password.description": {
+        "message": "Enter your current password to set a new one.",
+        "context": "Change-password card description."
+    },
+    "settings.current_password": {
+        "message": "Current Password",
+        "context": "Settings current-password input label."
+    },
+    "settings.confirm_new_password": {
+        "message": "Confirm New Password",
+        "context": "Settings confirm-new-password input label."
+    },
+    "settings.updating": {
+        "message": "Updating…",
+        "context": "Change-password submit button while updating."
+    },
+    "settings.update_password": {
+        "message": "Update password",
+        "context": "Change-password submit button label."
+    },
+    "security.unknown_device": {
+        "message": "Unknown device",
+        "context": "Fallback name for a device with no user agent."
+    },
+    "security.this_device": {
+        "message": "(This device)",
+        "context": "Marker on the currently-used device in the session list."
+    },
+    "security.last_active": {
+        "message": "Last active: {date}",
+        "context": "Device last-active timestamp line."
+    },
+    "security.delete_passkey_confirm": {
+        "message": "Delete passkey \"{name}\"?",
+        "context": "Confirm dialog before deleting a passkey."
+    },
+    "security.delete_passkey_failed": {
+        "message": "Failed to delete passkey.",
+        "context": "Error when deleting a passkey fails."
+    },
+    "security.added": {
+        "message": "Added: {date}",
+        "context": "Passkey added-on timestamp line."
+    },
+    "security.deleting": {
+        "message": "Deleting…",
+        "context": "Passkey remove button while deleting."
+    },
+    "security.totp_disabled": {
+        "message": "TOTP disabled.",
+        "context": "Success message after disabling TOTP."
+    },
+    "security.totp_disable_failed": {
+        "message": "Failed to disable TOTP.",
+        "context": "Error when disabling TOTP fails."
+    },
+    "security.title": {
+        "message": "Security Settings",
+        "context": "Security settings page heading."
+    },
+    "security.profile_link": {
+        "message": "← Profile settings",
+        "context": "Link from security settings back to profile settings."
+    },
+    "security.sessions.title": {
+        "message": "Active Sessions",
+        "context": "Security card title for active sessions."
+    },
+    "security.sessions.description": {
+        "message": "Devices currently logged in to your account.",
+        "context": "Active sessions card description."
+    },
+    "security.sessions.loading": {
+        "message": "Loading sessions…",
+        "context": "Loading state for the sessions list."
+    },
+    "security.sessions.empty": {
+        "message": "No active sessions found.",
+        "context": "Empty state for the sessions list."
+    },
+    "security.totp.title": {
+        "message": "Authenticator App (TOTP)",
+        "context": "Security card title for TOTP."
+    },
+    "security.totp.description": {
+        "message": "Use an authenticator app to generate one-time codes for login.",
+        "context": "TOTP card description."
+    },
+    "security.totp.enabled": {
+        "message": "Authenticator app enabled.",
+        "context": "Success message after enabling the authenticator app."
+    },
+    "security.totp.setup_button": {
+        "message": "Set up authenticator app",
+        "context": "Button to begin TOTP enrollment."
+    },
+    "security.totp.disable_prompt": {
+        "message": "If TOTP is currently enabled, enter a code to disable it:",
+        "context": "Prompt above the TOTP disable form."
+    },
+    "security.totp.code_label": {
+        "message": "TOTP Code",
+        "context": "sr-only label on the TOTP disable code input."
+    },
+    "security.totp.code_placeholder": {
+        "message": "6-digit code",
+        "context": "Placeholder in the TOTP disable code input."
+    },
+    "security.totp.disabling": {
+        "message": "Disabling…",
+        "context": "TOTP disable button while disabling."
+    },
+    "security.totp.disable_button": {
+        "message": "Disable TOTP",
+        "context": "TOTP disable button label."
+    },
+    "security.passkeys.title": {
+        "message": "Passkeys",
+        "context": "Security card title for passkeys."
+    },
+    "security.passkeys.description": {
+        "message": "Sign in using your device's biometrics or PIN.",
+        "context": "Passkeys card description."
+    },
+    "security.passkeys.loading": {
+        "message": "Loading passkeys…",
+        "context": "Loading state for the passkeys list."
+    },
+    "security.passkeys.empty": {
+        "message": "No passkeys registered.",
+        "context": "Empty state for the passkeys list."
+    },
+    "security.passkeys.add_button": {
+        "message": "Add passkey",
+        "context": "Button to start registering a new passkey."
+    },
+    "mfa.passkey.reg_cancelled": {
+        "message": "Passkey registration was cancelled.",
+        "context": "Error when the user cancels passkey registration."
+    },
+    "mfa.passkey.already_registered": {
+        "message": "A passkey for this device is already registered.",
+        "context": "Error when a passkey already exists for the device."
+    },
+    "mfa.passkey.reg_failed": {
+        "message": "Passkey registration failed.",
+        "context": "Generic passkey registration failure."
+    },
+    "mfa.passkey.description": {
+        "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
+        "context": "Passkey registration form description."
+    },
+    "mfa.passkey.name_label": {
+        "message": "Passkey Name (optional)",
+        "context": "Passkey name input label."
+    },
+    "mfa.passkey.name_placeholder": {
+        "message": "My MacBook",
+        "context": "Example passkey name hint text."
+    },
+    "mfa.passkey.registering": {
+        "message": "Registering…",
+        "context": "Passkey create button while registering."
+    },
+    "mfa.passkey.create": {
+        "message": "Create Passkey",
+        "context": "Passkey registration submit button label."
+    },
+    "mfa.totp.start_failed": {
+        "message": "Failed to start enrollment.",
+        "context": "Error when starting TOTP enrollment fails."
+    },
+    "mfa.totp.invalid_code": {
+        "message": "Invalid code. Please try again.",
+        "context": "Error when a TOTP enrollment code is rejected."
+    },
+    "mfa.totp.start_description": {
+        "message": "Use an authenticator app (e.g. Google Authenticator, Authy) to scan a QR code and generate one-time codes.",
+        "context": "TOTP enrollment intro description."
+    },
+    "mfa.totp.starting": {
+        "message": "Starting…",
+        "context": "TOTP enroll start button while starting."
+    },
+    "mfa.totp.setup": {
+        "message": "Set up authenticator",
+        "context": "TOTP enroll start button label."
+    },
+    "mfa.totp.scan_description": {
+        "message": "Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.",
+        "context": "TOTP enrollment scan-step description."
+    },
+    "mfa.totp.show_key": {
+        "message": "Can't scan? Show setup key",
+        "context": "TOTP enrollment details summary to reveal the setup key."
+    },
+    "mfa.totp.scanned": {
+        "message": "I've scanned the code",
+        "context": "TOTP enrollment button to proceed to the verify step."
+    },
+    "mfa.totp.verify_description": {
+        "message": "Enter the 6-digit code from your authenticator app to complete setup.",
+        "context": "TOTP enrollment verify-step description."
+    },
+    "mfa.totp.code_label": {
+        "message": "Verification Code",
+        "context": "TOTP enrollment verification code input label."
+    },
+    "mfa.totp.confirm": {
+        "message": "Confirm",
+        "context": "TOTP enrollment verify submit button label."
+    },
+    "sharing.description": {
+        "message": "Share your photos and albums with friends and family. Shared content will appear here.",
+        "context": "Sharing page empty-state description."
+    },
+    "sharing.created": {
+        "message": "Shared album \"{title}\" created!",
+        "context": "Toast after creating a shared album."
+    },
+    "sharing.create_button": {
+        "message": "Create Shared Album",
+        "context": "Button and dialog title to create a shared album."
+    },
+    "sharing.dialog_description": {
+        "message": "Create a new album to share with friends and family.",
+        "context": "Create shared album dialog description."
+    },
+    "sharing.album_title": {
+        "message": "Album Title",
+        "context": "Shared album title input label."
+    },
+    "sharing.album_title_placeholder": {
+        "message": "e.g., Summer Vacation 2024",
+        "context": "Example album title hint text."
+    },
+    "sharing.link_sharing": {
+        "message": "Link Sharing",
+        "context": "Toggle label for link sharing."
+    },
+    "sharing.link_sharing_hint": {
+        "message": "Anyone with the link can view",
+        "context": "Hint under the link-sharing toggle."
+    },
+    "sharing.collaborative": {
+        "message": "Collaborative",
+        "context": "Toggle label for collaborative albums."
+    },
+    "sharing.collaborative_hint": {
+        "message": "Allow others to add photos",
+        "context": "Hint under the collaborative toggle."
+    },
+    "sharing.create_album": {
+        "message": "Create Album",
+        "context": "Confirm button in the create shared album dialog."
+    },
+    "storage.title": {
+        "message": "Manage Storage",
+        "context": "Storage page heading."
+    },
+    "storage.error": {
+        "message": "Error",
+        "context": "Storage overview error state."
+    },
+    "storage.no_data": {
+        "message": "No data",
+        "context": "Storage overview / asset list no-data state."
+    },
+    "storage.usage_summary": {
+        "message": "{percent}% of storage used ({used} of {total})",
+        "context": "Storage usage summary heading."
+    },
+    "storage.cleanup_hint": {
+        "message": "Make room for your photos, files, and more by cleaning up space",
+        "context": "Storage cleanup encouragement text."
+    },
+    "storage.category.photos": {
+        "message": "Photos",
+        "context": "Storage breakdown category: photos."
+    },
+    "storage.category.videos": {
+        "message": "Videos",
+        "context": "Storage breakdown category: videos."
+    },
+    "storage.category.sidecar": {
+        "message": "Sidecar",
+        "context": "Storage breakdown category: sidecar files."
+    },
+    "storage.category_legend": {
+        "message": "{name} ({size})",
+        "context": "Legend entry combining a category name and its size."
+    },
+    "storage.free_space": {
+        "message": "Free Space ({size})",
+        "context": "Legend entry for remaining free space."
+    },
+    "storage.cleanup_title": {
+        "message": "Clean up suggested items",
+        "context": "Storage cleanup section heading."
+    },
+    "storage.suggestion.trash": {
+        "message": "Files in trash",
+        "context": "Cleanup suggestion tab: trashed files."
+    },
+    "storage.suggestion.similar": {
+        "message": "Similar assets",
+        "context": "Cleanup suggestion tab: similar assets."
+    },
+    "storage.suggestion.large": {
+        "message": "Large files",
+        "context": "Cleanup suggestion tab: large files."
+    },
+    "storage.error_mock": {
+        "message": "Error (Mock)",
+        "context": "Storage asset list mock error state."
+    },
+    "storage.preview": {
+        "message": "Preview",
+        "context": "Storage asset preview dialog title."
+    },
+    "storage.col_filename": {
+        "message": "File Name",
+        "context": "Storage asset table column header."
+    },
+    "storage.col_path": {
+        "message": "Path",
+        "context": "Storage asset table column header."
+    },
+    "storage.col_size": {
+        "message": "Size",
+        "context": "Storage asset table column header."
+    },
+    "storage.col_date": {
+        "message": "Date",
+        "context": "Storage asset table column header."
+    },
+    "storage.empty_list": {
+        "message": "Empty asset list",
+        "context": "Storage asset table empty state."
+    },
+    "storage.thumbnail_alt": {
+        "message": "Thumbnail for {fileName}",
+        "context": "Alt text for an asset thumbnail in the storage table."
+    },
+    "storage.image_file_alt": {
+        "message": "Image file: {fileName}",
+        "context": "aria-label for an image-file icon in the storage table."
+    },
+    "storage.video_file_alt": {
+        "message": "Video file: {fileName}",
+        "context": "aria-label for a video-file icon in the storage table."
+    },
+    "storage.sidecar_file_alt": {
+        "message": "Sidecar file: {fileName}",
+        "context": "aria-label for a sidecar-file icon in the storage table."
+    },
+    "ios.common.cancel": {
+        "message": "Cancel",
+        "context": "iOS shared button title for dismissing/cancelling an alert or dialog."
+    },
+    "ios.common.create": {
+        "message": "Create",
+        "context": "iOS shared button title confirming creation (e.g. of an album)."
+    },
+    "ios.common.delete": {
+        "message": "Delete",
+        "context": "iOS shared destructive button title for deleting an item."
+    },
+    "ios.common.ok": {
+        "message": "OK",
+        "context": "iOS shared button title acknowledging an alert."
+    },
+    "ios.common.done": {
+        "message": "Done",
+        "context": "iOS shared button title dismissing a modal sheet."
+    },
+    "ios.common.not_now": {
+        "message": "Not Now",
+        "context": "iOS shared button title declining an offered action for now."
+    },
+    "ios.common.location": {
+        "message": "Location",
+        "context": "iOS shared label for a location: asset-info section header and the places cluster grid navigation title."
+    },
+    "ios.tab.library": {
+        "message": "Library",
+        "context": "iOS main tab bar item and the timeline screen navigation title (the photo library)."
+    },
+    "ios.tab.collections": {
+        "message": "Collections",
+        "context": "iOS main tab bar item and the collections screen navigation title."
+    },
+    "ios.tab.search": {
+        "message": "Search",
+        "context": "iOS main tab bar item and the search screen navigation title."
+    },
+    "ios.tab.settings": {
+        "message": "Settings",
+        "context": "iOS main tab bar item and the settings screen navigation title."
+    },
+    "ios.diagnostics.crash_alert.title": {
+        "message": "Capsule quit unexpectedly last time",
+        "context": "iOS alert title offering to send a crash report after a crash."
+    },
+    "ios.diagnostics.crash_alert.send": {
+        "message": "Send Report",
+        "context": "iOS alert button that sends the crash diagnostics report."
+    },
+    "ios.diagnostics.crash_alert.body": {
+        "message": "A redacted diagnostic report can help us fix the crash. It contains no photos or album contents.",
+        "context": "iOS crash-report alert message explaining the redacted report."
+    },
+    "ios.settings.diagnostics.toggle": {
+        "message": "Share On-Device Diagnostics",
+        "context": "iOS settings toggle enabling on-device diagnostics collection."
+    },
+    "ios.settings.diagnostics.header": {
+        "message": "Diagnostics",
+        "context": "iOS settings section header for the diagnostics toggle."
+    },
+    "ios.settings.diagnostics.footer": {
+        "message": "Collects crash and performance diagnostics on this device using Apple's MetricKit. Nothing leaves your device unless you turn on uploads below.",
+        "context": "iOS settings section footer explaining on-device diagnostics."
+    },
+    "ios.settings.upload.toggle": {
+        "message": "Upload Reports",
+        "context": "iOS settings toggle enabling upload of diagnostic reports to a self-hosted server."
+    },
+    "ios.settings.upload.header": {
+        "message": "Self-Hosted Upload",
+        "context": "iOS settings section header for the self-hosted upload option."
+    },
+    "ios.settings.upload.footer": {
+        "message": "Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.",
+        "context": "iOS settings section footer explaining the self-hosted upload option."
+    },
+    "ios.settings.report.button": {
+        "message": "Report a Problem…",
+        "context": "iOS settings button that builds and shares a redacted problem report."
+    },
+    "ios.settings.report.footer": {
+        "message": "Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.",
+        "context": "iOS settings footer explaining the Report a Problem action."
+    },
+    "ios.settings.version": {
+        "message": "Version",
+        "context": "iOS settings labeled-content row label showing the app version."
+    },
+    "ios.recently_deleted.title": {
+        "message": "Recently Deleted",
+        "context": "iOS Recently Deleted screen navigation title."
+    },
+    "ios.recently_deleted.empty.title": {
+        "message": "No Recently Deleted",
+        "context": "iOS Recently Deleted empty-state title."
+    },
+    "ios.recently_deleted.empty.description": {
+        "message": "Deleted Capsule photos appear here for recovery.",
+        "context": "iOS Recently Deleted empty-state description."
+    },
+    "ios.recently_deleted.recover": {
+        "message": "Recover",
+        "context": "iOS swipe-action button restoring a deleted photo."
+    },
+    "ios.hidden.title": {
+        "message": "Hidden",
+        "context": "iOS Hidden album navigation title and locked-state label."
+    },
+    "ios.hidden.empty.title": {
+        "message": "Nothing Hidden",
+        "context": "iOS Hidden album empty-state title."
+    },
+    "ios.hidden.empty.description": {
+        "message": "Hide photos from the Library with Select → Hide.",
+        "context": "iOS Hidden album empty-state description."
+    },
+    "ios.hidden.confirm.title": {
+        "message": "Hidden Photo",
+        "context": "iOS Hidden album confirmation dialog title before unhiding a photo."
+    },
+    "ios.hidden.unhide": {
+        "message": "Unhide",
+        "context": "iOS button to unhide a hidden photo."
+    },
+    "ios.hidden.locked.description": {
+        "message": "Authenticate to view your hidden photos.",
+        "context": "iOS Hidden album locked-state description prompting biometric auth."
+    },
+    "ios.hidden.unlock": {
+        "message": "Unlock",
+        "context": "iOS button to authenticate and unlock the Hidden album."
+    },
+    "ios.imports.title": {
+        "message": "Imports",
+        "context": "iOS Imports screen navigation title (managed-store imported photos)."
+    },
+    "ios.imports.empty.title": {
+        "message": "No Imports",
+        "context": "iOS Imports empty-state title."
+    },
+    "ios.imports.empty.description": {
+        "message": "Photos imported into Capsule appear here.",
+        "context": "iOS Imports empty-state description."
+    },
+    "ios.places.title": {
+        "message": "Places",
+        "context": "iOS Places map screen navigation title."
+    },
+    "ios.places.empty.title": {
+        "message": "No Places",
+        "context": "iOS Places map empty-state title."
+    },
+    "ios.places.empty.description": {
+        "message": "Photos with location data will appear here.",
+        "context": "iOS Places map empty-state description."
+    },
+    "ios.collections.section.media_types": {
+        "message": "Media Types",
+        "context": "iOS Collections section header over smart-album (media type) cover cards."
+    },
+    "ios.collections.section.utilities": {
+        "message": "Utilities",
+        "context": "iOS Collections group header for utility links (Recently Deleted, Hidden, Imports, Duplicates)."
+    },
+    "ios.collections.section.more": {
+        "message": "More",
+        "context": "iOS Collections group header for the More links (Places, People, Memories)."
+    },
+    "ios.albums.title": {
+        "message": "Albums",
+        "context": "iOS Albums screen navigation title."
+    },
+    "ios.albums.new_album.title": {
+        "message": "New Album",
+        "context": "iOS new-album alert title and the toolbar + button accessibility label."
+    },
+    "ios.albums.new_album.name_field": {
+        "message": "Album Name",
+        "context": "iOS new-album alert text field placeholder for the album name."
+    },
+    "ios.albums.new_album.message": {
+        "message": "Name your new Capsule album.",
+        "context": "iOS new-album alert message."
+    },
+    "ios.albums.section.my_albums": {
+        "message": "My Albums",
+        "context": "iOS section header over the user's own albums (Collections and Albums screens)."
+    },
+    "ios.albums.section.smart_albums": {
+        "message": "Smart Albums",
+        "context": "iOS Albums screen section header over system smart albums."
+    },
+    "ios.albums.empty.title": {
+        "message": "No Albums",
+        "context": "iOS Albums screen empty-state title."
+    },
+    "ios.albums.empty.description": {
+        "message": "Create a Capsule album with the + button.",
+        "context": "iOS Albums screen empty-state description."
+    },
+    "ios.albums.detail.empty.title": {
+        "message": "Empty Album",
+        "context": "iOS album detail empty-state title."
+    },
+    "ios.albums.detail.empty.description": {
+        "message": "Add photos using a viewer's Add to Album action.",
+        "context": "iOS album detail empty-state description."
+    },
+    "ios.search.prompt": {
+        "message": "Photos, Videos, Moments",
+        "context": "iOS search field placeholder prompt."
+    },
+    "ios.search.section.recent": {
+        "message": "Recent",
+        "context": "iOS search browse section header over recent searches."
+    },
+    "ios.search.section.categories": {
+        "message": "Categories",
+        "context": "iOS search browse section header over category suggestions."
+    },
+    "ios.search.clear_recents": {
+        "message": "Clear",
+        "context": "iOS destructive button clearing recent searches."
+    },
+    "ios.search.empty.title": {
+        "message": "No Matches",
+        "context": "iOS search results empty-state title."
+    },
+    "ios.search.empty.description": {
+        "message": "No photos match these filters.",
+        "context": "iOS search results empty-state description."
+    },
+    "ios.timeline.import_complete.title": {
+        "message": "Import Complete",
+        "context": "iOS timeline alert title shown after an import finishes."
+    },
+    "ios.timeline.empty.title": {
+        "message": "No Photos",
+        "context": "iOS timeline empty-state title."
+    },
+    "ios.timeline.empty.description": {
+        "message": "Tap the import button to add photos to Capsule.",
+        "context": "iOS timeline empty-state description."
+    },
+    "ios.timeline.load_failed.title": {
+        "message": "Couldn't Load Photos",
+        "context": "iOS timeline failure-state title when the library can't be loaded."
+    },
+    "ios.timeline.import.accessibility": {
+        "message": "Import Photos",
+        "context": "iOS timeline import toolbar button accessibility label."
+    },
+    "ios.timeline.view_picker": {
+        "message": "View",
+        "context": "iOS timeline segmented picker accessibility label for Years/Months/All."
+    },
+    "ios.timeline.level.years": {
+        "message": "Years",
+        "context": "iOS timeline zoom-level segment: group by year."
+    },
+    "ios.timeline.level.months": {
+        "message": "Months",
+        "context": "iOS timeline zoom-level segment: group by month."
+    },
+    "ios.timeline.level.all": {
+        "message": "All",
+        "context": "iOS timeline zoom-level segment: show all photos."
+    },
+    "ios.timeline.grid_size": {
+        "message": "Grid Size",
+        "context": "iOS timeline grid-density picker accessibility label."
+    },
+    "ios.timeline.grid.large": {
+        "message": "Large",
+        "context": "iOS timeline grid-density option: large tiles (fewer columns)."
+    },
+    "ios.timeline.grid.medium": {
+        "message": "Medium",
+        "context": "iOS timeline grid-density option: medium tiles."
+    },
+    "ios.timeline.grid.small": {
+        "message": "Small",
+        "context": "iOS timeline grid-density option: small tiles (more columns)."
+    },
+    "ios.timeline.permission.title": {
+        "message": "Photo Access Needed",
+        "context": "iOS timeline permission-prompt title when photo access is not granted."
+    },
+    "ios.timeline.permission.description": {
+        "message": "Grant photo access to see your library, or import photos directly into Capsule.",
+        "context": "iOS timeline permission-prompt description."
+    },
+    "ios.timeline.permission.open_settings": {
+        "message": "Open Settings",
+        "context": "iOS timeline permission-prompt button opening the system Settings app."
+    },
+    "ios.timeline.importing": {
+        "message": "Importing…",
+        "context": "iOS timeline progress overlay label while importing photos."
+    },
+    "ios.timeline.select": {
+        "message": "Select",
+        "context": "iOS timeline toolbar button entering multi-select mode."
+    },
+    "ios.add_to_album.title": {
+        "message": "Add to Album",
+        "context": "iOS Add to Album confirmation dialog title (timeline multi-select and single-asset viewer)."
+    },
+    "ios.add_to_album.choose": {
+        "message": "Choose a Capsule album.",
+        "context": "iOS Add to Album dialog message when albums exist (timeline and viewer)."
+    },
+    "ios.add_to_album.empty_collections": {
+        "message": "Create an album in Collections first.",
+        "context": "iOS Add to Album dialog message (timeline) when no user albums exist yet."
+    },
+    "ios.add_to_album.empty_albums": {
+        "message": "Create an album in the Albums tab first.",
+        "context": "iOS Add to Album dialog message (viewer) when no user albums exist yet."
+    },
+    "ios.viewer.info.title": {
+        "message": "Info",
+        "context": "iOS asset info panel navigation title."
+    },
+    "ios.viewer.info.capture": {
+        "message": "Capture",
+        "context": "iOS asset info panel section header for capture details."
+    },
+    "ios.viewer.info.camera": {
+        "message": "Camera",
+        "context": "iOS asset info panel section header for camera/EXIF details."
+    },
+    "ios.viewer.info.type": {
+        "message": "Type",
+        "context": "iOS asset info row label: media type."
+    },
+    "ios.viewer.info.date": {
+        "message": "Date",
+        "context": "iOS asset info row label: capture date."
+    },
+    "ios.viewer.info.dimensions": {
+        "message": "Dimensions",
+        "context": "iOS asset info row label: pixel dimensions."
+    },
+    "ios.viewer.info.resolution": {
+        "message": "Resolution",
+        "context": "iOS asset info row label: megapixel resolution."
+    },
+    "ios.viewer.info.duration": {
+        "message": "Duration",
+        "context": "iOS asset info row label: video duration."
+    },
+    "ios.viewer.info.make": {
+        "message": "Make",
+        "context": "iOS asset info row label: camera make."
+    },
+    "ios.viewer.info.model": {
+        "message": "Model",
+        "context": "iOS asset info row label: camera model."
+    },
+    "ios.viewer.info.lens": {
+        "message": "Lens",
+        "context": "iOS asset info row label: lens model."
+    },
+    "ios.viewer.info.iso": {
+        "message": "ISO",
+        "context": "iOS asset info row label: ISO speed."
+    },
+    "ios.viewer.info.aperture": {
+        "message": "Aperture",
+        "context": "iOS asset info row label: aperture (f-number)."
+    },
+    "ios.viewer.info.shutter": {
+        "message": "Shutter",
+        "context": "iOS asset info row label: shutter speed."
+    },
+    "ios.viewer.info.focal_length": {
+        "message": "Focal Length",
+        "context": "iOS asset info row label: focal length."
+    },
+    "ios.viewer.play_slideshow": {
+        "message": "Play Slideshow",
+        "context": "iOS viewer bottom-bar accessibility label to start the slideshow."
+    },
+    "ios.viewer.pause_slideshow": {
+        "message": "Pause Slideshow",
+        "context": "iOS viewer bottom-bar accessibility label to pause the slideshow."
+    },
+    "drop.error.passphrase": {
+        "message": "This upload needs the link's password. Unlock the page and try again.",
+        "context": "Per-file guest-drop upload failure when the passphrase gate rejected the request."
     }
 }

@@ -8,20 +8,21 @@ import {
     Share2,
     Trash2,
 } from 'lucide-react';
+import { FormattedMessage } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils'; // Assuming cn exists, usually it does in shadcn
 
 const sidebarItems = [
-    { icon: Image, label: 'Photos', href: '/photos' },
-    { icon: Compass, label: 'Explore', href: '/explore' },
-    { icon: Share2, label: 'Sharing', href: '/sharing' },
+    { icon: Image, labelId: 'nav.photos', href: '/photos' },
+    { icon: Compass, labelId: 'nav.explore', href: '/explore' },
+    { icon: Share2, labelId: 'nav.sharing', href: '/sharing' },
 ];
 
 const libraryItems = [
-    { icon: Heart, label: 'Favorites', href: '/library/favorites' },
-    { icon: Library, label: 'Albums', href: '/albums' },
-    { icon: Archive, label: 'Archive', href: '/library/archive' },
-    { icon: Trash2, label: 'Trash', href: '/library/trash' },
+    { icon: Heart, labelId: 'nav.favorites', href: '/library/favorites' },
+    { icon: Library, labelId: 'nav.albums', href: '/albums' },
+    { icon: Archive, labelId: 'nav.archive', href: '/library/archive' },
+    { icon: Trash2, labelId: 'nav.trash', href: '/library/trash' },
 ];
 
 export function AppSidebar({ className }: { className?: string }) {
@@ -51,7 +52,7 @@ export function AppSidebar({ className }: { className?: string }) {
                                 className="w-full justify-start"
                             >
                                 <item.icon className="mr-2 h-4 w-4" />
-                                {item.label}
+                                <FormattedMessage id={item.labelId} />
                             </Button>
                         </Link>
                     ))}
@@ -59,7 +60,7 @@ export function AppSidebar({ className }: { className?: string }) {
             </div>
             <div className="px-3 py-2">
                 <h2 className="mb-2 px-4 text-xs font-semibold tracking-tight text-muted-foreground uppercase">
-                    Library
+                    <FormattedMessage id="nav.library" />
                 </h2>
                 <div className="space-y-1">
                     {libraryItems.map((item) => (
@@ -71,7 +72,7 @@ export function AppSidebar({ className }: { className?: string }) {
                                 className="w-full justify-start"
                             >
                                 <item.icon className="mr-2 h-4 w-4" />
-                                {item.label}
+                                <FormattedMessage id={item.labelId} />
                             </Button>
                         </Link>
                     ))}
@@ -84,7 +85,7 @@ export function AppSidebar({ className }: { className?: string }) {
                         <div className="h-full bg-primary w-[45%]" />
                     </div>
                     <p className="text-xs text-muted-foreground mt-2">
-                        15 GB used of 2 TB
+                        <FormattedMessage id="nav.storage_usage" />
                     </p>
                 </div>
             </div>

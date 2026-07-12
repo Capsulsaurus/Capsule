@@ -55,24 +55,24 @@ public struct CollectionsRootView: View {
                             .padding(.top, 48)
                     } else {
                         if !albums.userAlbums.isEmpty {
-                            albumSection("My Albums", albums.userAlbums)
+                            albumSection("ios.albums.section.my_albums", albums.userAlbums)
                         }
                         if !albums.smartAlbums.isEmpty {
-                            albumSection("Media Types", albums.smartAlbums)
+                            albumSection("ios.collections.section.media_types", albums.smartAlbums)
                         }
-                        linkGroup("Utilities", rows: UtilityCategory.allCases.map(AnyCollectionLink.init))
-                        linkGroup("More", rows: CollectionCategory.allCases.map(AnyCollectionLink.init))
+                        linkGroup("ios.collections.section.utilities", rows: UtilityCategory.allCases.map(AnyCollectionLink.init))
+                        linkGroup("ios.collections.section.more", rows: CollectionCategory.allCases.map(AnyCollectionLink.init))
                     }
                 }
                 .padding()
             }
-            .navigationTitle("Collections")
+            .navigationTitle("ios.tab.collections")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isCreatingAlbum = true } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("New Album")
+                    .accessibilityLabel("ios.albums.new_album.title")
                 }
             }
             .navigationDestination(for: AlbumSummary.self) { album in
@@ -128,16 +128,16 @@ public struct CollectionsRootView: View {
             }
         }
         .task { await albums.load() }
-        .alert("New Album", isPresented: $isCreatingAlbum) {
-            TextField("Album Name", text: $newAlbumName)
-            Button("Cancel", role: .cancel) { newAlbumName = "" }
-            Button("Create") {
+        .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
+            TextField("ios.albums.new_album.name_field", text: $newAlbumName)
+            Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
+            Button("ios.common.create") {
                 let name = newAlbumName
                 newAlbumName = ""
                 Task { await albums.createAlbum(named: name) }
             }
         } message: {
-            Text("Name your new Capsule album.")
+            Text("ios.albums.new_album.message")
         }
     }
 }
@@ -145,7 +145,7 @@ public struct CollectionsRootView: View {
 // MARK: - Sections
 
 private extension CollectionsRootView {
-    func albumSection(_ title: String, _ summaries: [AlbumSummary]) -> some View {
+    func albumSection(_ title: LocalizedStringKey, _ summaries: [AlbumSummary]) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             Text(title).font(.title2.bold())
             LazyVGrid(columns: gridColumns, spacing: CapsuleTheme.Spacing.large) {
@@ -164,7 +164,7 @@ private extension CollectionsRootView {
         }
     }
 
-    func linkGroup(_ title: String, rows: [AnyCollectionLink]) -> some View {
+    func linkGroup(_ title: LocalizedStringKey, rows: [AnyCollectionLink]) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             Text(title).font(.title2.bold())
             VStack(spacing: 0) {

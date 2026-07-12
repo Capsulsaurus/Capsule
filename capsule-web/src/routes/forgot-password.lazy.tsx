@@ -2,6 +2,7 @@ import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import { MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -14,12 +15,14 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, requestPasswordReset } from '@/lib/api';
+import { APP_NAME } from '@/lib/constant';
 
 export const Route = createLazyFileRoute('/forgot-password')({
     component: ForgotPassword,
 });
 
 function ForgotPassword() {
+    const intl = useIntl();
     const [email, setEmail] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
@@ -37,7 +40,7 @@ function ForgotPassword() {
             if (err instanceof ApiError && err.status !== 200) {
                 setSubmitted(true);
             } else {
-                setError('Something went wrong. Please try again.');
+                setError(intl.formatMessage({ id: 'common.error.generic' }));
             }
         } finally {
             setLoading(false);
@@ -48,15 +51,21 @@ function ForgotPassword() {
         <div className="flex flex-col items-center justify-center min-h-screen bg-muted/40 p-4">
             <Link to="/" className="mb-8 flex items-center gap-2">
                 <MountainIcon className="h-8 w-8 text-primary" />
-                <span className="text-2xl font-bold text-primary">Capsule</span>
+                <span className="text-2xl font-bold text-primary">
+                    {APP_NAME}
+                </span>
             </Link>
             <Card className="w-full max-w-sm">
                 <CardHeader>
-                    <CardTitle className="text-2xl">Forgot Password</CardTitle>
+                    <CardTitle className="text-2xl">
+                        <FormattedMessage id="auth.forgot.title" />
+                    </CardTitle>
                     <CardDescription>
-                        {submitted
-                            ? 'Check your email for instructions.'
-                            : "Enter your email and we'll send you a reset link."}
+                        {submitted ? (
+                            <FormattedMessage id="auth.forgot.description_sent" />
+                        ) : (
+                            <FormattedMessage id="auth.forgot.description" />
+                        )}
                     </CardDescription>
                 </CardHeader>
                 {!submitted ? (
@@ -68,11 +77,15 @@ function ForgotPassword() {
                                 </p>
                             )}
                             <div className="grid gap-2">
-                                <Label htmlFor="email">Email</Label>
+                                <Label htmlFor="email">
+                                    <FormattedMessage id="common.email" />
+                                </Label>
                                 <Input
                                     id="email"
                                     type="email"
-                                    placeholder="m@example.com"
+                                    placeholder={intl.formatMessage({
+                                        id: 'common.email_placeholder',
+                                    })}
                                     required
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
@@ -86,27 +99,30 @@ function ForgotPassword() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Sending…' : 'Send reset link'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.forgot.sending" />
+                                ) : (
+                                    <FormattedMessage id="auth.forgot.send" />
+                                )}
                             </Button>
                             <Link
                                 to="/login"
                                 className="text-xs text-muted-foreground underline"
                             >
-                                Back to login
+                                <FormattedMessage id="auth.back_to_login" />
                             </Link>
                         </CardFooter>
                     </form>
                 ) : (
                     <CardFooter className="flex flex-col gap-3 pt-4">
                         <p className="text-sm text-muted-foreground text-center">
-                            If an account with that email exists, you'll receive
-                            a reset link shortly.
+                            <FormattedMessage id="auth.forgot.confirmation" />
                         </p>
                         <Link
                             to="/login"
                             className="text-xs text-muted-foreground underline"
                         >
-                            Back to login
+                            <FormattedMessage id="auth.back_to_login" />
                         </Link>
                     </CardFooter>
                 )}

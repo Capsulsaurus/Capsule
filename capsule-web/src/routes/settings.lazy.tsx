@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -20,6 +21,7 @@ export const Route = createLazyFileRoute('/settings')({
 });
 
 function Settings() {
+    const intl = useIntl();
     const { user } = useAuth();
     const queryClient = useQueryClient();
 
@@ -47,12 +49,14 @@ function Settings() {
         try {
             const updated = await updateProfile({ username, email });
             queryClient.setQueryData(['auth', 'profile'], updated);
-            setSuccess('Profile updated.');
+            setSuccess(intl.formatMessage({ id: 'settings.profile_updated' }));
         } catch (err) {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to update profile.',
+                    : intl.formatMessage({
+                          id: 'settings.profile_update_failed',
+                      }),
             );
         } finally {
             setLoading(false);
@@ -64,11 +68,11 @@ function Settings() {
         setError(null);
         setSuccess(null);
         if (newPassword !== confirmPassword) {
-            setError('New passwords do not match.');
+            setError(intl.formatMessage({ id: 'settings.password_mismatch' }));
             return;
         }
         if (newPassword.length < 8) {
-            setError('Password must be at least 8 characters.');
+            setError(intl.formatMessage({ id: 'common.password_min' }));
             return;
         }
         setLoading(true);
@@ -77,7 +81,7 @@ function Settings() {
                 current_password: currentPassword,
                 new_password: newPassword,
             });
-            setSuccess('Password updated.');
+            setSuccess(intl.formatMessage({ id: 'settings.password_updated' }));
             setCurrentPassword('');
             setNewPassword('');
             setConfirmPassword('');
@@ -85,7 +89,9 @@ function Settings() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to update password.',
+                    : intl.formatMessage({
+                          id: 'settings.password_update_failed',
+                      }),
             );
         } finally {
             setLoading(false);
@@ -95,20 +101,24 @@ function Settings() {
     return (
         <div className="max-w-2xl mx-auto p-6 space-y-8">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold">Profile Settings</h1>
+                <h1 className="text-2xl font-bold">
+                    <FormattedMessage id="settings.title" />
+                </h1>
                 <Link
                     to="/settings/security"
                     className="text-sm underline text-muted-foreground"
                 >
-                    Security settings →
+                    <FormattedMessage id="settings.security_link" />
                 </Link>
             </div>
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Profile Information</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="settings.profile.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Update your username and email address.
+                        <FormattedMessage id="settings.profile.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -120,7 +130,9 @@ function Settings() {
                             <p className="text-sm text-green-600">{success}</p>
                         )}
                         <div className="grid gap-2">
-                            <Label htmlFor="username">Username</Label>
+                            <Label htmlFor="username">
+                                <FormattedMessage id="common.username" />
+                            </Label>
                             <Input
                                 id="username"
                                 value={username}
@@ -129,7 +141,9 @@ function Settings() {
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="email">Email</Label>
+                            <Label htmlFor="email">
+                                <FormattedMessage id="common.email" />
+                            </Label>
                             <Input
                                 id="email"
                                 type="email"
@@ -139,7 +153,11 @@ function Settings() {
                             />
                         </div>
                         <Button type="submit" disabled={loading}>
-                            {loading ? 'Saving…' : 'Save changes'}
+                            {loading ? (
+                                <FormattedMessage id="common.saving" />
+                            ) : (
+                                <FormattedMessage id="common.save_changes" />
+                            )}
                         </Button>
                     </form>
                 </CardContent>
@@ -147,16 +165,18 @@ function Settings() {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Change Password</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="settings.password.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Enter your current password to set a new one.
+                        <FormattedMessage id="settings.password.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handlePasswordSubmit} className="space-y-4">
                         <div className="grid gap-2">
                             <Label htmlFor="current-password">
-                                Current Password
+                                <FormattedMessage id="settings.current_password" />
                             </Label>
                             <Input
                                 id="current-password"
@@ -170,7 +190,9 @@ function Settings() {
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="new-password">New Password</Label>
+                            <Label htmlFor="new-password">
+                                <FormattedMessage id="auth.new_password" />
+                            </Label>
                             <Input
                                 id="new-password"
                                 type="password"
@@ -183,7 +205,7 @@ function Settings() {
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="confirm-password">
-                                Confirm New Password
+                                <FormattedMessage id="settings.confirm_new_password" />
                             </Label>
                             <Input
                                 id="confirm-password"
@@ -197,7 +219,11 @@ function Settings() {
                             />
                         </div>
                         <Button type="submit" disabled={loading}>
-                            {loading ? 'Updating…' : 'Update password'}
+                            {loading ? (
+                                <FormattedMessage id="settings.updating" />
+                            ) : (
+                                <FormattedMessage id="settings.update_password" />
+                            )}
                         </Button>
                     </form>
                 </CardContent>

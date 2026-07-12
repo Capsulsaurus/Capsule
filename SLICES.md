@@ -126,7 +126,7 @@ its slice.
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | done    |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | done*   |
 | S-H4  | Group-scoped evaluations (best shot/framing/exposure) | ML             | S-H3             | M    | post-v1 |
-| S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
+| S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | done*   |
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | done    |
@@ -1502,6 +1502,21 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
 - **Done when:** the gate runs clean on all three surfaces; `mise run i18n-check`
   green; the touched screens render from the catalogs.
 - **Tier:** Unit/Smoke per platform.
+- **Landed (done\* — Kotlin/Xcode compile verification owed to platform CI):** 302
+  new catalog keys (web 204 across the pre-S-D6 surface incl. toasts/aria/
+  placeholders/alt; iOS 98 `ios.*` over 115 call-sites; Android was already fully
+  on `stringResource` — no code changes), `en.json` 155→457, 12 locales seeded
+  with the S-I2 review flag, placeholders verbatim. Brand wordmarks ride the
+  `APP_NAME` constant, untranslated. Gate: `xtask i18n-guard` in `check-rust`
+  right after `i18n-check` — one pure-Rust scanner over JSX text/attrs, SwiftUI
+  string-arg APIs, and Compose `Text`/`contentDescription`, catalog-key-anchored,
+  documented (currently empty) allowlist; zero false positives on the migrated
+  tree, injected literals caught on all three surfaces, runs without Gradle. Also
+  fixed S-D3's dangling `drop.error.passphrase` key. Owed: human review of the
+  302 seeds; an Xcode build confirming cross-framework `Localizable.xcstrings`
+  resolution; Swift interpolated/plural strings + model-layer titles (a
+  documented gate blind spot pending `String(localized:)`/ICU-argument
+  migration); `InfoPlist`/`LAContext` reason strings (separate mechanisms).
 
 ### S-I2 — Official language-set rollout
 

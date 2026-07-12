@@ -2,6 +2,7 @@ import { createLazyFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import { KeyRoundIcon, MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -21,6 +22,7 @@ import {
     verifyTotpLogin,
 } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { APP_NAME } from '@/lib/constant';
 import { authenticateWithPasskey } from '@/lib/webauthn';
 
 export const Route = createLazyFileRoute('/login')({
@@ -30,6 +32,7 @@ export const Route = createLazyFileRoute('/login')({
 type LoginStep = 'credentials' | 'totp';
 
 function Login() {
+    const intl = useIntl();
     const { setTokens, isAuthenticated, isLoading } = useAuth();
     const navigate = useNavigate();
 
@@ -65,7 +68,7 @@ function Login() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'An unexpected error occurred.',
+                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
             );
         } finally {
             setLoading(false);
@@ -84,7 +87,7 @@ function Login() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'An unexpected error occurred.',
+                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
             );
         } finally {
             setLoading(false);
@@ -104,9 +107,9 @@ function Login() {
             if (err instanceof ApiError) {
                 setError(err.message);
             } else if (err instanceof Error && err.name === 'NotAllowedError') {
-                setError('Passkey authentication was cancelled.');
+                setError(intl.formatMessage({ id: 'auth.passkey.cancelled' }));
             } else {
-                setError('Passkey authentication failed.');
+                setError(intl.formatMessage({ id: 'auth.passkey.failed' }));
             }
         } finally {
             setLoading(false);
@@ -117,15 +120,19 @@ function Login() {
         <div className="flex flex-col items-center justify-center min-h-screen bg-muted/40 p-4">
             <Link to="/" className="mb-8 flex items-center gap-2">
                 <MountainIcon className="h-8 w-8 text-primary" />
-                <span className="text-2xl font-bold text-primary">Capsule</span>
+                <span className="text-2xl font-bold text-primary">
+                    {APP_NAME}
+                </span>
             </Link>
 
             {step === 'credentials' ? (
                 <Card className="w-full max-w-sm">
                     <CardHeader>
-                        <CardTitle className="text-2xl">Login</CardTitle>
+                        <CardTitle className="text-2xl">
+                            <FormattedMessage id="auth.login.title" />
+                        </CardTitle>
                         <CardDescription>
-                            Enter your email below to login to your account.
+                            <FormattedMessage id="auth.login.description" />
                         </CardDescription>
                     </CardHeader>
                     <form onSubmit={handleCredentialsSubmit}>
@@ -136,11 +143,15 @@ function Login() {
                                 </p>
                             )}
                             <div className="grid gap-2">
-                                <Label htmlFor="email">Email</Label>
+                                <Label htmlFor="email">
+                                    <FormattedMessage id="common.email" />
+                                </Label>
                                 <Input
                                     id="email"
                                     type="email"
-                                    placeholder="m@example.com"
+                                    placeholder={intl.formatMessage({
+                                        id: 'common.email_placeholder',
+                                    })}
                                     required
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
@@ -148,7 +159,9 @@ function Login() {
                                 />
                             </div>
                             <div className="grid gap-2">
-                                <Label htmlFor="password">Password</Label>
+                                <Label htmlFor="password">
+                                    <FormattedMessage id="common.password" />
+                                </Label>
                                 <Input
                                     id="password"
                                     type="password"
@@ -167,7 +180,11 @@ function Login() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Signing in…' : 'Sign in'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.signing_in" />
+                                ) : (
+                                    <FormattedMessage id="common.sign_in" />
+                                )}
                             </Button>
                             <div className="relative w-full">
                                 <div className="absolute inset-0 flex items-center">
@@ -175,7 +192,7 @@ function Login() {
                                 </div>
                                 <div className="relative flex justify-center text-xs uppercase">
                                     <span className="bg-card px-2 text-muted-foreground">
-                                        or
+                                        <FormattedMessage id="auth.or" />
                                     </span>
                                 </div>
                             </div>
@@ -187,12 +204,12 @@ function Login() {
                                 onClick={handlePasskeyLogin}
                             >
                                 <KeyRoundIcon className="mr-2 h-4 w-4" />
-                                Sign in with Passkey
+                                <FormattedMessage id="auth.sign_in_passkey" />
                             </Button>
                             <p className="text-xs text-muted-foreground text-center">
-                                Don't have an account?{' '}
+                                <FormattedMessage id="auth.no_account" />{' '}
                                 <Link to="/register" className="underline">
-                                    Sign up
+                                    <FormattedMessage id="auth.sign_up" />
                                 </Link>
                             </p>
                             <p className="text-xs text-muted-foreground text-center">
@@ -200,7 +217,7 @@ function Login() {
                                     to="/forgot-password"
                                     className="underline"
                                 >
-                                    Forgot password?
+                                    <FormattedMessage id="auth.forgot_password_link" />
                                 </Link>
                             </p>
                         </CardFooter>
@@ -210,10 +227,10 @@ function Login() {
                 <Card className="w-full max-w-sm">
                     <CardHeader>
                         <CardTitle className="text-2xl">
-                            Two-Factor Auth
+                            <FormattedMessage id="auth.totp.title" />
                         </CardTitle>
                         <CardDescription>
-                            Enter the 6-digit code from your authenticator app.
+                            <FormattedMessage id="auth.totp.description" />
                         </CardDescription>
                     </CardHeader>
                     <form onSubmit={handleTotpSubmit}>
@@ -224,12 +241,16 @@ function Login() {
                                 </p>
                             )}
                             <div className="grid gap-2">
-                                <Label htmlFor="totp">Authenticator Code</Label>
+                                <Label htmlFor="totp">
+                                    <FormattedMessage id="auth.totp.code_label" />
+                                </Label>
                                 <Input
                                     id="totp"
                                     type="text"
                                     inputMode="numeric"
-                                    placeholder="123456"
+                                    placeholder={intl.formatMessage({
+                                        id: 'common.code_placeholder',
+                                    })}
                                     maxLength={6}
                                     required
                                     value={totpCode}
@@ -247,7 +268,11 @@ function Login() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Verifying…' : 'Verify'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.verifying" />
+                                ) : (
+                                    <FormattedMessage id="auth.verify" />
+                                )}
                             </Button>
                             <Button
                                 variant="ghost"
@@ -259,7 +284,7 @@ function Login() {
                                     setTotpCode('');
                                 }}
                             >
-                                Back
+                                <FormattedMessage id="common.back" />
                             </Button>
                         </CardFooter>
                     </form>

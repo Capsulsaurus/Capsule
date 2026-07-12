@@ -82,6 +82,7 @@ run = [
   "mise run format-check-rust",
   "mise run lint-check-rust",
   "mise run i18n-check",
+  "mise run i18n-guard",
   "mise run openapi-check",
   "mise run translate-readme-check",
   "mise run build-rust",
@@ -152,6 +153,14 @@ run = "cargo run -q -p xtask -- i18n"
 [tasks.i18n-check]
 description = "Verify generated i18n is in sync with locales/"
 run = "cargo run -q -p xtask -- i18n --check"
+
+# S-I1 regression gate: fail on any hardcoded user-facing string literal in the
+# web (JSX), SwiftUI, or Compose surfaces that isn't a catalog key/allowlisted. This
+# is the ONE gate for all three surfaces — the Kotlin half runs here (not via Gradle,
+# which the migration cannot depend on) so it stays locally verifiable.
+[tasks.i18n-guard]
+description = "Fail on hardcoded user-facing literals (web/swift/compose)"
+run = "cargo run -q -p xtask -- i18n-guard"
 
 # Dump the server's OpenAPI 3.1 schema (salvo-oapi) to the committed capsule-sdk/openapi.json
 # that spargen generates the typed REST client from (slice S-D8). The dump is state-free
