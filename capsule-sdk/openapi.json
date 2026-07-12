@@ -1,0 +1,2658 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Capsule API",
+    "description": "Capsule API Documentation",
+    "license": {
+      "name": "GNU Affero General Public License v3.0 or later",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/v1/albums/{album_id}/ops": {
+      "post": {
+        "tags": [
+          "lifecycle"
+        ],
+        "summary": "Apply one lifecycle write to `{album_id}`.",
+        "operationId": "album_lifecycle_op",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "Get parameter `album_id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {},
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/assets/{asset_id}/receipts": {
+      "get": {
+        "tags": [
+          "storage"
+        ],
+        "summary": "Fetch the permanent custody-receipt log for an asset (uploader or owner).",
+        "operationId": "get_asset_receipts",
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "description": "Get parameter `asset_id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/media.routes.receipts.AssetReceiptsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The request could not be understood by the server due to malformed syntax.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The request requires user authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "The request could not be processed due to lack of payment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The server refused to authorize the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested resource could not be found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "The request method is not supported for the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "406": {
+            "description": "The requested resource is capable of generating only content not acceptable according to the Accept headers sent in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "407": {
+            "description": "Authentication with the proxy is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The server timed out waiting for the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The request could not be processed because of a conflict in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "The resource requested is no longer available and will not be available again.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "411": {
+            "description": "The request did not specify the length of its content, which is required by the requested resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "412": {
+            "description": "The server does not meet one of the preconditions specified in the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The request is larger than the server is willing or able to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "414": {
+            "description": "The URI provided was too long for the server to process.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "The request entity has a media type which the server or resource does not support.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "416": {
+            "description": "The portion of the requested file cannot be supplied by the server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "417": {
+            "description": "The server cannot meet the requirements of the expect request-header field.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "418": {
+            "description": "I was requested to brew coffee, and I am a teapot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "421": {
+            "description": "The server cannot produce a response for this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The request was well-formed but was unable to be followed due to semantic errors.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "The source or destination resource of a method is locked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "424": {
+            "description": "The method could not be performed on the resource because the requested action depended on another action and that action failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Switching to the protocol in the Upgrade header field is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "428": {
+            "description": "The server requires the request to be conditional.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests have been received recently.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "431": {
+            "description": "The server is unwilling to process the request because either  an individual header field, or all the header fields collectively, are too large.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "451": {
+            "description": "The requested resource is unavailable due to a legal demand to deny access to this resource.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The server encountered an internal error while processing this request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "501": {
+            "description": "The server either does not recognize the request method, or it lacks the ability to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Received an invalid response from an inbound server it accessed while attempting to fulfill the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The server is currently unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The server did not receive a timely response from an upstream server.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "505": {
+            "description": "The server does not support, or refuses to support, the major version of HTTP that was used in the request message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "506": {
+            "description": "The server has an internal configuration error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "The method could not be performed on the resource because the server is unable to store the representation needed to successfully complete the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "508": {
+            "description": "the server terminated an operation because it encountered an infinite loop while processing a request with \"Depth: infinity\".",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "510": {
+            "description": "Further extensions to the request are required for the server to fulfill it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          },
+          "511": {
+            "description": "the client needs to authenticate to gain network access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/salvo_core.http.errors.status_error.StatusError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/backup/escrow": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Fetch the caller's own wrapped master-key escrow verbatim so a client can unwrap it with",
+        "description": "the recovery passphrase (the `capsule_core::backup` restore path) on a fresh device.",
+        "operationId": "fetch_backup_escrow",
+        "responses": {
+          "200": {
+            "description": "The wrapped master-key escrow, returned verbatim as opaque bytes (application/octet-stream)"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "No escrow stored for this user"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Store or replace the caller's wrapped master-key escrow. The body is the opaque",
+        "description": "`capsule_core::backup` wrap; the server keeps it opaque and overwrites any prior escrow in\n\nthe same transaction (single active escrow), so a replace leaves the old ciphertext\n\nunretrievable.",
+        "operationId": "store_backup_escrow",
+        "responses": {
+          "204": {
+            "description": "Escrow stored (any prior blob replaced in place)"
+          },
+          "400": {
+            "description": "Escrow blob failed the size sanity bound"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get all active devices (sessions)",
+        "operationId": "get_devices",
+        "responses": {
+          "200": {
+            "description": "Success - returns active sessions (each with its advisory cohort) plus the durable cohort map",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.SessionListingResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/directory": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Publish the caller's signed device directory. The body is the opaque signed CBOR; the",
+        "description": "server projects only `directory_version` for the invariant-23 monotonicity check and\n\nstores the bytes verbatim.",
+        "operationId": "publish_device_directory",
+        "responses": {
+          "200": {
+            "description": "Directory published",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.directory.PublishDirectoryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed device directory document"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "409": {
+            "description": "Directory version does not advance (invariant 23)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/directory/{user_id}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Fetch a user's signed device directory verbatim so a client can pin it and verify the",
+        "description": "signature it covers.",
+        "operationId": "fetch_device_directory",
+        "responses": {
+          "200": {
+            "description": "The signed device directory, returned verbatim as opaque CBOR (application/cbor)"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "No directory published for this user"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/enroll": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Issue a single-use enrollment code from an existing, locally-authorized device.",
+        "operationId": "issue_enrollment_code",
+        "responses": {
+          "200": {
+            "description": "Enrollment code issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.devices.EnrollmentCodeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "403": {
+            "description": "Fresh local device authorization required"
+          },
+          "429": {
+            "description": "Per-user issuance budget exhausted"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/enroll/channel/{channel_id}": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Drain a channel mailbox for the requested direction (`?to=a|b`). Authorized by possession",
+        "description": "of the opaque channel handle.",
+        "operationId": "poll_enrollment_messages",
+        "responses": {
+          "200": {
+            "description": "Drained opaque relay payloads",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.devices.RelayMessagesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown direction"
+          },
+          "404": {
+            "description": "Unknown or expired relay channel"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Relay one opaque ceremony payload into a channel mailbox. Authorized by possession of the",
+        "description": "opaque channel handle; the server stores the payload verbatim and never inspects it.",
+        "operationId": "relay_enrollment_message",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.routes.devices.RelaySendRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Opaque payload accepted for relay"
+          },
+          "400": {
+            "description": "Unknown direction or missing/oversized payload"
+          },
+          "404": {
+            "description": "Unknown or expired relay channel"
+          }
+        }
+      }
+    },
+    "/v1/auth/devices/enroll/redeem": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Redeem an enrollment code from the new device (unauthenticated; the code is the",
+        "description": "credential).",
+        "operationId": "redeem_enrollment_code",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.routes.devices.RedeemRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Relay channel established",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.devices.ChannelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown, expired, redeemed, or rate-limited code (indistinguishable)"
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Login a user",
+        "operationId": "login_user",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success - login successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "401": {
+            "description": "Invalid credentials"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/login/verify-totp": {
+      "post": {
+        "tags": [
+          "totp"
+        ],
+        "summary": "Verify TOTP code during login and return access tokens",
+        "operationId": "totp_verify_login",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.VerifyTotpLoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success - login completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TOTP not enrolled"
+          },
+          "401": {
+            "description": "Invalid or expired MFA token"
+          },
+          "403": {
+            "description": "Invalid TOTP code"
+          },
+          "429": {
+            "description": "Maximum verification attempts exceeded"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Logout user and invalidate tokens",
+        "operationId": "logout",
+        "responses": {
+          "200": {
+            "description": "Logout successful"
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing token"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/password-reset": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Reset password with token",
+        "operationId": "reset_password",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.ResetPasswordPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset successful"
+          },
+          "400": {
+            "description": "Invalid or expired token, or invalid new password"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/password-reset-request": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request password reset",
+        "operationId": "reset_password_request",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.ResetPasswordRequestPayload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Password reset email sent (if user exists)"
+          },
+          "400": {
+            "description": "Bad request"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/profile": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Get user profile",
+        "operationId": "get_user_profile",
+        "responses": {
+          "200": {
+            "description": "Success - returns user profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.UserProfile"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing token"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Update user profile",
+        "operationId": "update_user_profile",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.UpdateProfileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success - returns updated user profile",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.UserProfile"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or password"
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing token"
+          },
+          "404": {
+            "description": "User not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Refresh an access token using a refresh token",
+        "operationId": "refresh_token",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.RefreshTokenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success - tokens refreshed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid or expired refresh token"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Register a new user",
+        "operationId": "register_user",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success - user registered and tokens returned",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid registration data"
+          },
+          "409": {
+            "description": "User already exists"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        }
+      }
+    },
+    "/v1/auth/totp/disable": {
+      "post": {
+        "tags": [
+          "totp"
+        ],
+        "summary": "Disable TOTP for the authenticated user",
+        "operationId": "totp_disable",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.DisableTotpRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TOTP enabled successfully"
+          },
+          "400": {
+            "description": "Invalid TOTP code or enrollment not initiated"
+          },
+          "401": {
+            "description": "Invalid or expired MFA token"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/totp/enroll": {
+      "post": {
+        "tags": [
+          "totp"
+        ],
+        "summary": "Enroll in TOTP - generates secret and provisioning URI",
+        "operationId": "totp_enroll",
+        "responses": {
+          "200": {
+            "description": "Success - TOTP enrollment initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.models.responses.TotpEnrollmentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "409": {
+            "description": "TOTP already enabled"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/totp/verify-enrollment": {
+      "post": {
+        "tags": [
+          "totp"
+        ],
+        "summary": "Verify TOTP enrollment - confirms the secret works",
+        "operationId": "totp_verify_enrollment",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/auth.models.requests.VerifyTotpEnrollmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "TOTP enabled successfully"
+          },
+          "400": {
+            "description": "Invalid TOTP code or enrollment not initiated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/validate": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Validate an access token",
+        "operationId": "validate_token",
+        "responses": {
+          "200": {
+            "description": "Token is valid - returns user ID"
+          },
+          "401": {
+            "description": "Invalid or expired token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/blob/{hash}": {
+      "get": {
+        "tags": [
+          "media"
+        ],
+        "summary": "Serve a ciphertext blob by its content address, ranged at the ciphertext stride.",
+        "operationId": "get_blob",
+        "parameters": [
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "Get parameter `hash` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque ciphertext blob (full, or 206 for a range)"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Unknown content address"
+          },
+          "409": {
+            "description": "Original not yet uploaded (error.blob.pending_upload)"
+          },
+          "410": {
+            "description": "Blob gone (taken down, mid-GC, or dangling)"
+          },
+          "416": {
+            "description": "Requested range not satisfiable"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/storage/verify": {
+      "post": {
+        "tags": [
+          "storage"
+        ],
+        "summary": "Batch-confirm that assets' blobs are stored, indexed, and retrievable on this server.",
+        "operationId": "storage_verify",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/media.routes.verify.StorageVerifyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Per-asset durability verdicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/media.routes.verify.StorageVerifyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Structurally invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "429": {
+            "description": "Deep-scan rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload": {
+      "post": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Create a new upload session",
+        "operationId": "create_upload",
+        "responses": {
+          "201": {
+            "description": "Upload session created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/upload.models.responses.CreateUploadResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request - invalid parameters"
+          },
+          "401": {
+            "description": "Unauthorized - invalid or missing token"
+          },
+          "403": {
+            "description": "Forbidden - insufficient permissions"
+          },
+          "409": {
+            "description": "Conflict - content hash already finalized (error.upload.duplicate_blob; merge trigger)"
+          },
+          "413": {
+            "description": "Payload too large - declared size exceeds the limit"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload/quota": {
+      "get": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Report the authenticated uploader's storage-quota snapshot (slice `S-C6`).",
+        "description": "Returns `used` (bytes charged to the caller), the configured `soft_limit` / `hard_limit`\n\n(`null` when the deployment runs unlimited), and the classified `state`. Read-only; the\n\nhard enforcement point is `POST /upload` session creation, not this endpoint.",
+        "operationId": "get_quota",
+        "responses": {
+          "200": {
+            "description": "The uploader's storage-quota snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/upload.models.responses.QuotaResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload/sessions": {
+      "get": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "List user's upload sessions",
+        "operationId": "list_sessions",
+        "responses": {
+          "200": {
+            "description": "List of upload sessions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/upload.models.responses.ListSessionsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload/{id}": {
+      "delete": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Delete/cancel an upload session",
+        "operationId": "delete_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Upload session deleted"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - not owner of session"
+          },
+          "404": {
+            "description": "Upload session not found"
+          },
+          "409": {
+            "description": "Conflict - finalization in progress is not interruptible"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "head": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Get upload session status",
+        "operationId": "head_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload progress and state via X-Capsule-Offset / X-Capsule-Content-Length / X-Capsule-Upload-Status headers (no body)"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - not owner of session"
+          },
+          "404": {
+            "description": "Upload session not found"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Append a chunk to an upload",
+        "operationId": "patch_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Chunk uploaded successfully"
+          },
+          "400": {
+            "description": "Bad request - invalid chunk size or checksum"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden - not owner of session"
+          },
+          "404": {
+            "description": "Upload session not found"
+          },
+          "409": {
+            "description": "Conflict - offset mismatch / chunk conflict / session not active"
+          },
+          "413": {
+            "description": "Payload too large - chunk exceeds the 16 MiB maximum"
+          },
+          "415": {
+            "description": "Unsupported media type - chunk body must be application/octet-stream"
+          },
+          "500": {
+            "description": "Internal server error"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload/{id}/receipt": {
+      "get": {
+        "tags": [
+          "upload"
+        ],
+        "summary": "Fetch the custody receipt for an upload session.",
+        "operationId": "get_upload_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Get parameter `id` from request url path.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The signed custody receipt",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/upload.routes.receipt.ReceiptResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such upload session"
+          },
+          "409": {
+            "description": "Receipt not available (session not yet Completed)"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/version": {
+      "get": {
+        "tags": [
+          "api"
+        ],
+        "summary": "Get API version info",
+        "operationId": "get_version",
+        "responses": {
+          "200": {
+            "description": "Response with json format data",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/capsule_api.routes.version.VersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "auth.models.ResetPasswordPayload": {
+        "type": "object",
+        "required": [
+          "token",
+          "new_password"
+        ],
+        "properties": {
+          "new_password": {
+            "type": "string"
+          },
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "auth.models.ResetPasswordRequestPayload": {
+        "type": "object",
+        "required": [
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "email": "johndoe@email.com"
+          }
+        ]
+      },
+      "auth.models.UserProfile": {
+        "type": "object",
+        "description": "User profile information\n\nTypically private data, not to be retrieved by any user",
+        "required": [
+          "user_id",
+          "username",
+          "email",
+          "is_admin",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "is_admin": {
+            "type": "boolean"
+          },
+          "profile_image_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "URL to profile image"
+          },
+          "registered_via": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "How the account was created (e.g. 'invitation'); null for seeded/legacy/unknown"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        }
+      },
+      "auth.models.requests.DisableTotpRequest": {
+        "type": "object",
+        "required": [
+          "totp_code"
+        ],
+        "properties": {
+          "totp_code": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "totp_code": "123456"
+          }
+        ]
+      },
+      "auth.models.requests.LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from\n[Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group\nthis device's sessions and is never read by any authorization decision — absent or\ngarbage values are accepted and behave identically to a valid one.\n\n[Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts"
+          },
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "email": "johndoe@email.com",
+            "password": "password"
+          }
+        ]
+      },
+      "auth.models.requests.RefreshTokenRequest": {
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "properties": {
+          "refresh_token": {
+            "type": "string"
+          }
+        }
+      },
+      "auth.models.requests.RegisterRequest": {
+        "type": "object",
+        "required": [
+          "username",
+          "name",
+          "email",
+          "password"
+        ],
+        "properties": {
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from\n[Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group\nthis device's sessions and is never read by any authorization decision — absent or\ngarbage values are accepted and behave identically to a valid one.\n\n[Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts"
+          },
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "email": "johndoe@email.com",
+            "name": "John Doe",
+            "password": "password",
+            "username": "johndoe"
+          }
+        ]
+      },
+      "auth.models.requests.UpdateProfileRequest": {
+        "type": "object",
+        "properties": {
+          "current_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_password": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "auth.models.requests.VerifyTotpEnrollmentRequest": {
+        "type": "object",
+        "required": [
+          "totp_code"
+        ],
+        "properties": {
+          "totp_code": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "totp_code": "123456"
+          }
+        ]
+      },
+      "auth.models.requests.VerifyTotpLoginRequest": {
+        "type": "object",
+        "required": [
+          "mfa_token",
+          "totp_code"
+        ],
+        "properties": {
+          "mfa_token": {
+            "type": "string"
+          },
+          "totp_code": {
+            "type": "string"
+          }
+        },
+        "examples": [
+          {
+            "mfa_token": "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9...",
+            "totp_code": "123456"
+          }
+        ]
+      },
+      "auth.models.responses.Device": {
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "last_active_at",
+          "is_current"
+        ],
+        "properties": {
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The advisory device-cohort hash asserted when this session was created (slice\n`S-C13`), or `None` if the client did not assert one. A grouping aid only — clients\ngroup the ledger by this value; it carries no authority."
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "id": {
+            "type": "string"
+          },
+          "ip_address": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_current": {
+            "type": "boolean"
+          },
+          "last_active_at": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "auth.models.responses.DeviceCohort": {
+        "type": "object",
+        "description": "One entry of the durable device-cohort map surfaced alongside the session listing (slice\n`S-C13`). Lets a client label a cohort \"a device you've used before (last seen …)\" even\nwhen its earlier sessions have expired — the map outlives sessions.",
+        "required": [
+          "cohort_hash",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "cohort_hash": {
+            "type": "string",
+            "description": "The advisory cohort hash (opaque; the client groups its sessions by this)."
+          },
+          "first_seen": {
+            "type": "integer",
+            "format": "int64",
+            "description": "First time this cohort was seen for the user (Unix seconds)."
+          },
+          "last_seen": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Most recent time this cohort was seen for the user (Unix seconds)."
+          }
+        }
+      },
+      "auth.models.responses.SessionListingResponse": {
+        "type": "object",
+        "description": "The session-listing surface (slice `S-C13`): the user's active sessions, each carrying its\nadvisory cohort, plus the durable cohort map. Clients group the ledger by cohort.",
+        "required": [
+          "devices",
+          "cohorts"
+        ],
+        "properties": {
+          "cohorts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/auth.models.responses.DeviceCohort"
+            },
+            "description": "The durable cohort map (persists beyond session expiry)."
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/auth.models.responses.Device"
+            },
+            "description": "Active sessions (\"devices\"), each annotated with its per-session cohort."
+          }
+        }
+      },
+      "auth.models.responses.TokenResponse": {
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_by"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "expires_by": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Access token expiry in seconds",
+            "minimum": 0.0
+          },
+          "refresh_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string",
+            "description": "E.g. \"Bearer\""
+          }
+        }
+      },
+      "auth.models.responses.TotpEnrollmentResponse": {
+        "type": "object",
+        "required": [
+          "provisioning_uri"
+        ],
+        "properties": {
+          "provisioning_uri": {
+            "type": "string"
+          }
+        }
+      },
+      "auth.routes.devices.ChannelResponse": {
+        "type": "object",
+        "description": "The established relay channel handle the ceremony continues over.",
+        "required": [
+          "channel_id"
+        ],
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "description": "Opaque relay-channel handle for the ephemeral-ECDH ceremony messages."
+          }
+        }
+      },
+      "auth.routes.devices.EnrollmentCodeResponse": {
+        "type": "object",
+        "description": "The issued enrollment code, displayed as a QR (full entropy) with a shorter,\nrate-limited numeric text fallback.",
+        "required": [
+          "code",
+          "text_fallback",
+          "expires_at"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The full-entropy code for the QR payload (URL-safe base64; ≥64 bits)."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "RFC 3339 expiry (10 minutes from issue)."
+          },
+          "text_fallback": {
+            "type": "string",
+            "description": "The shorter transcribable fallback (safe because redemption is single-use,\nexpiring, and rate-limited; channel integrity rests on the safety code)."
+          }
+        }
+      },
+      "auth.routes.devices.RedeemRequest": {
+        "type": "object",
+        "description": "A redemption request from the new device.",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The scanned or typed enrollment code (either the QR form or the numeric fallback)."
+          }
+        }
+      },
+      "auth.routes.devices.RelayMessagesResponse": {
+        "type": "object",
+        "description": "The drained opaque payloads pending in a channel mailbox.",
+        "required": [
+          "messages"
+        ],
+        "properties": {
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Payloads in arrival order; the mailbox is drained on read."
+          }
+        }
+      },
+      "auth.routes.devices.RelaySendRequest": {
+        "type": "object",
+        "description": "A request to relay one opaque ceremony payload into a channel mailbox.",
+        "required": [
+          "to",
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "type": "string",
+            "description": "The opaque payload, relayed verbatim — the server never decodes it."
+          },
+          "to": {
+            "type": "string",
+            "description": "Target mailbox: `\"a\"` toward the initiator (device A), `\"b\"` toward the enrollee\n(device B)."
+          }
+        }
+      },
+      "auth.routes.directory.PublishDirectoryResponse": {
+        "type": "object",
+        "description": "The accepted-version acknowledgement for a successful publish.",
+        "required": [
+          "directory_version"
+        ],
+        "properties": {
+          "directory_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The `directory_version` now stored for the user (equals the submitted version)."
+          }
+        }
+      },
+      "capsule_api.routes.version.VersionResponse": {
+        "type": "object",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "media.routes.receipts.AssetReceipt": {
+        "type": "object",
+        "description": "One custody receipt, decoded, plus its signed CBOR form.",
+        "required": [
+          "receipt_seq",
+          "server_id",
+          "server_key_id",
+          "upload_id",
+          "blob_role",
+          "ciphertext_hash",
+          "size",
+          "received_at",
+          "receipt_cbor"
+        ],
+        "properties": {
+          "blob_role": {
+            "type": "string",
+            "description": "`original | derivative | metadata | provenance`."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The server-recomputed ciphertext content address (hex)."
+          },
+          "envelope_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the manifest envelope CBOR (hex), when present."
+          },
+          "prior_receipt_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the previous receipt (hex), absent for the first receipt."
+          },
+          "receipt_cbor": {
+            "type": "string",
+            "description": "The full signed receipt as canonical CBOR (base64)."
+          },
+          "receipt_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Strictly monotonic per-server sequence number."
+          },
+          "received_at": {
+            "type": "string",
+            "description": "The server's trusted clock at the finalization commit (RFC 3339)."
+          },
+          "server_id": {
+            "type": "string",
+            "description": "This server's canonical origin."
+          },
+          "server_key_id": {
+            "type": "string",
+            "description": "The attestation key fingerprint that signed (hex)."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ciphertext size in bytes."
+          },
+          "upload_id": {
+            "type": "string",
+            "description": "The upload session that produced custody."
+          }
+        }
+      },
+      "media.routes.receipts.AssetReceiptsResponse": {
+        "type": "object",
+        "description": "The `GET /assets/{asset_id}/receipts` response.",
+        "required": [
+          "asset_id",
+          "receipts"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset id."
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/media.routes.receipts.AssetReceipt"
+            },
+            "description": "Every receipt covering the asset, in chain order."
+          }
+        }
+      },
+      "media.routes.verify.AssetVerifyRequest": {
+        "type": "object",
+        "description": "One asset to verify: the exact blob hashes the client is relying on.",
+        "required": [
+          "asset_id",
+          "blob_hashes"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset id."
+          },
+          "blob_hashes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Content addresses (hex) of every blob the client relies on."
+          }
+        }
+      },
+      "media.routes.verify.BlobVerdictResponse": {
+        "type": "object",
+        "description": "One blob's verdict.",
+        "required": [
+          "hash",
+          "role",
+          "stored",
+          "indexed",
+          "retrievable"
+        ],
+        "properties": {
+          "hash": {
+            "type": "string",
+            "description": "The declared content address (hex)."
+          },
+          "indexed": {
+            "type": "boolean",
+            "description": "Referenced by a committed, `uploaded = true` row."
+          },
+          "retrievable": {
+            "type": "boolean",
+            "description": "Refcount > 0, not `collectable_since`, not quarantined."
+          },
+          "role": {
+            "type": "string",
+            "description": "`original | metadata | derivative | provenance` — or `unknown` for a hash the server\ndoes not associate with the asset."
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "Present in the blob store at its content address."
+          }
+        }
+      },
+      "media.routes.verify.StorageVerdictResponse": {
+        "type": "object",
+        "description": "One asset's verdict.",
+        "required": [
+          "asset_id",
+          "durable",
+          "blobs",
+          "checked_at"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset id."
+          },
+          "blobs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/media.routes.verify.BlobVerdictResponse"
+            },
+            "description": "Per-blob detail, one entry per declared hash (a hash the server does not associate\nwith the asset comes back `stored=false, indexed=false` — never silently omitted)."
+          },
+          "checked_at": {
+            "type": "string",
+            "description": "The server's trusted clock at verification (RFC 3339)."
+          },
+          "durable": {
+            "type": "boolean",
+            "description": "All required blobs stored ∧ indexed ∧ retrievable."
+          }
+        }
+      },
+      "media.routes.verify.StorageVerifyRequest": {
+        "type": "object",
+        "description": "The `POST /storage/verify` request body.",
+        "required": [
+          "assets"
+        ],
+        "properties": {
+          "assets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/media.routes.verify.AssetVerifyRequest"
+            },
+            "description": "The assets to verify."
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "Re-read and re-hash blob bytes instead of trusting stat + index (rate-limited and\ncoalesced server-side)."
+          },
+          "nonce": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An optional client freshness challenge (base64), echoed verbatim into every signed\nattestation so a stale `durable = true` cannot be replayed as current. Ignored unless\n`signed`."
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "Return a server-signed [`StorageAttestation`] per asset instead of the bare verdict —\nevidence a client can retain. Server-priced like `deep` (rate-limited per user)."
+          }
+        }
+      },
+      "media.routes.verify.StorageVerifyResponse": {
+        "type": "object",
+        "description": "The `POST /storage/verify` response body.",
+        "required": [
+          "verdicts"
+        ],
+        "properties": {
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/media.routes.verify.StorageVerdictResponse"
+            },
+            "description": "One verdict per requested asset."
+          }
+        }
+      },
+      "salvo_core.http.errors.status_error.StatusError": {
+        "type": "object",
+        "required": [
+          "code",
+          "name",
+          "brief",
+          "detail"
+        ],
+        "properties": {
+          "brief": {
+            "type": "string"
+          },
+          "cause": {
+            "type": "string"
+          },
+          "code": {
+            "type": "integer",
+            "format": "uint16",
+            "minimum": 0.0
+          },
+          "detail": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "upload.models.responses.CreateUploadResponse": {
+        "type": "object",
+        "description": "Response for a successful upload creation",
+        "required": [
+          "id",
+          "upload_url",
+          "suggested_chunk_size"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Upload session ID"
+          },
+          "suggested_chunk_size": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Suggested chunk size for this upload",
+            "minimum": 0.0
+          },
+          "upload_url": {
+            "type": "string",
+            "description": "URL to use for uploading chunks"
+          }
+        }
+      },
+      "upload.models.responses.ListSessionsResponse": {
+        "type": "object",
+        "description": "Response for session listing",
+        "required": [
+          "sessions"
+        ],
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/upload.models.session.UploadSession"
+            }
+          }
+        }
+      },
+      "upload.models.responses.QuotaResponse": {
+        "type": "object",
+        "description": "Response for `GET /quota` — the uploader's storage-quota snapshot (S-C6).",
+        "required": [
+          "used",
+          "state"
+        ],
+        "properties": {
+          "hard_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "description": "Hard-refusal threshold in bytes (`null` when unlimited).",
+            "minimum": 0.0
+          },
+          "soft_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "description": "Soft-warning threshold in bytes (`null` when unlimited).",
+            "minimum": 0.0
+          },
+          "state": {
+            "type": "string",
+            "description": "Quota state: `ok | soft_warning | hard_exceeded | grace_expired | suspended`."
+          },
+          "used": {
+            "type": "integer",
+            "format": "uint64",
+            "description": "Bytes currently charged to the uploader.",
+            "minimum": 0.0
+          }
+        }
+      },
+      "upload.models.session.BlobRole": {
+        "type": "string",
+        "description": "The blob's role within its asset bundle, declared at session creation and\nrecorded on the pending row (closed enum; the visibility gate and staged\nuploads reason over it — see the upload-protocol design doc).",
+        "enum": [
+          "original",
+          "derivative",
+          "metadata",
+          "provenance",
+          "backup"
+        ]
+      },
+      "upload.models.session.UploadSession": {
+        "type": "object",
+        "description": "Volatile transfer state for one upload session.\n\nThe record carries everything finalization needs — sizes, hash, crypto/protocol\npins, blob role, the manifest envelope, and the parties — so a session is\nfinalizable from its own record with no further client input (upload-protocol\ndesign doc, §Endpoints).",
+        "required": [
+          "id",
+          "asset_id",
+          "owner_id",
+          "upload_user_id",
+          "expected_hash",
+          "crypto_suite_id",
+          "protocol_version",
+          "blob_role",
+          "manifest_envelope",
+          "received_bytes",
+          "total_size",
+          "status",
+          "created_at",
+          "last_progress_at",
+          "expires_at"
+        ],
+        "properties": {
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional Album ID to link the upload to"
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "Asset ID (usually created by Postgres during session creation)"
+          },
+          "blob_role": {
+            "$ref": "#/components/schemas/upload.models.session.BlobRole"
+          },
+          "content_type": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Content type of the file being uploaded"
+          },
+          "created_at": {
+            "type": "string",
+            "description": "Creation timestamp (RFC 3339)"
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "format": "uint16",
+            "description": "Crypto suite the blob was sealed under (validated against the inventory by\nthe envelope gate, S-C1)",
+            "minimum": 0.0
+          },
+          "expected_hash": {
+            "type": "string",
+            "description": "Expected SHA-256 hash for verification on finalize (64-char lowercase hex)"
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "Expiration timestamp (the 24-hour cap, RFC 3339)"
+          },
+          "id": {
+            "type": "string",
+            "description": "Upload Session ID"
+          },
+          "intent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Album-upgrade intent, when part of an upgrade ceremony"
+          },
+          "last_progress_at": {
+            "type": "string",
+            "description": "Timestamp of the last accepted chunk (creation time if none). Anchors the\n≥1-hour survival floor; the pressure sweeper (S-C1) evicts\nleast-recently-progressed first."
+          },
+          "manifest_envelope": {
+            "type": "string",
+            "description": "The server-visible manifest envelope, serialized JSON. Stored opaquely on\nthe session; deep validation is the envelope gate's job (S-C1)."
+          },
+          "owner_id": {
+            "type": "string",
+            "description": "Owner ID"
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "Pinned protocol date (`YYYY-MM-DD`) from session creation"
+          },
+          "received_bytes": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "status": {
+            "$ref": "#/components/schemas/upload.models.session.UploadSessionStatus"
+          },
+          "total_size": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0.0
+          },
+          "upload_user_id": {
+            "type": "string",
+            "description": "User ID who initiated the upload (this matters for storage quota)"
+          }
+        }
+      },
+      "upload.models.session.UploadSessionStatus": {
+        "type": "string",
+        "enum": [
+          "Pending",
+          "Uploading",
+          "WaitingForProcessing",
+          "Completed",
+          "FailedProcessing"
+        ]
+      },
+      "upload.routes.receipt.ReceiptResponse": {
+        "type": "object",
+        "description": "The decoded receipt view returned alongside the signed CBOR.",
+        "required": [
+          "receipt_seq",
+          "server_id",
+          "server_key_id",
+          "upload_id",
+          "asset_id",
+          "blob_role",
+          "ciphertext_hash",
+          "size",
+          "received_at",
+          "receipt_cbor"
+        ],
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset id."
+          },
+          "blob_role": {
+            "type": "string",
+            "description": "`original | derivative | metadata | provenance`."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The server-recomputed ciphertext content address (hex)."
+          },
+          "envelope_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the manifest envelope CBOR (hex), when present."
+          },
+          "prior_receipt_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the previous receipt (hex), absent for the first receipt."
+          },
+          "receipt_cbor": {
+            "type": "string",
+            "description": "The full signed receipt as canonical CBOR (base64) — verify under the attestation key."
+          },
+          "receipt_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Strictly monotonic per-server sequence number."
+          },
+          "received_at": {
+            "type": "string",
+            "description": "The server's trusted clock at the finalization commit (RFC 3339)."
+          },
+          "server_id": {
+            "type": "string",
+            "description": "This server's canonical origin."
+          },
+          "server_key_id": {
+            "type": "string",
+            "description": "The attestation key fingerprint that signed (hex)."
+          },
+          "size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Ciphertext size in bytes."
+          },
+          "upload_id": {
+            "type": "string",
+            "description": "The upload session id."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT Bearer token authentication"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "api",
+      "description": "Capsule API"
+    },
+    {
+      "name": "auth",
+      "description": "Capsule Authentication API"
+    },
+    {
+      "name": "drops",
+      "description": "Capsule Web-Upload Drops API"
+    },
+    {
+      "name": "library",
+      "description": "Capsule Library API (GraphQL)"
+    },
+    {
+      "name": "media",
+      "description": "Capsule Media Serving API"
+    },
+    {
+      "name": "share",
+      "description": "Capsule Public Share API"
+    },
+    {
+      "name": "storage",
+      "description": "Capsule Storage Verification API"
+    },
+    {
+      "name": "sync",
+      "description": "Capsule Sync API (gRPC)"
+    },
+    {
+      "name": "upload",
+      "description": "Capsule Upload API"
+    }
+  ]
+}

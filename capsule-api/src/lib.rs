@@ -165,6 +165,49 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     Ok(router)
 }
 
+/// Assemble the router used **only** to extract the server's OpenAPI 3.1 schema (slice
+/// `S-D8`), with no injected state, so it builds with no database, Valkey, key material,
+/// disk, or network — the prerequisite for a deterministic dump that runs anywhere,
+/// including the Rust check gate's `openapi-check` drift step.
+///
+/// It mirrors [`create_router`]'s `/v1` nesting exactly (the sibling above), pushing each
+/// crate's state-free route tree (`*::openapi_router`) at the identical sub-path so the
+/// operation paths are byte-identical to what the live server serves. The two must be kept
+/// in lockstep; each crate single-sources its route *shape* so only the top-level mounting
+/// is restated here.
+///
+/// Deliberately absent (each is invisible to salvo-oapi and so carries no schema):
+/// - the GraphQL `library` surface (retiring; not OpenAPI),
+/// - the gRPC `sync` service (bare `#[handler]` goals),
+/// - the media share (`/s`), guest-drop (`/u`, `/drops`), and `.well-known` routers, and
+///   the passkey routes — all bare `#[handler]`s (the recorded known limitation).
+pub fn openapi_router() -> Router {
+    let mut v1_router = Router::new();
+
+    #[cfg(feature = "auth")]
+    {
+        v1_router = v1_router.push(Router::with_path("auth").push(auth::openapi_router()));
+    }
+    #[cfg(feature = "upload")]
+    {
+        v1_router = v1_router
+            .push(Router::with_path("upload").push(upload::openapi_router()))
+            // `POST /albums/{album_id}/ops` (slice S-C16) lives at the API root, mirroring
+            // `create_router`.
+            .push(Router::with_path("albums").push(upload::openapi_ops_router()));
+    }
+    #[cfg(feature = "media")]
+    {
+        // The media crate's `#[endpoint]`-bearing trees, pre-nested under `media` / `blob`
+        // / `storage` / `assets` exactly as `create_router` mounts them.
+        v1_router = v1_router.push(media::routes::schema_router());
+    }
+
+    v1_router = v1_router.push(Router::with_path("version").get(routes::version::get_version));
+
+    Router::new().push(Router::with_path("v1").push(v1_router))
+}
+
 // Re-export dependency crates if needed by binaries
 #[cfg(feature = "auth")]
 pub use auth;

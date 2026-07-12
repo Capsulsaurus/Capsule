@@ -13,9 +13,20 @@ use salvo::prelude::*;
 use crate::state::AppState;
 
 pub(super) fn get_router(state: AppState) -> Router {
+    // The route *shape* (and thus the OpenAPI schema) is single-sourced in
+    // [`route_tree`]; serving only adds the depot state injector on top. See
+    // [`crate::openapi_router`] (slice `S-D8`), which reuses `route_tree` verbatim so
+    // the schema dump can never drift from the routes the server actually mounts.
+    route_tree().hoop(affix_state::inject(state))
+}
+
+/// The auth route tree with no injected state — the single source of truth for both the
+/// live router ([`get_router`]) and the deterministic OpenAPI schema dump
+/// ([`crate::openapi_router`], slice `S-D8`). State is a serving concern (depot
+/// injection); the salvo `#[endpoint]` metadata that becomes the schema is carried by the
+/// handler functions this tree references, so the schema is identical with or without it.
+pub(super) fn route_tree() -> Router {
     Router::new()
-        // Inject state into depot for all routes
-        .hoop(affix_state::inject(state))
         // Profile routes
         .push(
             Router::with_path("profile")

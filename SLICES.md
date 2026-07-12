@@ -99,7 +99,7 @@ its slice.
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
-| S-D8  | spargen REST client integration                      | sdk/clients     | in-house spargen | M    | blocked |
+| S-D8  | spargen REST client integration                      | sdk/clients     | in-house spargen | M    | done    |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | done*   |
 | S-D10 | Adverse-network hardening                            | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D11 | Client cohort emission + devices grouping UI         | sdk/clients     | S-C13, S-D7      | M    | done*   |
@@ -200,7 +200,7 @@ pass until the gate lifts.
 | Library | Status | Gates |
 | --- | --- | --- |
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
-| `spargen` (in-house OpenAPI **3.1** client generator) | in-house, imminent | S-D8 (typed REST client + `AuthenticatedClient` revival). Capsule-controlled, not an open-ended external gate — 3.1-native, unblocking soon; the only wait is our own release, tracked against spargen's repo milestones. Progenitor is gone — we do not downgrade schemas to 3.0. |
+| `spargen` (in-house OpenAPI **3.1** client generator) | **released** (0.1.0 on crates.io) — gate lifted | S-D8 landed on it. One known 0.1.0 limitation: object-typed query parameters mis-lower (`.to_string()` on a non-`Display` struct), so the media asset-serve tree is excluded from the generated surface (it is the hand-written byte-transfer path anyway); re-include when spargen supports object query params. We never downgrade schemas to 3.0. |
 | `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
 | `ptpip-rs` (in-house PTP/IP camera protocol; repo not yet created) | planned | S-B9 (post-v1). Portable Rust PTP/IP (ISO 15740 over TCP/IP) with a vendor-extension seam (Sony first) — see [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md). |
 | `openmls` (RFC 9420 MLS; X-Wing suite `0x004D` via the libcrux provider) | available — no longer a gate | S-X1 adopts `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`), which OpenMLS ships today. Capsule is a closed deployment (all clients are Capsule's; federation is Capsule↔Capsule), so an IANA codepoint — a third-party-interop concern — is not required; a private/experimental codepoint is sufficient. X-Wing is off the WG standards track (the WG's `draft-ietf-mls-pq-ciphersuites` moved to direct ML-KEM hybrid; X-Wing-in-MLS is the non-adopted `draft-mahy-mls-xwing`), so if Capsule ever needs the ratified suite it migrates via the S-X3 upgrade ceremony + `crypto_suite_id`. Lane X (S-X1 → S-X2 → S-X3) is now ordinary sequenced work, not upstream-blocked. |
@@ -956,6 +956,22 @@ SDK; they never hand-roll network flows.
 - **Deliverable:** generate the typed REST client from the OpenAPI 3.1 schema (no 3.0
   downgrade, ever), revive `AuthenticatedClient` over it (composing S-D7's token
   store), and delete the parked comment blocks.
+- **Landed:** `capsule_api::openapi_router()` dumps the salvo-oapi 3.1 schema
+  state-free (no DB/Valkey/keys/disk) to committed `capsule-sdk/openapi.json`
+  (29 paths); each server crate single-sources its route *shape* in a
+  `route_tree()`/`schema_router()` helper the live router injects state onto, so the
+  dump cannot drift from serving. `gen_openapi --check` is the `openapi-check` gate in
+  `check-rust` (mirrors `i18n-check`). spargen generates `capsule_sdk::rest::Client`
+  at **build time** (build-dependency only; the client is a pure function of the
+  committed spec). `client::AuthenticatedClient` wraps it, `Deref`s to it, and
+  composes S-D7's `Session` via spargen's async token-provider seam (pre-flight
+  refresh + single-flight reused, not duplicated). Generated surface = plain
+  request/response ops only — hand-written upload (S-D1)/sync (S-D2) untouched;
+  media asset-serve excluded (byte transfer + the spargen 0.1.0 object-query-param
+  gap in the gates table). Owed: reactive 401-retry-once on the typed path needs a
+  reqwest-middleware layer (S-D10 territory; proactive refresh already covers the
+  expiry case); bare-`#[handler]` routers (share `/s`, drops `/u`, `.well-known`,
+  passkeys, gRPC) stay absent from the schema by construction.
 
 ### S-D9 — capsule-sdk uniffi FFI bindings
 

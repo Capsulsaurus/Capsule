@@ -76,6 +76,7 @@ run = [
   "mise run format-check-rust",
   "mise run lint-check-rust",
   "mise run i18n-check",
+  "mise run openapi-check",
   "mise run translate-readme-check",
   "mise run build-rust",
   "mise run build-ffi",
@@ -145,6 +146,21 @@ run = "cargo run -q -p xtask -- i18n"
 [tasks.i18n-check]
 description = "Verify generated i18n is in sync with locales/"
 run = "cargo run -q -p xtask -- i18n --check"
+
+# Dump the server's OpenAPI 3.1 schema (salvo-oapi) to the committed capsule-sdk/openapi.json
+# that spargen generates the typed REST client from (slice S-D8). The dump is state-free
+# (capsule_api::openapi_router) — no database, Valkey, or key material — so it is deterministic
+# and runs anywhere. Re-run and commit after any REST endpoint/model change.
+[tasks.openapi]
+description = "Dump the server OpenAPI 3.1 schema to capsule-sdk/openapi.json"
+run = "cargo run -q -p capsule-api --bin gen_openapi"
+
+# Verify the committed schema still matches the server (CI drift gate; mirrors i18n-check).
+# The spargen-generated client is regenerated from this schema on every build, so this guards
+# the one drift the build cannot: the committed schema falling behind the server surface.
+[tasks.openapi-check]
+description = "Verify the committed OpenAPI schema matches the server"
+run = "cargo run -q -p capsule-api --bin gen_openapi -- --check"
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.

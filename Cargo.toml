@@ -19,7 +19,8 @@ members = [
     "capsule-sdk",
     "xtask",
 ]
-# capsule-sdk requires a pre-generated openapi.json (run generate_openapi.sh first)
+# capsule-sdk's REST client is generated at build time by spargen from the committed
+# capsule-sdk/openapi.json (slice S-D8); regenerate the schema with `mise run openapi`.
 default-members = [
     "capsule-api",
     "capsule-api/auth",

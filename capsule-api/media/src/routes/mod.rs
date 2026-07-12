@@ -14,8 +14,15 @@ mod verify;
 mod well_known;
 
 pub fn get_router(state: AppState) -> Router {
+    media_tree().hoop(affix_state::inject(state))
+}
+
+/// The asset-media route tree with no injected state — the single source of truth for both
+/// the live [`get_router`] and the deterministic OpenAPI schema dump ([`schema_router`],
+/// slice `S-D8`). Depot state injection is a serving concern that carries no schema
+/// information.
+fn media_tree() -> Router {
     Router::new()
-        .hoop(affix_state::inject(state.clone()))
         // Asset media endpoints. (Path syntax modernized to salvo's `{param}` wisp form —
         // the legacy `<param>` form no longer matches, which had left the takedown 410 gate
         // and these serve endpoints unreachable.)
@@ -35,9 +42,11 @@ pub fn get_router(state: AppState) -> Router {
 /// serves opaque ciphertext by content address with HTTP `Range` at the ciphertext stride;
 /// access-token auth is enforced per handler.
 pub fn get_blob_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("{hash}").get(blob::get_blob))
+    blob_tree().hoop(affix_state::inject(state))
+}
+
+fn blob_tree() -> Router {
+    Router::new().push(Router::with_path("{hash}").get(blob::get_blob))
 }
 
 /// Public share-link serve router (mounted at `/s`; slice `S-C4`). All three endpoints are
@@ -58,16 +67,45 @@ pub fn get_share_router(state: ShareState) -> Router {
 /// Storage-verification router (mounted at /storage). Slice `S-C3` (+ signed attestation,
 /// slice `S-C15`).
 pub fn get_storage_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("verify").post(verify::storage_verify))
+    storage_tree().hoop(affix_state::inject(state))
+}
+
+fn storage_tree() -> Router {
+    Router::new().push(Router::with_path("verify").post(verify::storage_verify))
 }
 
 /// Durable custody-receipt router (mounted at /assets; slice `S-C15`).
 pub fn get_receipts_router(state: AppState) -> Router {
+    receipts_tree().hoop(affix_state::inject(state))
+}
+
+fn receipts_tree() -> Router {
+    Router::new().push(Router::with_path("{asset_id}/receipts").get(receipts::get_asset_receipts))
+}
+
+/// The media crate's route trees that belong in the generated REST client's OpenAPI schema
+/// (slice `S-D8`), pre-nested under the same sub-paths the live server mounts them at
+/// ([`crate::get_router`] and friends in [`crate`]), with no injected state — for the
+/// deterministic schema dump.
+///
+/// Deliberately narrowed to a clean, generatable subset:
+/// - The share / drop / well-known routers are bare `#[handler]`s that salvo-oapi does not
+///   describe, so they are absent from the schema by construction anyway.
+/// - The **asset-serve** tree (`/media/{asset_id}[/…]`, `batch-download`; [`media_tree`]) is
+///   *excluded*: it is the hand-written media-transfer surface (byte serving with resize
+///   query + ranged streaming — slices S-D1/S-D4/fetch), which is not a plain
+///   request/response operation and is never routed through the generated client. It also
+///   declares an object-typed query parameter that `spargen` 0.1.0 mis-lowers (it emits
+///   `.to_string()` on a non-`Display` struct), so carving it out keeps the generated surface
+///   a compilable subset without ever touching (let alone downgrading) the 3.1 schema.
+///
+/// The blob (`/blob/{hash}`), storage-verify (`/storage/verify`), and custody-receipt
+/// (`/assets/{asset_id}/receipts`) reads stay in — plain, typed request/response surfaces.
+pub fn schema_router() -> Router {
     Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("{asset_id}/receipts").get(receipts::get_asset_receipts))
+        .push(Router::with_path("blob").push(blob_tree()))
+        .push(Router::with_path("storage").push(storage_tree()))
+        .push(Router::with_path("assets").push(receipts_tree()))
 }
 
 /// Attestation-key publication router (mounted at /.well-known/capsule; slice `S-C15`).

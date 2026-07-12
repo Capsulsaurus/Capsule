@@ -143,3 +143,25 @@ pub async fn get_ops_router<C: Into<UploadServerConfig>>(
 
     Ok(routes::get_ops_router(state, protocol_min, protocol_max))
 }
+
+/// The upload route tree with no injected state, for OpenAPI schema extraction only
+/// (slice `S-D8`). Reuses [`routes::route_tree`] — the exact `#[endpoint]` set the live
+/// [`get_router`] mounts — so the deterministic schema dump can never drift from the
+/// served routes, while needing no Valkey session manager, storage service, database, or
+/// startup scrub to build. The protocol window is the declared default; it affects only
+/// the `EnvelopeGate` response headers, never the schema.
+pub fn openapi_router() -> Router {
+    routes::route_tree(
+        config::DEFAULT_PROTOCOL_MIN.to_string(),
+        config::DEFAULT_PROTOCOL_MAX.to_string(),
+    )
+}
+
+/// The lifecycle-write (`POST /albums/{album_id}/ops`) route tree with no injected state,
+/// for OpenAPI schema extraction only (slice `S-D8`). Mirrors [`get_ops_router`].
+pub fn openapi_ops_router() -> Router {
+    routes::ops_route_tree(
+        config::DEFAULT_PROTOCOL_MIN.to_string(),
+        config::DEFAULT_PROTOCOL_MAX.to_string(),
+    )
+}
