@@ -15,8 +15,11 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-// LEGACY-PLAINTEXT (frozen): SLICES.md S-G3 — plaintext-era serving assumptions; the
-// key-free ranged ciphertext serving (and per-route access-token auth) is slice S-C10.
+// LEGACY-PLAINTEXT (frozen): the plaintext-era per-id serve model. S-G3 retired the plaintext
+// asset columns this path used to read (the filename that derived the served extension); the
+// key-free content-addressed ciphertext serving that fully supersedes these routes is slice
+// S-C10 (`blob.rs`). Until S-C10 folds the moderation takedown gate into the content-addressed
+// path, this module is retained solely to host that `served`→`410 Gone` gate (S-C8).
 
 // ============================================================================
 // Request/Response Types
@@ -164,11 +167,10 @@ async fn serve_asset_file(depot: &mut Depot, asset_id_str: &str) -> AssetRespons
         upload_dir: state.config.upload_dir.clone(),
     });
 
-    // Derive extension from filename or use a default
-    let ext = std::path::Path::new(&asset.original_filename)
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("bin");
+    // The plaintext filename that once derived the served extension was retired in S-G3; the
+    // opaque default is used for the legacy per-id path (real serving is content-addressed via
+    // `blob.rs`, S-C10).
+    let ext = "bin";
 
     let path =
         storage.get_upload_path_by_ids(&uuid, &asset.owner_id, asset.album_id.as_deref(), ext);

@@ -336,11 +336,7 @@ impl Mutation {
             owner_id: Set(owner_id.to_string()),
             upload_user_id: Set(owner_id.to_string()),
             album_id: Set(Some(input.album_id.clone())),
-            width: Set(0),
-            height: Set(0),
             asset_type: Set(asset_type),
-            // LEGACY-PLAINTEXT (frozen): the plaintext-era filename column gets the inbox id.
-            original_filename: Set(inbox_row.drop_id.clone()),
             file_size: Set(size),
             file_hash: Set(input.ciphertext_hash.clone()),
             content_type: Set(content_type.clone()),

@@ -15,6 +15,7 @@ mod m20260710_000008_backup_escrow;
 mod m20260710_000009_public_shares;
 mod m20260710_000010_moderation;
 mod m20260710_000011_federation;
+mod m20260710_000012_retire_plaintext_entities;
 
 pub struct Migrator;
 
@@ -37,6 +38,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260710_000009_public_shares::Migration),
             Box::new(m20260710_000010_moderation::Migration),
             Box::new(m20260710_000011_federation::Migration),
+            Box::new(m20260710_000012_retire_plaintext_entities::Migration),
         ]
     }
 }

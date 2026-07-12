@@ -120,7 +120,7 @@ its slice.
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | done    |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | done    |
-| S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
+| S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | done    |
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | done    |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | done    |
@@ -707,6 +707,9 @@ pass until the gate lifts.
   stale-state convention, distinguishable from 410). Album-scoped authz is a
   carried-but-unconsumed seam (`BlobServeReference.album_id`) — feed-level authz
   is S-C2's. Legacy plaintext routes untouched (S-G1/G3 own retirement).
+  **Owed (from S-G3):** fold the S-C8 takedown `served`→410 gate into this
+  content-addressed path — the legacy per-id routes survive S-G3 solely to host
+  that gate and can be deleted once it moves here.
 
 ### S-C11 — Refcount GC + retention purge worker
 
@@ -1408,6 +1411,20 @@ keeps compiling and takes no new surface.
   migrations down to the key-free set; their features re-land client-side
   ([AI/ML](capsule-docs/src/content/docs/design/ai.md) + client-side views).
 - **Depends on:** S-G1, S-H3 (feature parity client-side before the server rows go).
+- **Landed:** retired `face`/`person`/`smart_tag`/`memory` + the `asset_smart_tag`
+  junction and 9 plaintext `asset` columns (`width`, `height`,
+  `original_filename`, `latitude`, `longitude`, `lqip_hash`, `dominant_color`,
+  `is_favorite`, `captured_at`) via forward-only migration
+  `m20260710_000012_retire_plaintext_entities` (tables child-before-parent,
+  columns in one `ALTER`, safe on populated data, no-op `down`). Server-side
+  metadata extraction (`ProcessingService`) deleted — the server never decodes
+  ciphertext; the `original_filename`→upload-session correlation moved to
+  volatile Valkey state where session state belongs. Kept, justified:
+  `asset_type` (coarse kind derived from `content_type`, key-free) and the stack
+  columns (stacks are a live feature outside this slice's named set). The legacy
+  per-id asset-serve routes are retained **only** to host the S-C8 takedown 410
+  gate — deleting them waits on S-C10 folding that gate into the
+  content-addressed blob path (recorded there as the owed follow-up).
 
 ### S-G4 — Legacy import-executor removal
 

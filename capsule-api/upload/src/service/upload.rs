@@ -17,7 +17,6 @@ use crate::envelope::{revalidate_envelope, validate_create_envelope};
 use crate::error::UploadError;
 use crate::models::requests::{CreateUploadRequest, ManifestEnvelope};
 use crate::models::session::{BlobRole, UploadSession, UploadSessionStatus};
-use crate::service::processing::ProcessingService;
 use crate::service::storage::StorageService;
 use crate::session::UploadSessionManager;
 use crate::visibility::{derive_original_held, finalization_makes_visible};
@@ -50,7 +49,6 @@ pub(crate) struct UploadService {
     config: UploadServerConfig,
     storage: StorageService,
     session_manager: UploadSessionManager,
-    processing_service: ProcessingService,
     conn: DatabaseConnection,
 }
 
@@ -65,9 +63,35 @@ impl UploadService {
             config,
             storage,
             session_manager,
-            processing_service: ProcessingService::new(),
             conn,
         }
+    }
+
+    /// Find the active upload session (if any) whose pending asset row is `asset_id`, by
+    /// scanning the uploader's session index in Valkey.
+    ///
+    /// This replaces the retired `original_filename` correlation (S-G3): the pending-row↔
+    /// session mapping is *volatile session state*, so it is resolved from Valkey — never a
+    /// durable plaintext column. The scan is over the uploader's own (typically few) active
+    /// sessions and only runs on the rare idempotent duplicate-create path.
+    async fn active_session_for_asset(
+        &self,
+        upload_user_id: &str,
+        asset_id: &str,
+    ) -> Result<Option<UploadSession>, UploadError> {
+        for id in self
+            .session_manager
+            .list_by_uploader(upload_user_id)
+            .await?
+        {
+            if let Some(session) = self.session_manager.get(&id).await?
+                && session.asset_id == asset_id
+                && session.status.is_active()
+            {
+                return Ok(Some(session));
+            }
+        }
+        Ok(None)
     }
 
     /// The uploader's device-authorization floor: the account-creation time, standing in for
@@ -156,23 +180,22 @@ impl UploadService {
         }
 
         // Active pending session for this tuple → return it as-is (no second session). The
-        // pending row records its upload id in `original_filename` (legacy plaintext column).
+        // pending-row↔session mapping is resolved from volatile Valkey session state (S-G3
+        // retired the `original_filename` plaintext column that used to carry the upload id).
         if let Some(pending) = existing_rows
             .iter()
             .find(|a| !a.uploaded && a.album_id == request.album_id)
+            && let Some(session) = self
+                .active_session_for_asset(upload_user_id, &pending.id)
+                .await?
         {
-            let existing_id = pending.original_filename.clone();
-            if let Some(session) = self.session_manager.get(&existing_id).await?
-                && session.status.is_active()
-            {
-                // No second session: return the active one (releasing the row lock).
-                txn.rollback().await?;
-                tracing::info!(upload_id = %existing_id, "returning active session for duplicate create");
-                return Ok(CreateOutcome::Existing(session));
-            }
-            // The pending row is stale (its session expired). Fall through on the same
-            // transaction and create a fresh session.
+            // No second session: return the active one (releasing the row lock).
+            txn.rollback().await?;
+            tracing::info!(upload_id = %session.id, "returning active session for duplicate create");
+            return Ok(CreateOutcome::Existing(session));
         }
+        // Otherwise the pending row (if any) is stale — its session expired. Fall through on
+        // the same transaction and create a fresh session.
 
         // Quota enforcement (S-C6): the single hard gate. This is a genuinely new blob (the
         // dedup/merge cases returned above), so charge its declared size against the
@@ -204,19 +227,15 @@ impl UploadService {
         } else {
             asset::AssetType::Photo
         };
-        // LEGACY-PLAINTEXT (frozen, S-C1/S-G3): the plaintext-era `original_filename` column
-        // gets the opaque upload id — the wire request carries no filename.
         let asset = AssetService::Mutation::create_pending(
             &txn,
             owner_id.to_string(),
             upload_user_id.to_string(),
             request.album_id.clone(),
             asset_type,
-            upload_id.clone(),
             request.size as i64,
             request.hash.clone(),
             request.content_type.clone(),
-            None,
         )
         .await
         .map_err(|e| UploadError::Unknown(e.to_string()))?;
@@ -405,8 +424,7 @@ impl UploadService {
         }
 
         // Invariant 14: recompute the ciphertext hash on the blocking pool.
-        let final_path = self.storage.get_upload_path(upload_id);
-        let hash_path = final_path.clone();
+        let hash_path = self.storage.get_upload_path(upload_id);
         let actual_hash = tokio::task::spawn_blocking(move || get_file_hash(&hash_path))
             .await
             .map_err(|e| UploadError::ProcessingError(e.to_string()))?
@@ -455,13 +473,9 @@ impl UploadService {
             }
         }
 
-        // Best-effort server-side metadata: the server holds no key, so ciphertext blobs do
-        // not decode — a decode failure is expected, not fatal (dimensions stay 0).
-        let (width, height, date) =
-            match self.processing_service.extract_metadata(&final_path).await {
-                Ok(m) => (m.width, m.height, m.date),
-                Err(_) => (0, 0, None),
-            };
+        // The server extracts no plaintext metadata: it holds no key, so ciphertext blobs
+        // never decode. Dimensions/capture-date live inside the encrypted metadata blob,
+        // readable only by authorized clients (S-G3 retired the server-side plaintext columns).
 
         // Atomic rename into the content-addressed blob store, then commit `uploaded` in one
         // Postgres transaction (the custody-receipt insert joins this txn in S-C15). A
@@ -524,9 +538,7 @@ impl UploadService {
         // atomically. Any failure rolls back all three (no receipt without durable custody,
         // no custody-marking without a receipt) and GCs the blob.
         let committed = async {
-            let asset =
-                AssetService::Mutation::mark_uploaded(&txn, &session.asset_id, width, height, date)
-                    .await?;
+            let asset = AssetService::Mutation::mark_uploaded(&txn, &session.asset_id).await?;
             if let Some(input) = feed_input {
                 SyncFeed::Mutation::record_finalization(&txn, input).await?;
             }
