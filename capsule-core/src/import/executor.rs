@@ -8,9 +8,12 @@
 //! when a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is attached to the
 //! workspace — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
 //!
-//! This retires the legacy unsigned `AssetSidecar` write path from the executor (that write path
-//! itself is deleted wholesale later, in `S-G4`). The pure planner (`import::planner`) is
-//! unchanged: it still decides *what* to import; the executor decides *how* to commit it.
+//! This retired the legacy unsigned `AssetSidecar` write path from the executor; the production
+//! write path itself is now gone (`S-G4`) — no code writes unsigned sidecars anymore. Only the
+//! *read* path survives, for the recovery-first index rebuild
+//! ([`rebuild_index`](crate::library::rebuild::rebuild_index)) that still ingests unsigned `.cbor`
+//! sidecars left by pre-signed-path libraries. The pure planner (`import::planner`) is unchanged:
+//! it still decides *what* to import; the executor decides *how* to commit it.
 
 use std::path::PathBuf;
 

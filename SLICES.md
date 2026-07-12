@@ -121,7 +121,7 @@ its slice.
 | S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
-| S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | blocked |
+| S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | done    |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | done    |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | done    |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | done*   |
@@ -1375,6 +1375,16 @@ keeps compiling and takes no new surface.
 
 - **Deliverable:** delete the unsigned `AssetSidecar` write path once S-B2 lands.
   **Depends on:** S-B2.
+- **Landed:** deleted `library::trash` (`soft_delete`/`purge_expired_trash` — dead
+  since S-B2 moved imports to the signed lifecycle; superseded by
+  `Workspace::soft_delete`/`restore`), the only production writer of an unsigned
+  `AssetSidecar`; `sidecar::io::write_sidecar` demoted to `#[cfg(test)]` and
+  dropped from re-exports. The **read/recovery path** (`read_sidecar`,
+  `AssetSidecar`, `library::rebuild::rebuild_index`) is deliberately kept — it is
+  live via `capsule library rebuild` (failure-modes recovery path 5) and still
+  ingests unsigned `.cbor` sidecars from pre-signed-path libraries; it becomes
+  deletable only if a future slice retires the plaintext filesystem library model
+  (the CLI's `library init/info/rebuild` still ride it).
 
 ## Lane H — ML (client-side)
 

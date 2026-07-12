@@ -8,7 +8,7 @@ pub mod stack_hint;
 pub use asset_sidecar::AssetSidecar;
 pub use io::{
     read_library_config, read_library_version, read_sidecar, write_library_config,
-    write_library_version, write_sidecar,
+    write_library_version,
 };
 pub use library_config::LibraryConfigCbor;
 pub use library_version::LibraryVersionCbor;

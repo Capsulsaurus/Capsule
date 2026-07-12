@@ -11,6 +11,16 @@ pub fn read_sidecar(path: &Path) -> Result<AssetSidecar, Box<dyn std::error::Err
     Ok(sidecar)
 }
 
+/// Write an unsigned [`AssetSidecar`] to disk (atomic tmp-then-rename).
+///
+/// The legacy unsigned sidecar **write path is retired** (`S-G4`): no production code writes
+/// unsigned sidecars anymore — imports land on the signed [`SidecarV1`](crate::sidecar::SidecarV1)
+/// path via [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with)
+/// (`S-B2`), and soft-delete/retention ride the signed lifecycle. This writer survives only to
+/// build on-disk fixtures for the retained *read* path — the recovery-first index rebuild
+/// ([`rebuild_index`](crate::library::rebuild::rebuild_index)) that still ingests unsigned
+/// `.cbor` sidecars from pre-signed-path libraries — so it is compiled under `cfg(test)` only.
+#[cfg(test)]
 pub fn write_sidecar(
     path: &Path,
     sidecar: &AssetSidecar,

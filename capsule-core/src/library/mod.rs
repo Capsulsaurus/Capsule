@@ -12,7 +12,6 @@ pub mod receipts;
 pub mod scrub;
 pub mod space;
 pub mod storage_verify;
-pub mod trash;
 
 pub use auth_gate::{
     DEFAULT_GRACE, GateError, GateKeeper, GatedQueryError, GatedView, GraceClock, LocalAuthError,
