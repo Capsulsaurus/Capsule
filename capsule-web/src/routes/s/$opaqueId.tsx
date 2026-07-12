@@ -23,7 +23,12 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { initShareWasm, openShare, shareOpenCode } from '@/lib/share-open';
+import {
+    decryptShareBlob,
+    initShareWasm,
+    openShare,
+    shareOpenCode,
+} from '@/lib/share-open';
 
 export const Route = createFileRoute('/s/$opaqueId')({
     component: ShareViewer,
@@ -40,6 +45,10 @@ interface ShareAsset {
     content_type: string;
     size: number;
     metadata_blob: string;
+    /** Lowercase-hex STREAM nonce prefix — a key-free crypto param needed to decrypt the blob. */
+    nonce_prefix: string;
+    /** The crypto-manifest AMK epoch (`0` for an asset-scoped grant). */
+    amk_version: number;
 }
 
 /** The `GET /s/{opaque-id}` response body. */
@@ -66,7 +75,12 @@ type View =
           wrong: boolean;
           busy: boolean;
       }
-    | { kind: 'ready'; meta: ShareMetadata };
+    | {
+          kind: 'ready';
+          meta: ShareMetadata;
+          /** Object URLs of decrypted image thumbnails, keyed by `asset_id`. */
+          thumbs: Record<string, string>;
+      };
 
 function ShareViewer() {
     const { opaqueId } = Route.useParams();
@@ -87,18 +101,58 @@ function ShareViewer() {
         ): Promise<'ok' | 'wrong' | 'error'> => {
             try {
                 await initShareWasm();
-                // Opening validates the fragment secret (and passphrase); we render the served,
-                // already-stripped metadata read-only. Full-resolution blob decryption
-                // (ShareScope.decryptBlob) activates once the serve response carries each asset's
-                // crypto-manifest params (nonce prefix / AMK epoch) — a follow-up.
+                // Opening validates the fragment secret (and passphrase) client-side. With the
+                // scope open we decrypt each covered image blob in the browser: fetch the
+                // ciphertext, derive the per-file key from the scope, STREAM-decrypt via
+                // ShareScope.decryptBlob (fed the served nonce-prefix / AMK-epoch crypto params),
+                // and wrap the plaintext in an object URL for a thumbnail. The secret and the
+                // plaintext never leave the browser.
                 const scope = openShare(
                     wrapped,
                     opaqueId,
                     fragment,
                     passphrase,
                 );
-                scope.free();
-                setView({ kind: 'ready', meta });
+                const thumbs: Record<string, string> = {};
+                try {
+                    await Promise.all(
+                        meta.assets.map(async (asset) => {
+                            // Only decode renderable images into thumbnails; other content types
+                            // stay as their (privacy-stripped) metadata card.
+                            if (!asset.content_type.startsWith('image/'))
+                                return;
+                            try {
+                                const blobRes = await fetch(
+                                    `${SHARE_BASE}/s/${opaqueId}/blob/${asset.content_hash}`,
+                                );
+                                if (!blobRes.ok) return;
+                                const ciphertext = new Uint8Array(
+                                    await blobRes.arrayBuffer(),
+                                );
+                                const plaintext = decryptShareBlob(
+                                    scope,
+                                    {
+                                        assetId: asset.asset_id,
+                                        amkVersion: asset.amk_version,
+                                        noncePrefixHex: asset.nonce_prefix,
+                                    },
+                                    ciphertext,
+                                );
+                                thumbs[asset.asset_id] = URL.createObjectURL(
+                                    new Blob([plaintext], {
+                                        type: asset.content_type,
+                                    }),
+                                );
+                            } catch {
+                                // A single blob that fails to fetch/decrypt just renders without a
+                                // thumbnail — it never fails the whole (validated) open.
+                            }
+                        }),
+                    );
+                } finally {
+                    scope.free();
+                }
+                setView({ kind: 'ready', meta, thumbs });
                 return 'ok';
             } catch (err) {
                 const code = shareOpenCode(err);
@@ -178,6 +232,16 @@ function ShareViewer() {
         };
     }, [opaqueId, fragment, attemptOpen]);
 
+    // Release the decrypted-thumbnail object URLs when the ready view is torn down (navigation
+    // away or a re-open), so the in-browser plaintext is not retained longer than it is shown.
+    useEffect(() => {
+        if (view.kind !== 'ready') return;
+        const urls = Object.values(view.thumbs);
+        return () => {
+            for (const url of urls) URL.revokeObjectURL(url);
+        };
+    }, [view]);
+
     return (
         <div className="flex min-h-screen flex-col items-center justify-center bg-muted/40 p-4">
             <div className="w-full max-w-2xl">
@@ -209,7 +273,9 @@ function ShareViewer() {
                         onOpen={attemptOpen}
                     />
                 )}
-                {view.kind === 'ready' && <ShareContents meta={view.meta} />}
+                {view.kind === 'ready' && (
+                    <ShareContents meta={view.meta} thumbs={view.thumbs} />
+                )}
             </div>
         </div>
     );
@@ -311,7 +377,13 @@ function PassphraseGate({
 }
 
 /** The read-only contents view once the scope has been opened client-side. */
-function ShareContents({ meta }: { meta: ShareMetadata }) {
+function ShareContents({
+    meta,
+    thumbs,
+}: {
+    meta: ShareMetadata;
+    thumbs: Record<string, string>;
+}) {
     const intl = useIntl();
     return (
         <Card>
@@ -356,8 +428,17 @@ function ShareContents({ meta }: { meta: ShareMetadata }) {
                 {meta.assets.map((asset) => (
                     <div
                         key={asset.asset_id}
-                        className="grid gap-1 rounded-md border p-3 text-sm"
+                        className="grid gap-2 rounded-md border p-3 text-sm"
                     >
+                        {thumbs[asset.asset_id] && (
+                            <img
+                                src={thumbs[asset.asset_id]}
+                                alt={intl.formatMessage({
+                                    id: 'share.scope.asset',
+                                })}
+                                className="max-h-80 w-full rounded object-contain"
+                            />
+                        )}
                         <div className="flex justify-between gap-2">
                             <span className="text-muted-foreground">
                                 <FormattedMessage id="share.asset.type" />

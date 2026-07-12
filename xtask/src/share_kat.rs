@@ -68,7 +68,12 @@ pub(crate) fn run(root: &Path, out_rel: &str) -> Result<()> {
 
     // The served ciphertext blob: a real STREAM encryption under the file key (spanning enough
     // bytes to exercise a partial chunk), byte-for-byte what `/s/{opaque-id}/blob/{hash}` returns.
-    let plaintext: Vec<u8> = (0..5000u32).map(|i| (i % 251) as u8).collect();
+    // The plaintext leads with the 8-byte PNG signature so the browser end-to-end render — decrypt
+    // → `Blob([bytes], { type: contentType })` — is a genuine `image/png` payload, then a
+    // deterministic filler that exercises multiple STREAM chunks.
+    const PNG_SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    let mut plaintext: Vec<u8> = PNG_SIGNATURE.to_vec();
+    plaintext.extend((0..5000u32).map(|i| (i % 251) as u8));
     let (_, ciphertext) = encrypt_asset_vec_with_prefix(&file_key, nonce_prefix, &plaintext);
 
     let fixture = json!({
@@ -79,6 +84,9 @@ pub(crate) fn run(root: &Path, out_rel: &str) -> Result<()> {
         "fileId": file_id.to_string(),
         "amkVersion": 0,
         "noncePrefixHex": hex::encode(nonce_prefix),
+        // The plaintext content type the viewer wraps the decrypted bytes in (a served, key-free
+        // fact); PNG magic bytes lead the plaintext so the end-to-end render is a real image.
+        "contentType": "image/png",
         "passphrase": PASSPHRASE,
         "wrongPassphrase": "not the passphrase",
         "linkOnlyWrappedB64": wrapped_b64(&link_only)?,

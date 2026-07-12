@@ -1184,11 +1184,14 @@ SDK; they never hand-roll network flows.
   `test-web`/`build-web`; artifacts gitignored, deterministic. Scenario #33/#42
   client halves proven by the cross-language KAT (Rust seals real issuer
   encapsulation + real STREAM ciphertext; bun/wasm reopens byte-exactly;
-  wrong-passphrase/tamper refused). Owed: the clean-browser-profile live smoke
-  (like S-D6's); in-viewer thumbnail decrypt needs `ServeAsset`/
-  `ShareMetadataResponse` to carry `nonce_prefix`+`amk_version` (S-C4 surface
-  extension — follow-up); 12 non-English `share.*` entries are English
-  placeholders pending translation seeds.
+  wrong-passphrase/tamper refused). The thumbnail-decrypt follow-up is done:
+  `ServeAsset`/`ShareMetadataResponse` carry per-asset `nonce_prefix`+
+  `amk_version` (key-free envelope facts; privacy strip untouched) and
+  `/s/$opaqueId` fetches + decrypts covered image blobs via
+  `ShareScope.decryptBlob` into rendered thumbnails (object URLs revoked on
+  teardown), proven by the extended `share-kat` end-to-end render test. Owed: the
+  clean-browser-profile live smoke (like S-D6's); 12 non-English `share.*`
+  entries are English placeholders pending translation seeds.
 
 ### S-E2 — Federation capabilities + pulls
 

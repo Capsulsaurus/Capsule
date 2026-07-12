@@ -24,6 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
+use capsule_core::crypto::encryption::stream::NONCE_PREFIX_LEN;
 use capsule_core::crypto::hash::Hash32;
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::{CRYPTO_SUITE_ID, pwkdf};
@@ -117,6 +118,11 @@ fn passphrase_scope() -> WrappedScope {
     }
 }
 
+/// A fixed nonce prefix for the fixture assets (a key-free crypto-envelope fact served verbatim).
+const FIXTURE_NONCE_PREFIX: [u8; NONCE_PREFIX_LEN] = [0x07; NONCE_PREFIX_LEN];
+/// The AMK epoch the fixture assets are published under.
+const FIXTURE_AMK_VERSION: u32 = 3;
+
 /// One covered asset with the given content hash and sidecar.
 fn asset(content_hash: &str, sidecar: SidecarV1) -> ShareAssetInput {
     ShareAssetInput {
@@ -125,6 +131,8 @@ fn asset(content_hash: &str, sidecar: SidecarV1) -> ShareAssetInput {
         content_type: "image/jpeg".to_string(),
         size: 12,
         sidecar,
+        nonce_prefix: FIXTURE_NONCE_PREFIX,
+        amk_version: FIXTURE_AMK_VERSION,
     }
 }
 
@@ -490,6 +498,47 @@ async fn metadata_is_stripped_on_serve_with_no_opt_out() {
     let gps = served.gps.unwrap();
     assert_eq!(gps.lat, 40.71, "GPS truncated to city level");
     assert_eq!(gps.lon, -74.01);
+}
+
+/// The serve response carries each asset's **key-free crypto-envelope params** — the STREAM nonce
+/// prefix and AMK epoch — alongside the stripped metadata blob, so a guest client can feed them to
+/// `ShareScope.decryptBlob` and decrypt the fetched ciphertext. These reveal nothing without the
+/// link secret; the privacy strip (a metadata concern) does not touch them.
+#[tokio::test]
+async fn serve_response_carries_per_asset_crypto_params() {
+    let ctx = setup().await;
+    let svc = share_service(&ctx);
+    let hash = "c".repeat(64);
+    let (_id, opaque) = publish(
+        &ctx,
+        SELF_SERVER,
+        link_only_scope(),
+        None,
+        vec![asset(&hash, fingerprinted_sidecar())],
+    )
+    .await;
+
+    let (status, meta) = get_json(&svc, &opaque).await;
+    assert_eq!(status, StatusCode::OK);
+    let served_asset = &meta["assets"][0];
+    // The nonce prefix is served as lowercase hex of the published bytes …
+    assert_eq!(
+        served_asset["nonce_prefix"],
+        Value::String(hex_encode(&FIXTURE_NONCE_PREFIX))
+    );
+    // … and the AMK epoch verbatim.
+    assert_eq!(
+        served_asset["amk_version"],
+        Value::from(FIXTURE_AMK_VERSION)
+    );
+    // The strip still ran (the crypto params are additive, not a bypass): the fingerprinting
+    // camera serial is gone from the served metadata blob.
+    let blob_b64 = served_asset["metadata_blob"]
+        .as_str()
+        .expect("metadata_blob");
+    let served =
+        SidecarV1::from_canonical_slice(&B64.decode(blob_b64).unwrap(), SIDECAR_SCHEMA_V1).unwrap();
+    assert_eq!(served.camera_id.as_ref().unwrap().serial, "");
 }
 
 // ─────────────────── Bullet 6: home-server-only (unit) ────────────────────────────

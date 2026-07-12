@@ -15,6 +15,38 @@ import init, {
 export type { ShareScope };
 export { openShare, shareIsPassphraseProtected };
 
+/** The per-asset crypto-envelope params the serve response carries; exactly what
+ *  {@link decryptShareBlob} feeds `ShareScope.decryptBlob`. */
+export interface ShareAssetCryptoParams {
+    /** The served `asset_id` (the file UUID the per-file key is derived for). */
+    assetId: string;
+    /** The crypto-manifest AMK epoch (`amk_version`); `0` for an asset-scoped grant. */
+    amkVersion: number;
+    /** Lowercase-hex of the asset's STREAM nonce prefix (`nonce_prefix`). */
+    noncePrefixHex: string;
+}
+
+/**
+ * Decrypt one covered asset's ciphertext blob to plaintext, entirely in the browser.
+ *
+ * The single decrypt path shared by the guest viewer and the cross-language KAT: it derives the
+ * asset's per-file key from the opened {@link ShareScope} and STREAM-decrypts the `ciphertext`
+ * (the bytes from `/s/{opaque-id}/blob/{hash}`), authenticated by the AEAD tag. Throws a stable
+ * machine code (`scope_unavailable`, `tampered`, `malformed`) mapped by {@link shareOpenCode}.
+ */
+export function decryptShareBlob(
+    scope: ShareScope,
+    params: ShareAssetCryptoParams,
+    ciphertext: Uint8Array,
+): Uint8Array {
+    return scope.decryptBlob(
+        params.assetId,
+        params.amkVersion,
+        params.noncePrefixHex,
+        ciphertext,
+    );
+}
+
 /**
  * Stable machine error codes the wasm surface throws (as `Error.message`). Kept in sync with
  * `capsule-wasm/src/lib.rs::err`; the viewer maps each to an i18n catalog key.

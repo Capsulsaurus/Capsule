@@ -16,6 +16,7 @@ import { beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 
 import {
+    decryptShareBlob,
     initShareWasm,
     openShare,
     shareIsPassphraseProtected,
@@ -29,6 +30,7 @@ interface Fixture {
     fileId: string;
     amkVersion: number;
     noncePrefixHex: string;
+    contentType: string;
     passphrase: string;
     wrongPassphrase: string;
     linkOnlyWrappedB64: string;
@@ -91,6 +93,38 @@ describe('share-link cross-language KAT', () => {
             bytes(fixture.ciphertextB64),
         );
         expect(new Uint8Array(plaintext)).toEqual(bytes(fixture.plaintextB64));
+    });
+
+    test('end-to-end asset render: the viewer helper decrypts a byte-exact image blob', () => {
+        // Mirrors the guest viewer's render path: open the scope, then decrypt the served
+        // ciphertext through the SAME `decryptShareBlob` helper the route uses, fed the serve
+        // response's crypto params (asset id, AMK epoch, nonce prefix).
+        const scope = openShare(
+            fixture.linkOnlyWrappedB64,
+            fixture.opaqueIdHex,
+            fixture.fragmentHex,
+            null,
+        );
+        const plaintext = decryptShareBlob(
+            scope,
+            {
+                assetId: fixture.fileId,
+                amkVersion: fixture.amkVersion,
+                noncePrefixHex: fixture.noncePrefixHex,
+            },
+            bytes(fixture.ciphertextB64),
+        );
+        // Byte-exact plaintext recovery, end to end (fixture ciphertext → decrypt → plaintext).
+        expect(new Uint8Array(plaintext)).toEqual(bytes(fixture.plaintextB64));
+        // The decrypted bytes wrap into a content-typed Blob — what the viewer turns into a
+        // thumbnail object URL — and lead with the PNG signature the fixture seals.
+        const blob = new Blob([plaintext], { type: fixture.contentType });
+        expect(blob.type).toBe('image/png');
+        expect(blob.size).toBe(bytes(fixture.plaintextB64).length);
+        expect(Array.from(plaintext.slice(0, 8))).toEqual([
+            0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+        ]);
+        scope.free();
     });
 
     test('passphrase: unwraps client-side and recovers the exact plaintext', () => {

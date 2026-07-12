@@ -1,4 +1,4 @@
-use data_encoding::BASE64;
+use data_encoding::{BASE64, HEXLOWER};
 use entity::public_share;
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, Set};
 
@@ -27,6 +27,8 @@ impl Mutation {
                 content_type: a.content_type.clone(),
                 size: a.size,
                 sidecar_cbor_b64: BASE64.encode(&a.sidecar.to_canonical_vec()),
+                nonce_prefix_hex: HEXLOWER.encode(&a.nonce_prefix),
+                amk_version: a.amk_version,
             })
             .collect();
         let served_metadata = serde_json::to_value(StoredMetadata { assets })

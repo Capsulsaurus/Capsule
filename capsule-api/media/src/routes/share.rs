@@ -62,6 +62,14 @@ struct ShareAssetMetadata {
     size: u64,
     /// The **stripped** metadata blob (base64 canonical CBOR); fingerprinting fields removed.
     metadata_blob: String,
+    /// The asset's STREAM nonce prefix (lowercase hex) — a key-free crypto-envelope fact the
+    /// guest client feeds to `ShareScope.decryptBlob` to decrypt the fetched ciphertext blob. It
+    /// carries no meaning without the link secret, so serving it is sanctioned by the Share Links
+    /// contract ("the client decrypts using the link-derived key").
+    nonce_prefix: String,
+    /// The asset's album-master-key epoch (crypto-manifest `amk_version`), the other decrypt
+    /// parameter; `0` for an asset-scoped grant whose file key travels in the scope directly.
+    amk_version: u32,
 }
 
 /// The opaque wrapped-secret payload — the issuer-published `WrappedScope`, unwrapped client-side.
@@ -166,6 +174,8 @@ pub async fn get_share_metadata(
             content_type: a.content_type,
             size: a.size,
             metadata_blob: a.metadata_blob_b64,
+            nonce_prefix: a.nonce_prefix_hex,
+            amk_version: a.amk_version,
         })
         .collect();
 

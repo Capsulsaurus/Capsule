@@ -92,6 +92,8 @@ fn decode_assets(served_metadata: &serde_json::Value) -> Vec<ServeAsset> {
                 content_type: a.content_type,
                 size: a.size,
                 sidecar_cbor,
+                nonce_prefix_hex: a.nonce_prefix_hex,
+                amk_version: a.amk_version,
             })
         })
         .collect()

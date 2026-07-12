@@ -23,6 +23,7 @@
 mod mutation;
 mod query;
 
+use capsule_core::crypto::encryption::stream::NONCE_PREFIX_LEN;
 use capsule_core::sharing::WrappedScope;
 use capsule_core::sidecar::sidecar_v1::SidecarV1;
 use data_encoding::BASE64;
@@ -48,6 +49,16 @@ pub(super) struct StoredAsset {
     pub(super) size: u64,
     /// Base64 of the sidecar's canonical CBOR (un-stripped; stripped on serve).
     pub(super) sidecar_cbor_b64: String,
+    /// Lowercase-hex of the asset's STREAM nonce prefix — a key-free crypto-envelope fact the
+    /// recipient needs to decrypt the served ciphertext blob (reveals nothing without the link
+    /// secret). `#[serde(default)]` so pre-follow-up rows still decode (empty ⇒ absent).
+    #[serde(default)]
+    pub(super) nonce_prefix_hex: String,
+    /// The asset's album-master-key epoch (the crypto-manifest `amk_version`); `0` for an
+    /// asset-scoped grant whose file key travels in the scope directly. `#[serde(default)]` for
+    /// pre-follow-up rows.
+    #[serde(default)]
+    pub(super) amk_version: u32,
 }
 
 /// Encode a [`WrappedScope`] to its opaque stored form: base64 of its canonical CBOR.
@@ -108,6 +119,12 @@ pub struct ShareAssetInput {
     pub size: u64,
     /// The asset's sidecar (stripped for export on serve; the local copy is never modified).
     pub sidecar: SidecarV1,
+    /// The asset's STREAM nonce prefix — a key-free crypto-envelope fact served verbatim so a
+    /// member client can decrypt the ciphertext blob (it reveals nothing without the link secret).
+    pub nonce_prefix: [u8; NONCE_PREFIX_LEN],
+    /// The asset's album-master-key epoch (crypto-manifest `amk_version`); `0` for an
+    /// asset-scoped grant whose file key travels directly in the scope material.
+    pub amk_version: u32,
 }
 
 /// The outcome of an authoritative serve-path resolution.
@@ -159,4 +176,9 @@ pub struct ServeAsset {
     pub size: u64,
     /// The un-stripped sidecar as canonical CBOR (the serve layer applies the export strip).
     pub sidecar_cbor: Vec<u8>,
+    /// Lowercase-hex of the asset's STREAM nonce prefix (served verbatim; the recipient needs it
+    /// to decrypt the ciphertext blob — a key-free envelope fact, not a fingerprinting field).
+    pub nonce_prefix_hex: String,
+    /// The asset's album-master-key epoch (crypto-manifest `amk_version`).
+    pub amk_version: u32,
 }

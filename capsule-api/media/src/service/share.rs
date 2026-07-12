@@ -135,6 +135,12 @@ pub(crate) struct StrippedAsset {
     pub(crate) size: u64,
     /// Base64 of the stripped sidecar's canonical CBOR (the served metadata blob).
     pub(crate) metadata_blob_b64: String,
+    /// Lowercase-hex of the asset's STREAM nonce prefix — served verbatim (the export strip does
+    /// not touch it: it is a key-free crypto-envelope fact the recipient needs to decrypt the
+    /// ciphertext blob, not a fingerprinting field).
+    pub(crate) nonce_prefix_hex: String,
+    /// The asset's album-master-key epoch (crypto-manifest `amk_version`).
+    pub(crate) amk_version: u32,
 }
 
 // ─── Rate + cache state ────────────────────────────────────────────────────────
@@ -347,5 +353,9 @@ fn strip_asset(asset: &ServeAsset) -> StrippedAsset {
         content_type: asset.content_type.clone(),
         size: asset.size,
         metadata_blob_b64,
+        // Crypto-envelope facts pass through untouched — the export strip is about fingerprinting
+        // metadata, never the parameters a member client needs to decrypt the blob.
+        nonce_prefix_hex: asset.nonce_prefix_hex.clone(),
+        amk_version: asset.amk_version,
     }
 }
