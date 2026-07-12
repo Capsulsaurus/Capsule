@@ -28,4 +28,10 @@ export interface Asset {
     height: number;
     /** ThumbHash (base64) for an instant blurred placeholder. */
     thumbhash: string;
+    /**
+     * Awaiting-original: the server has the manifest + metadata but not yet the original
+     * blob (staged uploads; download-sync design doc). Derived key-free from the feed's
+     * `original_held` fact. `undefined`/`false` means the original is held.
+     */
+    pending?: boolean;
 }

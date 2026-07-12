@@ -110,6 +110,7 @@ async fn cli_login_sync_list_round_trip() {
         cursor_mac_key: CURSOR_KEY,
         default_page_size: DEFAULT_PAGE_SIZE,
         max_page_size: MAX_PAGE_SIZE,
+        allowed_origins: Vec::new(),
     };
     let sync_router = crate::get_router(db.clone(), sync_config).await.unwrap();
     let sync_url = serve(sync_router).await;

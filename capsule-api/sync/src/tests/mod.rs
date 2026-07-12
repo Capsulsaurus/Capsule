@@ -157,6 +157,7 @@ pub(crate) async fn setup() -> TestCtx {
         cursor_mac_key: CURSOR_KEY,
         default_page_size: DEFAULT_PAGE_SIZE,
         max_page_size: MAX_PAGE_SIZE,
+        allowed_origins: Vec::new(),
     };
 
     // Seed user U, owner group id=U (owner_member U∈U), and album A owned by U — matching the

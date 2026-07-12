@@ -17,12 +17,13 @@ use proto::photolibrary::metadata::v1::{
     SyncMetadataResponse, UpdateAlbumRequest, UpdateAlbumResponse, UpdatePhotoMetadataRequest,
     UpdatePhotoMetadataResponse,
 };
-use salvo::http::{ResBody, StatusError};
+use salvo::cors::{AllowOrigin, Cors};
+use salvo::http::{Method, ResBody, StatusError};
 use salvo::prelude::*;
 use salvo::{BoxedError, hyper};
 use sea_orm::DatabaseConnection;
 use tonic::{Request, Response, Status};
-use tower::Service;
+use tower::{Layer, Service};
 
 pub mod config;
 pub mod cursor;
@@ -258,12 +259,41 @@ pub async fn get_router<C: Into<SyncServerConfig>>(
     let config = config.into();
 
     // The key-free sync feed (SLICES.md S-C2). Mounted at its explicit service path BEFORE
-    // the legacy catch-all so it wins matching.
-    let sync_feed = GrpcHandler::new(
+    // the legacy catch-all so it wins matching. The `tonic_web::GrpcWebLayer` wrap lets the
+    // SAME service also answer browser gRPC-web calls (slice S-D6: the web gateway can only
+    // speak gRPC-web, not native gRPC) — a key-free enabling wrap that neither forks the
+    // service nor changes what it serves (the manifest/metadata stay opaque). Native gRPC
+    // clients (SDK/CLI/federation peers) are unaffected: the layer only translates the
+    // grpc-web content-types and passes `application/grpc` straight through.
+    let sync_feed = GrpcHandler::new(tonic_web::GrpcWebLayer::new().layer(
         proto::capsule::sync::v1::sync_service_server::SyncServiceServer::new(
             SyncFeedService::new(conn, &config),
         ),
-    );
+    ));
+
+    // Browser gRPC-web needs CORS: the preflight (`OPTIONS`) and the exposed gRPC-web
+    // status/trailer + protocol-advertisement headers. Scoped to the sync feed sub-router
+    // only, mirroring the auth/upload routers' permissive-by-default origin handling. This
+    // is browser-carriage plumbing; native gRPC clients never send an `Origin`.
+    let allow_origin =
+        if config.allowed_origins.is_empty() || config.allowed_origins.iter().any(|o| o == "*") {
+            AllowOrigin::any()
+        } else {
+            AllowOrigin::from(&config.allowed_origins)
+        };
+    let cors = Cors::new()
+        .allow_origin(allow_origin)
+        .allow_methods(vec![Method::POST, Method::OPTIONS])
+        .allow_headers("*")
+        .expose_headers(vec![
+            "grpc-status",
+            "grpc-message",
+            "grpc-status-details-bin",
+            "x-capsule-error-code",
+            "x-capsule-protocol-min",
+            "x-capsule-protocol-max",
+        ])
+        .into_handler();
 
     // LEGACY-PLAINTEXT (frozen): SLICES.md S-G2.
     let service = CapsuleMetadataService::default();
@@ -274,7 +304,11 @@ pub async fn get_router<C: Into<SyncServerConfig>>(
     // `{**rest}` wisp syntax; the sync service path is matched BEFORE the legacy catch-all so
     // it wins. (The tonic server does its own per-method dispatch under this prefix.)
     let router = Router::new()
-        .push(Router::with_path("capsule.sync.v1.SyncService/{**rest}").goal(sync_feed))
+        .push(
+            Router::with_path("capsule.sync.v1.SyncService/{**rest}")
+                .hoop(cors)
+                .goal(sync_feed),
+        )
         .push(Router::with_path("{**rest}").goal(handler));
 
     Ok(router)

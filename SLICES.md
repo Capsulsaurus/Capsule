@@ -97,7 +97,7 @@ its slice.
 | S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | done    |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | done    |
-| S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | ready   |
+| S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | done    |
 | S-D7  | SDK auth/session foundation + auto token refresh     | sdk/clients     | —                | M    | done    |
 | S-D8  | spargen REST client integration                      | sdk/clients     | in-house spargen | M    | done    |
 | S-D9  | capsule-sdk uniffi FFI bindings                      | sdk/clients     | S-F1, S-D7       | M    | done*   |
@@ -926,6 +926,21 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-D2 (the feed contract). **Blocks:** S-G1 (query parity is the
   retirement precondition). **Done when:** the gateway methods run against a dev server
   with the mock gateway deleted. **Tier:** Smoke (`mise run check-web` + bun tests).
+- **Landed:** the web read path is a **key-free projection** of `capsule.sync.v1`
+  over **gRPC-web** — hand-rolled golden-tested Protobuf+gRPC-web codec
+  (`sync/wire.ts`) into a client-side `SyncStore` (validate-then-apply, per-album
+  `sync_seq` anti-rewind + forward-version rejection, persisted cursor+snapshot in
+  one atomic unit); mock gateway deleted. Server side: the same `SyncService` gains
+  `tonic_web::GrpcWebLayer` + a scoped CORS hoop (key-free; native gRPC untouched,
+  26 sync tests green). Queries return **key-free shells**: ids, album membership +
+  counts, awaiting-original, blob content-addresses, change recency are real;
+  titles/cover art/capture dates/dimensions/LQIP/locations are absent (encrypted
+  metadata; the wasm decode/verify boundary deferred in gateway.ts fills them
+  later). For S-G1, "query parity" = the four gateway methods on this real path —
+  not decrypted-content parity, which is structurally impossible until the wasm
+  boundary lands. Owed: a live browser↔server gRPC-web smoke (CORS preflight is the
+  unexercised piece); blob rendering rides the wasm boundary; 28 bun tests cover
+  wire/store/gateway against a mocked transport.
 
 ### S-D7 — SDK auth/session foundation + auto token refresh
 

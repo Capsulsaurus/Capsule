@@ -25,6 +25,10 @@ pub struct SyncServerConfig {
     pub default_page_size: u32,
     /// Hard clamp on a client-requested page size.
     pub max_page_size: u32,
+    /// CORS-allowed browser origins for the gRPC-web feed carriage (slice `S-D6`). Empty
+    /// (the default when unset) allows any origin, mirroring the other browser-facing
+    /// routers' permissive default.
+    pub allowed_origins: Vec<String>,
 }
 
 impl From<&ServerConfig> for SyncServerConfig {
@@ -37,6 +41,7 @@ impl From<&ServerConfig> for SyncServerConfig {
             cursor_mac_key: *config.sync_cursor_mac_key,
             default_page_size: DEFAULT_PAGE_SIZE,
             max_page_size: MAX_PAGE_SIZE,
+            allowed_origins: config.allowed_origins.clone(),
         }
     }
 }
