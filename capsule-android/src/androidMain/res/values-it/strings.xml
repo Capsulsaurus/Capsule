@@ -105,4 +105,23 @@
     <string name="label_repository">Collezione</string>
     <string name="label_title">Titolo</string>
     <string name="no_data_available">Nessun dato disponibile</string>
+    <string name="share_asset_size">Size</string>
+    <string name="share_asset_type">Type</string>
+    <string name="share_error_body">Something went wrong. Please try again later.</string>
+    <string name="share_error_title">Couldn\'t open this link</string>
+    <string name="share_expires">Expires {date}</string>
+    <string name="share_incomplete_body">The secret needed to open it is missing from the link.</string>
+    <string name="share_incomplete_title">This link is incomplete</string>
+    <string name="share_items">{count, plural, one {# item} other {# items}}</string>
+    <string name="share_passphrase_body">This shared link is protected with a password.</string>
+    <string name="share_passphrase_label">Password</string>
+    <string name="share_passphrase_submit">Unlock</string>
+    <string name="share_passphrase_title">Password required</string>
+    <string name="share_passphrase_wrong">That password didn\'t work. Try again.</string>
+    <string name="share_scope_album">Shared album</string>
+    <string name="share_scope_asset">Shared item</string>
+    <string name="share_unavailable_body">It may have expired, been revoked, or never existed.</string>
+    <string name="share_unavailable_title">This link is unavailable</string>
+    <string name="share_viewer_opening">Opening shared link…</string>
+    <string name="share_viewer_readonly_badge">Read-only share</string>
 </resources>

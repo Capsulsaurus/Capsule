@@ -1,0 +1,25 @@
+[package]
+name = "capsule-wasm"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path (slice S-E1)."
+
+[lib]
+# `cdylib` is the wasm artifact `wasm-bindgen` post-processes into the JS glue the web app and
+# the bun KAT load. `rlib` keeps the crate buildable/host-testable inside `cargo build --workspace`
+# (wasm-bindgen compiles inertly off-wasm), so it rides the standard Rust CI gate too.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The recipient-open crypto lives in capsule-core::sharing (always-on since S-E1) over `crypto`
+# + `cbor`. `default-features = false` drops the native SQLite/lifecycle stack that cannot target
+# wasm32 — exactly the S-A6 sealing-build posture. Feature unification with the rest of the
+# workspace (which pulls `native`) is harmless: `sharing` compiles under both.
+capsule-core = { path = "../capsule-core", default-features = false }
+# The browser boundary. Pinned `=0.2.100` to the `wasm-bindgen` CLI the `build-wasm` mise task
+# drives — wasm-bindgen requires the runtime crate and the CLI to match exactly.
+wasm-bindgen = "=0.2.100"
+base64 = { workspace = true }
+hex = { workspace = true }
+uuid = { workspace = true }

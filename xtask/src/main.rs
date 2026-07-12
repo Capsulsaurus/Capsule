@@ -15,6 +15,7 @@
 //!   locale's translation-data file.
 
 mod i18n;
+mod share_kat;
 mod translate_readme;
 
 use std::fs;
@@ -25,8 +26,10 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str =
-    "usage: xtask <set-version <X.Y.Z> | i18n [--check] | translate-readme [--check | --extract]>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | translate-readme [--check | --extract] | share-kat [<out-path>]>";
+
+/// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
+const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -52,6 +55,10 @@ fn main() -> Result<()> {
                 ),
             };
             translate_readme::run(&repo_root(), mode)
+        }
+        Some("share-kat") => {
+            let out = args.next().unwrap_or_else(|| SHARE_KAT_OUT.to_string());
+            share_kat::run(&repo_root(), &out)
         }
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),

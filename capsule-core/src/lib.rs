@@ -8,6 +8,13 @@ pub mod cbor;
 pub mod crypto;
 pub mod drop;
 
+/// Share-link generation, encapsulation crypto, and the recipient-side [`sharing::open_scope`]
+/// path. Always compiled (slice S-E1): it depends only on `cbor` + `crypto`, both of which
+/// target `wasm32-unknown-unknown`, so the browser share viewer (via `capsule-wasm`) can unwrap
+/// a link client-side. The native issuer (`ShareLinkIssuer` on [`lifecycle::Workspace`]) still
+/// rides the `native` feature; only the pure crypto + recipient-open path is needed in the browser.
+pub mod sharing;
+
 /// Client build identification — the `client_version` / `generated_by_client` grammar and the
 /// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
 pub mod client_build;
@@ -47,8 +54,6 @@ pub mod metadata;
 pub mod ml;
 #[cfg(feature = "native")]
 pub mod models;
-#[cfg(feature = "native")]
-pub mod sharing;
 #[cfg(feature = "native")]
 pub mod sidecar;
 #[cfg(feature = "native")]

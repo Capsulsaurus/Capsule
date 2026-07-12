@@ -418,5 +418,81 @@
     "device.cohort.support.report": {
         "message": "Report a problem with this device grouping",
         "context": "Devices screen: the one-tap support action. Because a device grouping is an advisory hash the user cannot adjudicate, there is deliberately no 'this isn't my device' toggle; the dispute path is a support report carrying the cohort hash and session map."
+    },
+    "share.viewer.opening": {
+        "message": "Opening shared link…",
+        "context": "Guest share viewer (/s/…): loading state shown while the link is fetched and its scope is unwrapped client-side."
+    },
+    "share.viewer.readonly_badge": {
+        "message": "Read-only share",
+        "context": "Guest share viewer: badge marking the view as read-only — a share link never grants write access."
+    },
+    "share.scope.album": {
+        "message": "Shared album",
+        "context": "Guest share viewer: heading when the link points at a whole album."
+    },
+    "share.scope.asset": {
+        "message": "Shared item",
+        "context": "Guest share viewer: heading when the link points at a single asset."
+    },
+    "share.items": {
+        "message": "{count, plural, one {# item} other {# items}}",
+        "context": "Guest share viewer: count of assets the shared link covers."
+    },
+    "share.expires": {
+        "message": "Expires {date}",
+        "context": "Guest share viewer: shown when the link has an expiry. {date} is a formatted date/time the app supplies."
+    },
+    "share.asset.type": {
+        "message": "Type",
+        "context": "Guest share viewer: label for an asset's content type (e.g. image/jpeg)."
+    },
+    "share.asset.size": {
+        "message": "Size",
+        "context": "Guest share viewer: label for an asset's byte size."
+    },
+    "share.unavailable.title": {
+        "message": "This link is unavailable",
+        "context": "Guest share viewer: the single generic failure title shown for a not-found, revoked, or expired link — deliberately indistinguishable so a probe cannot tell which case applies."
+    },
+    "share.unavailable.body": {
+        "message": "It may have expired, been revoked, or never existed.",
+        "context": "Guest share viewer: the generic failure body paired with share.unavailable.title. Must not distinguish not-found from revoked from expired."
+    },
+    "share.incomplete.title": {
+        "message": "This link is incomplete",
+        "context": "Guest share viewer: shown when the URL is missing its '#' fragment secret, without which nothing can be decrypted."
+    },
+    "share.incomplete.body": {
+        "message": "The secret needed to open it is missing from the link.",
+        "context": "Guest share viewer: body for share.incomplete.title — the fragment after '#' was not present in the URL."
+    },
+    "share.passphrase.title": {
+        "message": "Password required",
+        "context": "Guest share viewer: title of the passphrase prompt for a password-protected link. The password is checked entirely in the browser and never sent to the server."
+    },
+    "share.passphrase.body": {
+        "message": "This shared link is protected with a password.",
+        "context": "Guest share viewer: explanatory body above the passphrase input."
+    },
+    "share.passphrase.label": {
+        "message": "Password",
+        "context": "Guest share viewer: field label for the passphrase input."
+    },
+    "share.passphrase.submit": {
+        "message": "Unlock",
+        "context": "Guest share viewer: button that attempts the client-side passphrase unwrap."
+    },
+    "share.passphrase.wrong": {
+        "message": "That password didn't work. Try again.",
+        "context": "Guest share viewer: error shown when the client-side Argon2id unwrap fails (wrong password)."
+    },
+    "share.error.title": {
+        "message": "Couldn't open this link",
+        "context": "Guest share viewer: title for an unexpected error (network/decoding) distinct from the deliberate share.unavailable generic case."
+    },
+    "share.error.body": {
+        "message": "Something went wrong. Please try again later.",
+        "context": "Guest share viewer: body for share.error.title."
     }
 }

@@ -19,6 +19,12 @@ hk = "1.48.0"
 # builds from source, working uniformly on every OS in CI and locally.
 "cargo:convco" = "0.6.4"
 "cargo:cargo-nextest" = "0.9"
+# wasm-bindgen CLI post-processes the `capsule-wasm` cdylib into the browser JS glue the web
+# share viewer + the `share-open` bun KAT load (slice S-E1, `build-wasm`). Pinned to EXACTLY the
+# `wasm-bindgen` crate version in `capsule-wasm/Cargo.toml` — the two must match or wasm-bindgen
+# aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
+# fetch of a version-matched wasm-bindgen) once the toolchain is installed.
+"cargo:wasm-bindgen-cli" = "0.2.100"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -218,9 +224,9 @@ run = [
 # guards + toolchain checks). Run `mise run targets-add` first.
 
 [tasks.targets-add]
-description = "Add rustup targets + cargo-ndk for the mobile/desktop FFI builds"
+description = "Add rustup targets + cargo-ndk for the mobile/desktop/wasm FFI builds"
 run = [
-  "rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android",
+  "rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android wasm32-unknown-unknown",
   "cargo install cargo-ndk",
 ]
 
@@ -251,12 +257,35 @@ run = "bunx biome check --write ."
 dir = "capsule-web"
 run = "bunx biome check ."
 
+# Build the `capsule-wasm` browser surface (slice S-E1) and post-process it into the JS glue the
+# web app + the `share-open` bun KAT import. Two deterministic, offline steps: a release wasm32
+# build, then `wasm-bindgen --target web` into the gitignored `capsule-web/src/generated/wasm/`
+# (build-time generation — no wasm binary is committed). Requires the `wasm32-unknown-unknown`
+# rustup target (see `targets-add`) and the pinned `wasm-bindgen-cli` tool.
+[tasks.build-wasm]
+description = "Build capsule-wasm and emit the browser JS glue for capsule-web"
+run = [
+  "cargo build -p capsule-wasm --target wasm32-unknown-unknown --release",
+  "wasm-bindgen target/wasm32-unknown-unknown/release/capsule_wasm.wasm --out-dir capsule-web/src/generated/wasm --target web",
+]
+
+# Generate the deterministic cross-language share-link KAT fixture the bun test reopens (Rust
+# seals via the real issuer crypto; wasm reopens — proving byte-identical interop). Written to the
+# gitignored capsule-web/src/generated/ tree.
+[tasks.share-kat]
+description = "Generate the share-link cross-language KAT fixture for the web bun test"
+run = "cargo run -q -p xtask -- share-kat"
+
+# test-web loads the wasm module + the KAT fixture, so both are prerequisites.
 [tasks.test-web]
 dir = "capsule-web"
+depends = ["build-wasm", "share-kat"]
 run = "bun test --pass-with-no-tests"
 
+# build-web bundles the guest share viewer, which imports the generated wasm glue.
 [tasks.build-web]
 dir = "capsule-web"
+depends = ["build-wasm"]
 run = "bun run build"
 
 # ── Docs ─────────────────────────────────────────────────────────────────────

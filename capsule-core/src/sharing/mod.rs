@@ -276,7 +276,11 @@ fn link_wrap_key(
 /// Encapsulate `material` around a fresh link secret, optionally adding the Argon2id
 /// passphrase layer. Pure crypto — the caller supplies the CSPRNG-drawn secrets and the
 /// resolved material, so it is unit-testable without a [`Workspace`](crate::lifecycle::Workspace).
-pub(crate) fn encapsulate_scope(
+///
+/// The issuer-side primitive [`open_scope`] reverses. Public so the cross-language KAT generator
+/// (`cargo xtask share-kat`) can seal fixtures byte-identically to the native issuer, then have
+/// the browser (`capsule-wasm`) reopen them.
+pub fn encapsulate_scope(
     material: &ScopeMaterial,
     fragment_secret: &[u8; LINK_SECRET_LEN],
     opaque_id: &[u8; OPAQUE_ID_LEN],

@@ -44,6 +44,7 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 | CLI | `clap` (derive) | `capsule-cli`, xtask argument parsing where non-trivial. | — |
 | Test runner | `cargo-nextest`; `testcontainers` (+ podman) for real backing services | The Unit/Smoke tiers per [Principles — Validation Tiers](/design/principles/#validation-tiers). | — |
 | FFI bindings | `uniffi` | One workspace version — consolidation is slice S-F1. | — |
+| Browser FFI (WASM) | `wasm-bindgen` (+ `wasm-bindgen-cli`, mise-pinned) | `capsule-wasm` — the guest web client's share-link open surface (slice S-E1): parse the URL fragment secret, Argon2id passphrase unwrap, scope decapsulation, STREAM blob decrypt. Compiles `capsule-core` (`--no-default-features`: `crypto` + `cbor` + `sharing`) to `wasm32-unknown-unknown`; `wasm-bindgen-cli` (the `build-wasm` mise task, `--target web`) post-processes the cdylib into the browser JS glue. The CLI and crate are pinned to the **same** version (`0.2.100`) — wasm-bindgen requires it. Randomness rides the getrandom `wasm_js` backend already pinned in `.cargo/config.toml`. | Not wasm-pack: it fetches a version-matched wasm-bindgen at run time, breaking the offline gate; the `cargo build` + `wasm-bindgen` path uses only pre-installed toolchains. |
 
 ## Web
 
@@ -55,6 +56,7 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 | Validation | zod | — |
 | Datetime | **none** — native `Intl` / `Date` | A date library is added only by adding a row here. |
 | i18n runtime | FormatJS over the generated catalogs | Contract owned by [Internationalization](/design/i18n/). |
+| Guest share crypto (WASM) | `capsule-wasm` module (built by `mise run build-wasm`) | The `/s/{opaque-id}` viewer's client-side share-link open path — the URL fragment secret and any passphrase never leave the browser (slice S-E1). Generated into the gitignored `src/generated/wasm/`; never committed. The Rust FFI crate + build tool are the [Rust — Browser FFI](#rust) row. |
 | Lint/format | Biome | — |
 | Runtime / package manager | bun | — |
 

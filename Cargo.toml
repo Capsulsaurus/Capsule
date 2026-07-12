@@ -17,6 +17,7 @@ members = [
     "capsule-core-ffi",
     "capsule-i18n",
     "capsule-sdk",
+    "capsule-wasm",
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed

@@ -13,6 +13,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AlbumsIndexRouteImport } from './routes/albums/index'
+import { Route as SOpaqueIdRouteImport } from './routes/s/$opaqueId'
 import { Route as AlbumsIdRouteImport } from './routes/albums/$id'
 
 const StorageLazyRouteImport = createFileRoute('/storage')()
@@ -112,6 +113,11 @@ const LibraryArchiveLazyRoute = LibraryArchiveLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/library/archive.lazy').then((d) => d.Route),
 )
+const SOpaqueIdRoute = SOpaqueIdRouteImport.update({
+  id: '/s/$opaqueId',
+  path: '/s/$opaqueId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AlbumsIdRoute = AlbumsIdRouteImport.update({
   id: '/albums/$id',
   path: '/albums/$id',
@@ -130,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/sharing': typeof SharingLazyRoute
   '/storage': typeof StorageLazyRoute
   '/albums/$id': typeof AlbumsIdRoute
+  '/s/$opaqueId': typeof SOpaqueIdRoute
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
@@ -148,6 +155,7 @@ export interface FileRoutesByTo {
   '/sharing': typeof SharingLazyRoute
   '/storage': typeof StorageLazyRoute
   '/albums/$id': typeof AlbumsIdRoute
+  '/s/$opaqueId': typeof SOpaqueIdRoute
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
@@ -167,6 +175,7 @@ export interface FileRoutesById {
   '/sharing': typeof SharingLazyRoute
   '/storage': typeof StorageLazyRoute
   '/albums/$id': typeof AlbumsIdRoute
+  '/s/$opaqueId': typeof SOpaqueIdRoute
   '/library/archive': typeof LibraryArchiveLazyRoute
   '/library/favorites': typeof LibraryFavoritesLazyRoute
   '/library/trash': typeof LibraryTrashLazyRoute
@@ -187,6 +196,7 @@ export interface FileRouteTypes {
     | '/sharing'
     | '/storage'
     | '/albums/$id'
+    | '/s/$opaqueId'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
@@ -205,6 +215,7 @@ export interface FileRouteTypes {
     | '/sharing'
     | '/storage'
     | '/albums/$id'
+    | '/s/$opaqueId'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
@@ -223,6 +234,7 @@ export interface FileRouteTypes {
     | '/sharing'
     | '/storage'
     | '/albums/$id'
+    | '/s/$opaqueId'
     | '/library/archive'
     | '/library/favorites'
     | '/library/trash'
@@ -242,6 +254,7 @@ export interface RootRouteChildren {
   SharingLazyRoute: typeof SharingLazyRoute
   StorageLazyRoute: typeof StorageLazyRoute
   AlbumsIdRoute: typeof AlbumsIdRoute
+  SOpaqueIdRoute: typeof SOpaqueIdRoute
   LibraryArchiveLazyRoute: typeof LibraryArchiveLazyRoute
   LibraryFavoritesLazyRoute: typeof LibraryFavoritesLazyRoute
   LibraryTrashLazyRoute: typeof LibraryTrashLazyRoute
@@ -355,6 +368,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibraryArchiveLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/s/$opaqueId': {
+      id: '/s/$opaqueId'
+      path: '/s/$opaqueId'
+      fullPath: '/s/$opaqueId'
+      preLoaderRoute: typeof SOpaqueIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/albums/$id': {
       id: '/albums/$id'
       path: '/albums/$id'
@@ -389,6 +409,7 @@ const rootRouteChildren: RootRouteChildren = {
   SharingLazyRoute: SharingLazyRoute,
   StorageLazyRoute: StorageLazyRoute,
   AlbumsIdRoute: AlbumsIdRoute,
+  SOpaqueIdRoute: SOpaqueIdRoute,
   LibraryArchiveLazyRoute: LibraryArchiveLazyRoute,
   LibraryFavoritesLazyRoute: LibraryFavoritesLazyRoute,
   LibraryTrashLazyRoute: LibraryTrashLazyRoute,

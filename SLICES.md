@@ -107,7 +107,7 @@ its slice.
 | S-D13 | Culling workflow client UX                           | sdk/clients     | —                | M    | done    |
 | S-D14 | Local-gallery security gates                         | sdk/clients     | —                | S    | done    |
 | S-D15 | Exact client build identification                    | sdk/clients     | —                | S    | done    |
-| S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | ready   |
+| S-E1  | Share-link end-to-end serving                        | fed/sharing     | S-C4             | M    | done*   |
 | S-E2  | Federation capabilities + pulls                      | fed/sharing     | S-C2, S-A3       | L    | done    |
 | S-E3  | LAN peering                                          | fed/sharing     | S-D2, S-C7       | L    | done*   |
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | done    |
@@ -1154,6 +1154,25 @@ SDK; they never hand-roll network flows.
   open in a browser with client-side unwrap — plus scenario #33/#42 checks.
 - **Depends on:** S-C4. **Done when:** a passphrase-protected album link opens
   read-only in a clean browser profile with the privacy strip verified. **Tier:** Smoke.
+- **Landed (done\* — live-browser smoke owed):** the full flow — issuer crypto
+  (S-A5) → serve (S-C4) → browser client-side open. `capsule_core::sharing` moved
+  to the always-on set (per the S-A6 note); new `capsule-wasm` workspace member
+  (wasm-bindgen, open-only surface: passphrase detection, `openShare`,
+  `ShareScope.decryptBlob`) with stable machine error codes and one
+  indistinguishable `wrong_secret` for the whole cannot-open family. Web route
+  `/s/$opaqueId`: guest no-auth read-only viewer — fragment secret and passphrase
+  never leave the browser, 421 home-server pointer resolution, one generic message
+  for the indistinguishable 404; 19 new `share.*` catalog keys. Build: mise
+  `build-wasm` (cargo + pinned `wasm-bindgen-cli` `=0.2.100`, bumped together;
+  wasm-pack rejected — it fetches tools at runtime) + `share-kat` fixtures feed
+  `test-web`/`build-web`; artifacts gitignored, deterministic. Scenario #33/#42
+  client halves proven by the cross-language KAT (Rust seals real issuer
+  encapsulation + real STREAM ciphertext; bun/wasm reopens byte-exactly;
+  wrong-passphrase/tamper refused). Owed: the clean-browser-profile live smoke
+  (like S-D6's); in-viewer thumbnail decrypt needs `ServeAsset`/
+  `ShareMetadataResponse` to carry `nonce_prefix`+`amk_version` (S-C4 surface
+  extension — follow-up); 12 non-English `share.*` entries are English
+  placeholders pending translation seeds.
 
 ### S-E2 — Federation capabilities + pulls
 

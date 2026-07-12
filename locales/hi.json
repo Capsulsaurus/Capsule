@@ -418,5 +418,62 @@
     "device.cohort.support.report": {
         "message": "इस डिवाइस समूह के साथ समस्या की रिपोर्ट करें",
         "context": "Machine-translated seed pending human review."
+    },
+    "share.viewer.opening": {
+        "message": "Opening shared link…"
+    },
+    "share.viewer.readonly_badge": {
+        "message": "Read-only share"
+    },
+    "share.scope.album": {
+        "message": "Shared album"
+    },
+    "share.scope.asset": {
+        "message": "Shared item"
+    },
+    "share.items": {
+        "message": "{count, plural, one {# item} other {# items}}"
+    },
+    "share.expires": {
+        "message": "Expires {date}"
+    },
+    "share.asset.type": {
+        "message": "Type"
+    },
+    "share.asset.size": {
+        "message": "Size"
+    },
+    "share.unavailable.title": {
+        "message": "This link is unavailable"
+    },
+    "share.unavailable.body": {
+        "message": "It may have expired, been revoked, or never existed."
+    },
+    "share.incomplete.title": {
+        "message": "This link is incomplete"
+    },
+    "share.incomplete.body": {
+        "message": "The secret needed to open it is missing from the link."
+    },
+    "share.passphrase.title": {
+        "message": "Password required"
+    },
+    "share.passphrase.body": {
+        "message": "This shared link is protected with a password."
+    },
+    "share.passphrase.label": {
+        "message": "Password"
+    },
+    "share.passphrase.submit": {
+        "message": "Unlock"
+    },
+    "share.passphrase.wrong": {
+        "message": "That password didn't work. Try again."
+    },
+    "share.error.title": {
+        "message": "Couldn't open this link"
+    },
+    "share.error.body": {
+        "message": "Something went wrong. Please try again later."
     }
 }
