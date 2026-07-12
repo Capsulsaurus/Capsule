@@ -30,13 +30,9 @@ Since Capsule extensively uses container technologies for both development and p
 
 The Capsule API is written almost entirely in Rust with several binary components serving distinct purposes:
 
-- **GraphQL**: GraphQL API for majority of user-facing functionality. Flexible and cross-platform.
-- **Upload**: A performant TUS-based upload service. Enables high-throughput, resumable uploads.
-- **Metadata**: Used for efficient metadata fetching and updating. Consists of two parts:
-  - A gRPC (web) service for efficient fetching and updating metadata. We strictly prefer binary-based protocols (i.e. no JSON) for lower-serialization costs with mobile clients.
-  - WebSocket + ProtoBuf service for efficient real-time updates
+- **Auth + Media + Upload**: REST/OpenAPI surfaces for authentication, ciphertext media serving, and TUS-based high-throughput resumable uploads. User-facing library queries are answered client-side over the synced `library.sqlite`, so the server needs no readable-content query surface.
+- **Sync**: A gRPC (web) service for efficient bulk library sync and delta updates. We strictly prefer binary-based protocols (i.e. no JSON) for lower-serialization costs with mobile clients.
 <!-- TODO: this section is outdated ^^ -->
-<!-- For instance, we are likely dumping GraphQL outright -->
 
 *Note: These components may be combined into a single web server for low-resource environments. It is used in the one-click Docker installer as well.*
 

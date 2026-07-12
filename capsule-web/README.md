@@ -29,12 +29,11 @@ drop in later:
   components consume **only** these, never a data source directly.
 - `src/data/index.ts` — selects the active gateway (mock for now).
 
-When the server schema is live, implement `ServerGateway` against it (a typed
-GraphQL client such as [gql.tada](https://gql-tada.0no.co/) for library queries,
-REST for blobs) and select it in `data/index.ts`. If `capsule-core` later ships
-a WebAssembly build, a decode/verify boundary slots in *below* `CapsuleGateway`
-— assets would arrive as ciphertext references plus a `decode()` call — without
-changing the UI.
+`ServerGateway` (`src/data/server/`) implements this interface against the
+key-free `capsule.sync.v1` feed (gRPC-web) for library reads and REST for blobs,
+and is selected in `data/index.ts`. If `capsule-core` later ships a WebAssembly
+build, a decode/verify boundary slots in *below* `CapsuleGateway` — assets would
+arrive as ciphertext references plus a `decode()` call — without changing the UI.
 
 ## Development
 

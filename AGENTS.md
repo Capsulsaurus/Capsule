@@ -12,7 +12,7 @@
 
 ## Dependencies
 
-- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-api/entity` and `capsule-cli/entity` (convert at the entity boundary) and in the frozen `capsule-api-library`.
+- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-api/entity` and `capsule-cli/entity` (convert at the entity boundary).
 - Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
 - Logging: `tracing`, never the `log` facade in new code.
 - TLS: `rustls` only; never native-tls/openssl.

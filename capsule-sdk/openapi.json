@@ -2631,10 +2631,6 @@
       "description": "Capsule Web-Upload Drops API"
     },
     {
-      "name": "library",
-      "description": "Capsule Library API (GraphQL)"
-    },
-    {
       "name": "media",
       "description": "Capsule Media Serving API"
     },

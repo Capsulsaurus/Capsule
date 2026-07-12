@@ -118,7 +118,7 @@ its slice.
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | done*   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | done    |
-| S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
+| S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | done    |
 | S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | done    |
 | S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
 | S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | done    |
@@ -1371,6 +1371,19 @@ keeps compiling and takes no new surface.
 - **Depends on:** S-C2, S-D6 (the parity precondition is explicit: the web app's reads
   run on the gateway, not GraphQL — today they run on the mock, so nothing user-facing
   breaks earlier, but retirement waits for the real path). **Blocks:** S-G3.
+- **Landed:** deleted `capsule-api-library` (async-graphql schema, disabled
+  dataloaders, `gen_graphql_schema` bin) and its workspace membership; removed the
+  `library` feature from `capsule-api` (dependency, `full` list, `/v1/library`
+  mount, `LIBRARY` OpenAPI tag, re-export) + the now-unused `graphql` feature on
+  `capsule-api-environment`; `build.rs` server-feature list refreshed to the real
+  set (also dropping a phantom `metadata` entry left by S-G2);
+  `capsule-sdk/openapi.json` regenerated (tag-only change). **async-graphql left
+  the workspace lockfile entirely**; the `chrono` exception shrinks to the entity
+  crates (dependencies.md + AGENTS/CLAUDE rules updated). Docs swept; the web app
+  references no GraphQL. **Breaking:** the public `/v1/library` GraphQL surface is
+  removed. Residual: root `README.md` prose (+ its 13 translations) still mentions
+  GraphQL in philosophy/FAQ — deliberately untouched to avoid cascading the S-I3
+  translation regeneration; scrub-and-regenerate is a docs follow-up.
 
 ### S-G2 — Legacy plaintext proto/service removal
 

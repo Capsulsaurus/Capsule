@@ -16,7 +16,6 @@ pub mod tags {
     pub const SHARE: &str = "share";
     pub const STORAGE: &str = "storage";
     pub const DROPS: &str = "drops";
-    pub const LIBRARY: &str = "library";
     pub const SYNC: &str = "sync";
 }
 
@@ -38,7 +37,6 @@ pub fn create_openapi_spec() -> OpenApi {
             Tag::new(tags::SHARE).description("Capsule Public Share API"),
             Tag::new(tags::STORAGE).description("Capsule Storage Verification API"),
             Tag::new(tags::DROPS).description("Capsule Web-Upload Drops API"),
-            Tag::new(tags::LIBRARY).description("Capsule Library API (GraphQL)"),
             Tag::new(tags::SYNC).description("Capsule Sync API (gRPC)"),
         ])
         .add_security_scheme(
@@ -59,13 +57,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     {
         v1_router = v1_router.push(
             Router::with_path("auth").push(auth::get_router(conn.clone(), &env.server).await?),
-        );
-    }
-    #[cfg(feature = "library")]
-    {
-        v1_router = v1_router.push(
-            Router::with_path("library")
-                .push(library::get_router(conn.clone(), &env.server, (&env.server).into()).await?),
         );
     }
     #[cfg(feature = "upload")]
@@ -177,7 +168,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
 /// is restated here.
 ///
 /// Deliberately absent (each is invisible to salvo-oapi and so carries no schema):
-/// - the GraphQL `library` surface (retiring; not OpenAPI),
 /// - the gRPC `sync` service (bare `#[handler]` goals),
 /// - the media share (`/s`), guest-drop (`/u`, `/drops`), and `.well-known` routers, and
 ///   the passkey routes — all bare `#[handler]`s (the recorded known limitation).
@@ -211,8 +201,6 @@ pub fn openapi_router() -> Router {
 // Re-export dependency crates if needed by binaries
 #[cfg(feature = "auth")]
 pub use auth;
-#[cfg(feature = "library")]
-pub use library;
 #[cfg(feature = "media")]
 pub use media;
 #[cfg(feature = "sync")]

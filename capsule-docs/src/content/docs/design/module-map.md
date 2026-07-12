@@ -17,7 +17,6 @@ The mapping reflects the *design intent*. Modules not yet implemented are annota
 | `capsule-core-ffi`        | uniffi bindings crate for native Swift/Kotlin consumers (sidecar `Catalog` surface; the `HardwareSigner` foreign trait ships under `capsule-core`'s `ffi` feature) |
 | `capsule-api`             | Server entry-point + routing                                                                                      |
 | `capsule-api-auth`        | Authentication, sessions, OIDC, device directory                                                                  |
-| `capsule-api-library`     | **Legacy** GraphQL API for UI queries — frozen and retiring; rich queries move client-side onto `library.sqlite` (see [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)) |
 | `capsule-api-upload`      | TUS-like resumable upload protocol server                                                                         |
 | `capsule-api-media`       | Media serving (ciphertext blobs, public shares)                                                                   |
 | `capsule-api-sync`        | gRPC sync API + federation                                                                                        |
@@ -80,8 +79,6 @@ Hardware-key adapters do **not** live in `capsule-sdk`: the `Signer`/`HardwareSi
 | `capsule-api` (routing)                              | [Filesystem — Server](/design/filesystem/server/)                                    | Smoke                                       |
 | `capsule-api-auth::{oidc,session,claims,roles}`      | [Authentication](/design/authentication/), [Authorization](/design/authorization/)   | Unit + Smoke (testcontainer Postgres/Valkey) |
 | `capsule-api-auth::devices` (planned for enrollment) | [Device Enrollment](/design/device-enrollment/)                                      | Smoke                                       |
-| `capsule-api-library::schema::*` (legacy, retiring)  | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
-| `capsule-api-library::loaders` (legacy, retiring)    | [API Surfaces](/design/api-surfaces/#legacy-graphql-retiring)                        | frozen (no new surface)                     |
 | `capsule-api-upload`                                 | [Import — Upload Protocol](/design/import/upload-protocol/)                          | Unit + Smoke + 1 E2E                        |
 | `capsule-api-upload::ops` (planned)                  | [Authorization](/design/authorization/#the-lifecycle-write-surface), [Threat Model — Validation](/design/threat-model/validation/) | Unit + Smoke (+ E2E case 7)                 |
 | `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
@@ -130,7 +127,7 @@ Navigation from a design doc back to where the code lives.
 | [Internationalization](/design/i18n/)                               | `capsule-i18n` (runtime) + `xtask::i18n` (codegen) + `locales/` source + per-platform generated catalogs                     |
 | [Versioning](/design/versioning/)                                   | Cross-cutting: `capsule-api` (header enforcement), `capsule-core::crypto::mls` (upgrade ceremony), `capsule-api-migration`    |
 | [Backup and Recovery](/design/backup-recovery/)                     | `capsule-core::backup`, `capsule-api-auth` (escrow surface, planned)                                                          |
-| [Metadata](/design/metadata/)                                       | `capsule-core::{metadata,sidecar,exif}`, `capsule-api-library::schema`                                                        |
+| [Metadata](/design/metadata/)                                       | `capsule-core::{metadata,sidecar,exif}`                                                                                       |
 | [Filesystem — Server](/design/filesystem/server/)                   | `capsule-api`, `capsule-api-entity`, blob store glue                                                                          |
 | [Filesystem — Client](/design/filesystem/client/)                   | `capsule-core::{library,db}`, per-platform native code                                                                        |
 | [Filesystem — Maintenance](/design/filesystem/maintenance/)         | `capsule-core::library::{scrub,rebuild,trash}`, server-side scrub in `capsule-api-upload`                                     |

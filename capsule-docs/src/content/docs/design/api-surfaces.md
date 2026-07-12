@@ -33,15 +33,13 @@ Two consequences worth stating plainly:
 - **REST + OpenAPI** for every request/response surface: the OpenAPI **3.1** schema is the machine-readable contract that generates `capsule-sdk`'s typed REST client via `spargen`, our in-house generator (in development; SLICES.md `S-D8`). Progenitor was dropped because it consumes OpenAPI 3.0 only, forcing a lossy 3.1→3.0 down-conversion — we do not downgrade schemas. A plain HTTP surface stays debuggable with nothing but `curl` — which matters for a self-hosted product.
 - **gRPC** only where a typed, paged feed contract earns it: the sync feed and its federation twin are one proto contract consumed by every client and every peer server, with the signed manifest traveling as opaque canonical CBOR inside it (never re-modeled as proto fields — re-encoding would detach it from its signatures).
 
-## Legacy: GraphQL (retiring)
+## Legacy: GraphQL (removed)
 
-`capsule-api-library` exposes an `async-graphql` schema at `/v1/library`. It predates the E2EE key-free server model and is **retiring**, not evolving:
+The `capsule-api-library` crate exposed an `async-graphql` schema at `/v1/library`. It predated the E2EE key-free server model and was **removed** in slice S-G1 (repo-root `SLICES.md`); no GraphQL surface exists. It was never evolving, for reasons that also foreclose reviving it:
 
-- Its resolvers presume a server that can read content (people, faces, smart tags, memories server-side) — structurally impossible under the [threat model](/design/threat-model/); the key-free replacements are client-side ML ([AI/ML](/design/ai/)) and client-side views ([Organization](/design/organization/#system--smart-albums-views)).
+- Its resolvers presumed a server that can read content (people, faces, smart tags, memories server-side) — structurally impossible under the [threat model](/design/threat-model/); the key-free replacements are client-side ML ([AI/ML](/design/ai/)) and client-side views ([Organization](/design/organization/#system--smart-albums-views)).
 - The generated SDK is OpenAPI-derived and cannot drive GraphQL, so the surface was never consumable by the client stack the design commits to.
-- The query role it aimed at is served client-side over `library.sqlite` (above), fed by the sync feed.
-
-The crate stays frozen (compiling, unmounted from new work) until the client-side query path reaches parity; retirement is an explicit slice in the repo-root `SLICES.md`. New surfaces MUST NOT be added to it.
+- The query role it aimed at is served client-side over `library.sqlite` (above), fed by the sync feed — the parity precondition that unblocked retirement.
 
 ## Negotiation Across Transports
 

@@ -1,12 +1,11 @@
 # Capsule SDK
 
-SDK for Capsule API. Assess all Capsule APIs statelessly via one library only. Note this SDK currently is for Rust and rather than supporting other languages via bindings, we recommend generating the respective OpenAPI, GraphQL, gRPC, etc. clients via the coresponding API specifications you need with tools from the native language.
+SDK for Capsule API. Assess all Capsule APIs statelessly via one library only. Note this SDK currently is for Rust and rather than supporting other languages via bindings, we recommend generating the respective OpenAPI, gRPC, etc. clients via the coresponding API specifications you need with tools from the native language.
 
 ## APIs Supported
 
 - [Auth](../capsule-api/auth/README.md)
-<!-- - [GraphQL](../capsule-api/graphql/README.md)
-- [Upload](../capsule-api/upload/README.md)
+<!-- - [Upload](../capsule-api/upload/README.md)
 - [Metadata](../capsule-api/metadata/README.md) -->
 
 ## Development

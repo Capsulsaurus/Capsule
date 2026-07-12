@@ -215,31 +215,6 @@ impl Writer for GetAssetResponses {
 }
 ```
 
-### GraphQL (async-graphql)
-
-Use `async_graphql::Result<T>` which wraps errors appropriately:
-
-```rust
-#[Object]
-impl AssetQuery {
-    async fn get_asset(&self, ctx: &Context<'_>, id: ID) -> Result<AssetMetadata> {
-        let db = ctx.data::<DatabaseConnection>()?;
-        let user = ctx.data::<UserContext>()?;
-        
-        let asset = AssetService::find_by_id(db, &id.to_string())
-            .await?
-            .ok_or_else(|| Error::new("Asset not found"))?;
-        
-        // Permission check
-        if !user.can_access(&asset) {
-            return Err(Error::new("Access denied"));
-        }
-        
-        Ok(asset.into())
-    }
-}
-```
-
 ## Logging Best Practices
 
 ### Structured Logging
@@ -337,7 +312,7 @@ To ease auditing sensitive dependencies/crates, we enforce the following hierarc
 
 ```plaintext
 capsule-api
-capsule-api-library; capsule-api-media; capsule-api-sync; capsule-api-upload; capsule-api-auth
+capsule-api-media; capsule-api-sync; capsule-api-upload; capsule-api-auth
 capsule-api-service; capsule-api-model; capsule-api-environment
 capsule-api-entity; capsule-api-migration
 

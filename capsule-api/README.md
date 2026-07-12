@@ -5,7 +5,6 @@ This is API service for all Capsule clients, written in Rust.
 There are multiple servable components (built together for development but separately for production):
 
 - [`auth`](auth/README.md): Federated authentication and user management (REST)
-- [`library`](library/README.md): Client library operations - assets, albums, search (GraphQL)
 - [`media`](media/README.md): High-performance media serving (REST)
 - [`upload`](upload/README.md): High-performance, resumable upload server (REST+TUS)
 - [`sync`](sync/README.md): Bulk library sync for mobile/desktop clients (gRPC)
@@ -45,10 +44,9 @@ _We assume Linux-based systems for this service due to use of platform-specific 
 
 ### Generating API specifications
 
-There are three API specifications that programatically describe the API:
+There are two API specifications that programatically describe the API:
 
 - `openapi.json`: OpenAPI specification for REST APIs. Run `cargo run --bin gen_openapi --features=full -- ./openapi.json` to generate.
-- `schema.graphql`: GraphQL schema for library GraphQL API. Run `cargo run --bin gen_graphql_schema > schema.graphql` in [library](./library/) to generate.
 - `metadata.proto`: Protocol Buffers schema for the sync gRPC API. See [sync/proto](./sync/proto/) for the definitions.
 
 ### Testing
@@ -72,8 +70,6 @@ Most tests are written to require minimal system dependencies. However, some are
   - _Append feature flags to enable specific parts of server_
 - The following endpoints should be up:
   - Auth: <http://localhost:3000/v1/auth>
-  - Library (GraphQL): <http://localhost:3000/v1/library>
-    - GraphiQL (debug build only): <http://localhost:3000/v1/library/playground>
   - Media: <http://localhost:3000/v1/media>
   - Upload: <http://localhost:3000/v1/upload>
   - Sync (gRPC): <http://localhost:3000/v1/sync> (requires H2C/gRPC client)

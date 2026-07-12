@@ -1,6 +1,6 @@
 ---
 title: Architecture
-description: How Capsule combines gRPC, GraphQL, TUS, and more to deliver a high-performance and robust API.
+description: How Capsule combines gRPC, REST/OpenAPI, TUS, and more to deliver a high-performance and robust API.
 ---
 
 Capsule is a cross-platform photo service designed for professional and enthusiast photographers who expect fast syncing, seamless uploads, and powerful search—regardless of device or network conditions.
@@ -24,10 +24,8 @@ To achieve this, Capsule employs a **hybrid API strategy** that balances perform
 | Technology | Use Case | Benefits |
 |------------|----------|----------|
 | **gRPC + Protocol Buffers** | Bulk metadata sync, initial sync, delta updates | - 60–80% smaller payloads than JSON<br>- Highly efficient for syncing thousands of records<br>- Strongly typed to reduce data corruption |
-| **GraphQL** | UI queries, search, and filtering | - Ideal for flexible UI data needs<br>- Reduces API iteration cycles<br>- Great developer experience for frontend teams |
+| **REST + OpenAPI 3.1** | Request/response surfaces (auth, media, upload control); UI queries answered client-side over the synced `library.sqlite` | - Debuggable with plain HTTP tooling<br>- Generates the typed `capsule-sdk` REST client<br>- No server-readable content required (key-free model) |
 | **HTTP + TUS Protocol** | Uploading and downloading original photo assets | - Resume-capable uploads for poor networks<br>- CDN-compatible<br>- Built for large file transfers |
-| **WebSockets + Protocol Buffers** | Real-time sync status, presence, notifications | - Efficient binary messaging<br>- Reuses existing protobuf models<br>- Low-latency delivery for system-level events |
-| **GraphQL Subscriptions** | User-facing real-time events (comments, shares, collab) | - Easy to use in UI clients<br>- Strong typing<br>- Filtering and selective subscriptions |
 | **Offline-First Architecture** | Local caching, editing, and sync | - Guarantees smooth experience regardless of connectivity<br>- Local-first UX with background resolution and merge |
 
 ### Some Technical Notes

@@ -3,8 +3,8 @@
  *
  * It consumes the `capsule.sync.v1` feed over gRPC-web, validates-then-applies each page
  * into the client-side `SyncStore` (the browser's `library.sqlite` analogue), persists the
- * snapshot, and answers the gateway's read queries from that store. There is NO GraphQL and
- * the server decrypts nothing (api-surfaces design doc): the feed carries opaque manifests,
+ * snapshot, and answers the gateway's read queries from that store. There is no server-side
+ * query surface and the server decrypts nothing (api-surfaces design doc): the feed carries opaque manifests,
  * ciphertext metadata and blob content addresses, and the browser holds no album keys.
  *
  * Consequently the queries return KEY-FREE SHELLS. What is real and honest here: asset and
@@ -14,9 +14,9 @@
  * thumbhashes, locations, durations, and any renderable imagery (blobs are ciphertext with
  * no in-browser decrypt path yet — gateway.ts defers that wasm boundary). Those display
  * fields are filled with safe placeholders and documented in the S-D6 report; they light up
- * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (GraphQL retirement)
- * needs query PARITY on this real path — which the key-free shells provide for the aggregate
- * UI — not decrypted content.
+ * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (legacy GraphQL surface
+ * retirement) required query PARITY on this real path — which the key-free shells provide for the
+ * aggregate UI — not decrypted content; that surface is now removed.
  */
 
 import type { Album, Asset } from '@/domain';

@@ -2,7 +2,6 @@
 members = [
     "capsule-api",
     "capsule-api/auth",
-    "capsule-api/library",
     "capsule-api/media",
     "capsule-api/service",
     "capsule-api/entity",
@@ -25,7 +24,6 @@ members = [
 default-members = [
     "capsule-api",
     "capsule-api/auth",
-    "capsule-api/library",
     "capsule-api/media",
     "capsule-api/service",
     "capsule-api/entity",
