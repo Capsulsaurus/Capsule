@@ -36,6 +36,7 @@ mls = [
     "dep:openmls_traits",
     "dep:openmls_libcrux_crypto",
     "dep:openmls_basic_credential",
+    "dep:openmls_memory_storage",
 ]
 # `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
 # native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
@@ -145,6 +146,10 @@ openmls = { version = "0.8.1", default-features = false, features = [
 openmls_traits = { version = "0.5", optional = true }
 openmls_libcrux_crypto = { version = "0.3.1", optional = true }
 openmls_basic_credential = { version = "0.5", optional = true }
+# The OpenMLS storage provider Capsule owns (rather than the libcrux provider's private one), so
+# durable group state serializes for `OpenMlsAuthority::export_state`/`import_state` (slice S-X2).
+# Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
+openmls_memory_storage = { version = "0.5.0", optional = true }
 
 # ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
 # RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system

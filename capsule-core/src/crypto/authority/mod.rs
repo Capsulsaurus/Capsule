@@ -31,7 +31,11 @@ mod reference;
 mod openmls_authority;
 
 #[cfg(feature = "mls")]
-pub use openmls_authority::{OpenMlsAuthority, OpenMlsAuthorityError, PINNED_CIPHERSUITE_ID};
+pub use openmls_authority::{
+    AddOutcome, AlbumHistoryBundle, AlbumKeyDistribution, AmkHistoryEntry, HistoryPolicy,
+    MlsDeviceIdentity, OpenMlsAuthority, OpenMlsAuthorityError, PINNED_CIPHERSUITE_ID,
+    RemoveOutcome, WriteTierDistribution,
+};
 pub use reference::ReferenceAuthority;
 use uuid::Uuid;
 

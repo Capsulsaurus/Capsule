@@ -130,7 +130,7 @@ its slice.
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
 | S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | done    |
-| S-X2  | MLS membership + Welcome/history delivery            | crypto/mls      | S-X1             | L    | blocked |
+| S-X2  | MLS membership + Welcome/history delivery            | crypto/mls      | S-X1             | L    | done    |
 | S-X3  | Album upgrade ceremony + MLS resilience              | crypto/mls      | S-X2             | L    | blocked |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
 | S-Z2  | Provider migration user guides (docs site)           | design          | S-B6             | S    | done*   |
@@ -1513,6 +1513,25 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   the MLS backend is available once S-X1 lands `OpenMlsAuthority`). Enables organization's
   invitation surface, moderation's per-user block, enrollment's group joins (their docs
   link to the MLS note).
+- **Landed:** the four ceremonies on `OpenMlsAuthority` over live OpenMLS 0.8.1
+  commits/Welcome — add (user/device), remove+re-key, self-update rotation,
+  join-via-Welcome — behind the same `&dyn AlbumAuthority` seam (`verify_asset`
+  untouched). `AlbumKeyDistribution { amk_version, amk_bytes }` delivers AMK read
+  keys over MLS application messages (steady-state broadcast + join-time history
+  batch); per-album `HistoryPolicy` (`Full | Capped(n)`) fixed at creation.
+  Write-tier keys are **minted by the committer and distributed**, never
+  exporter-derived: public half attested in the commit's authenticated AAD, private
+  half via `WriteTierDistribution` to the `writers()` seam (all members today —
+  the filter narrows to per-writer delivery when a roles model lands), so signing
+  capability is never derivable from group state. Hybrid MLS↔device-identity
+  LeafNode binding (device DSK Ed25519+ML-DSA over the MLS leaf key, checked
+  against the device directory). Durable group persistence via an owned
+  serializable provider + `export_state`/`import_state` CBOR. Accepted deferrals:
+  per-receiver re-verification of add-commit leaf bindings; `history_policy` as a
+  join parameter (not yet a GroupContext extension); capped-out prior epochs read
+  as `WrongEpoch` (a distinct placeholder outcome would touch `verify_asset`).
+  Note: several OpenMLS 0.8 serialization surfaces are `test-utils`-gated —
+  persistence works around them via public fields + ungated codecs (gates table).
 
 ### S-X3 — Album upgrade ceremony + MLS resilience
 
