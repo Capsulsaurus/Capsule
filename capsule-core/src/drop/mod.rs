@@ -19,9 +19,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::crypto::encryption::{open_blob, seal_blob, stream};
+use crate::crypto::encryption::stream::NONCE_PREFIX_LEN;
+use crate::crypto::encryption::{open_blob, seal_blob_with_nonce, stream};
 use crate::crypto::hash::Hash32;
-use crate::crypto::keys::{DEK_CIPHERTEXT_LEN, DekKeypair, encapsulate_to_public};
+use crate::crypto::keys::{
+    DEK_CIPHERTEXT_LEN, DekKeypair, ESEED_LEN, encapsulate_to_public_derand,
+};
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::provenance::AssetManifest;
 use crate::crypto::{pwkdf, rng};
@@ -253,21 +256,58 @@ pub fn seal_drop(
     drop_pubkey: &[u8],
     content_type: &str,
 ) -> Result<SealedDrop, DropError> {
-    // 1. Draw a random 32-byte asset key K from the CSPRNG.
+    // The production path draws every value the seal randomizes — the asset key `K`, the STREAM
+    // nonce prefix, the KEM encapsulation seed, and the key-wrap nonce — from the OS CSPRNG, then
+    // delegates to the deterministic core so the two share one implementation.
     let k = rng::random_array::<32>();
+    let nonce_prefix = rng::random_array::<NONCE_PREFIX_LEN>();
+    let eseed = rng::random_array::<ESEED_LEN>();
+    let blob_nonce = rng::random_array::<12>();
+    seal_drop_derand(
+        plaintext,
+        drop_pubkey,
+        content_type,
+        &k,
+        &nonce_prefix,
+        &eseed,
+        &blob_nonce,
+    )
+}
 
-    // 2. STREAM-encrypt the asset under K (fresh nonce prefix), hashing the ciphertext.
-    let (enc, ciphertext) = stream::encrypt_asset_vec_full(&k, plaintext);
+/// The deterministic core of [`seal_drop`]: every randomized value is supplied explicitly.
+///
+/// **Exposed for known-answer testing only** — the public path is [`seal_drop`], which draws all
+/// four values from the CSPRNG. Feeding fixed `k`, `nonce_prefix`, `eseed`, and `blob_nonce`
+/// makes the sealed bytes reproducible so the browser (WASM) seal can be proven byte-identical to
+/// this Rust implementation across the language boundary (the S-D3 cross-language KAT), and so the
+/// fixture that a Rust adopter consumes is a pure function of its inputs. **Never** reuse a
+/// `(k, nonce_prefix)` pair for two distinct plaintexts (STREAM nonce reuse) outside a KAT.
+///
+/// - `k` — the 32-byte asset key.
+/// - `nonce_prefix` — the 7-byte STREAM nonce prefix.
+/// - `eseed` — the 64-byte X-Wing encapsulation seed (`m ‖ x25519-ephemeral`).
+/// - `blob_nonce` — the 12-byte AEAD nonce wrapping `K` under the KEM shared secret.
+pub fn seal_drop_derand(
+    plaintext: &[u8],
+    drop_pubkey: &[u8],
+    content_type: &str,
+    k: &[u8; 32],
+    nonce_prefix: &[u8; NONCE_PREFIX_LEN],
+    eseed: &[u8; ESEED_LEN],
+    blob_nonce: &[u8; 12],
+) -> Result<SealedDrop, DropError> {
+    // 1. STREAM-encrypt the asset under K with the given nonce prefix, hashing the ciphertext.
+    let (enc, ciphertext) = stream::encrypt_asset_vec_with_prefix(k, *nonce_prefix, plaintext);
 
-    // 3. Encapsulate K to the Drop Key public half (KEM-DEM): X-Wing ciphertext ‖ seal(ss, K).
-    let (kem_ct, ss) = encapsulate_to_public(drop_pubkey)
+    // 2. Encapsulate K to the Drop Key public half (KEM-DEM): X-Wing ciphertext ‖ seal(ss, K).
+    let (kem_ct, ss) = encapsulate_to_public_derand(drop_pubkey, eseed)
         .map_err(|_| DropError::Crypto("drop key encapsulation failed"))?;
-    let wrapped_k = seal_blob(&ss, &k);
+    let wrapped_k = seal_blob_with_nonce(&ss, *blob_nonce, k);
     let mut kem_ct_dem = Vec::with_capacity(kem_ct.len() + wrapped_k.len());
     kem_ct_dem.extend_from_slice(&kem_ct);
     kem_ct_dem.extend_from_slice(&wrapped_k);
 
-    // 4. Emit the unsigned descriptor beside the ciphertext.
+    // 3. Emit the unsigned descriptor beside the ciphertext.
     let descriptor = DropDescriptor {
         content_type: content_type.to_owned(),
         plaintext_size: enc.plaintext_size,
@@ -495,6 +535,56 @@ mod tests {
             .unwrap(),
             plaintext,
         );
+    }
+
+    /// `seal_drop_derand` is a pure function of its inputs (byte-reproducible), and its output is
+    /// adoptable exactly like a CSPRNG-sealed drop — the property the S-D3 cross-language KAT and
+    /// its Rust adopter rely on (the browser reproduces these same bytes; the Rust side adopts
+    /// them). Also asserts the derandomized seal agrees with the CSPRNG path's *shape*.
+    #[test]
+    fn seal_drop_derand_is_reproducible_and_adoptable() {
+        let drop_key = DekKeypair::from_seed(&[0x5D; 32]);
+        let pk = drop_key.public_bytes();
+        let plaintext = b"a deterministic guest drop, sealed under fixed key material";
+        let k = [0x11; 32];
+        let nonce_prefix = [0x22; NONCE_PREFIX_LEN];
+        let eseed = [0x33; ESEED_LEN];
+        let blob_nonce = [0x44; 12];
+
+        let a = seal_drop_derand(
+            plaintext,
+            &pk,
+            "image/png",
+            &k,
+            &nonce_prefix,
+            &eseed,
+            &blob_nonce,
+        )
+        .unwrap();
+        let b = seal_drop_derand(
+            plaintext,
+            &pk,
+            "image/png",
+            &k,
+            &nonce_prefix,
+            &eseed,
+            &blob_nonce,
+        )
+        .unwrap();
+
+        // Byte-for-byte reproducible: identical descriptor and ciphertext.
+        assert_eq!(a.descriptor, b.descriptor);
+        assert_eq!(a.ciphertext, b.ciphertext);
+        assert_eq!(a.descriptor.nonce_prefix, nonce_prefix);
+        assert_eq!(a.descriptor.kem_ct.len(), EXPECTED_KEM_CT_LEN);
+
+        // The Drop Key holder recovers K and STREAM-decrypt returns the exact plaintext — the
+        // deterministic seal is adoptable just like the CSPRNG path.
+        let recovered = open_drop_key(&drop_key, &a.descriptor.kem_ct).unwrap();
+        assert_eq!(recovered, k);
+        let back =
+            decrypt_asset_vec(&recovered, &a.descriptor.nonce_prefix, &a.ciphertext).unwrap();
+        assert_eq!(back, plaintext);
     }
 
     /// Doc "Opaque-id entropy (unit)": generated upload-link ids are ≥128-bit CSPRNG values

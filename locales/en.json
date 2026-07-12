@@ -494,5 +494,129 @@
     "share.error.body": {
         "message": "Something went wrong. Please try again later.",
         "context": "Guest share viewer: body for share.error.title."
+    },
+    "drop.title": {
+        "message": "Upload photos",
+        "context": "Guest drop uploader (/u/…): page heading for the contribute-only upload flow a guest reaches via an upload link."
+    },
+    "drop.subtitle": {
+        "message": "You've been invited to contribute to a private album.",
+        "context": "Guest drop uploader: subheading explaining the guest may only add files, not view the album."
+    },
+    "drop.upload_only_badge": {
+        "message": "Upload only",
+        "context": "Guest drop uploader: badge marking the page as contribute-only — an upload link never grants read access."
+    },
+    "drop.privacy_note": {
+        "message": "Your files are encrypted in your browser before they are uploaded. The server never sees your originals, and this page can't show you anything already in the album.",
+        "context": "Guest drop uploader: reassurance that files are end-to-end encrypted client-side and the link grants no read access."
+    },
+    "drop.incomplete.title": {
+        "message": "This upload link is incomplete",
+        "context": "Guest drop uploader: shown when the URL is missing its '#' fragment, without which files cannot be encrypted for the album owner."
+    },
+    "drop.incomplete.body": {
+        "message": "The key needed to encrypt your upload is missing from the link.",
+        "context": "Guest drop uploader: body for drop.incomplete.title — the fragment after '#' (the Drop Key) was not present in the URL."
+    },
+    "drop.passphrase.title": {
+        "message": "Password required",
+        "context": "Guest drop uploader: title of the password prompt for a password-protected upload link. The password is checked with a proof computed in the browser and never sent to the server."
+    },
+    "drop.passphrase.body": {
+        "message": "This upload link is protected with a password.",
+        "context": "Guest drop uploader: explanatory body above the password input."
+    },
+    "drop.passphrase.label": {
+        "message": "Password",
+        "context": "Guest drop uploader: field label for the password input."
+    },
+    "drop.passphrase.wrong": {
+        "message": "That password didn't work. Try again.",
+        "context": "Guest drop uploader: error shown when the server rejects the password proof (wrong password)."
+    },
+    "drop.picker.label": {
+        "message": "Choose photos to upload",
+        "context": "Guest drop uploader: label for the file picker."
+    },
+    "drop.picker.button": {
+        "message": "Choose files",
+        "context": "Guest drop uploader: button that opens the native file picker."
+    },
+    "drop.picker.empty": {
+        "message": "No files selected yet.",
+        "context": "Guest drop uploader: placeholder shown before the guest has chosen any files."
+    },
+    "drop.upload.button": {
+        "message": "{count, plural, one {Upload # file} other {Upload # files}}",
+        "context": "Guest drop uploader: button that seals and uploads the selected files. {count} is how many files are selected."
+    },
+    "drop.upload.busy": {
+        "message": "Uploading…",
+        "context": "Guest drop uploader: label on the upload button while uploads are in progress."
+    },
+    "drop.file.pending": {
+        "message": "Waiting",
+        "context": "Guest drop uploader: per-file status before its upload has started."
+    },
+    "drop.file.sealing": {
+        "message": "Encrypting…",
+        "context": "Guest drop uploader: per-file status while the file is being encrypted in the browser."
+    },
+    "drop.file.uploading": {
+        "message": "Uploading… {percent}%",
+        "context": "Guest drop uploader: per-file status while bytes are being uploaded. {percent} is a whole-number percentage."
+    },
+    "drop.file.done": {
+        "message": "Uploaded",
+        "context": "Guest drop uploader: per-file status once the file has been uploaded successfully."
+    },
+    "drop.file.failed": {
+        "message": "Failed",
+        "context": "Guest drop uploader: per-file status when the upload failed."
+    },
+    "drop.file.retry": {
+        "message": "Retry",
+        "context": "Guest drop uploader: button to retry a single failed file upload."
+    },
+    "drop.summary": {
+        "message": "{done} of {total} uploaded",
+        "context": "Guest drop uploader: overall progress summary. {done} and {total} are file counts."
+    },
+    "drop.done.title": {
+        "message": "Thanks for your upload",
+        "context": "Guest drop uploader: heading shown once every selected file has uploaded."
+    },
+    "drop.done.body": {
+        "message": "Your files have been sent for the album owner to review. They won't appear until the owner adds them.",
+        "context": "Guest drop uploader: body for drop.done.title — explains drops are staged for the owner's review, not added automatically."
+    },
+    "drop.error.unavailable": {
+        "message": "This upload link is unavailable. It may have expired, been revoked, or never existed.",
+        "context": "Guest drop uploader: failure message for a not-found, revoked, or expired link — deliberately indistinguishable so a probe cannot tell which case applies."
+    },
+    "drop.error.rate_limited": {
+        "message": "Too many attempts. Please wait a moment and try again.",
+        "context": "Guest drop uploader: failure message when the server rate-limits upload attempts."
+    },
+    "drop.error.too_large": {
+        "message": "This file is too large to upload here.",
+        "context": "Guest drop uploader: failure message when a file exceeds the link's or server's size limit."
+    },
+    "drop.error.quota": {
+        "message": "There isn't enough space to accept this upload right now.",
+        "context": "Guest drop uploader: failure message when the album owner's storage quota can't accept the file."
+    },
+    "drop.error.cap": {
+        "message": "This link has reached its upload limit.",
+        "context": "Guest drop uploader: failure message when the link's file-count or total-byte cap is exhausted."
+    },
+    "drop.error.unsupported_type": {
+        "message": "This file type can't be uploaded here.",
+        "context": "Guest drop uploader: failure message when a file's type is not accepted by the link."
+    },
+    "drop.error.generic": {
+        "message": "Something went wrong uploading this file. Please try again.",
+        "context": "Guest drop uploader: generic per-file upload failure message."
     }
 }

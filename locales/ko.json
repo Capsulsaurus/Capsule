@@ -475,5 +475,98 @@
     },
     "share.error.body": {
         "message": "Something went wrong. Please try again later."
+    },
+    "drop.title": {
+        "message": "Upload photos"
+    },
+    "drop.subtitle": {
+        "message": "You've been invited to contribute to a private album."
+    },
+    "drop.upload_only_badge": {
+        "message": "Upload only"
+    },
+    "drop.privacy_note": {
+        "message": "Your files are encrypted in your browser before they are uploaded. The server never sees your originals, and this page can't show you anything already in the album."
+    },
+    "drop.incomplete.title": {
+        "message": "This upload link is incomplete"
+    },
+    "drop.incomplete.body": {
+        "message": "The key needed to encrypt your upload is missing from the link."
+    },
+    "drop.passphrase.title": {
+        "message": "Password required"
+    },
+    "drop.passphrase.body": {
+        "message": "This upload link is protected with a password."
+    },
+    "drop.passphrase.label": {
+        "message": "Password"
+    },
+    "drop.passphrase.wrong": {
+        "message": "That password didn't work. Try again."
+    },
+    "drop.picker.label": {
+        "message": "Choose photos to upload"
+    },
+    "drop.picker.button": {
+        "message": "Choose files"
+    },
+    "drop.picker.empty": {
+        "message": "No files selected yet."
+    },
+    "drop.upload.button": {
+        "message": "{count, plural, one {Upload # file} other {Upload # files}}"
+    },
+    "drop.upload.busy": {
+        "message": "Uploading…"
+    },
+    "drop.file.pending": {
+        "message": "Waiting"
+    },
+    "drop.file.sealing": {
+        "message": "Encrypting…"
+    },
+    "drop.file.uploading": {
+        "message": "Uploading… {percent}%"
+    },
+    "drop.file.done": {
+        "message": "Uploaded"
+    },
+    "drop.file.failed": {
+        "message": "Failed"
+    },
+    "drop.file.retry": {
+        "message": "Retry"
+    },
+    "drop.summary": {
+        "message": "{done} of {total} uploaded"
+    },
+    "drop.done.title": {
+        "message": "Thanks for your upload"
+    },
+    "drop.done.body": {
+        "message": "Your files have been sent for the album owner to review. They won't appear until the owner adds them."
+    },
+    "drop.error.unavailable": {
+        "message": "This upload link is unavailable. It may have expired, been revoked, or never existed."
+    },
+    "drop.error.rate_limited": {
+        "message": "Too many attempts. Please wait a moment and try again."
+    },
+    "drop.error.too_large": {
+        "message": "This file is too large to upload here."
+    },
+    "drop.error.quota": {
+        "message": "There isn't enough space to accept this upload right now."
+    },
+    "drop.error.cap": {
+        "message": "This link has reached its upload limit."
+    },
+    "drop.error.unsupported_type": {
+        "message": "This file type can't be uploaded here."
+    },
+    "drop.error.generic": {
+        "message": "Something went wrong uploading this file. Please try again."
     }
 }

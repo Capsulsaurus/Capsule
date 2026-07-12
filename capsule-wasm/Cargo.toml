@@ -3,7 +3,7 @@ name = "capsule-wasm"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path (slice S-E1)."
+description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path (slice S-E1) and the contribute-only guest drop sealing path (slice S-D3)."
 
 [lib]
 # `cdylib` is the wasm artifact `wasm-bindgen` post-processes into the JS glue the web app and

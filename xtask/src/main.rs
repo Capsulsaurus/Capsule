@@ -14,6 +14,7 @@
 //!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a
 //!   locale's translation-data file.
 
+mod drop_kat;
 mod i18n;
 mod share_kat;
 mod translate_readme;
@@ -26,10 +27,13 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | translate-readme [--check | --extract] | share-kat [<out-path>]>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>]>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
+
+/// Default output path (repo-relative) for the guest-drop KAT fixture the bun test consumes.
+const DROP_KAT_OUT: &str = "capsule-web/src/generated/drop-kat.json";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -59,6 +63,10 @@ fn main() -> Result<()> {
         Some("share-kat") => {
             let out = args.next().unwrap_or_else(|| SHARE_KAT_OUT.to_string());
             share_kat::run(&repo_root(), &out)
+        }
+        Some("drop-kat") => {
+            let out = args.next().unwrap_or_else(|| DROP_KAT_OUT.to_string());
+            drop_kat::run(&repo_root(), &out)
         }
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),

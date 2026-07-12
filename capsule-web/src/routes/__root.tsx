@@ -77,15 +77,18 @@ export const Route = createRootRoute({
             window.toggleDevtools = () => setShowDevtools((old) => !old);
         }, []);
 
-        // The guest share viewer (/s/…) is a full-page, unauthenticated surface: it renders
-        // outside the app chrome (no sidebar, header, or auth gate) so a recipient with no
-        // Capsule account sees only the shared content.
-        const isGuestShare = location.pathname.startsWith('/s/');
+        // The guest surfaces — the share viewer (/s/…) and the drop uploader (/u/…) — are
+        // full-page, unauthenticated pages: they render outside the app chrome (no sidebar,
+        // header, or auth gate) so someone with no Capsule account sees only the shared content
+        // or the contribute-only upload flow.
+        const isGuest =
+            location.pathname.startsWith('/s/') ||
+            location.pathname.startsWith('/u/');
 
         return (
             <QueryClientProvider client={queryClient}>
                 <AuthProvider>
-                    {isGuestShare ? (
+                    {isGuest ? (
                         <main className="min-h-screen bg-background">
                             <Outlet />
                         </main>

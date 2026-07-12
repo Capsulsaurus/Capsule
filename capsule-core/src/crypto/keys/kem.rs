@@ -35,7 +35,7 @@ pub const DEK_PUBLIC_LEN: usize = 1184 + 32;
 /// X-Wing ciphertext length: `ct_M (1088) ‖ ct_X (32)`.
 pub const DEK_CIPHERTEXT_LEN: usize = 1088 + 32;
 /// Length of the X-Wing encapsulation seed: ML-KEM coins `m` (32) and the X25519 ephemeral (32).
-const ESEED_LEN: usize = 64;
+pub(crate) const ESEED_LEN: usize = 64;
 const MLKEM_CT_LEN: usize = 1088;
 /// ML-KEM-768 encapsulation-key length (the `pk_M` prefix of an X-Wing public key).
 const MLKEM_PK_LEN: usize = 1184;

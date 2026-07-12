@@ -33,6 +33,9 @@ pub use hardware::{
 };
 pub use hybrid_sig::{ClassicalAlgorithm, HybridSignature, HybridSigningKey, HybridVerifyingKey};
 pub use kem::{DEK_CIPHERTEXT_LEN, DEK_PUBLIC_LEN, DekKeypair, encapsulate_to_public};
+// Derandomized encapsulation + its eseed length: crate-internal, for the deterministic
+// drop-seal known-answer path (`drop::seal_drop_derand`). Never on the public API.
+pub(crate) use kem::{ESEED_LEN, encapsulate_to_public_derand};
 pub use kem_p256::{
     DEK_P256_CIPHERTEXT_LEN, DEK_P256_PUBLIC_LEN, P256HybridDek, encapsulate_to_p256_public,
 };

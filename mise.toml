@@ -276,10 +276,17 @@ run = [
 description = "Generate the share-link cross-language KAT fixture for the web bun test"
 run = "cargo run -q -p xtask -- share-kat"
 
-# test-web loads the wasm module + the KAT fixture, so both are prerequisites.
+# Generate the deterministic cross-language guest-drop KAT fixture the bun test reproduces (slice
+# S-D3): the browser (WASM) seals, and this fixture pins the byte-identical Rust `seal_drop_derand`
+# output + the passphrase abuse-gate proof. Written to the gitignored capsule-web/src/generated/.
+[tasks.drop-kat]
+description = "Generate the guest-drop cross-language KAT fixture for the web bun test"
+run = "cargo run -q -p xtask -- drop-kat"
+
+# test-web loads the wasm module + both KAT fixtures, so all three are prerequisites.
 [tasks.test-web]
 dir = "capsule-web"
-depends = ["build-wasm", "share-kat"]
+depends = ["build-wasm", "share-kat", "drop-kat"]
 run = "bun test --pass-with-no-tests"
 
 # build-web bundles the guest share viewer, which imports the generated wasm glue.

@@ -94,7 +94,7 @@ its slice.
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server         | S-C1             | M    | done    |
 | S-D1  | SDK upload client (hand-written, stateful protocol)  | sdk/clients     | S-C1             | M    | done    |
 | S-D2  | SDK sync/download client + connection-class budget   | sdk/clients     | S-C2, S-C9       | L    | done    |
-| S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | ready   |
+| S-D3  | Web guest drop client (WASM)                         | sdk/clients     | S-A6, S-C5       | L    | done*   |
 | S-D4  | Verify-before-destroy wiring                         | sdk/clients     | S-C3, S-C15      | M    | done    |
 | S-D5  | CLI auth/sync/list                                   | sdk/clients     | S-D1, S-D2       | M    | done    |
 | S-D6  | Web server gateway (key-free reads)                  | sdk/clients     | S-D2             | L    | done    |
@@ -873,6 +873,22 @@ SDK; they never hand-roll network flows.
 - **Depends on:** S-A6, S-C5. **Done when:** E2E case 13's browser half runs (seal →
   stage → adopt on a native client → verify on a second device). **Tier:** Smoke
   (browser/WASM).
+- **Landed (done\* — live-browser smoke owed):** the `/u/{opaque-id}#{drop_pubkey}`
+  guest flow — WASM sealing (`capsule-wasm` `sealDrop`/`dropPassphraseProof`,
+  contribute-only; new deterministic `seal_drop_derand` core in `capsule-core`),
+  fragment parser (Drop Key + optional Argon2id salt/params, never sent to the
+  server), and a deliberately minimal chunked uploader speaking the S-C5 drop
+  protocol directly (octet-stream, offset/checksum headers, 4 KiB alignment,
+  progress + per-file failure UX on catalog keys; 31 new `drop.*` keys).
+  Cross-language KAT: bun/wasm `sealDropDerand` == Rust `seal_drop_derand`
+  byte-for-byte (`xtask drop-kat`), adopted end-to-end by
+  `capsule-core/tests/drop_adopt_kat.rs` (decapsulate → keywrap rewrap → signed
+  create → `verify_asset` Accept → second-member decrypt). **Contract note:** the
+  passphrase-gated fragment extension
+  `#{pubkey}~{memKib}~{tCost}~{pCost}~{saltHex}` is established here — S-A6's
+  future URL emitter must format it identically. Owed: clean-browser-profile live
+  smoke (same posture as S-E1/S-D6); 13 non-English `drop.*` entries are English
+  placeholders pending translation seeds.
 
 ### S-D4 — Verify-before-destroy wiring
 

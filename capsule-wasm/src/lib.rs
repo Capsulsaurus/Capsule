@@ -18,11 +18,26 @@
 //!    and STREAM-decrypt a served ciphertext blob to plaintext, authenticated (a tampered blob is
 //!    rejected by the AEAD tag).
 //!
-//! The surface is deliberately **open-only**: the drop-sealing browser surface is slice S-D3's,
-//! and a follow-up slice extends this crate with it. Keep new browser entry points here behind
-//! the same thin-glue discipline — the crypto itself always lives in `capsule-core`, so the two
-//! platforms stay byte-identical and the cross-language KAT (`capsule-web`'s `share-open` bun
-//! test, fed by `cargo xtask share-kat`) can prove it.
+//! The crate also carries the **inbound** guest surface (slice `S-D3`; SSoT: [Web Upload]) — the
+//! browser half of a *guest drop*. A guest opening `https://server.tld/u/{opaque-id}#{drop_pubkey}`
+//! seals each selected asset entirely client-side and can never read anything back:
+//!
+//! 4. [`seal_drop_wasm`] (`sealDrop`) — draw a fresh `K`, STREAM-encrypt the asset under it, and
+//!    KEM-encapsulate `K` to the link's Drop Key (parsed from the URL fragment, never sent to the
+//!    server). Returns a [`WasmSealedDrop`] the uploader turns into a drop session + chunks.
+//! 5. [`drop_passphrase_proof`] (`dropPassphraseProof`) — derive the Argon2id **proof** a
+//!    passphrase-gated link requires, from the passphrase + the salt/params carried in the
+//!    fragment. Byte-identical to the server's stored verifier, so the guest proves possession
+//!    without transmitting the passphrase (SSoT: [Web Upload] — Optional passphrase abuse gate).
+//!
+//! The drop surface is deliberately **contribute-only**: there is no open/decapsulate/decrypt
+//! entry point for drops (only the provisioning user's *native* client, holding the Drop Key
+//! private half, can adopt). Keep new browser entry points here behind the same thin-glue
+//! discipline — the crypto itself always lives in `capsule-core`, so the two platforms stay
+//! byte-identical and the cross-language KATs (`capsule-web`'s `share-open` / `drop-seal` bun
+//! tests, fed by `cargo xtask share-kat` / `drop-kat`) can prove it.
+//!
+//! [Web Upload]: https://docs/design/web-upload/
 //!
 //! Errors cross the boundary as a **stable machine code string** (`Error.message`), never a
 //! localized sentence — the web viewer maps the code to an i18n catalog key. Codes: see
@@ -33,6 +48,9 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::encryption::stream::{NONCE_PREFIX_LEN, decrypt_asset_vec};
+use capsule_core::crypto::primitives::Argon2Params;
+use capsule_core::crypto::pwkdf;
+use capsule_core::drop::{SealedDrop, seal_drop, seal_drop_derand};
 use capsule_core::sharing::{
     LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, SharingError, WrappedScope, open_scope,
 };
@@ -54,6 +72,10 @@ mod err {
     pub(crate) const SCOPE_UNAVAILABLE: &str = "scope_unavailable";
     /// The served ciphertext failed authentication (tamper, truncation, wrong key/prefix).
     pub(crate) const TAMPERED: &str = "tampered";
+    /// Sealing a guest drop failed — the Drop Key (URL fragment) is malformed, so encapsulation
+    /// could not run. Distinct from [`MALFORMED`] only in provenance; the viewer maps both to the
+    /// same "this link is broken" surface.
+    pub(crate) const SEAL_FAILED: &str = "seal_failed";
 }
 
 /// Map a [`SharingError`] to its stable boundary code.
@@ -177,4 +199,165 @@ impl ShareScope {
         decrypt_asset_vec(&file_key, &nonce_prefix, ciphertext)
             .map_err(|_| JsError::new(err::TAMPERED))
     }
+}
+
+// ─────────────────────────── Guest drop sealing (slice S-D3) ────────────────────────────────
+
+/// A sealed guest drop, ready for the uploader to open a drop session and stream its chunks.
+///
+/// Holds the STREAM ciphertext plus the unsigned descriptor's fields, projected across the JS
+/// boundary in exactly the wire shapes the drop endpoints expect (hex nonce prefix / ciphertext
+/// hash, base64 `kem_ct`) so the TypeScript uploader builds the request body without re-encoding
+/// crypto. Contribute-only: it exposes no way to recover `K` or decrypt — only a native adopter,
+/// holding the Drop Key private half, can do that.
+#[wasm_bindgen]
+pub struct WasmSealedDrop {
+    sealed: SealedDrop,
+}
+
+#[wasm_bindgen]
+impl WasmSealedDrop {
+    /// The declared content type (the closed-enum value passed into [`seal_drop_wasm`]).
+    #[wasm_bindgen(js_name = contentType)]
+    #[must_use]
+    pub fn content_type(&self) -> String {
+        self.sealed.descriptor.content_type.clone()
+    }
+
+    /// Total plaintext byte length (`plaintext_size`), as a JS number — the drop descriptor wire
+    /// field. A guest asset never approaches the 2^53 exact-integer ceiling.
+    #[wasm_bindgen(js_name = plaintextSize)]
+    #[must_use]
+    pub fn plaintext_size(&self) -> f64 {
+        self.sealed.descriptor.plaintext_size as f64
+    }
+
+    /// The STREAM plaintext chunk size.
+    #[wasm_bindgen(js_name = chunkSize)]
+    #[must_use]
+    pub fn chunk_size(&self) -> u32 {
+        self.sealed.descriptor.chunk_size
+    }
+
+    /// The 7-byte STREAM nonce prefix, lowercase hex (14 chars) — the descriptor wire field.
+    #[wasm_bindgen(js_name = noncePrefixHex)]
+    #[must_use]
+    pub fn nonce_prefix_hex(&self) -> String {
+        hex::encode(self.sealed.descriptor.nonce_prefix)
+    }
+
+    /// The ciphertext content-address digest, lowercase hex (64 chars) — the descriptor wire
+    /// field **and** the per-chunk / finalization checksum the uploader sends.
+    #[wasm_bindgen(js_name = ciphertextHashHex)]
+    #[must_use]
+    pub fn ciphertext_hash_hex(&self) -> String {
+        self.sealed.descriptor.ciphertext_hash.to_hex()
+    }
+
+    /// `K` encapsulated to the Drop Key (KEM-DEM), base64 — the descriptor wire field. Opaque to
+    /// the server; only the Drop Key private half opens it.
+    #[wasm_bindgen(js_name = kemCtB64)]
+    #[must_use]
+    pub fn kem_ct_b64(&self) -> String {
+        BASE64.encode(&self.sealed.descriptor.kem_ct)
+    }
+
+    /// Total ciphertext byte length — the drop session's declared `size` and the cumulative
+    /// upload target, as a JS number.
+    #[wasm_bindgen(js_name = ciphertextLen)]
+    #[must_use]
+    pub fn ciphertext_len(&self) -> f64 {
+        self.sealed.ciphertext.len() as f64
+    }
+
+    /// The STREAM ciphertext octets the uploader streams to the drop endpoint (a copy).
+    #[wasm_bindgen(js_name = ciphertext)]
+    #[must_use]
+    pub fn ciphertext(&self) -> Vec<u8> {
+        self.sealed.ciphertext.clone()
+    }
+}
+
+/// Seal one selected asset for a guest drop, entirely in the browser (slice `S-D3`).
+///
+/// - `plaintext` — the asset bytes read from the file picker.
+/// - `drop_pubkey` — the link's Drop Key public half, decoded from the URL `#{drop_pubkey}`
+///   fragment (which never reaches the server).
+/// - `content_type` — the asset's media type (validated server-side against the link's closed
+///   enum; here it is carried verbatim into the descriptor).
+///
+/// Draws a fresh `K`, STREAM-encrypts under it, and KEM-encapsulates `K` to the Drop Key. Throws
+/// `seal_failed` (as `Error.message`) if the Drop Key is malformed.
+#[wasm_bindgen(js_name = sealDrop)]
+pub fn seal_drop_wasm(
+    plaintext: &[u8],
+    drop_pubkey: &[u8],
+    content_type: &str,
+) -> Result<WasmSealedDrop, JsError> {
+    let sealed = seal_drop(plaintext, drop_pubkey, content_type)
+        .map_err(|_| JsError::new(err::SEAL_FAILED))?;
+    Ok(WasmSealedDrop { sealed })
+}
+
+/// Derandomized [`seal_drop_wasm`] — **exposed for the cross-language known-answer test only**.
+///
+/// Every value the production seal draws from the CSPRNG is supplied explicitly (`k`,
+/// `nonce_prefix`, `eseed`, `blob_nonce`, all lowercase hex) so the browser seal is byte-for-byte
+/// reproducible and can be proven identical to `capsule_core::drop::seal_drop_derand` — the Rust
+/// adopter then consumes those exact bytes (S-D3 KAT). Web app code uses [`seal_drop_wasm`], never
+/// this. Throws `malformed` on a bad-length hex field, `seal_failed` on a malformed Drop Key.
+#[wasm_bindgen(js_name = sealDropDerand)]
+pub fn seal_drop_derand_wasm(
+    plaintext: &[u8],
+    drop_pubkey: &[u8],
+    content_type: &str,
+    k_hex: &str,
+    nonce_prefix_hex: &str,
+    eseed_hex: &str,
+    blob_nonce_hex: &str,
+) -> Result<WasmSealedDrop, JsError> {
+    let k: [u8; 32] = hex_array(k_hex)?;
+    let nonce_prefix: [u8; NONCE_PREFIX_LEN] = hex_array(nonce_prefix_hex)?;
+    let eseed: [u8; 64] = hex_array(eseed_hex)?;
+    let blob_nonce: [u8; 12] = hex_array(blob_nonce_hex)?;
+    let sealed = seal_drop_derand(
+        plaintext,
+        drop_pubkey,
+        content_type,
+        &k,
+        &nonce_prefix,
+        &eseed,
+        &blob_nonce,
+    )
+    .map_err(|_| JsError::new(err::SEAL_FAILED))?;
+    Ok(WasmSealedDrop { sealed })
+}
+
+/// Derive the Argon2id **proof** a passphrase-gated upload link requires at drop-session creation.
+///
+/// The link's salt + Argon2id parameters travel in the URL fragment beside the Drop Key; the
+/// passphrase is entered by the guest and never leaves the browser. The returned lowercase-hex
+/// proof equals the server's stored verifier byte-for-byte (both are
+/// `Argon2id(passphrase, salt, params)`), so submitting it proves possession without transmitting
+/// the passphrase (SSoT: [Web Upload] — the optional-passphrase abuse gate). Throws `malformed`
+/// on a bad salt hex, `seal_failed` if the KDF parameters are invalid.
+///
+/// [Web Upload]: https://docs/design/web-upload/
+#[wasm_bindgen(js_name = dropPassphraseProof)]
+pub fn drop_passphrase_proof(
+    passphrase: &str,
+    salt_hex: &str,
+    mem_kib: u32,
+    t_cost: u32,
+    p_cost: u32,
+) -> Result<String, JsError> {
+    let salt = hex::decode(salt_hex.trim()).map_err(|_| JsError::new(err::MALFORMED))?;
+    let params = Argon2Params {
+        mem_kib,
+        t_cost,
+        p_cost,
+    };
+    let proof = pwkdf::derive_wrap_key(passphrase.as_bytes(), &salt, params)
+        .map_err(|_| JsError::new(err::SEAL_FAILED))?;
+    Ok(hex::encode(proof))
 }
