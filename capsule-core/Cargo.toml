@@ -24,7 +24,19 @@ required-features = ["ffi-bindgen"]
 # `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
-native = ["dep:rusqlite", "dep:sqlite-vec"]
+native = ["dep:rusqlite", "dep:sqlite-vec", "mls"]
+# `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
+# S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
+# (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
+# library build (CLI, FFI, tests) exercises it; **excluded** from the `wasm32-unknown-unknown`
+# sealing build (`--no-default-features`) because the libcrux provider does not target wasm32.
+# The offline `ReferenceAuthority` stays available on every build regardless of this feature.
+mls = [
+    "dep:openmls",
+    "dep:openmls_traits",
+    "dep:openmls_libcrux_crypto",
+    "dep:openmls_basic_credential",
+]
 # `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
 # native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
 # uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
@@ -118,6 +130,21 @@ zune-jpeg = { version = "0.5.15", optional = true }
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
 # build (CLI, server, tests) never compiles it.
 uniffi = { version = "0.31", optional = true }
+
+# ── MLS group layer (optional; `mls` feature, implied by `native`) ──────────
+# RFC 9420 MLS backing the live `OpenMlsAuthority`, pinned to the X-Wing PQ ciphersuite
+# `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`). The `libcrux-provider` feature
+# wires OpenMLS to Cryspen's formally-verified libcrux crypto — the only released provider
+# shipping the X-Wing suite. `openmls_libcrux_crypto` is that provider; `openmls_basic_credential`
+# supplies the leaf `SignatureKeyPair`; `openmls_traits` exposes the `Ciphersuite` type. All four
+# are host-only (libcrux does not target `wasm32-unknown-unknown`), so they sit behind `mls`,
+# which `native` implies and the wasm sealing build excludes. See `crypto::authority::openmls`.
+openmls = { version = "0.8.1", default-features = false, features = [
+    "libcrux-provider",
+], optional = true }
+openmls_traits = { version = "0.5", optional = true }
+openmls_libcrux_crypto = { version = "0.3.1", optional = true }
+openmls_basic_credential = { version = "0.5", optional = true }
 
 # ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
 # RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system

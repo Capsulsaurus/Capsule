@@ -34,7 +34,7 @@ use uuid::Uuid;
 use crate::backup::{self, BackupArtifact, BackupAsset, BackupInput, RestoreMode};
 use crate::cbor;
 use crate::crypto::CryptoError;
-use crate::crypto::authority::ReferenceAuthority;
+use crate::crypto::authority::{Authority, ReferenceAuthority};
 use crate::crypto::encryption::keywrap::seal_file_key;
 use crate::crypto::encryption::{
     blob_ciphertext_hash, blob_nonce, encrypt_asset_rekey, open_blob, seal_metadata_blob, stream,
@@ -230,7 +230,12 @@ pub struct Workspace {
     client_version: String,
     counter: Counter,
     albums: HashMap<Uuid, AlbumKeys>,
-    authorities: HashMap<Uuid, ReferenceAuthority>,
+    /// Per-album write authority behind the [`AlbumAuthority`](crate::crypto::authority::AlbumAuthority)
+    /// seam (`&Authority` coerces to `&dyn AlbumAuthority` at every `verify_asset` call site). The
+    /// offline [`ReferenceAuthority`] is the shipped default; the enum lets the live
+    /// [`OpenMlsAuthority`](crate::crypto::authority::OpenMlsAuthority) drop in without the
+    /// lifecycle naming a concrete backend. Session-scoped (not persisted), like the album keys.
+    authorities: HashMap<Uuid, Authority>,
     assets: HashMap<Uuid, AssetState>,
     /// The reconciled [aggregated-album](crate::federation) group assertion for each album the
     /// workspace can see, keyed by album id (`S-E4`). An own album's entry is self-authored via
@@ -611,7 +616,10 @@ impl Workspace {
             &write_tier.verifying_key(),
             true,
         );
-        self.authorities.insert(album_id, authority);
+        // Offline default: the reference ledger authority. The live `OpenMlsAuthority` drops into
+        // the same `Authority` slot behind the seam once membership ceremonies land (S-X2).
+        self.authorities
+            .insert(album_id, Authority::Reference(Box::new(authority)));
         self.albums.insert(
             album_id,
             AlbumKeys {
@@ -644,12 +652,16 @@ impl Workspace {
             album.current_epoch = next;
             next
         };
-        // Disjoint fields: read the album's keys while mutably attesting in its authority.
+        // Disjoint fields: read the album's keys while mutably attesting in its authority. Offline
+        // rotation is a reference-ledger attestation; the live MLS backend rotates via a
+        // self-update commit through the membership ceremonies (S-X2), not this path — hence the
+        // reference-only accessor.
         let album = self.albums.get(&album_id).expect("album just mutated");
         let authority = self
             .authorities
             .get_mut(&album_id)
-            .ok_or_else(|| LifecycleError::NotFound(format!("authority {album_id}")))?;
+            .and_then(Authority::as_reference_mut)
+            .ok_or_else(|| LifecycleError::NotFound(format!("reference authority {album_id}")))?;
         authority.attest_epoch(
             &album.admin,
             AmkVersion(next),

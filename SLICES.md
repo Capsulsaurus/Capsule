@@ -129,7 +129,7 @@ its slice.
 | S-I1  | Hardcoded-string migration to catalog keys           | i18n            | —                | M    | ready   |
 | S-I2  | Official language-set rollout (12 locales + RTL)     | i18n            | —                | L    | done*   |
 | S-I3  | `xtask translate-readme` + CI drift check            | i18n            | S-I2             | M    | done    |
-| S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | ready   |
+| S-X1  | OpenMLS backend → `OpenMlsAuthority`                 | crypto/mls      | —                | L    | done    |
 | S-X2  | MLS membership + Welcome/history delivery            | crypto/mls      | S-X1             | L    | blocked |
 | S-X3  | Album upgrade ceremony + MLS resilience              | crypto/mls      | S-X2             | L    | blocked |
 | S-Z1  | Library-settings document schema (design)            | design          | —                | S    | done    |
@@ -1463,6 +1463,17 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   stores `authorities: HashMap<Uuid, ReferenceAuthority>` (`lifecycle.rs`) and `drop/mod.rs`
   names the concrete type — both move to `Box<dyn AlbumAuthority>` (or an enum/generic) so
   the live backend can be swapped in.
+- **Landed:** `OpenMlsAuthority` over a live OpenMLS 0.8.1 group pinned to X-Wing
+  `0x004D` via the libcrux provider (`openmls_libcrux_crypto` 0.3.1), behind the same
+  `&dyn AlbumAuthority` seam — `verify_asset` untouched. Backend/authority layer only:
+  self-group creation, epoch ceiling via self-update commit, per-epoch write-tier key,
+  AMK export from the RFC 9420 exporter (album id = exporter context),
+  pending-vs-terminal `has_amk`. `Workspace.authorities` + create/rotate now hold a
+  boxed `Authority` enum (`Reference` | `OpenMls`); `drop/mod.rs`'s concrete naming
+  turned out test-only (the sanctioned test authority) and stays. Gated behind the
+  `mls` feature (implied by `native`, excluded from wasm — libcrux has no wasm32
+  target). MLS group state is in-memory (`openmls_memory_storage`); durable group
+  persistence rides S-X2 with the membership ceremonies / Welcome / history seams.
 
 ### S-X2 — MLS membership + Welcome/history delivery
 
