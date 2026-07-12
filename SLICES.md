@@ -113,7 +113,7 @@ its slice.
 | S-E4  | Aggregated federated albums (album-group view)       | fed/sharing     | S-E2, S-D2       | L    | done    |
 | S-F1  | uniffi consolidation (0.29 catalog vs 0.31 core)     | platform/FFI    | —                | M    | done    |
 | S-F2  | Secure Enclave / StrongBox hybrid composition        | platform/FFI    | S-A4, S-F1       | L    | done*   |
-| S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | ready   |
+| S-F3  | Xcode/Gradle binding wiring + on-device CI           | platform/FFI    | S-F2             | L    | done*   |
 | S-F4  | Windows TPM (TBS) backend                            | platform/FFI    | S-A4             | M    | done*   |
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | done*   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | done    |
@@ -201,7 +201,7 @@ pass until the gate lifts.
 | --- | --- | --- |
 | `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
 | `spargen` (in-house OpenAPI **3.1** client generator) | **released** (0.1.0 on crates.io) — gate lifted | S-D8 landed on it. One known 0.1.0 limitation: object-typed query parameters mis-lower (`.to_string()` on a non-`Display` struct), so the media asset-serve tree is excluded from the generated surface (it is the hand-written byte-transfer path anyway); re-include when spargen supports object query params. We never downgrade schemas to 3.0. |
-| `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
+| `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | **released** (`geocoordinates` 0.14.0 on crates.io) — but the fold stays gated | China datums shipped, **but BD-09→GCJ-02 exists only as `Approx` (`to_gcj02_fast`/`_refined`)**: the exact direction is GCJ-02→BD-09; the inverse is error-bounded, contradicting metadata.md's "closed-form and exact" fold claim. S-A7's `fold_bd09_to_gcj02` therefore keeps refusing (`FoldGated`) per its never-approximate contract until a design decision amends metadata.md (accept the bounded refined inverse, documenting the bound) or keeps refusing BD-09 input. Display conversion can proceed independently (it is allowed to be lossy/approximate). |
 | `ptpip-rs` (in-house PTP/IP camera protocol; repo not yet created) | planned | S-B9 (post-v1). Portable Rust PTP/IP (ISO 15740 over TCP/IP) with a vendor-extension seam (Sony first) — see [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md). |
 | `openmls` (RFC 9420 MLS; X-Wing suite `0x004D` via the libcrux provider) | available — no longer a gate | S-X1 adopts `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`), which OpenMLS ships today. Capsule is a closed deployment (all clients are Capsule's; federation is Capsule↔Capsule), so an IANA codepoint — a third-party-interop concern — is not required; a private/experimental codepoint is sufficient. X-Wing is off the WG standards track (the WG's `draft-ietf-mls-pq-ciphersuites` moved to direct ML-KEM hybrid; X-Wing-in-MLS is the non-adopted `draft-mahy-mls-xwing`), so if Capsule ever needs the ratified suite it migrates via the S-X3 upgrade ceremony + `crypto_suite_id`. Lane X (S-X1 → S-X2 → S-X3) is now ordinary sequenced work, not upstream-blocked. |
 
@@ -613,8 +613,8 @@ pass until the gate lifts.
   (`service::drop::Mutation::adopt_in_txn`: inbox `FOR UPDATE` → quota handover →
   asset insert → `sync_seq` mint + feed entry → inbox delete; rollback smoke proves
   no half-state; re-adopt is `AlreadyPromoted`). Owner quota charged at drop
-  creation via txn-scoped `quota::reserve`. Upload transport (`UploadSessionManager`
-  + `StorageService`) re-exported, not forked. Notes: in-process rate limiter
+  creation via txn-scoped `quota::reserve`. Upload transport (`UploadSessionManager` +
+  `StorageService`) re-exported, not forked. Notes: in-process rate limiter
   (shared-Valkey limiter is future hardening); drop endpoints use `#[handler]` so
   they're absent from the OpenAPI doc; drops migration renumbered to `000004` at
   landing (S-C3's `blob_gc` holds `000003`).
@@ -725,8 +725,8 @@ pass until the gate lifts.
   only past `earliest_byte_deletion`, zero-reference re-confirmed under the row
   lock; reappearing references cancel marks; quarantine never swept; dangling refs
   quarantined); keyless retention purge from the signed envelope floor; `capsule-gc`
-  operator binary (`--dry-run`, phase filters). Refcount SSoT = live `assets` rows
-  + the S-C6 `quota_ledger` (the append-only feed would pin blobs forever). Note:
+  operator binary (`--dry-run`, phase filters). Refcount SSoT = live `assets` rows +
+  the S-C6 `quota_ledger` (the append-only feed would pin blobs forever). Note:
   blob store is flat `blobs/{hash}.bin` per the landed code, not the doc's nested
   fanout — doc or store should reconcile eventually.
 
@@ -1302,6 +1302,26 @@ SDK; they never hand-roll network flows.
 - **Deliverable:** the generated bindings + `cdylib`/`staticlib` wired into the real
   Xcode and Gradle apps, with on-device CI lanes. **Depends on:** S-F2.
 - **Done when:** both apps build in CI consuming the produced bindings. **Tier:** Smoke.
+- **Landed (done\* — CI runs + device lanes owed):** `capsule-core-ffi` became the
+  app umbrella staticlib (its `capsule_core_ffi` + capsule-sdk's `capsule_sdk`
+  namespaces in one library; S-F1's never-same-binary invariant preserved —
+  capsule-sdk doesn't enable `capsule-core/ffi`); the iOS app builds
+  clean-checkout → simulator via `mise run build-swift`, **verified on this host**
+  (xcframework, tuist generate, xcodebuild BUILD SUCCEEDED with the SDK glue
+  compiled) — also discharging S-I1's owed Xcode confirmation. Fixed the
+  plural-namespace `}module` modulemap-concat bug; `build-apple` cross-gates the
+  umbrella. Gradle: opt-in `-Pcapsule.wireFfi` staging (bindings at preBuild;
+  cargo-ndk jniLibs on package/connected paths only, JVM tests NDK-free) —
+  authored blind, every Gradle execution owed to CI. New `build-android.yml`
+  (JDK 21/NDK r27c — de-facto documenting the local JDK-26 fix; assembleDebug +
+  `:core` JVM smoke = first CI run of the S-F2 Kotlin software mirror) + manual
+  self-hosted `strongbox-device`/`secure-enclave` lanes (inert until runners are
+  provisioned). actionlint clean; the workflows themselves have never executed.
+  Still homeless after the owed-halves audit: S-D9's behavioral Swift/Kotlin
+  harnesses (unwritten), S-F2's instrumented StrongBox driver, S-F5's Kotlin ECDH
+  adapter, S-F4's real-TPM smoke + windows-target clippy. Environment note: the
+  mise-installed swiftformat 0.55 binary is SIGKILLed (invalid signature) on this
+  host — `format-swift` cannot run locally.
 
 ### S-F4 — Windows TPM (TBS) backend
 
@@ -1321,8 +1341,8 @@ SDK; they never hand-roll network flows.
 - **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md).
 - **Deliverable:** the device **encryption** key's classical half hardware-bound
   (P-256 ECDH), mirroring the DSK composition. **Depends on:** S-F2. **Tier:** Smoke.
-- **Landed (done\* — keystore wiring + Kotlin owed):** `HardwareKeyAgreement` seam
-  + `P256HybridDek` mirroring the X-Wing combiner with the classical half swapped
+- **Landed (done\* — keystore wiring + Kotlin owed):** `HardwareKeyAgreement` seam +
+  `P256HybridDek` mirroring the X-Wing combiner with the classical half swapped
   (distinct domain label; lengths never alias X25519's, so tagging is structural;
   X-Wing KAT byte-identical); real SE ECDH ran on this host. Owed: wiring the
   hardware DEK into full workspace creation/keystore (this slice ships the
@@ -1530,8 +1550,9 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   documented (currently empty) allowlist; zero false positives on the migrated
   tree, injected literals caught on all three surfaces, runs without Gradle. Also
   fixed S-D3's dangling `drop.error.passphrase` key. Owed: human review of the
-  302 seeds; an Xcode build confirming cross-framework `Localizable.xcstrings`
-  resolution; Swift interpolated/plural strings + model-layer titles (a
+  302 seeds; ~~an Xcode build confirming cross-framework `Localizable.xcstrings`
+  resolution~~ (discharged by S-F3's simulator build); Swift
+  interpolated/plural strings + model-layer titles (a
   documented gate blind spot pending `String(localized:)`/ICU-argument
   migration); `InfoPlist`/`LAContext` reason strings (separate mechanisms).
 
@@ -1649,8 +1670,8 @@ runtime, error-code scheme) already ships — this lane is the content and rollo
   lineage, `intent_id`-keyed crash-resume through `export_state`); group re-keying
   (`rekey_group` + two-phase `begin`/`finish`/`resume` — fresh AMK + write-tier,
   assets not re-encrypted, prior AMKs retained for reads); reconciliation
-  (`reconcile_with_server(ServerChainView) → ReconcileOutcome`, all four variants,
-  + `LostCommitTracker` 30s/2m/10m retry); E2E case 8 in the in-process
+  (`reconcile_with_server(ServerChainView) → ReconcileOutcome`, all four variants, +
+  `LostCommitTracker` 30s/2m/10m retry); E2E case 8 in the in-process
   multi-participant shape (incl. mid-ceremony crash-resume). Tombstoned albums
   refuse every write ceremony; the tombstoned-member-cannot-write-into-fork
   negative rides the fork's fresh write-tier key (terminal-reject through the

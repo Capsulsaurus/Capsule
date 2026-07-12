@@ -340,11 +340,16 @@ run = "./gradlew detekt"
 [tasks.lint-check-kotlin]
 run = "./gradlew detekt"
 
+# `-Pcapsule.wireFfi` turns on the S-F3 FFI-staging tasks in capsule-core-kotlin
+# (:core): generate the uniffi Kotlin bindings + build the per-ABI JNI libs as Gradle
+# build inputs, so a clean checkout compiles/packages without a manual staging step.
+# Needs a Rust toolchain (+ cargo-ndk & the Android NDK for the jniLibs). The lint-only
+# `check-kotlin` (ktlint/detekt) deliberately omits the flag — it needs no cargo.
 [tasks.test-kotlin]
-run = "./gradlew test"
+run = "./gradlew test -Pcapsule.wireFfi"
 
 [tasks.build-kotlin]
-run = "./gradlew build"
+run = "./gradlew build -Pcapsule.wireFfi"
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 # Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses

@@ -90,12 +90,15 @@ private let moduleTargets: [Target] =
         )
 
         // Catalog — Swift adapter over the Rust UniFFI catalog. Compiles the
-        // generated bindings and links the prebuilt xcframework.
+        // generated bindings and links the prebuilt xcframework (the S-F3 umbrella
+        // staticlib: both the capsule_core_ffi catalog namespace and capsule-sdk's
+        // capsule_sdk user-flow namespace ride in it, so both glue files compile here).
         + module(
             "CapsuleCatalog",
             sources: [
                 "Modules/CapsuleCatalog/Sources/**",
                 ".ffi/generated/capsule_core_ffi.swift",
+                ".ffi/generated/capsule_sdk.swift",
             ],
             dependencies: [
                 .target(name: "CapsuleFoundation"),

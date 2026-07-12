@@ -1,12 +1,20 @@
 //! UniFFI bindings exposing the `capsule-core` SQLite catalog and CBOR sidecar
 //! to Swift (and, in future, other UniFFI targets such as Android/Kotlin).
 //!
-//! One of **two** uniffi surfaces in the workspace — `capsule-core`'s `ffi` feature
+//! One of the uniffi surfaces in the workspace — `capsule-core`'s `ffi` feature
 //! exports the crypto `FfiWorkspace` + `HardwareSigner` foreign trait separately. The two
 //! are **layered** on a single uniffi version (slice `S-F1`): distinct crates and distinct
 //! bindings namespaces (`capsule_core_ffi` here, `capsule_core` there), never linked into the
-//! same binary, so their generated scaffolding cannot collide. Everything platform-specific
-//! (filesystem layout, file I/O, PhotoKit,
+//! same binary, so their generated scaffolding cannot collide.
+//!
+//! This crate is also the **app umbrella staticlib** (slice `S-F3`): it links
+//! `capsule-sdk`'s uniffi surface (the `capsule_sdk` namespace — the S-D9 user-flow
+//! primitives) so the iOS app consumes ONE Rust library carrying both namespaces.
+//! Two separate Rust staticlibs cannot share a binary (each bundles its own std), so
+//! any namespace the app needs must ride in this one. `capsule-sdk` does *not* enable
+//! `capsule-core/ffi`, keeping the S-F1 never-same-binary invariant intact.
+//!
+//! Everything platform-specific (filesystem layout, file I/O, PhotoKit,
 //! hashing) lives in the Swift client. The types defined here form the explicit
 //! Rust ↔ Swift contract:
 //!
@@ -18,6 +26,12 @@
 //! - [`CatalogError`] — the single error type crossing the boundary.
 
 uniffi::setup_scaffolding!();
+
+// Force linkage of the SDK's uniffi surface into this staticlib: nothing in this
+// crate calls capsule-sdk directly (the generated Swift does, over the C ABI), and
+// rustc only bundles crates it sees referenced — without this anchor the `capsule_sdk`
+// scaffolding and metadata would be dropped from the archive.
+use capsule_sdk as _;
 
 mod catalog;
 mod error;

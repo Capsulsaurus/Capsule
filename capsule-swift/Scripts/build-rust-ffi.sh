@@ -43,13 +43,25 @@ cargo run -p "$CRATE" --bin uniffi-bindgen -- \
     generate --library "$REPO_ROOT/target/$DEVICE_TARGET/release/$LIB_NAME" \
     --language swift --out-dir "$GEN_DIR"
 
-# uniffi emits `<namespace>FFI.modulemap`; an xcframework's headers directory
-# must contain a file literally named `module.modulemap`.
+# The staticlib is the app umbrella (S-F3): it carries the capsule_core_ffi namespace
+# AND capsule-sdk's capsule_sdk namespace (S-D9), so library-mode bindgen must have
+# emitted Swift glue for both. Fail loudly if either went missing.
+test -s "$GEN_DIR/capsule_core_ffi.swift"
+test -s "$GEN_DIR/capsule_sdk.swift"
+
+# uniffi emits `<namespace>FFI.modulemap` (one per namespace); an xcframework's headers
+# directory must contain a file literally named `module.modulemap` — concatenating the
+# per-namespace maps yields one file declaring every C module.
 echo "▸ Preparing C headers + modulemap"
 rm -rf "$HEADERS_DIR"
 mkdir -p "$HEADERS_DIR"
 cp "$GEN_DIR"/*FFI.h "$HEADERS_DIR/"
-cat "$GEN_DIR"/*FFI.modulemap >"$HEADERS_DIR/module.modulemap"
+# uniffi's emitted modulemaps have no trailing newline, so a bare `cat` would glue
+# `}module` together — append one after each part.
+for mm in "$GEN_DIR"/*FFI.modulemap; do
+    cat "$mm"
+    echo
+done >"$HEADERS_DIR/module.modulemap"
 
 echo "▸ Lipo-ing the universal simulator library (arm64 + x86_64)"
 rm -rf "$BUILD_DIR"
@@ -70,3 +82,4 @@ xcodebuild -create-xcframework \
 echo "✓ FFI build complete"
 echo "  xcframework : ${XCFRAMEWORK#"$REPO_ROOT/"}"
 echo "  swift glue  : ${GEN_DIR#"$REPO_ROOT/"}/capsule_core_ffi.swift"
+echo "  swift glue  : ${GEN_DIR#"$REPO_ROOT/"}/capsule_sdk.swift"

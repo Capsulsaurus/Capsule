@@ -1,0 +1,135 @@
+name: Build Android app
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    paths:
+      - "capsule-android/**"
+      - "capsule-core-kotlin/**"
+      - "capsule-core/**"
+      - "capsule-sdk/**"
+      - "**/*.gradle.kts"
+      - "gradle.properties"
+      - "gradle/**"
+      - "gradlew"
+      - "settings.gradle.kts"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/build-android.yml"
+  # Manual trigger for the hardware-backed StrongBox lane (self-hosted; see below).
+  workflow_dispatch:
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# mise is only a tool installer / exec shim here (stage-bindings.sh calls
+# `mise run gen-bindings`); never let it implicitly install the root mise.toml [tools].
+# Same convention as ci.yml / build-ios.yml: each job installs exactly what it needs.
+env:
+  MISE_AUTO_INSTALL: "false"
+
+jobs:
+  build:
+    name: Build Capsule.apk + :core JVM smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Gradle 8.11.1 supports JDK 21, not the JDK 26 on some dev machines — this pin
+      # is the de-facto fix for the documented local Gradle break (see
+      # capsule-core-kotlin/README.md and ci.yml's kotlin lane).
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36"
+
+      # NDK r27c matches ci.yml's rust-cross android lane — the cargo-ndk .so build must
+      # use the same NDK the cross-compile gate verifies against.
+      - name: Set up Android NDK
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+
+      - name: Export ANDROID_NDK_HOME
+        if: steps.ndk.outputs.ndk-path != ''
+        run: echo "ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+
+      # capsule-sdk (built by gen-bindings) links protobuf-generated code.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: build-android
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # stage-bindings.sh (invoked by the :core stageUniffiBindings task) shells out to
+      # `mise run gen-bindings`, so mise must be on PATH — but install nothing implicitly.
+      - name: Set up mise (exec shim)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+
+      # `-Pcapsule.wireFfi` turns on the S-F3 FFI-staging tasks in :core: generate the
+      # uniffi Kotlin bindings (host libcapsule_core) + build the per-ABI JNI libs via
+      # cargo-ndk, both as Gradle build inputs. assembleDebug proves the app consumes
+      # them; :core:test runs the software-signer FfiWorkspace smoke on the JVM (JNA
+      # loads the host libcapsule_core).
+      - name: Build app + run :core JVM smoke
+        run: ./gradlew :android:assembleDebug :core:test -Pcapsule.wireFfi
+
+  # On-device StrongBox / hardware-keystore lane. StrongBox is a physical secure element
+  # — stock emulators expose only a software/TEE keystore, so the S-F2 StrongBoxSigner
+  # (and the S-F5 hardware-DEK ECDH adapter) can only truly run on hardware. This lane is
+  # therefore manual + self-hosted; add a runner with the `strongbox` label (a device or
+  # a host with an attached device) to activate it. Until then it is inert, matching the
+  # repo convention of gating hardware runs behind a label rather than faking them on a
+  # hosted runner.
+  strongbox-device:
+    name: StrongBox instrumented (self-hosted device)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, android, strongbox]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up mise (exec shim)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+
+      # connectedAndroidTest runs :core's instrumented tests against the attached device;
+      # -Pcapsule.wireFfi stages the bindings + builds the per-ABI JNI libs the APK loads.
+      # The StrongBox instrumented driver itself is owed (see SLICES.md S-F2/S-F5).
+      - name: Run :core instrumented tests on device
+        run: ./gradlew :core:connectedAndroidTest -Pcapsule.wireFfi

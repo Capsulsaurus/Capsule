@@ -14,6 +14,12 @@ path = "src/bin/uniffi-bindgen.rs"
 
 [dependencies]
 capsule-core = { path = "../capsule-core" }
+# The SDK's uniffi surface (`capsule_sdk` namespace: FfiCapsuleClient/FfiSession, S-D9)
+# rides in this staticlib so the app links ONE Rust library — two Rust staticlibs in one
+# binary would each bundle their own std and collide at link time. Deliberately WITHOUT
+# capsule-core's `ffi` feature (capsule-sdk does not enable it), preserving the S-F1
+# invariant that the `capsule_core_ffi` and `capsule_core` namespaces never share a binary.
+capsule-sdk = { path = "../capsule-sdk", features = ["ffi"] }
 ciborium = "0.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
