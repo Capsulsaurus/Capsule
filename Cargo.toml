@@ -2,11 +2,9 @@
 members = [
     "capsule-api",
     "capsule-api/auth",
-    "capsule-api/library",
     "capsule-api/media",
     "capsule-api/service",
     "capsule-api/entity",
-    "capsule-api/sync",
     "capsule-api/migration",
     "capsule-api/model",
     "capsule-api/testing",
@@ -24,11 +22,9 @@ members = [
 default-members = [
     "capsule-api",
     "capsule-api/auth",
-    "capsule-api/library",
     "capsule-api/media",
     "capsule-api/service",
     "capsule-api/entity",
-    "capsule-api/sync",
     "capsule-api/migration",
     "capsule-api/model",
     "capsule-api/testing",
@@ -65,8 +61,6 @@ log = { version = "0.4.32", features = ["release_max_level_debug"] }
 file-format = "0.28"
 nanoid = "0.4.0"
 num-rational = { version = "0.4.2", features = ["serde"] }
-prost = "0.14.4"
-prost-types = "0.14.4"
 redis = { version = "1.2.2", features = ["tokio-comp", "connection-manager"] }
 ring = "0.17.14"
 salvo = { version = "0.86.0", features = [
@@ -94,11 +88,6 @@ testcontainers-modules = { version = "0.14.0", features = [
 ] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
-tonic = "0.14.6"
-tonic-health = "0.14.6"
-tonic-types = "0.14.6"
-tonic-prost = "0.14.6"
-tonic-prost-build = { version = "0.14.6" }
 uuid = { version = "1.23.3", features = ["v4"] }
 tower-http = { version = "0.6.11", features = ["cors"] }
 tracing = "0.1.44"

@@ -60,7 +60,7 @@ pub struct ServerConfig {
     /// TOTP issuer string shown in authenticator apps
     pub totp_issuer: String,
 
-    #[cfg(any(feature = "upload", feature = "media", feature = "sync"))]
+    #[cfg(any(feature = "upload", feature = "media"))]
     /// Upload directory
     pub upload_dir: PathBuf,
     #[cfg(feature = "upload")]
@@ -170,7 +170,7 @@ impl Environment {
                 .unwrap_or(ACCESS_TOKEN_EXPIRY),
                 #[cfg(feature = "auth")]
                 totp_issuer: load_env("TOTP_ISSUER").unwrap_or(TOTP_ISSUER.to_string()),
-                #[cfg(any(feature = "upload", feature = "media", feature = "sync"))]
+                #[cfg(any(feature = "upload", feature = "media"))]
                 upload_dir: load_env("UPLOAD_DIR")
                     .unwrap_or(String::from("./uploads"))
                     .into(),

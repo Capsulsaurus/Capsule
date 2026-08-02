@@ -7,11 +7,9 @@ default-run = "capsule-api"
 
 [dependencies]
 capsule-api-auth = { path = "./auth", optional = true }
-capsule-api-library = { path = "./library", optional = true }
 capsule-api-media = { path = "./media", optional = true }
 # TODO: Re-enable when upload is production-ready
 capsule-api-upload = { path = "./upload", optional = true }
-capsule-api-sync = { path = "./sync", optional = true }
 capsule-api-environment = { path = "./environment" }
 capsule-api-migration = { path = "./migration" }
 salvo = { workspace = true }
@@ -32,11 +30,8 @@ clap = { version = "4.6.1", features = ["derive"] }
 
 [features]
 default = ["full"]
-full = ["auth", "upload", "media", "library", "sync", "openapi"]
-h2c = ["salvo/http2-cleartext", "salvo/rustls"]
+full = ["auth", "upload", "media", "openapi"]
 auth = ["capsule-api-auth", "capsule-api-environment/auth"]
-library = ["capsule-api-library", "capsule-api-environment/graphql"]
 upload = ["capsule-api-upload", "capsule-api-environment/upload"]
 media = ["capsule-api-media", "capsule-api-environment/media"]
-sync = ["capsule-api-sync", "capsule-api-environment/sync", "h2c"]
 openapi = []

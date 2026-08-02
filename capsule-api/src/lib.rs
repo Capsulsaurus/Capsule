@@ -14,8 +14,6 @@ pub mod tags {
     pub const UPLOAD: &str = "upload";
     pub const MEDIA: &str = "media";
     pub const SHARE: &str = "share";
-    pub const LIBRARY: &str = "library";
-    pub const SYNC: &str = "sync";
 }
 
 /// Create OpenAPI specification with proper metadata
@@ -34,8 +32,6 @@ pub fn create_openapi_spec() -> OpenApi {
             Tag::new(tags::UPLOAD).description("Capsule Upload API"),
             Tag::new(tags::MEDIA).description("Capsule Media Serving API"),
             Tag::new(tags::SHARE).description("Capsule Public Share API"),
-            Tag::new(tags::LIBRARY).description("Capsule Library API (GraphQL)"),
-            Tag::new(tags::SYNC).description("Capsule Sync API (gRPC)"),
         ])
         .add_security_scheme(
             "bearer",
@@ -57,13 +53,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
             Router::with_path("auth").push(auth::get_router(conn.clone(), &env.server).await?),
         );
     }
-    #[cfg(feature = "library")]
-    {
-        v1_router = v1_router.push(
-            Router::with_path("library")
-                .push(library::get_router(conn.clone(), &env.server, (&env.server).into()).await?),
-        );
-    }
     #[cfg(feature = "upload")]
     {
         v1_router = v1_router.push(
@@ -81,14 +70,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                 Router::with_path("s")
                     .push(media::get_share_router(conn.clone(), &env.server).await?),
             );
-    }
-    // TODO: Verify this GRPc route works
-    #[cfg(feature = "sync")]
-    {
-        // gRPC sync routes
-        v1_router = v1_router.push(
-            Router::with_path("sync").push(sync::get_router(conn.clone(), &env.server).await?),
-        );
     }
 
     // Add version endpoint
@@ -121,11 +102,7 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
 // Re-export dependency crates if needed by binaries
 #[cfg(feature = "auth")]
 pub use auth;
-#[cfg(feature = "library")]
-pub use library;
 #[cfg(feature = "media")]
 pub use media;
-#[cfg(feature = "sync")]
-pub use sync;
 #[cfg(feature = "upload")]
 pub use upload;

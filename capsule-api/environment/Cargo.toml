@@ -21,7 +21,5 @@ thiserror = { workspace = true }
 [features]
 default = []
 auth = []
-graphql = []
 upload = []
 media = []
-sync = []
