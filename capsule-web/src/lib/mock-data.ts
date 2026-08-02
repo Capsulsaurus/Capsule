@@ -8,7 +8,6 @@ export type Asset = {
     location?: string;
     width: number;
     height: number;
-    thumbhash: string;
 };
 
 export type Album = {
@@ -39,14 +38,6 @@ const CITIES = [
     undefined,
 ];
 
-// Sample thumbhashes (base64)
-const THUMBHASHES = [
-    '1QcSHQRnh493V4dIh4eXh1h4kJY=', // Nature/Green
-    'k0oGLQaSZ3l0hweJiIiHh1iAZ1Y=', // Warm/Red
-    'ImYFHPZ3aHiHiHh4eIeXh4h4R4g=', // Sky/Blue
-    'VFopSlCAhoh2iJh3eniHd3d2d2g=', // Gray/City
-];
-
 export const generateAssets = (count: number): Asset[] => {
     return Array.from({ length: count })
         .map(() => {
@@ -65,7 +56,6 @@ export const generateAssets = (count: number): Asset[] => {
                 location: CITIES[randomInt(0, CITIES.length - 1)],
                 width,
                 height,
-                thumbhash: THUMBHASHES[randomInt(0, THUMBHASHES.length - 1)],
             };
         })
         .sort((a, b) => b.date.getTime() - a.date.getTime());
