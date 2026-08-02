@@ -45,7 +45,7 @@ check: format-check lint-check test
 # Each maps 1:1 to a CI job so the workflow stays consistent with the justfile.
 
 [group('rust')]
-check-rust: format-check-rust lint-check-rust i18n-check build-rust build-ffi lint-check-ffi gen-bindings verify-examples
+check-rust: architecture-check format-check-rust lint-check-rust i18n-check build-rust build-ffi lint-check-ffi gen-bindings verify-examples
 
 [group('web')]
 check-web: format-check-web lint-check-web test-web build-web
@@ -74,24 +74,29 @@ format-check-rust:
 
 [group('rust')]
 lint-rust:
-    cargo clippy --workspace --exclude capsule-sdk --fix --allow-dirty -- {{ clippy_flags }}
+    cargo clippy --workspace --fix --allow-dirty -- {{ clippy_flags }}
 
 [group('rust')]
 lint-check-rust:
-    cargo clippy --workspace --exclude capsule-sdk -- {{ clippy_flags }}
+    cargo clippy --workspace -- {{ clippy_flags }}
 
 [group('rust')]
 test-rust:
-    cargo test --workspace --exclude capsule-sdk
+    cargo test --workspace
     cargo test -p capsule-core --features ffi
 
 [group('rust')]
 test-coverage-rust:
-    cargo llvm-cov --workspace --exclude capsule-sdk --fail-under-lines 0
+    cargo llvm-cov --workspace --fail-under-lines 0
 
 [group('rust')]
 build-rust:
-    cargo build --workspace --exclude capsule-sdk
+    cargo build --workspace
+
+# Keep review-only code out of Cargo and prevent retired stacks from returning by accident.
+[group('rust')]
+architecture-check:
+    cargo run -q -p xtask -- architecture-check
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
 # (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.

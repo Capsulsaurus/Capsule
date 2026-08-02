@@ -41,7 +41,7 @@ jobs:
               - 'capsule-api/**'
               - 'capsule-cli/**'
               - 'capsule-core/**'
-              - 'capsule-media/**'
+              - 'legacy-review/**'
               - 'capsule-sdk/**'
               - 'xtask/**'
               - '.github/workflows/ci.yml'
@@ -93,10 +93,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -113,15 +109,8 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    # Non-blocking: capsule-api integration tests use testcontainers (Docker),
-    # which is slower and flakier. Drop continue-on-error once stabilized.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo
@@ -313,7 +302,7 @@ jobs:
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
-  # treats as a pass. rust-test is non-blocking and intentionally excluded.
+  # treats as a pass.
   required:
     name: required
     if: always()
@@ -322,7 +311,7 @@ jobs:
     steps:
       - name: Verify required jobs succeeded
         run: |
-          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
+          for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do

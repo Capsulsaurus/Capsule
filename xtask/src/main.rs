@@ -1,6 +1,6 @@
 //! Repo-maintenance tasks for the Capsule workspace.
 //!
-//! Two commands:
+//! Three commands:
 //!
 //! - `set-version <X.Y.Z>` writes a single repo-wide version string into every
 //!   package's source of truth so a release bump stays in sync across Rust, web,
@@ -9,7 +9,10 @@
 //! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
 //!   platform's native localization format (see [`i18n`]). `--check` verifies the
 //!   committed files are up to date instead of writing them.
+//! - `architecture-check` rejects implicit workspace packages, retired dependencies,
+//!   buildable review-only code, and stale component references.
 
+mod architecture;
 mod i18n;
 
 use std::fs;
@@ -20,7 +23,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check]>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | architecture-check>";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -35,6 +38,7 @@ fn main() -> Result<()> {
             let check = args.next().as_deref() == Some("--check");
             i18n::run(&repo_root(), check)
         }
+        Some("architecture-check") => architecture::run(&repo_root()),
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),
     }
