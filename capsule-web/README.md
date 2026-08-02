@@ -29,9 +29,9 @@ drop in later:
   components consume **only** these, never a data source directly.
 - `src/data/index.ts` — selects the active gateway (mock for now).
 
-When the server schema is live, implement `ServerGateway` against it (a typed
-GraphQL client such as [gql.tada](https://gql-tada.0no.co/) for library queries,
-REST for blobs) and select it in `data/index.ts`. If `capsule-core` later ships
+When the server schema is live, implement `ServerGateway` against the checked-in
+Kynos REST/OpenAPI contract through the Spargen-generated SDK and select it in
+`data/index.ts`. If `capsule-core` later ships
 a WebAssembly build, a decode/verify boundary slots in *below* `CapsuleGateway`
 — assets would arrive as ciphertext references plus a `decode()` call — without
 changing the UI.
@@ -41,10 +41,10 @@ changing the UI.
 ### Prerequisites
 
 - Install [Bun](https://bun.sh).
+- The replacement API is not available yet; UI-only development uses local fixtures
 
 The app runs against the mock gateway out of the box, so no backend is required
-for UI work. (Auth flows under `src/lib` still call `capsule-api`'s `/v1/auth`;
-see [capsule-api/README.md](../capsule-api/README.md) to run that.)
+for UI work. Network-backed authentication and library reads remain planned.
 
 ### Commands
 
@@ -58,12 +58,17 @@ bun run preview    # preview the production build locally
 Lint, format, test, and build together (matches CI):
 
 ```bash
-just check-web
+mise run check-web
 ```
 
 ## Internationalization
 
 User-facing strings come from the canonical `locales/` catalogs, compiled to
-`src/i18n/messages/*.json` by `just i18n` (see the
+`src/i18n/messages/*.json` by `mise run i18n` (see the
 [i18n design doc](../capsule-docs/src/content/docs/design/i18n.md)). Don't edit
 the generated catalogs by hand.
+
+## API
+
+The web client will consume the checked-in Kynos REST/OpenAPI contract through the
+planned Spargen-generated SDK. The replacement server and SDK are not available yet.

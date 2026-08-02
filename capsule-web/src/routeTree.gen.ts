@@ -15,45 +15,35 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AlbumsIndexRouteImport } from './routes/albums/index'
 import { Route as AlbumsIdRouteImport } from './routes/albums/$id'
 
-const StorageLazyRouteImport = createFileRoute('/storage')()
-const SharingLazyRouteImport = createFileRoute('/sharing')()
-const SettingsLazyRouteImport = createFileRoute('/settings')()
-const PhotosLazyRouteImport = createFileRoute('/photos')()
-const LoginLazyRouteImport = createFileRoute('/login')()
-const ForgotPasswordLazyRouteImport = createFileRoute('/forgot-password')()
-const ExploreLazyRouteImport = createFileRoute('/explore')()
-const DashboardLazyRouteImport = createFileRoute('/dashboard')()
 const IndexLazyRouteImport = createFileRoute('/')()
-const SettingsSecurityLazyRouteImport = createFileRoute('/settings/security')()
-const LibraryTrashLazyRouteImport = createFileRoute('/library/trash')()
-const LibraryFavoritesLazyRouteImport = createFileRoute('/library/favorites')()
+const DashboardLazyRouteImport = createFileRoute('/dashboard')()
+const ExploreLazyRouteImport = createFileRoute('/explore')()
+const ForgotPasswordLazyRouteImport = createFileRoute('/forgot-password')()
+const LoginLazyRouteImport = createFileRoute('/login')()
+const PhotosLazyRouteImport = createFileRoute('/photos')()
+const SettingsLazyRouteImport = createFileRoute('/settings')()
+const SharingLazyRouteImport = createFileRoute('/sharing')()
+const StorageLazyRouteImport = createFileRoute('/storage')()
 const LibraryArchiveLazyRouteImport = createFileRoute('/library/archive')()
+const LibraryFavoritesLazyRouteImport = createFileRoute('/library/favorites')()
+const LibraryTrashLazyRouteImport = createFileRoute('/library/trash')()
+const SettingsSecurityLazyRouteImport = createFileRoute('/settings/security')()
 
-const StorageLazyRoute = StorageLazyRouteImport.update({
-  id: '/storage',
-  path: '/storage',
+const IndexLazyRoute = IndexLazyRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/storage.lazy').then((d) => d.Route))
-const SharingLazyRoute = SharingLazyRouteImport.update({
-  id: '/sharing',
-  path: '/sharing',
+} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
+const DashboardLazyRoute = DashboardLazyRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/sharing.lazy').then((d) => d.Route))
-const SettingsLazyRoute = SettingsLazyRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+} as any).lazy(() => import('./routes/dashboard.lazy').then((d) => d.Route))
+const ExploreLazyRoute = ExploreLazyRouteImport.update({
+  id: '/explore',
+  path: '/explore',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/settings.lazy').then((d) => d.Route))
-const PhotosLazyRoute = PhotosLazyRouteImport.update({
-  id: '/photos',
-  path: '/photos',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/photos.lazy').then((d) => d.Route))
-const LoginLazyRoute = LoginLazyRouteImport.update({
-  id: '/login',
-  path: '/login',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/login.lazy').then((d) => d.Route))
+} as any).lazy(() => import('./routes/explore.lazy').then((d) => d.Route))
 const ForgotPasswordLazyRoute = ForgotPasswordLazyRouteImport.update({
   id: '/forgot-password',
   path: '/forgot-password',
@@ -61,50 +51,46 @@ const ForgotPasswordLazyRoute = ForgotPasswordLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/forgot-password.lazy').then((d) => d.Route),
 )
-const ExploreLazyRoute = ExploreLazyRouteImport.update({
-  id: '/explore',
-  path: '/explore',
+const LoginLazyRoute = LoginLazyRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/explore.lazy').then((d) => d.Route))
-const DashboardLazyRoute = DashboardLazyRouteImport.update({
-  id: '/dashboard',
-  path: '/dashboard',
+} as any).lazy(() => import('./routes/login.lazy').then((d) => d.Route))
+const PhotosLazyRoute = PhotosLazyRouteImport.update({
+  id: '/photos',
+  path: '/photos',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/dashboard.lazy').then((d) => d.Route))
+} as any).lazy(() => import('./routes/photos.lazy').then((d) => d.Route))
 const ResetPasswordRoute = ResetPasswordRouteImport.update({
   id: '/reset-password',
   path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const IndexLazyRoute = IndexLazyRouteImport.update({
-  id: '/',
-  path: '/',
+const SettingsLazyRoute = SettingsLazyRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/index.lazy').then((d) => d.Route))
+} as any).lazy(() => import('./routes/settings.lazy').then((d) => d.Route))
+const SharingLazyRoute = SharingLazyRouteImport.update({
+  id: '/sharing',
+  path: '/sharing',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/sharing.lazy').then((d) => d.Route))
+const StorageLazyRoute = StorageLazyRouteImport.update({
+  id: '/storage',
+  path: '/storage',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/storage.lazy').then((d) => d.Route))
 const AlbumsIndexRoute = AlbumsIndexRouteImport.update({
   id: '/albums/',
   path: '/albums/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SettingsSecurityLazyRoute = SettingsSecurityLazyRouteImport.update({
-  id: '/security',
-  path: '/security',
-  getParentRoute: () => SettingsLazyRoute,
-} as any).lazy(() =>
-  import('./routes/settings/security.lazy').then((d) => d.Route),
-)
-const LibraryTrashLazyRoute = LibraryTrashLazyRouteImport.update({
-  id: '/library/trash',
-  path: '/library/trash',
+const AlbumsIdRoute = AlbumsIdRouteImport.update({
+  id: '/albums/$id',
+  path: '/albums/$id',
   getParentRoute: () => rootRouteImport,
-} as any).lazy(() => import('./routes/library/trash.lazy').then((d) => d.Route))
-const LibraryFavoritesLazyRoute = LibraryFavoritesLazyRouteImport.update({
-  id: '/library/favorites',
-  path: '/library/favorites',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() =>
-  import('./routes/library/favorites.lazy').then((d) => d.Route),
-)
+} as any)
 const LibraryArchiveLazyRoute = LibraryArchiveLazyRouteImport.update({
   id: '/library/archive',
   path: '/library/archive',
@@ -112,11 +98,25 @@ const LibraryArchiveLazyRoute = LibraryArchiveLazyRouteImport.update({
 } as any).lazy(() =>
   import('./routes/library/archive.lazy').then((d) => d.Route),
 )
-const AlbumsIdRoute = AlbumsIdRouteImport.update({
-  id: '/albums/$id',
-  path: '/albums/$id',
+const LibraryFavoritesLazyRoute = LibraryFavoritesLazyRouteImport.update({
+  id: '/library/favorites',
+  path: '/library/favorites',
   getParentRoute: () => rootRouteImport,
-} as any)
+} as any).lazy(() =>
+  import('./routes/library/favorites.lazy').then((d) => d.Route),
+)
+const LibraryTrashLazyRoute = LibraryTrashLazyRouteImport.update({
+  id: '/library/trash',
+  path: '/library/trash',
+  getParentRoute: () => rootRouteImport,
+} as any).lazy(() => import('./routes/library/trash.lazy').then((d) => d.Route))
+const SettingsSecurityLazyRoute = SettingsSecurityLazyRouteImport.update({
+  id: '/security',
+  path: '/security',
+  getParentRoute: () => SettingsLazyRoute,
+} as any).lazy(() =>
+  import('./routes/settings/security.lazy').then((d) => d.Route),
+)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexLazyRoute
@@ -250,53 +250,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/storage': {
-      id: '/storage'
-      path: '/storage'
-      fullPath: '/storage'
-      preLoaderRoute: typeof StorageLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/sharing': {
-      id: '/sharing'
-      path: '/sharing'
-      fullPath: '/sharing'
-      preLoaderRoute: typeof SharingLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/settings': {
-      id: '/settings'
-      path: '/settings'
-      fullPath: '/settings'
-      preLoaderRoute: typeof SettingsLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/photos': {
-      id: '/photos'
-      path: '/photos'
-      fullPath: '/photos'
-      preLoaderRoute: typeof PhotosLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/explore': {
-      id: '/explore'
-      path: '/explore'
-      fullPath: '/explore'
-      preLoaderRoute: typeof ExploreLazyRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/dashboard': {
@@ -306,6 +264,34 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof DashboardLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/explore': {
+      id: '/explore'
+      path: '/explore'
+      fullPath: '/explore'
+      preLoaderRoute: typeof ExploreLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/photos': {
+      id: '/photos'
+      path: '/photos'
+      fullPath: '/photos'
+      preLoaderRoute: typeof PhotosLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/reset-password': {
       id: '/reset-password'
       path: '/reset-password'
@@ -313,11 +299,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/': {
-      id: '/'
-      path: '/'
-      fullPath: '/'
-      preLoaderRoute: typeof IndexLazyRouteImport
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/sharing': {
+      id: '/sharing'
+      path: '/sharing'
+      fullPath: '/sharing'
+      preLoaderRoute: typeof SharingLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/storage': {
+      id: '/storage'
+      path: '/storage'
+      fullPath: '/storage'
+      preLoaderRoute: typeof StorageLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/albums/': {
@@ -327,25 +327,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AlbumsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/settings/security': {
-      id: '/settings/security'
-      path: '/security'
-      fullPath: '/settings/security'
-      preLoaderRoute: typeof SettingsSecurityLazyRouteImport
-      parentRoute: typeof SettingsLazyRoute
-    }
-    '/library/trash': {
-      id: '/library/trash'
-      path: '/library/trash'
-      fullPath: '/library/trash'
-      preLoaderRoute: typeof LibraryTrashLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/library/favorites': {
-      id: '/library/favorites'
-      path: '/library/favorites'
-      fullPath: '/library/favorites'
-      preLoaderRoute: typeof LibraryFavoritesLazyRouteImport
+    '/albums/$id': {
+      id: '/albums/$id'
+      path: '/albums/$id'
+      fullPath: '/albums/$id'
+      preLoaderRoute: typeof AlbumsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/library/archive': {
@@ -355,12 +341,26 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LibraryArchiveLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/albums/$id': {
-      id: '/albums/$id'
-      path: '/albums/$id'
-      fullPath: '/albums/$id'
-      preLoaderRoute: typeof AlbumsIdRouteImport
+    '/library/favorites': {
+      id: '/library/favorites'
+      path: '/library/favorites'
+      fullPath: '/library/favorites'
+      preLoaderRoute: typeof LibraryFavoritesLazyRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/library/trash': {
+      id: '/library/trash'
+      path: '/library/trash'
+      fullPath: '/library/trash'
+      preLoaderRoute: typeof LibraryTrashLazyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings/security': {
+      id: '/settings/security'
+      path: '/security'
+      fullPath: '/settings/security'
+      preLoaderRoute: typeof SettingsSecurityLazyRouteImport
+      parentRoute: typeof SettingsLazyRoute
     }
   }
 }

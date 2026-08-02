@@ -6,7 +6,7 @@ status: draft
 
 The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.
 
-Implemented in `capsule-api` (blob storage, Postgres index, manifest envelope validation). Volatile session state lives in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
+Implementation is planned in `capsule-api::{blob,index}` behind a narrow Capsule-owned blob-store port with arbitrary backend support. Volatile session state will live in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
 
 ## Required Services
 
@@ -103,7 +103,7 @@ The server cannot read an asset's `is_deleted` flag — it lives inside the encr
 
 ## Storage Verification
 
-Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route lives in `capsule-api-media`.
+Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route will live in `capsule-api::blob`.
 
 ## Validation
 

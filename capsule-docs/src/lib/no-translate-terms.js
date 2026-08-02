@@ -54,8 +54,6 @@ const BRAND = ['Capsule'];
 
 /** Protocol, format & infrastructure names. */
 const INFRA = [
-    'GraphQL',
-    'gRPC',
     'WebSocket',
     'ProtoBuf',
     'Protobuf',

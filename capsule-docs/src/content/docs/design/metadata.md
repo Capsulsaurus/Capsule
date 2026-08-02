@@ -8,7 +8,7 @@ The CBOR sidecar is the canonical, plaintext-local-only metadata record for ever
 
 This doc is the **single source of truth** for the CBOR sidecar schema. The schema below — every field, type, and ordering rule — is the contract every implementation must conform to byte-for-byte (else cross-peer signatures break). Per the [SSoT rule](/design/principles/#single-source-of-truth), other docs reference fields here by name and never re-declare them.
 
-All metadata processing lives in `capsule-core::metadata` (extraction, filtering, querying) and `capsule-core::sidecar` (encoding, signing, schema versioning). Implementation is in Rust and exposed to all native clients via FFI from `capsule-core` — the I/O is handled natively to minimize FFI surface.
+Rawshift owns media metadata extraction and normalization. `capsule-core::metadata` maps those outputs into Capsule fields and owns filtering and querying, while `capsule-core::sidecar` owns encoding, signing, and schema versioning. Capsule will call Chromahash directly after its v1 release; that boundary is deliberately separate from Rawshift. Shared Rust contracts are exposed to native clients through `capsule-core` FFI while platform I/O stays native.
 
 ## Sidecar Schema v1
 

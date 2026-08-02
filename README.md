@@ -65,27 +65,23 @@ This is a personal choice but if you're happy with existing services like Google
 
 Components:
 
-- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)
+- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined
 - [Capsule Web](capsule-web/README.md) (WIP): Web client in React
 - [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
 - [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client
 - [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
 - [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS
-- Capsule Media: media decode/encode utilities, folded into `capsule-core` as the `media` module (behind the `media` feature)
 - [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)
 
 <!-- TODO: ensure readme links work ^^ -->
 <!-- TODO: TO be updated ^^ -->
 
-External dependencies:
+Planned server dependencies:
 
 - [PostgreSQL](https://www.postgresql.org/)
-- [MinIO](https://min.io/)
-- [RabbitMQ](https://www.rabbitmq.com/)
-- [Memcached](https://memcached.org/)
+- [Valkey](https://valkey.io/) (optional session-state adapter)
 
-- [Envoy](https://github.com/envoyproxy/envoy)
-- [Istio](https://github.com/istio/istio)
+Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service.
 
 <!-- TODO: To be updated ^^ -->
 
@@ -96,7 +92,6 @@ Considering all the technologies used, you may have to switch between IDEs to de
 - `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
 - `capsule-desktop`: VS Code or similar
 - `capsule-docs`: VS Code or similar
-- `capsule-core` (media module): VS Code or similar
 - `capsule-swift`: Xcode
 - `capsule-web`: VS Code or similar
 
@@ -138,7 +133,7 @@ A: While there are multiple great open-source solutions, they lack a lot of the 
 Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.
 **Q: For the API, were languages other than Rust considered?**
 
-A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into multiple APIs (GraphQL, REST, gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.
+A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger.
 
 **Q: How do bugfixes happen?**
 

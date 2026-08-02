@@ -20,14 +20,13 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 
 | Domain | Canonical choice | Scope | Exceptions |
 | --- | --- | --- | --- |
-| Datetime | `jiff` | All domain logic — parsing, formatting, arithmetic. Signed and wire formats carry RFC 3339 strings or integer epochs, never a datetime library type, so the pin never touches serialized bytes. | `chrono` remains **only** as the sea-orm column type in the entity crates (`capsule-api/entity`, `capsule-cli/entity`), converted to jiff at the entity boundary, and in the frozen `capsule-api-library` (async-graphql `chrono` scalars), which retires with slice S-G1. |
+| Datetime | `jiff` | All domain logic — parsing, formatting, arithmetic. Signed and wire formats carry RFC 3339 strings or integer epochs, never a datetime library type, so the pin never touches serialized bytes. | `chrono` remains **only** as the sea-orm column type in `capsule-cli/entity`, converted to jiff at the entity boundary, and in non-buildable review-only server code. |
 | Error handling | `thiserror` in libraries; `eyre` + `color-eyre` in binaries | Libraries define typed error enums; binaries (CLI, server `main`, xtask) wrap them in reports. | `anyhow` is not used. |
 | Logging | `tracing` (facade) + `tracing-subscriber` (binaries) | All crates; structured fields and hot-path spans per the traceability rule in `AGENTS.md`. The `log` facade is forbidden in new code. | Remaining `log::` call sites in `capsule-core` / `capsule-core-ffi` migrate in slice S-F6. |
 | TLS implementation | `rustls` | Wherever Capsule code holds a TLS stack: the SDK's HTTP client, [LAN-peering](/design/peering/) mutual TLS, server egress, sea-orm's `runtime-tokio-rustls`. Never native-tls/openssl. | `openssl` appears only as a transitive dependency of `webauthn-rs` attestation-certificate verification — it is never a TLS stack. |
 | Identifiers | `uuid` — **UUIDv7 for every newly introduced identifier** | Time-ordered v7 is the default (index locality); the assignment of existing ids is owned by [Metadata — Identifiers](/design/metadata/#identifiers). | UUIDv4 where an id must not leak creation time (e.g. `device_id`). Capability-bearing opaque ids (share links, drops) are not UUIDs at all — they carry their own ≥128-bit entropy per their owner docs. |
 | Async runtime | `tokio` | All async code. | — |
-| HTTP server | `salvo` | `capsule-api` REST surfaces. | — |
-| gRPC | `tonic` + `prost` | The `capsule.sync.v1` feed per [API Surfaces](/design/api-surfaces/). | — |
+| HTTP server | Kynos | All `capsule-api` REST/OpenAPI surfaces, including sync and federation. | No secondary public transport. |
 | HTTP client | `reqwest` (`default-features = false`, `rustls-tls`) | `capsule-sdk` — the sanctioned network path. | — |
 | ORM | `sea-orm` (`sqlx-postgres` on the server, `sqlx-sqlite` in the CLI) | The rebuildable index databases only — sidecars stay canonical per [Principles](/design/principles/). | — |
 | Embedded SQLite | `rusqlite` (`bundled`) | `capsule-core`'s `library.sqlite`. | — |

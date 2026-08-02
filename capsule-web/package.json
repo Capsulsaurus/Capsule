@@ -12,7 +12,9 @@
         "dev": "rsbuild dev",
         "dev:analyze": "cross-env BUNDLE_ANALYZE=true bun run dev",
         "dev:doctor": "cross-env RSDOCTOR=true bun run dev",
-        "preview": "rsbuild preview"
+        "preview": "rsbuild preview",
+        "intl:extract": "formatjs extract 'src/**/*.{ts,tsx}' --out-file build/i18n-extracted.json",
+        "intl:compile": "formatjs compile src/i18n/messages/en.json --ast --out-file build/i18n-en.json"
     },
     "dependencies": {
         "@radix-ui/react-avatar": "^1.2.0",
@@ -42,11 +44,11 @@
         "sonner": "^2.0.7",
         "tailwind-merge": "^3.6.0",
         "tailwindcss": "^4.3.1",
-        "thumbhash": "^0.1.1",
         "zod": "^4.4.3"
     },
     "devDependencies": {
         "@biomejs/biome": "^2.5.1",
+        "@formatjs/cli": "^6.16.11",
         "@rsbuild/core": "^2.1.0",
         "@rsbuild/plugin-react": "^2.1.0",
         "@rsdoctor/rspack-plugin": "^1.5.16",

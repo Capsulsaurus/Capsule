@@ -6,7 +6,7 @@ status: draft
 
 We generate thumbnails and previews for all photos and videos. This doc is the **single source of truth** for the LQIP scheme and the thumbnail/preview formats — per the [SSoT rule](/design/principles/#single-source-of-truth), other docs reference these by link rather than restating the choice. The format table is itself the contract: every receiver (and every federated peer) compares the `DerivativeManifest.format` value against this list, and an unknown value is a structural rejection.
 
-Derivative generation runs client-side in `capsule-sdk` (per-platform encoder libraries) over the shared format-detection and manifest-building logic in `capsule-core`. Server-side serving is `capsule-api-media` (it serves opaque ciphertext — never decodes).
+Rawshift owns client-side media decoding, metadata extraction, and derivative generation. Capsule core maps those outputs into signed manifests, and the planned `capsule-api::blob` module serves only opaque ciphertext.
 
 ## Thumbnail and Preview Formats
 
@@ -37,7 +37,7 @@ If an original asset is lower-resolution than the highest thumbnail tier, that t
 
 ## LQIP
 
-We use [chromahash](https://github.com/justin13888/chromahash) as a perceptual hash that decodes into a low-quality image placeholder, chosen for its color accuracy across color spaces and developed for Capsule's needs. The chromahash, its format version, and a `dominant_color` fallback are the [`lqip` field of the sidecar](/design/metadata/#sidecar-schema-v1) — inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so the placeholder is available the instant metadata syncs, before any thumbnail fetch, and never leaks to the server. A decoder that does not recognize the chromahash format version falls back to the solid `dominant_color` fill rather than misrendering, so a future chromahash revision is a versioned change, never a silent break.
+Capsule will import [Chromahash](https://github.com/justin13888/chromahash) directly after Chromahash reaches v1. Rawshift does not wrap or expose it. The chromahash, its format version, and a `dominant_color` fallback are the [`lqip` field of the sidecar](/design/metadata/#sidecar-schema-v1) — inside the [encrypted metadata blob](/design/cryptography/encryption/#metadata-encryption), so the placeholder is available the instant metadata syncs, before any thumbnail fetch, and never leaks to the server. A decoder that does not recognize the chromahash format version falls back to the solid `dominant_color` fill rather than misrendering, so a future chromahash revision is a versioned change, never a silent break.
 
 Considered and rejected: ThumbHash (smaller wire size but worse color fidelity for the wide-gamut and HDR sources Capsule expects), BlurHash (older, blurrier, less color-accurate). The single-LQIP choice avoids exactly the kind of "chromahash/ThumbHash" hedge that previously caused doc drift.
 

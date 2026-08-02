@@ -35,26 +35,24 @@ exhaustive `verify_asset` chokepoint behind the `AlbumAuthority` seam
 (`capsule_core::validation`); CRDT metadata + signed `SidecarV1` + privacy-on-export;
 deterministic signed backup (tar, AMK ledger, escrow, Shamir 2-of-3, dry-run/commit
 restore); the lifecycle `Workspace` writing through to `library.sqlite`; the cache
-eviction sweep (issue #23); the offline import pipeline (scan/plan/execute — still
-writing the legacy unsigned sidecar, see S-B2).
+eviction sweep (issue #23); and the offline import scan/group/plan pipeline. Import
+execution is deliberately absent pending the Rawshift-backed signed-path rewrite (S-B2).
 
-On the server: `capsule-api-auth` (sessions, passkeys, TOTP, OIDC) is real and
-testcontainer-tested; the custom chunked upload server exists but is unhardened (S-C1);
-everything else networked is skeleton or legacy (below).
+The previous Salvo server, gRPC sync bridge, and Progenitor SDK are non-buildable review
+material under `legacy-review/`. The replacement server is planned as one Kynos
+REST/OpenAPI application; no deployable server or Rust SDK currently exists.
 
 **Contract skeletons in-tree** (this PR): manifest `key_mode`/`wrapped_file_key`/
 `metadata_blob_hash` fields + `asset-keywrap/v1` label; `crypto::keys::p256`;
 `capsule_core::{drop, sharing}`; `library::{space, storage_verify}` (with the pure
-`streaming_recommended` and `release_is_safe` predicates implemented);
-`capsule-api-media::{verify, drops}` + `capsule-api-auth::devices` route stubs;
-`capsule-api-upload::envelope` gate stub; the `capsule.sync.v1` proto + `SyncFeedService`
-stub. The design-review pass added: the upload server's contract-complete session/
-request types + append-only store + `error.upload.*` taxonomy (enforcement = S-C1);
+`streaming_recommended` and `release_is_safe` predicates implemented). Review-only
+server routes, upload/session shapes, and sync sketches are preserved for contract
+extraction; replacement enforcement is owned by S-C1/S-C2. The design-review pass added:
+an `error.upload.*` taxonomy;
 sidecar `stack_membership: Lww<Option<…>>`, `cull`, and `hidden` (implemented +
 tested); `capsule_core::cohort` and `capsule_core::backup::verify_recovery_secret`
-(implemented + tested); `UploadPolicy`/`UploadTier`, `capsule-sdk::net`
-(`ConnectionClass`/`RetryClass`), and `original_held` on the sync proto. Each names
-its slice.
+(implemented + tested); and review-only upload-policy and connection/retry taxonomies.
+Each names its slice.
 
 ## Slice index
 
@@ -118,10 +116,10 @@ its slice.
 | S-F5  | Hardware DEK binding                                 | platform/FFI    | S-F2             | M    | ready   |
 | S-F6  | `log` → `tracing` migration (core + core-ffi)        | platform/FFI    | —                | S    | ready   |
 | S-F7  | core-swift XCTest → swift-testing migration          | platform/FFI    | —                | S    | ready   |
-| S-G1  | GraphQL retirement                                   | legacy-retire   | S-C2, S-D6       | M    | blocked |
-| S-G2  | Legacy plaintext proto/service removal               | legacy-retire   | S-C2, S-D2       | S    | blocked |
-| S-G3  | Plaintext entity retirement (face/person/smart_tag)  | legacy-retire   | S-G1, S-H3       | M    | blocked |
-| S-G4  | Legacy import-executor removal                       | legacy-retire   | S-B2             | S    | blocked |
+| S-G1  | GraphQL retirement                                   | legacy-retire   | —                | M    | done    |
+| S-G2  | gRPC/plaintext proto retirement                      | legacy-retire   | —                | S    | done    |
+| S-G3  | Plaintext server entity quarantine                   | legacy-retire   | —                | M    | done    |
+| S-G4  | Legacy import-executor quarantine                    | legacy-retire   | —                | S    | done    |
 | S-H1  | Embeddings + sqlite-vec index                        | ML              | —                | L    | ready   |
 | S-H2  | Model registry + version regen                       | ML              | S-H1             | M    | ready   |
 | S-H3  | Semantic/face features                               | ML              | S-H1             | L    | ready   |
@@ -199,7 +197,7 @@ pass until the gate lifts.
 
 | Library | Status | Gates |
 | --- | --- | --- |
-| `rawshift` (in-house RAW decode; git submodule, alpha, consumed by nothing yet) | stabilizing | Full RAW support in S-B1/S-B2. v1 ships the zune-jpeg format set; the `media::image::formats::raw` stub is the integration point. |
+| `rawshift` (in-house media pipeline; git submodule, alpha, consumed by nothing yet) | stabilizing | Decode, metadata, derivative, preview, and video adapter contracts for S-B1/S-B2/S-B5; Capsule owns the narrow adapter and fixtures. |
 | `spargen` (in-house OpenAPI **3.1** client generator) | in development | S-D8 (typed REST client + `AuthenticatedClient` revival). Progenitor is gone — we do not downgrade schemas to 3.0. |
 | `geocoordinates-rs` (in-house WGS-84 ↔ GCJ-02/BD-09 conversions) | planned | The deterministic client-side coordinate conversion named in [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md); consumed by map display, S-H3 geo features, and S-A7's exact BD-09→GCJ-02 input fold. Until it lands, verbatim datum storage is unaffected (display conversion and the BD-09 fold are the gated pieces). |
 | `ptpip-rs` (in-house PTP/IP camera protocol; repo not yet created) | planned | S-B9 (post-v1). Portable Rust PTP/IP (ISO 15740 over TCP/IP) with a vendor-extension seam (Sony first) — see [Import — Camera Import](capsule-docs/src/content/docs/design/import/camera-import.md). |
@@ -308,10 +306,9 @@ pass until the gate lifts.
 ### S-B1 — Thumbnail/LQIP generation
 
 - **Contract:** [Thumbnails](capsule-docs/src/content/docs/design/thumbnails.md).
-- **Deliverable:** **still-image** thumbnail/preview generation over
-  `capsule_core::media` (the folded former `capsule-media` crate, behind the
-  non-default `media` feature; today it decodes JPEG only — format decoders grow as
-  needed), chromahash LQIP + `dominant_color` into the sidecar `lqip` field,
+- **Deliverable:** **still-image** thumbnail/preview generation through a narrow
+  Rawshift adapter, plus direct Chromahash v1 LQIP + `dominant_color` integration into
+  the sidecar `lqip` field,
   `DerivativeManifest`-signed outputs. Video tiers are split to S-B5 (distinct
   transcode toolchain).
 - **Done when:** generation produces the committed still formats with signed
@@ -321,10 +318,10 @@ pass until the gate lifts.
 ### S-B2 — Signed-path import-executor rewrite
 
 - **Contract:** [Import — Pipeline](capsule-docs/src/content/docs/design/import/pipeline.md) (status note).
-- **Deliverable:** the legacy `import::executor` unified onto the signed
+- **Deliverable:** a new executor over Rawshift results and the signed
   `lifecycle::Workspace` path (signed `SidecarV1` + manifest + provenance + derivatives),
-  retiring the unsigned `AssetSidecar` write path.
-- **Depends on:** S-B1 (derivative generation is the missing input). **Blocks:** S-G4.
+  informed by but not restoring `legacy-review/core-import-media/`.
+- **Depends on:** S-B1 (derivative generation is the missing input).
 - **Done when:** an executor import produces `verify_asset`-accepting assets with
   derivatives; planner determinism suite unchanged.
 - **Tier:** Unit (planner) + Smoke (executor).
@@ -423,7 +420,7 @@ pass until the gate lifts.
 
 - **Contract:** [Import — Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md),
   [Validation invariants 1–15](capsule-docs/src/content/docs/design/threat-model/validation.md).
-- **Deliverable:** the `EnvelopeGate` (skeleton in `capsule-api-upload/src/envelope.rs`)
+- **Deliverable:** the Kynos `capsule-api::upload` envelope gate
   wired ahead of every write with `capsule_core::validation::protocol_gate` +
   `check_manifest_envelope` (already implemented and unit-tested in core) plus the
   top-level↔envelope consistency check (`error.upload.envelope_mismatch`); the
@@ -449,24 +446,20 @@ pass until the gate lifts.
 
 ### S-C2 — Key-free sync feed
 
-- **Contract:** `capsule-api/sync/proto/capsule/sync/v1/sync.proto` (in-tree),
-  [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md),
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md),
   [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md).
-- **Deliverable:** `SyncFeedService` implemented — per-album `sync_seq` minted in the
+- **Deliverable:** a Kynos REST sync feed — per-album `sync_seq` minted in the
   finalization transaction, the HMAC'd opaque cursor (invariant 22), entries carrying
   the manifest as opaque CBOR + metadata blob + blob refs + the `original_held`
-  completeness fact (proto field in-tree; staged-uploads contract); gRPC metadata
-  negotiation per the api-surfaces mapping; the salvo↔tonic bridge verified
-  end-to-end.
-- **Depends on:** S-C1. **Blocks:** S-C8, S-D2, S-E2, S-G1, S-G2.
+  completeness fact; REST header negotiation per the API-surface mapping.
+- **Depends on:** S-C1. **Blocks:** S-C8, S-D2, S-E2.
 - **Done when:** the download-sync doc's sync-feed Validation bullets (monotonicity,
   forward-version rejection, rewind rejection, cursor authenticity) pass server-side.
 - **Tier:** Unit + Smoke + E2E case 3.
 
 ### S-C3 — Storage-verification endpoint
 
-- **Contract:** [Storage Verification](capsule-docs/src/content/docs/design/import/storage-verification.md);
-  stub `capsule-api-media/src/routes/verify.rs`.
+- **Contract:** [Storage Verification](capsule-docs/src/content/docs/design/import/storage-verification.md).
 - **Deliverable:** `POST /storage/verify` computing stored/indexed/retrievable from the
   blob store + Postgres, the `deep` re-hash (rate-limited, coalesced), and the
   GC-grace interaction that keeps a just-verified blob out of byte deletion.
@@ -488,7 +481,7 @@ pass until the gate lifts.
 
 - **Contract:** [Web Upload](capsule-docs/src/content/docs/design/web-upload.md),
   [Validation invariants 26–32](capsule-docs/src/content/docs/design/threat-model/validation.md);
-  stubs `capsule-api-media/src/routes/drops.rs`.
+  planned `capsule-api::drops` module.
 - **Deliverable:** drop sessions under link-capability auth (+ Argon2id passphrase
   verifier), chunks via the upload mechanics, the inbox rows, and the single-transaction
   inbox→album promotion on adoption (invariant 32).
@@ -499,7 +492,7 @@ pass until the gate lifts.
 ### S-C6 — Quota service
 
 - **Contract:** [Quota](capsule-docs/src/content/docs/design/quota.md).
-- **Deliverable:** `capsule-api-service::quota` per the doc's contract skeleton —
+- **Deliverable:** `capsule-api::quota` per the doc's contract skeleton —
   accounting sums, the five states (incl. the Grace-expired lifecycle-write exemption),
   enforcement at session creation/cancellation/metadata-growth, `GET /quota`.
 - **Done when:** the quota doc's seven Validation bullets pass. **Tier:** Unit + Smoke.
@@ -508,7 +501,7 @@ pass until the gate lifts.
 ### S-C7 — Device-enrollment endpoints
 
 - **Contract:** [Device Enrollment](capsule-docs/src/content/docs/design/device-enrollment.md);
-  stubs `capsule-api-auth/src/routes/devices.rs`.
+  planned `capsule-api::auth::devices` routes.
 - **Deliverable:** enrollment-code issue/redeem (single-use, 10-min, rate-limited,
   deleted on redemption/expiry), the relay channel, and the directory-update path for
   cross-device add.
@@ -604,7 +597,7 @@ pass until the gate lifts.
 - **Contract:** [Authorization — The Lifecycle Write Surface](capsule-docs/src/content/docs/design/authorization.md),
   [Validation invariants 16–18 + 25](capsule-docs/src/content/docs/design/threat-model/validation.md),
   [API Surfaces — transport row](capsule-docs/src/content/docs/design/api-surfaces.md).
-- **Deliverable:** `POST /albums/{album_id}/ops` in `capsule-api-upload::ops` — the
+- **Deliverable:** `POST /albums/{album_id}/ops` in `capsule-api::upload::ops` — the
   signed manifest bundle (opaque canonical-CBOR manifest + encrypted metadata blob
   when the action carries one) through S-C1's `EnvelopeGate` before any write;
   invariants 16 (closed action set), 17 (`prior_provenance_hash` chain match,
@@ -621,7 +614,7 @@ pass until the gate lifts.
 
 ## Lane D — SDK / clients
 
-`capsule-sdk` is the **sanctioned network path**: it owns the session/token store and
+The planned `capsule-sdk` is the **sanctioned network path**: it will own the session/token store and
 auto refresh (S-D7), the complete user-flow primitives (login → upload → status →
 sync), and their FFI exposure to Swift/Kotlin/Linux (S-D9). Native apps consume the
 SDK; they never hand-roll network flows.
@@ -629,7 +622,7 @@ SDK; they never hand-roll network flows.
 ### S-D1 — SDK upload client
 
 - **Contract:** [Import — Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md);
-  the `todo!()` stubs in `capsule-sdk/src/upload.rs`.
+  the review-only workflow contract under `legacy-review/sdk-progenitor/`.
 - **Deliverable:** the hand-written chunked, resumable, adaptive upload client — the
   protocol is too stateful for codegen; the spargen-generated REST client (S-D8)
   covers the plain request/response surfaces instead. Implements create/PATCH/HEAD/
@@ -650,14 +643,14 @@ SDK; they never hand-roll network flows.
 ### S-D2 — SDK sync/download client
 
 - **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md).
-- **Deliverable:** the gRPC sync consumer (cursor high-water marks, per-album
+- **Deliverable:** the Kynos REST sync consumer (cursor high-water marks, per-album
   `sync_seq` anti-rewind, forward-version rejection), tiered on-demand fetch with the
   degrade ladder (403-as-authorization-change), resumable ranged blob fetch, and the
   connection-class detection (taxonomy owned by
   [Networking](capsule-docs/src/content/docs/design/networking.md); `ConnectionClass`
   seam in `capsule-sdk::net`) that feeds the cache-eviction byte budget and the
   staged-upload tier gates.
-- **Depends on:** S-C2, S-C9. **Blocks:** S-D5, S-D6, S-E3, S-G1, S-G2.
+- **Depends on:** S-C2, S-C9. **Blocks:** S-D5, S-D6, S-E3.
 - **Done when:** the download-sync doc's client Validation bullets pass; E2E case 3
   lives. **Tier:** Unit + Smoke.
 
@@ -712,10 +705,10 @@ SDK; they never hand-roll network flows.
 ### S-D7 — SDK auth/session foundation + auto token refresh
 
 - **Contract:** [Authentication — Session and Access Tokens](capsule-docs/src/content/docs/design/authentication.md);
-  the parked `AuthenticatedClient` shape in `capsule-sdk/src/lib.rs`.
+  the review-only `AuthenticatedClient` shape under `legacy-review/sdk-progenitor/`.
 - **Deliverable:** the SDK-owned session/token store and refresh engine — a quick
   asynchronous pre-flight check on token expiry before each request, single-flight
-  refresh, 401-retry-once — hand-rolled `reqwest` against the real `capsule-api-auth`
+  refresh, 401-retry-once — hand-rolled `reqwest` against the planned `capsule-api::auth`
   endpoints (no spargen dependency), exposing the login → authenticated-call → logout
   primitives. This is the "SDK owns the complete user flow" foundation: native apps
   never juggle raw tokens.
@@ -726,7 +719,7 @@ SDK; they never hand-roll network flows.
 ### S-D8 — spargen REST client integration
 
 - **Contract:** [API Surfaces — Why Two Transports](capsule-docs/src/content/docs/design/api-surfaces.md);
-  the parked wrapper in `capsule-sdk/src/lib.rs`.
+  the review-only wrapper under `legacy-review/sdk-progenitor/`.
 - **Blocked on:** in-house `spargen` (OpenAPI 3.1 client generator) reaching usable
   stability **and** the server's OpenAPI schema stabilizing post-S-C1. Unblock check:
   spargen repo milestones; re-evaluate monthly.
@@ -955,39 +948,34 @@ SDK; they never hand-roll network flows.
   `import XCTest` outside UI-automation targets.
 - **Tier:** Smoke per platform.
 
-## Lane G — legacy retirement (frozen until preconditions)
+## Lane G — completed legacy quarantine
 
-Every `LEGACY-PLAINTEXT (frozen)` marker in the tree names its slice here. Frozen code
-keeps compiling and takes no new surface.
+These removals landed before the replacement implementations. Review material is
+non-buildable under `legacy-review/` and may return only through a contract-tested rewrite.
 
 ### S-G1 — GraphQL retirement
 
 - **Contract:** [API Surfaces — Legacy: GraphQL](capsule-docs/src/content/docs/design/api-surfaces.md).
-- **Deliverable:** delete `capsule-api-library` (schema, disabled dataloaders, the
-  `library` feature) once the client-side query path reaches parity.
-- **Depends on:** S-C2, S-D6 (the parity precondition is explicit: the web app's reads
-  run on the gateway, not GraphQL — today they run on the mock, so nothing user-facing
-  breaks earlier, but retirement waits for the real path). **Blocks:** S-G3.
+- **Delivered:** the GraphQL schema and transport were removed from the active workspace;
+  web reads remain on the gateway seam pending the Kynos sync-backed implementation.
 
 ### S-G2 — Legacy plaintext proto/service removal
 
-- **Deliverable:** delete `photolibrary.metadata.v1` (proto + `CapsuleMetadataService`)
-  once `capsule.sync.v1` serves clients. **Depends on:** S-C2, S-D2.
+- **Delivered:** the Tonic/protobuf sync bridge and plaintext metadata service were
+  removed from the active workspace. The replacement feed is Kynos REST.
 
 ### S-G3 — Plaintext entity retirement
 
 - **Contract:** [Filesystem — Server: PostgreSQL](capsule-docs/src/content/docs/design/filesystem/server.md)
   (the key-free row set).
-- **Deliverable:** retire the server-side plaintext-era entities (`face`, `person`,
-  `smart_tag`, `memory`, and the plaintext columns on `asset`) with forward-only
-  migrations down to the key-free set; their features re-land client-side
-  ([AI/ML](capsule-docs/src/content/docs/design/ai.md) + client-side views).
-- **Depends on:** S-G1, S-H3 (feature parity client-side before the server rows go).
+- **Delivered:** the plaintext-era entities and Salvo persistence stack are quarantined.
+  Any replacement schema is designed key-free from its contract and forward-only
+  migrations ([AI/ML](capsule-docs/src/content/docs/design/ai.md) + client-side views).
 
 ### S-G4 — Legacy import-executor removal
 
-- **Deliverable:** delete the unsigned `AssetSidecar` write path once S-B2 lands.
-  **Depends on:** S-B2.
+- **Delivered:** the unsigned executor was moved to `legacy-review/core-import-media/`.
+  S-B2 builds a new Rawshift-backed signed executor rather than restoring it.
 
 ## Lane H — ML (client-side)
 

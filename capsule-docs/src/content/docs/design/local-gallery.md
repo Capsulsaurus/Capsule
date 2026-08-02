@@ -20,6 +20,7 @@ The [offline/online divide principle](/design/principles/#principles) is the roo
 
 - **SR1 — Gated views require fresh local auth.** Opening the **Recently Deleted** (trash) view or the **Hidden** view requires fresh local authentication — biometric where enrolled (Face ID / Touch ID / BiometricPrompt), else the device or account credential. One grant covers a short grace window (default 5 minutes, per-view), after which re-auth is required. The gate is view-time UX protection against a borrowed-unlocked-phone snoop; it is **not** a cryptographic boundary (the same data is reachable through the filesystem by anyone who can defeat the platform sandbox — see SR2 for what actually protects bytes at rest).
 - **SR2 — At-rest posture per platform, stated honestly.**
+
   | Platform | Store | Protection from other apps / the user's file browser |
   | --- | --- | --- |
   | iOS | App-private container | Sandbox denies other apps; not visible in Files unless exported; file-level Data Protection (FBE) at rest |

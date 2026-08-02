@@ -20,21 +20,3 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # JUnit output for CI dashboards (written to target/nextest/ci/junit.xml).
 [profile.ci.junit]
 path = "junit.xml"
-
-# The capsule-api-auth integration tests spin up shared Postgres + Valkey containers and
-# share a tracing `Once`; running them concurrently is the main flakiness source. Pin the
-# group to one thread — the causal fix, with retries as the backstop.
-[test-groups.containers]
-max-threads = 1
-
-[[profile.default.overrides]]
-filter = 'package(capsule-api-auth)'
-test-group = 'containers'
-# Container startup is slower than a unit test — give it more headroom before the kill.
-slow-timeout = { period = "120s", terminate-after = 3 }
-
-[[profile.ci.overrides]]
-filter = 'package(capsule-api-auth)'
-test-group = 'containers'
-slow-timeout = { period = "120s", terminate-after = 3 }
-retries = 5

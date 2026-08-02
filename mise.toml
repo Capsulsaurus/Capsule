@@ -73,6 +73,7 @@ run = ["mise run format-check", "mise run lint-check", "mise run test"]
 [tasks.check-rust]
 description = "Rust CI gate"
 run = [
+  "mise run architecture-check",
   "mise run format-check-rust",
   "mise run lint-check-rust",
   "mise run i18n-check",
@@ -132,6 +133,10 @@ run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 
 [tasks.build-rust]
 run = "cargo build --workspace"
+
+[tasks.architecture-check]
+description = "Verify active Rust workspace and retired-component boundaries"
+run = "cargo run -q -p xtask -- architecture-check"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
 # (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
@@ -194,19 +199,19 @@ run = ["mise run build-apple", "mise run build-android", "mise run build-linux-c
 
 [tasks.format-web]
 dir = "capsule-web"
-run = "bunx biome format --write ."
+run = "bun x biome format --write ."
 
 [tasks.format-check-web]
 dir = "capsule-web"
-run = "bunx biome format ."
+run = "bun x biome format ."
 
 [tasks.lint-web]
 dir = "capsule-web"
-run = "bunx biome check --write ."
+run = "bun x biome check --write ."
 
 [tasks.lint-check-web]
 dir = "capsule-web"
-run = "bunx biome check ."
+run = "bun x biome check ."
 
 [tasks.test-web]
 dir = "capsule-web"
@@ -220,19 +225,19 @@ run = "bun run build"
 
 [tasks.format-docs]
 dir = "capsule-docs"
-run = "bunx biome format --write ."
+run = "bun x biome format --write ."
 
 [tasks.format-check-docs]
 dir = "capsule-docs"
-run = "bunx biome format ."
+run = "bun x biome format ."
 
 [tasks.lint-docs]
 dir = "capsule-docs"
-run = "bunx biome check --write ."
+run = "bun x biome check --write ."
 
 [tasks.lint-check-docs]
 dir = "capsule-docs"
-run = "bunx biome check ."
+run = "bun x biome check ."
 
 [tasks.build-docs]
 dir = "capsule-docs"
@@ -293,10 +298,10 @@ run = "uv run ruff check && uv run ty check"
 # is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
 
 [tasks.lint-md]
-run = "bunx markdownlint-cli2 --fix"
+run = "bun x markdownlint-cli2 --fix"
 
 [tasks.lint-check-md]
-run = "bunx markdownlint-cli2"
+run = "bun x markdownlint-cli2"
 
 # ── Commits / release ────────────────────────────────────────────────────────
 # convco enforces Conventional Commits (https://www.conventionalcommits.org).

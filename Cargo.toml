@@ -1,38 +1,16 @@
 [workspace]
 members = [
-    "capsule-api",
-    "capsule-api/auth",
-    "capsule-api/library",
-    "capsule-api/media",
-    "capsule-api/service",
-    "capsule-api/entity",
-    "capsule-api/sync",
-    "capsule-api/migration",
-    "capsule-api/model",
-    "capsule-api/testing",
-    "capsule-api/upload",
     "capsule-cli",
+    "capsule-cli/entity",
     "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
     "capsule-i18n",
-    "capsule-sdk",
     "xtask",
 ]
-# capsule-sdk requires a pre-generated openapi.json (run generate_openapi.sh first)
 default-members = [
-    "capsule-api",
-    "capsule-api/auth",
-    "capsule-api/library",
-    "capsule-api/media",
-    "capsule-api/service",
-    "capsule-api/entity",
-    "capsule-api/sync",
-    "capsule-api/migration",
-    "capsule-api/model",
-    "capsule-api/testing",
-    "capsule-api/upload",
     "capsule-cli",
+    "capsule-cli/entity",
     "capsule-cli/migration",
     "capsule-core",
     "capsule-core-ffi",
@@ -48,35 +26,14 @@ publish = false
 [workspace.dependencies]
 argon2 = "0.5.3"
 base64 = "0.22.1"
-bb8 = "0.9.1"
-bb8-redis = "0.26.0"
 bytes = "1.11"
 chrono = { version = "0.4.45", features = ["serde"] }
 data-encoding = "2.11.0"
-derive_more = "2.1.1"
 eyre = "0.6.12"
-futures-util = "0.3.32"
 indexmap = { version = "2.14.0", features = ["serde"] }
 jiff = { version = "0.2", features = ["serde"] }
-jsonwebtoken = { version = "10.4.0", features = ["aws_lc_rs"] }
 log = { version = "0.4.32", features = ["release_max_level_debug"] }
-file-format = "0.28"
 nanoid = "0.4.0"
-num-rational = { version = "0.4.2", features = ["serde"] }
-prost = "0.14.4"
-prost-types = "0.14.4"
-redis = { version = "1.2.2", features = ["tokio-comp", "connection-manager"] }
-ring = "0.17.14"
-salvo = { version = "0.86.0", features = [
-    "oapi",
-    "cors",
-    "server",
-    "http2",
-    "http2-cleartext",
-    "tower-compat",
-    "test",
-    "affix-state",
-] }
 sea-orm = { version = "1.1.20" }
 sea-orm-migration = { version = "1.1.20", features = [
     "sqlx-postgres",
@@ -85,20 +42,9 @@ sea-orm-migration = { version = "1.1.20", features = [
 secrecy = { version = "0.10.3", features = ["serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-testcontainers = "0.26.3"
-testcontainers-modules = { version = "0.14.0", features = [
-    "postgres",
-    "redis",
-] }
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["full"] }
-tonic = "0.14.6"
-tonic-health = "0.14.6"
-tonic-types = "0.14.6"
-tonic-prost = "0.14.6"
-tonic-prost-build = { version = "0.14.6" }
 uuid = { version = "1.23.3", features = ["v4"] }
-tower-http = { version = "0.6.11", features = ["cors"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 sha2 = "0.10"

@@ -6,7 +6,7 @@ status: draft
 
 Authorization in Capsule is **the same proof as a write**: every lifecycle transition — create, replace, delete, metadata-update, derivative add/replace, trash-restore — is an [asset manifest](/design/cryptography/provenance/#asset-manifest) signed under the album's per-epoch write-tier key. There is no weaker path to destroy data than to add it.
 
-This rule pulls authorization decisions out of any single trust boundary: the server can refuse to execute (it cannot forge destruction), and the client can refuse to apply (it cannot be tricked by a server-asserted change). The logic lives in two places that share the same verification machinery: `capsule-api-auth::roles` enforces structural envelope checks server-side, and `capsule-core::crypto::provenance` runs the [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint client-side. Both pull from the same closed action enum below.
+This rule pulls authorization decisions out of any single trust boundary: the server can refuse to execute (it cannot forge destruction), and the client can refuse to apply (it cannot be tricked by a server-asserted change). The logic lives in two places that share the same verification machinery: the planned `capsule-api::auth` module enforces structural envelope checks server-side, and `capsule-core::crypto::provenance` runs the [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint client-side. Both pull from the same closed action enum below.
 
 ## The Closed Action Set
 
@@ -46,7 +46,7 @@ The endpoint is deliberately singular — one closed enum, one gate, one transac
 - The accepted op appends the provenance record and mints the per-album `sync_seq` in **one transaction**, the same finalization rule the [sync feed](/design/import/download-sync/) relies on — an op is visible on the feed exactly when it is durable.
 - Rejections carry an [`error.*` code](/design/i18n/#server-error-codes) and write nothing; the rejection itself is logged.
 
-The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implemented in `capsule-api-upload::ops` (planned — slice `S-C16`, reusing the upload server's envelope gate).
+The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-api::upload::ops` (slice `S-C16`, reusing the upload server's envelope gate).
 
 ## The Server Executes But Never Authorizes
 

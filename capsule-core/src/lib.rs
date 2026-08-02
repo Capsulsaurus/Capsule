@@ -6,12 +6,9 @@ pub mod crypto;
 pub mod db;
 pub mod domain;
 pub mod drop;
-pub mod exif;
 pub mod import;
 pub mod library;
 pub mod lifecycle;
-#[cfg(feature = "media")]
-pub mod media;
 pub mod metadata;
 pub mod models;
 pub mod sharing;

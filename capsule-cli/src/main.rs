@@ -1,11 +1,6 @@
 use std::path::Path;
 
 use capitalize::Capitalize;
-use capsule_core::domain::ImportMode;
-use capsule_core::import::scanner::scan as scan_files;
-use capsule_core::import::{
-    CancellationToken, ImportConfig, ImportOutcome, ImportProgressEvent, execute, plan,
-};
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::metadata::FileMetadata;
 use clap::Parser;
@@ -120,122 +115,6 @@ async fn main() -> Result<()> {
                     .map_err(|e| eyre!("Failed to close library: {e}"))?;
             }
         },
-
-        // ── Import ────────────────────────────────────────────────────────
-        Commands::Import {
-            path,
-            library,
-            r#move,
-            force,
-        } => {
-            println!(
-                "{}",
-                format!(
-                    "Importing {} into library {}...",
-                    path.to_string_lossy().blue(),
-                    library.to_string_lossy().blue()
-                )
-                .green()
-            );
-
-            let lib = open_library_or_err(&library)?;
-
-            // Phase 1: Scan
-            println!("{}", "Scanning source files...".cyan());
-            let scan_result = scan_files(&[path]).map_err(|e| eyre!("Scan failed: {e}"))?;
-
-            println!(
-                "{}",
-                format!(
-                    "Found {} candidates ({} files total)",
-                    scan_result.candidates.len(),
-                    scan_result.total_files()
-                )
-                .green()
-            );
-
-            // Phase 2: Plan
-            let config = ImportConfig {
-                import_mode: if r#move {
-                    ImportMode::Move
-                } else {
-                    ImportMode::Copy
-                },
-                force_reimport_duplicates: force,
-                target_album_id: None,
-            };
-
-            let plan_result =
-                plan(&scan_result, &lib.db, &config).map_err(|e| eyre!("Planning failed: {e}"))?;
-
-            println!(
-                "{}",
-                format!(
-                    "Plan: {} to import, {} duplicates skipped, {} unsupported/errors",
-                    plan_result.counts.to_import,
-                    plan_result.counts.duplicates,
-                    plan_result.counts.unsupported + plan_result.counts.errors,
-                )
-                .cyan()
-            );
-
-            if plan_result.counts.to_import == 0 {
-                println!("{}", "Nothing to import.".yellow());
-                lib.close()
-                    .map_err(|e| eyre!("Failed to close library: {e}"))?;
-                return Ok(());
-            }
-
-            // Phase 3: Execute
-            println!("{}", "Importing...".cyan());
-            let token = CancellationToken::new();
-
-            let summary = execute(
-                &plan_result,
-                &lib,
-                &config,
-                |event| {
-                    if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event {
-                        for (path, outcome) in &outcomes {
-                            let msg = format!("  {}", path.display());
-                            match outcome {
-                                ImportOutcome::Imported => {
-                                    println!("{}", format!("✓ {msg}").green());
-                                }
-                                ImportOutcome::DuplicateSkipped { .. } => {
-                                    println!("{}", format!("= {msg} (duplicate)").yellow());
-                                }
-                                ImportOutcome::CorruptTransfer => {
-                                    println!("{}", format!("✗ {msg} (corrupt transfer)").red());
-                                }
-                                ImportOutcome::CorruptUnreadable(e) => {
-                                    println!("{}", format!("✗ {msg} (unreadable: {e})").red());
-                                }
-                                _ => {
-                                    println!("{}", format!("- {msg}").dimmed());
-                                }
-                            }
-                        }
-                    }
-                },
-                &token,
-            )
-            .map_err(|e| eyre!("Import execution failed: {e}"))?;
-
-            println!(
-                "{}",
-                format!(
-                    "Done: {} imported, {} duplicates, {} errors",
-                    summary.imported_count(),
-                    summary.duplicate_count(),
-                    summary.error_count()
-                )
-                .green()
-            );
-
-            lib.close()
-                .map_err(|e| eyre!("Failed to close library: {e}"))?;
-        }
 
         // ── Demo ──────────────────────────────────────────────────────────
         Commands::Demo { workdir, image } => {

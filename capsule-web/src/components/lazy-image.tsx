@@ -1,54 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
-import { useMemo } from 'react';
-import { thumbHashToRGBA } from 'thumbhash';
 
-// Helper to decode base64 to byte array
-function base64ToBytes(base64: string) {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
-}
+type LazyImageProps = React.ImgHTMLAttributes<HTMLImageElement>;
 
-// Convert rgba to data url
-function thumbHashToDataURL(hash: string) {
-    const bytes = base64ToBytes(hash);
-    const { w, h, rgba } = thumbHashToRGBA(bytes);
-    const canvas = document.createElement('canvas');
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return '';
-    const imageData = ctx.createImageData(w, h);
-    imageData.data.set(rgba);
-    ctx.putImageData(imageData, 0, 0);
-    return canvas.toDataURL();
-}
-
-interface LazyImageProps extends React.ImgHTMLAttributes<HTMLImageElement> {
-    thumbhash?: string;
-}
-
-export function LazyImage({
-    src,
-    alt,
-    className,
-    thumbhash,
-    ...props
-}: LazyImageProps) {
-    // Generate placeholder URL
-    const placeholderUrl = useMemo(() => {
-        if (!thumbhash) return null;
-        try {
-            return thumbHashToDataURL(thumbhash);
-        } catch (e) {
-            console.error('Failed to decode thumbhash', e);
-            return null;
-        }
-    }, [thumbhash]);
-
+export function LazyImage({ src, alt, className, ...props }: LazyImageProps) {
     const { data: loadedSrc, isSuccess } = useQuery({
         queryKey: ['image', src],
         queryFn: async () => {
@@ -77,7 +31,7 @@ export function LazyImage({
             className={`relative overflow-hidden w-full h-full bg-muted ${className || ''}`}
         >
             <img
-                src={loadedSrc || (placeholderUrl ?? '')}
+                src={loadedSrc || ''}
                 data-loaded={!!isLoaded}
                 className={`w-full h-full object-cover transition-opacity duration-500 ease-in-out ${isLoaded ? 'opacity-100' : 'opacity-0'}`}
                 {...props}
@@ -86,15 +40,7 @@ export function LazyImage({
 
             {!isLoaded && (
                 <div className="absolute inset-0 pointer-events-none">
-                    {placeholderUrl ? (
-                        <img
-                            src={placeholderUrl}
-                            alt=""
-                            className="w-full h-full object-cover blur-xl scale-110 animate-pulse opacity-80"
-                        />
-                    ) : (
-                        <div className="w-full h-full bg-muted animate-pulse" />
-                    )}
+                    <div className="w-full h-full bg-muted animate-pulse" />
                 </div>
             )}
         </div>

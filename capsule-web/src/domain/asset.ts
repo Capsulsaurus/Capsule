@@ -26,6 +26,4 @@ export interface Asset {
     width: number;
     /** Intrinsic pixel height, for justified layout. */
     height: number;
-    /** ThumbHash (base64) for an instant blurred placeholder. */
-    thumbhash: string;
 }

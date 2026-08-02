@@ -106,16 +106,16 @@ The pipeline decides which assets to *start*; the [upload protocol](/design/impo
 What the rest of the system depends on this module for:
 
 - `ImportPlan` — the deterministic output of the planner; rendered to the UI for confirmation. Schema fields: `added` (each entry carrying its resolved destination `album_id`), `skipped`, `conflicts`, `total_size`, `import_id` (UUIDv7), and `streaming_recommended` (set at confirmation from the [free-space probe](#plan--confirm), not by the pure planner).
-- `available_bytes() → u64` (planned) — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
-- `execute(plan, cancel_token) → ImportExecutionReport` — the executor entry-point. Honors the cancel token at every file boundary. Returns per-file status. In [streaming mode](#import-upload-streaming-mode) it drives the per-asset import→upload→verify→release window instead of executing-then-uploading in bulk.
-- A stable progress event stream so the UI can report per-asset state (queued / encrypting / uploading / done / failed).
+- `available_bytes() → u64` — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
+- Planned `execute(plan, cancel_token) → ImportExecutionReport` — a replacement executor built over Rawshift plus Capsule's direct Chromahash integration, privacy mapping, encryption, signing, and commit boundaries. The old plaintext executor is review-only under `legacy-review/core-import-media/`.
+- A planned stable progress event stream so the UI can report per-asset state (queued / processing / encrypting / uploading / done / failed).
 
 ## Validation
 
 - **Planner determinism (unit).** Table-driven tests over `(scan_input, library_state) → expected_plan`. Every conflict-resolution and dedup-detection path is its own row. Default-album resolution is part of the input snapshot, so a given `(context, pointer/overrides)` yields a deterministic destination `album_id`.
 - **Scanner format-rejection (unit).** Every unsupported extension and every malformed-header case produces a structured rejection, never a panic.
-- **Executor cancellation (smoke).** Run a real executor against a temp library, cancel mid-flight, assert no partial bundle is left on disk and a re-run produces the same plan minus already-completed files.
-- **Resume after interruption (smoke).** Plan → execute partially → kill the process → re-run. The deterministic planner re-derives the same plan; already-completed assets are skipped.
+- **Executor cancellation (planned smoke).** Run the replacement executor against a temp library, cancel mid-flight, assert no partial bundle is left on disk and a re-run produces the same plan minus already-completed files.
+- **Resume after interruption (planned smoke).** Plan → execute partially → kill the process → re-run. The deterministic planner re-derives the same plan; already-completed assets are skipped.
 - **Streaming auto-detect (unit).** With `available_bytes()` mocked below and above `total_size + headroom`, assert `streaming_recommended` is set in the constrained case and clear otherwise.
 - **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
 - **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.

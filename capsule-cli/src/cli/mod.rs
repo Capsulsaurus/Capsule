@@ -7,7 +7,7 @@ pub(crate) use commands::*;
 #[command(name = "capsule")]
 #[command(about = "A command line interface for Capsule - the photo management platform")]
 #[command(
-    long_about = "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Import photos from local directories\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections"
+    long_about = "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]

@@ -108,7 +108,7 @@ Mirror checklist that every client implements before applying any received data 
 
 Every versioned API surface — client-to-server uploads, sync feed, federation pull, peering — runs the same compatibility gate. The gate is **fail-closed**: a mismatch is a hard reject before any state is written, never a silent degrade.
 
-The rules are stated once, in REST terms (headers + HTTP statuses). On the gRPC surfaces the same values ride call metadata and the same rejections map onto gRPC status codes per [API Surfaces](/design/api-surfaces/#negotiation-across-transports) — one gate, two carriages.
+The rules are stated once in REST terms (headers + HTTP statuses) and applied by shared Kynos middleware to every public route, including sync and federation. There is one gate and one carriage; a new surface cannot bypass it.
 
 ### Universal Headers
 

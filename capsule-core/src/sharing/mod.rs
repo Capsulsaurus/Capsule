@@ -5,8 +5,8 @@
 //! Capsule account: `https://server.tld/s/{opaque-id}#{secret}`. The fragment secret
 //! carries the decryption material and never reaches the server; an optional passphrase
 //! wraps it a second time via the password-based KDF, unwrapped **client-side** (the
-//! server stores and returns only the wrapped material). The serving endpoints live in
-//! `capsule-api-media::shares`; this module owns link generation and capability
+//! server stores and returns only the wrapped material). The serving endpoints are planned in
+//! `capsule-api::shares`; this module owns link generation and capability
 //! validation on the issuing client.
 //!
 //! [Share Links]: https://docs/design/share-links/
