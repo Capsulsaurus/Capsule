@@ -34,14 +34,12 @@ ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
 indexmap = { workspace = true }
-kamadak-exif = "0.5"
 log = { workspace = true }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-tzf-rs = "0.4"
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 walkdir = "2"
 sha2 = { workspace = true }

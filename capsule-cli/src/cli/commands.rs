@@ -9,20 +9,6 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: AuthCommands,
     },
-    /// Import files into a local Capsule library
-    Import {
-        /// Source file or directory to import
-        path: PathBuf,
-        /// Path to the Capsule library
-        #[arg(long, value_name = "PATH")]
-        library: PathBuf,
-        /// Move files instead of copying them
-        #[arg(long)]
-        r#move: bool,
-        /// Re-import files even if they already exist (duplicate override)
-        #[arg(long)]
-        force: bool,
-    },
     /// Manage the local library
     Library {
         #[command(subcommand)]

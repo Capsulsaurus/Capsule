@@ -10,7 +10,6 @@ file-format = { workspace = true, optional = true }
 indexmap = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
-thumbhash = "0.1.0"
 tokio = { workspace = true }
 zune-core = "0.5.1"
 zune-jpeg = "0.5.15"

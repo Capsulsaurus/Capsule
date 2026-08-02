@@ -9,7 +9,6 @@ use crate::image::types::ImageFormat;
 
 pub mod buffer;
 pub mod formats;
-pub mod lqip;
 pub mod metadata;
 pub mod presets;
 pub mod types;
