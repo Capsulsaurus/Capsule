@@ -78,8 +78,9 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
 
 ### Networked server/client
 
-- All transport is out of scope here: the HTTP/TUS upload server, GraphQL resolvers, the
-  `/sync` feed, federation, peering, and the `capsule-sdk` network client. The **pure**
+- All transport is out of scope here: the Kynos REST/OpenAPI server, Capsule-owned resumable
+  upload protocol, `/sync` feed, federation, peering, and the planned Spargen-generated
+  `capsule-sdk` network client. The **pure**
   refuse-by-default validation invariants those paths need are implemented in
   `capsule_core::validation` and ready to wire into `capsule-api`.
 - The **storage-verification endpoint (`POST /storage/verify`) + verify-before-destroy gate**
@@ -88,7 +89,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   retrievable = refcount > 0 and not `collectable_since`/quarantined/dangling), and the
   standing client rule is that no destructive local cleanup of irreplaceable bytes proceeds
   without a `durable` verdict. **Seam:** the verdict is pure index+filesystem inspection that
-  drops into `capsule-api-media`; the verify-before-destroy predicate is a pure `capsule-core`
+  drops into the planned `capsule-api::blob`; the verify-before-destroy predicate is a pure `capsule-core`
   function the cache-eviction sweep, move-import, and streaming import all consume; the
   offline core's `verify_asset` already covers the complementary crypto-validity half of the
   gate.
@@ -107,7 +108,7 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   `capsule_core::library::cache_sweep` deletes evicted cache files (never the canonical `media/`
   files or the index). The byte budget is a plain parameter, so `capsule-sdk` connection-class
   detection drives it unchanged. Still deferred upstream: that connection-class budget detection
-  and the wider networked server/client (HTTP/TUS, GraphQL, `/sync`, federation, peering).
+  and the wider Kynos server/client surface (resumable upload, `/sync`, federation, peering).
 
 ### ML / AI
 
@@ -133,20 +134,20 @@ complements the design docs in `capsule-docs/src/content/docs/design/`.
   the envelope hash-match check land in `crypto::provenance` /
   `crypto::verify_asset` and the `capsule-api` envelope validator when the
   networked write path is wired.
-- Thumbnail/LQIP generation beyond `capsule-media`'s existing utilities.
-- Fusing the crypto data plane into the **existing plaintext import executor**
-  (`capsule_core::import::executor`) — **partially done.** `capsule_core::lifecycle::Workspace`
+- Thumbnail and metadata processing through Rawshift, plus Capsule's direct Chromahash integration
+  after Chromahash reaches v1.
+- Replacing the now-quarantined plaintext import executor with the crypto data plane.
+  `capsule_core::lifecycle::Workspace`
   now writes through to the shared `library.sqlite` index: every import / metadata edit /
   soft-delete upserts the queryable `assets` row (+ user tags) and records a device-owned
   `original` cache representation, so crypto-imported assets are timeline-queryable and feed the
-  Phase-3 cache sweep. Dedup against `assets` is consequently **global** across both import
-  paths. **Still deferred:** the legacy `import::executor` keeps writing the unsigned
-  `AssetSidecar`; replacing it with the signed `SidecarV1` + manifest + provenance path needs
-  the deferred thumbnail/LQIP (media) generation, so the full executor rewrite is a follow-up.
+  Phase-3 cache sweep. The old `import::executor` and EXIF path are retained only under
+  `legacy-review/core-import-media/`; their reusable orchestration must be reviewed against
+  Rawshift, direct Chromahash output, signed `SidecarV1`, manifests, and provenance before return.
 
 ## How to see it working
 
 ```bash
-cargo test --workspace --exclude capsule-sdk      # full unit + e2e test surface
+cargo test --workspace                            # full unit + e2e test surface
 cargo run -p capsule-cli -- demo --workdir /tmp/capsule-demo   # narrated end-to-end showcase
 ```

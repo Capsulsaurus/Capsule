@@ -16,3 +16,12 @@
 - After editing `locales/`, run `just i18n` to regenerate the per-platform files (Rust bundle, web JSON, Android `strings.xml`, iOS `.xcstrings`). Generated files are committed and carry a "do not edit by hand" banner; `just i18n-check` (part of `check-rust`) fails on drift.
 - Keys use dotted namespaces (`area.subarea.name`). Server errors carry a stable `code` from the `error.*` namespace (referenced via `capsule_i18n::error_codes`); clients localize the code while the English detail message stays English.
 - See the [i18n design doc](capsule-docs/src/content/docs/design/i18n.md) for the full contract and `locales/README.md` for the contributor workflow.
+
+## Rust Architecture Decisions
+
+- The public server surface is Kynos REST/OpenAPI only. Do not reintroduce Salvo, GraphQL, or gRPC.
+- Generate clients with Spargen from the checked-in Kynos OpenAPI contract. Do not use Progenitor.
+- Rawshift owns media decoding, metadata extraction, and derivative generation. Capsule imports Chromahash directly only after its v1 release; Rawshift must not wrap it.
+- Blob storage and resumable encrypted upload remain Capsule-owned behind narrow, arbitrary-backend ports. Do not add `object_store` or generic CAS/transfer crates without revisiting the security contract.
+- Keep authentication state and upload-session state as separate Capsule ports with PostgreSQL, `redis-rs`, and in-memory adapters. Do not introduce a generic TTL/CAS abstraction.
+- `legacy-review/` is non-buildable reference material. Restore code only after defining its contract and automated tests against the decisions above.

@@ -7,7 +7,7 @@ This is a fully-featured web client for Capsule. It is built using React, Rsbuil
 ### Prerequisites
 
 - Install Bun
-- Get `capsule-api` setup and development server running (see [capsule-api/README.md](../capsule-api/README.md))
+- The replacement API is not available yet; UI-only development uses local fixtures
 
 ### Starting
 
@@ -16,17 +16,16 @@ This is a fully-featured web client for Capsule. It is built using React, Rsbuil
     ```bash
     # Install dependencies
     bun install
-    # Generate GraphQL types
-    bun run codegen:watch
     # Run development server
     bun dev
     # Build production build
     bun run build
     # Preview production build locally
     bun run preview
-
-    # After graphql queries are changed (if not using watch mode)
-    bun run codegen
     ```
 
 2. Open <http://localhost:5173/> with your browser to see the result.
+
+### API
+
+The web client will consume the checked-in Kynos REST/OpenAPI contract through the planned Spargen-generated SDK. The replacement server and SDK are not available yet.

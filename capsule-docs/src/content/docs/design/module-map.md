@@ -1,162 +1,94 @@
 ---
 title: Module Map
-description: Index of every code module to its owning design doc and validation tier
+description: Current Rust modules, planned boundaries, and validation ownership
 ---
 
-This is the developer's first stop. It maps every Capsule workspace crate and module to the design doc(s) that govern its behavior, and to the validation tier (Unit / Smoke / E2E — see [Validation Tiers](/design/principles/#validation-tiers)) it ships with. The E2E test surface at the bottom is **bounded**: adding a test there means adding the test to the relevant doc's Validation section and justifying why the cross-module surface is irreducible.
+This map distinguishes code that is active today from contracts that are planned or preserved only
+for review. A name in the design does not imply that a deployable implementation exists.
 
-The mapping reflects the *design intent*. Some modules listed below are currently planned (annotated `(planned)`) rather than already implemented in the codebase — the doc structure already accounts for them so the boundary is set before code lands.
+## Current Status
 
-## Crate Roster
+| Area | Status | Ownership |
+| --- | --- | --- |
+| `capsule-core` | Active | Cryptography, canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite, import scan/plan |
+| `capsule-i18n` + `xtask::i18n` | Active | Canonical ICU catalogs, runtime localization, generated platform catalogs |
+| `capsule-core-ffi` | Active, consolidation pending | Legacy low-level UniFFI surface; the high-level `capsule-core` FFI is the intended destination |
+| `capsule-cli` + CLI entity/migration crates | Active, consolidation pending | Local CLI behavior and its legacy SQLite persistence stack |
+| Client import execution | Quarantined | Rebuild over Rawshift plus direct Chromahash v1; scan, grouping, and planning remain active |
+| Server | Quarantined | Rebuild with Kynos as REST/OpenAPI-only `capsule-api` modules |
+| Rust SDK | Quarantined | Regenerate with Spargen from the canonical Kynos OpenAPI document |
+| Media pipeline | Quarantined | Rawshift replaces in-repository codecs and metadata extraction |
+| GraphQL and gRPC transports | Deleted | Rejected; no compatibility surface will be restored |
 
-| Crate                     | Purpose                                                                                                           |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `capsule-core`            | Shared logic across server and clients: cryptography, library layout, import pipeline, metadata, ML orchestration |
-| `capsule-sdk`             | Client SDK: auto-generated OpenAPI client, upload protocol, per-platform hardware-key + peering glue              |
-| `capsule-api`             | Server entry-point + routing                                                                                      |
-| `capsule-api-auth`        | Authentication, sessions, OIDC, device directory                                                                  |
-| `capsule-api-library`     | GraphQL API for UI queries (assets, albums, search)                                                               |
-| `capsule-api-upload`      | TUS-like resumable upload protocol server                                                                         |
-| `capsule-api-media`       | Media serving (ciphertext blobs, public shares)                                                                   |
-| `capsule-api-sync`        | gRPC sync API + federation                                                                                        |
-| `capsule-api-service`     | Higher-level service layer over the entity model (album, asset, friendship, passkey, stack, user, quota)          |
-| `capsule-api-entity`      | Sea-ORM entities (Postgres schema)                                                                                |
-| `capsule-api-model`       | Business-logic models on top of entities                                                                          |
-| `capsule-api-migration`   | Sea-ORM migrations                                                                                                |
-| `capsule-api-environment` | Configuration, env vars, feature flags                                                                            |
-| `capsule-api-testing`     | Shared test utilities (testcontainer setup, schema fixtures)                                                      |
-| `capsule-cli`             | Command-line client                                                                                               |
-| `capsule-media`           | Standalone media utility crate                                                                                    |
-| `capsule-i18n`            | Runtime localization (locale negotiation + ICU message formatting) for the server and CLI                         |
+Review-only sources live under `legacy-review/`. They are not Cargo packages and have no validation
+status until rewritten against their owning contracts.
 
-## Module → Design Doc
+## Active `capsule-core` Ownership
 
-### `capsule-core`
+| Module | Owning design | Validation |
+| --- | --- | --- |
+| `crypto::{primitives,keys,encryption,provenance,verify_asset}` | [Cryptography](/design/cryptography/) and [Authorization](/design/authorization/) | Unit vectors, negative cases, smoke |
+| `backup` | [Backup and Recovery](/design/backup-recovery/) | Unit and smoke |
+| `library::{init,open,rebuild,scrub,trash,cache}` | [Client Filesystem](/design/filesystem/client/) and [Maintenance](/design/filesystem/maintenance/) | Unit and smoke |
+| `import::{scanner,planner,group,special}` | [Import Pipeline](/design/import/pipeline/) | Unit; executor smoke is blocked on Rawshift |
+| `metadata`, `sidecar` | [Metadata](/design/metadata/) | Unit determinism and round trips |
+| `db` | [Client Filesystem](/design/filesystem/client/) | Unit SQLite operations |
+| `domain`, `models` | [Organization](/design/organization/), [Metadata](/design/metadata/) | Closed-enum and model unit tests |
 
-| Module                                                                  | Owning design doc                                                                                              | Validation tier                               |
-| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
-| `crypto::primitives` (planned)                                          | [Cryptography — Primitives](/design/cryptography/primitives/)                                                  | Unit (RFC vectors)                            |
-| `crypto::keys` (planned)                                                | [Cryptography — Keys](/design/cryptography/keys/), [Device Enrollment](/design/device-enrollment/)             | Unit + Smoke (hardware per-platform)          |
-| `crypto::mls` (planned)                                                 | [Cryptography — MLS](/design/cryptography/mls/), [MLS Resilience](/design/mls-resilience/)                     | Unit + Smoke (protocol round-trip)            |
-| `crypto::encryption` (planned)                                          | [Cryptography — Encryption](/design/cryptography/encryption/)                                                  | Unit (KAT, round-trip)                        |
-| `crypto::provenance` (planned)                                          | [Cryptography — Provenance](/design/cryptography/provenance/)                                                  | Unit (exhaustive negative cases) + Smoke      |
-| `crypto::verify_asset` (planned)                                        | [Cryptography — Write Authorization](/design/cryptography/keys/#write-authorization)                           | Unit (the single chokepoint; exhaustive)      |
-| `backup` (planned)                                                      | [Backup and Recovery](/design/backup-recovery/)                                                                | Unit + Smoke                                  |
-| `library::{init,open,rebuild,lock,paths,scrub,trash}`                   | [Filesystem — Client](/design/filesystem/client/), [Filesystem — Maintenance](/design/filesystem/maintenance/) | Unit + Smoke                                  |
-| `import::{scanner,planner,executor,plan,upload,group,progress,special}` | [Import — Pipeline](/design/import/pipeline/)                                                                  | Unit (planner determinism) + Smoke (executor) |
-| `metadata::{file,filter,types}`                                         | [Metadata](/design/metadata/)                                                                                  | Unit (filtering)                              |
-| `sidecar::*`                                                            | [Metadata — Sidecar Schema](/design/metadata/#sidecar-schema-v1)                                               | Unit (serde determinism)                      |
-| `exif::{extract,timezone}`                                              | [Metadata](/design/metadata/)                                                                                  | Unit                                          |
-| `db::{driver,schema,rows}`                                              | [Filesystem — Client](/design/filesystem/client/)                                                              | Unit (SQLite ops)                             |
-| `domain::*` (enums)                                                     | [Organization](/design/organization/), [Authorization](/design/authorization/), [Metadata](/design/metadata/)  | Unit (closed-enum rejection)                  |
-| `models::*`                                                             | [Metadata](/design/metadata/), [Import — Pipeline](/design/import/pipeline/)                                   | Unit                                          |
-| `ml` (planned)                                                          | [AI/ML Integrations](/design/ai/)                                                                             | Unit + Smoke (inference parity per-platform)  |
-| `sharing` (planned)                                                     | [Share Links](/design/share-links/)                                                                            | Unit                                          |
+MLS, sharing, peering, and ML remain planned. OpenMLS and inference engines are implementation
+dependencies; Capsule retains the application protocols, schemas, provenance, and policy.
 
-### `capsule-sdk`
+## Planned Server Modules
 
-| Module                    | Owning design doc                                                                                  | Validation tier                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| (auto-generated client)   | [Clients](/design/clients/)                                                                        | Smoke (re-generated; not unit-tested) |
-| `upload`                  | [Import — Upload Protocol](/design/import/upload-protocol/)                                        | Unit + Smoke (client side)            |
-| `peering` (planned)       | [Peering](/design/peering/)                                                                        | Unit + Smoke per platform             |
-| `hardware-keys` (planned) | [Cryptography — Keys](/design/cryptography/keys/), [Device Enrollment](/design/device-enrollment/) | Smoke per platform                    |
+The future `capsule-api` is one Kynos REST/OpenAPI application composed from cohesive internal
+modules, not separate public transports or microservices.
 
-### `capsule-api` (root + sub-crates)
+| Module | Contract owner | Required validation |
+| --- | --- | --- |
+| `auth` | [Authentication](/design/authentication/) and [Device Enrollment](/design/device-enrollment/) | Unit plus Postgres/Valkey adapter parity |
+| `upload` | [Upload Protocol](/design/import/upload-protocol/) | State-machine property tests, adapter parity, smoke and E2E |
+| `blob` | [Server Filesystem](/design/filesystem/server/) and [Storage Verification](/design/import/storage-verification/) | Layout, range, corruption, crash, quarantine and GC tests |
+| `sync` | [Download and Sync](/design/import/download-sync/) | Cursor, monotonicity, pagination and range-resume tests |
+| `shares` | [Share Links](/design/share-links/) | Capability and expiry tests |
+| `federation` | [Federation](/design/federation/) | Capability, compartmentalization and pull-path tests |
+| `quota`, `moderation` | [Quota](/design/quota/) and [Moderation](/design/moderation/) | Unit plus policy smoke tests |
 
-| Module                                               | Owning design doc                                                                    | Validation tier                             |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------- |
-| `capsule-api` (routing)                              | [Filesystem — Server](/design/filesystem/server/)                                    | Smoke                                       |
-| `capsule-api-auth::{oidc,session,claims,roles}`      | [Authentication](/design/authentication/), [Authorization](/design/authorization/)   | Unit + Smoke (testcontainer Postgres/Redis) |
-| `capsule-api-auth::devices` (planned for enrollment) | [Device Enrollment](/design/device-enrollment/)                                      | Smoke                                       |
-| `capsule-api-library::schema::*`                     | [Metadata](/design/metadata/), [Organization](/design/organization/)                 | Smoke (GraphQL)                             |
-| `capsule-api-library::loaders`                       | [Filesystem — Server](/design/filesystem/server/)                                    | Unit (DataLoader)                           |
-| `capsule-api-upload`                                 | [Import — Upload Protocol](/design/import/upload-protocol/)                          | Unit + Smoke + 1 E2E                        |
-| `capsule-api-media::routes`                          | [Filesystem — Server](/design/filesystem/server/), [Thumbnails](/design/thumbnails/) | Smoke                                       |
-| `capsule-api-media::verify` (planned)                | [Import — Storage Verification](/design/import/storage-verification/) | Unit + Smoke                                |
-| `capsule-api-media::shares` (planned)                | [Share Links](/design/share-links/)                                                  | Unit + Smoke                                |
-| `capsule-api-sync` (sync feed)                       | [Import — Download & Sync](/design/import/download-sync/)                            | Unit + Smoke + 1 E2E                        |
-| `capsule-api-sync::federation`                       | [Federation](/design/federation/)                                                    | Unit + Smoke + 1 E2E                        |
-| `capsule-api-service::album`                         | [Organization](/design/organization/)                                                | Unit                                        |
-| `capsule-api-service::asset`                         | [Authorization](/design/authorization/), [Organization](/design/organization/)       | Unit + Smoke                                |
-| `capsule-api-service::quota` (planned)               | [Quota](/design/quota/)                                                              | Unit                                        |
-| `capsule-api::moderation` (planned)                  | [Moderation](/design/moderation/)                                                    | Smoke                                       |
-| `capsule-api-entity::*` (Sea-ORM)                    | [Filesystem — Server](/design/filesystem/server/)                                    | Unit (Sea-ORM CRUD)                         |
-| `capsule-api-migration`                              | [Versioning](/design/versioning/) (forward-only migrations)                          | Smoke (migration run)                       |
-| `capsule-api-environment`                            | (configuration; no design owner)                                                     | Unit                                        |
-| `capsule-api-testing`                                | (test utilities; no design owner)                                                    | n/a                                         |
+The server owns its content-addressed blob implementation behind a Capsule-defined backend trait.
+The E2EE-aware resumable protocol also stays in Capsule. Authentication state and upload state use
+separate typed ports; no generic CAS, transfer, or TTL library is planned.
 
-### `capsule-cli`, `capsule-media`, `capsule-i18n`
+## Planned Client Boundaries
 
-| Crate           | Owning design doc                                    | Validation tier |
-| --------------- | ---------------------------------------------------- | --------------- |
-| `capsule-cli`   | [Clients](/design/clients/) (treats CLI as a client) | Smoke           |
-| `capsule-media` | (small utility crate; no specific design owner)      | Unit            |
-| `capsule-i18n`  | [Internationalization](/design/i18n/)                | Unit + Smoke    |
+| Boundary | Decision |
+| --- | --- |
+| REST client | Spargen-generated Rust from a checked-in OpenAPI 3.1 document |
+| SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
+| Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work |
+| LQIP | Capsule imports Chromahash directly after v1; Rawshift has no Chromahash responsibility |
+| Import commit | Capsule applies privacy policy, creates sidecars/provenance, encrypts, signs, and commits normalized media results |
 
-## Design Doc → Module (Reverse Lookup)
+## External Dependency Register
 
-Navigation from a design doc back to where the code lives.
+These are the intended complexity boundaries. A dependency is not added to an active manifest until
+the named acceptance gaps are verified with contract fixtures or a minimal spike.
 
-| Design doc                                                          | Implementing modules                                                                                                          |
-| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| [Principles](/design/principles/)                                   | (meta — no specific code module)                                                                                              |
-| [Cryptography — Primitives](/design/cryptography/primitives/)       | `capsule-core::crypto::primitives` (planned)                                                                                  |
-| [Cryptography — Keys](/design/cryptography/keys/)                   | `capsule-core::crypto::keys`, `capsule-sdk::hardware-keys` (both planned)                                                     |
-| [Cryptography — MLS](/design/cryptography/mls/)                     | `capsule-core::crypto::mls` (planned, wraps OpenMLS)                                                                          |
-| [Cryptography — Encryption](/design/cryptography/encryption/)       | `capsule-core::crypto::encryption` (planned)                                                                                  |
-| [Cryptography — Provenance](/design/cryptography/provenance/)       | `capsule-core::crypto::provenance` + `verify_asset` chokepoint (planned)                                                      |
-| [Cryptography — Failure Modes](/design/cryptography/failure-modes/) | Cross-cutting: `capsule-core::backup`, `capsule-core::library`, `capsule-core::crypto::*`                                     |
-| [MLS Resilience](/design/mls-resilience/)                           | `capsule-core::crypto::mls` (extends main MLS module)                                                                         |
-| [Device Enrollment](/design/device-enrollment/)                     | `capsule-core::crypto::keys`, `capsule-api-auth::devices`                                                                     |
-| [Authentication](/design/authentication/)                           | `capsule-api-auth::{oidc,session,claims}`                                                                                     |
-| [Authorization](/design/authorization/)                             | `capsule-api-auth::roles`, `capsule-core::crypto::provenance` (verify_asset)                                                  |
-| [Clients](/design/clients/)                                         | `capsule-sdk` + per-platform native code                                                                                      |
-| [Internationalization](/design/i18n/)                               | `capsule-i18n` (runtime) + `xtask::i18n` (codegen) + `locales/` source + per-platform generated catalogs                     |
-| [Versioning](/design/versioning/)                                   | Cross-cutting: `capsule-api` (header enforcement), `capsule-core::crypto::mls` (upgrade ceremony), `capsule-api-migration`    |
-| [Backup and Recovery](/design/backup-recovery/)                     | `capsule-core::backup` (planned), `capsule-api-auth` (escrow surface)                                                         |
-| [Metadata](/design/metadata/)                                       | `capsule-core::{metadata,sidecar,exif}`, `capsule-api-library::schema`                                                        |
-| [Filesystem — Server](/design/filesystem/server/)                   | `capsule-api`, `capsule-api-entity`, blob store glue                                                                          |
-| [Filesystem — Client](/design/filesystem/client/)                   | `capsule-core::{library,db}`, per-platform native code                                                                        |
-| [Filesystem — Maintenance](/design/filesystem/maintenance/)         | `capsule-core::library::{scrub,rebuild,trash}`, server-side scrub in `capsule-api-upload`                                     |
-| [Import — Pipeline](/design/import/pipeline/)                       | `capsule-core::import::*` (incl. the streaming import-upload loop) + `capsule-core::library::available_bytes` (free-space probe) |
-| [Import — Upload Protocol](/design/import/upload-protocol/)         | `capsule-sdk::upload` (client) + `capsule-api-upload` (server)                                                                |
-| [Import — Download & Sync](/design/import/download-sync/)           | `capsule-sdk` (client) + `capsule-api-sync` (server)                                                                          |
-| [Import — Storage Verification](/design/import/storage-verification/) | `capsule-api-media::verify` (route) + `capsule-sdk` (client) + `capsule-core` (verify-before-destroy predicate)              |
-| [Federation](/design/federation/)                                   | `capsule-api-sync::federation`                                                                                                |
-| [Peering](/design/peering/)                                         | `capsule-sdk::peering` (planned) + `capsule-core::backup` (artifact format)                                                   |
-| [Organization](/design/organization/)                               | `capsule-core::domain::stack_type`, `capsule-api-service::{album,stack}`                                                      |
-| [AI/ML Integrations](/design/ai/)                                   | `capsule-core::ml` (planned), model registry + per-platform inference runners                                                 |
-| [Thumbnails](/design/thumbnails/)                                   | Client-side gen in `capsule-sdk` + serving in `capsule-api-media`                                                             |
-| [Share Links](/design/share-links/)                                 | `capsule-core::sharing` (planned), `capsule-api-media::shares` (planned)                                                      |
-| [Moderation](/design/moderation/)                                   | `capsule-api::moderation` (planned)                                                                                           |
-| [Quota](/design/quota/)                                             | `capsule-api-service::quota` (planned)                                                                                        |
-| [Threat Model](/design/threat-model/)                               | Enforced across every validation chokepoint: `capsule-core::crypto::verify_asset` (client), `capsule-api` validators (server) |
-| [Threat Model — Scenarios](/design/threat-model/scenarios/)         | (catalog; each row maps to the owner doc's module)                                                                            |
-| [Threat Model — Validation](/design/threat-model/validation/)       | `capsule-api` envelope checks (server-side), `capsule-core::crypto::verify_asset` (client-side)                               |
-| [Threat Model — Schema Rules](/design/threat-model/schema-rules/)   | `capsule-core::crypto` decoders + `capsule-api` validators (closed-enum + Postel asymmetry)                                   |
+| Library | Scope Capsule delegates | Acceptance gaps Capsule must verify |
+| --- | --- | --- |
+| Kynos | HTTP runtime, REST routing, middleware composition, OpenAPI 3.1 emission, limits, shutdown, observability | Streaming request/response bodies, cancellation and backpressure; deterministic schema output; custom protocol/error headers on every response; middleware ordering; test harnesses without live infrastructure |
+| Spargen | Rust client generation from the checked-in Kynos OpenAPI contract | OpenAPI 3.1 compatibility; streaming upload/range download; opaque binary bodies; stable error-code mapping; auth and protocol headers; supported Rust targets; deterministic generation and version-compatibility checks |
+| Rawshift | Media detection, decoding/encoding, metadata normalization, derivatives, previews, and video processing | Required format/codec matrix; bounded memory and concurrency; cancellation/progress; malformed-input isolation; deterministic orientation/color/HDR behavior; normalized metadata provenance; mobile/desktop targets; no Chromahash API |
+| Chromahash v1 | LQIP encode/decode only, imported directly by Capsule | Stable v1 wire format and versioning; deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. It remains absent from Cargo until v1 is released |
+| OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
+| PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
+| `redis-rs` | Optional Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; parity with PostgreSQL and in-memory test suites |
+| RustCrypto, `ciborium`, `rusqlite`, UniFFI | Existing crypto primitives, canonical serialization, local catalog, and native bindings | Continue vectors, canonical-byte tests, migration tests, and binding smoke tests; these libraries do not own Capsule protocols or schemas |
+
+Explicit non-dependencies: no generic CAS crate, `object_store`, resumable-transfer library, generic
+TTL/CAS library, GraphQL/gRPC stack, or in-repository media codec stack. Reconsider extraction only
+after a product-neutral interface has two real consumers and removes more audit surface than it adds.
 
 ## E2E Test Surface
 
-The bounded global list of cross-module integration tests. Editing this list requires updating the relevant doc's Validation section. **Adding an E2E case past this list is a signal the design has unwanted coupling worth examining** before adding the test.
-
-Target count: ≤ 12 cases. Each one is named by what it proves — not "test X" but "X works through Y and Z."
-
-1. **Auth → Library query.** Log in via OIDC → access-token → GraphQL query for own albums returns expected list. Covers `capsule-api-auth::oidc + session` × `capsule-api-library::schema`.
-2. **Full import + upload + finalize.** Local scan → plan → execute → upload session → finalize → blob present at `blobs/{hash}` + index row marked uploaded. Covers `capsule-core::import` × `capsule-sdk::upload` × `capsule-api-upload` × `capsule-api-entity`.
-3. **Sync feed pickup.** Upload from device A → device B's `/sync` advances → device B fetches metadata blob and (per scope) the original. Covers `capsule-api-sync` × `capsule-sdk` download path × `capsule-core::library` write.
-4. **Federation cross-server pull.** Alice on `home.tld` shares to Bob on `other.tld` → capability token → Bob's server pulls metadata + blobs → Bob's client renders. Covers `capsule-api-sync::federation` (both sides) × `capsule-api-auth` (capability issue).
-5. **LAN peering A→B.** Two devices on the same LAN; mDNS discovery → TLS handshake → delta-scoped artifact → restore on receiver → byte-equal libraries. Covers `capsule-sdk::peering` × `capsule-core::backup` × `capsule-core::library`.
-6. **Backup → restore on a fresh device.** Export full backup → bootstrap new device via passphrase + escrow → import backup → assert every asset present and verifiable. Covers `capsule-core::backup` × `capsule-core::crypto::keys` × `capsule-core::library`.
-7. **Full lifecycle.** Create → metadata-update → trash → restore → re-delete → hard-purge after retention. Provenance chain advances through every transition; server refuses purge before `retention_until`. Covers `capsule-api-auth::roles` × `capsule-core::crypto::provenance` × server purge worker.
-8. **Album upgrade ceremony.** Multi-member album; admin initiates upgrade → quiesce → drain → tombstone → fork → queued writes replay. Includes one resume-from-crash mid-ceremony. Covers `capsule-core::crypto::mls` × `capsule-api` × client UI.
-9. **Cross-version protocol gate.** Client with `protocol_version` outside server's range attempts upload; receives `426`; UI surfaces actionable error. Covers `capsule-api` handshake × `capsule-sdk` error handling.
-10. **Model regen after version bump.** Bump canonical model version; assert stale embeddings excluded from queries; background regen produces fresh embeddings; queries return correct results post-regen. Covers `capsule-core::ml` × `capsule-core::db` vector index.
-11. **Server crash mid-finalization.** Inject crash between blob rename and Postgres transaction commit; restart; assert session moves to `FailedProcessing` cleanly, no orphaned blob, no zombie pending row. Covers `capsule-api-upload` × `capsule-api-entity` × `capsule-api`'s startup scrub.
-12. **Cross-device enrollment.** Existing device A authorizes new device B over a verified channel (enrollment code + safety-code check) → B generates hardware keys → A cross-signs B into the device directory → B joins each album's MLS group → B's library matches A's. Includes one MITM-on-relay abort. Covers `capsule-api-auth::devices` × `capsule-core::crypto::keys` × `capsule-sdk::hardware-keys`.
-
-## Using This Map
-
-- **When implementing a module:** find it in [Module → Design Doc](#module--design-doc), open the owning doc, read the contracts and the validation tier expectations. The unit + smoke surface defined in that doc should be authorable without leaving the module.
-- **When adding a feature:** find the relevant design doc via the [reverse lookup](#design-doc--module-reverse-lookup); confirm the feature fits within an existing module's scope or warrants a new one. If new, add a row here.
-- **When considering an E2E test:** check this list first. If your proposed test isn't here, either it's an existing case in disguise (use that), or the design has cross-module coupling worth surfacing — discuss before adding.
+The future irreducible E2E cases are authentication-to-authorized REST, import-to-upload-to-storage
+verification, sync feed pickup, federation pull, backup restore, hardware-signer import, and server
+crash during finalization. Each must remain backed primarily by unit and adapter-contract tests.

@@ -3,9 +3,9 @@ title: Upload Protocol
 description: The wire protocol between Capsule clients and the server for resumable, content-addressed uploads
 ---
 
-The upload protocol is a custom resumable-upload protocol modeled on [TUS](https://tus.io/) but trimmed to Capsule's needs: no per-request capability negotiation, no metadata smuggled in headers, ciphertext-only payloads. Compatibility is gated once, up front, via the universal [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).
+The upload protocol is Capsule-owned because session state, encrypted-blob provenance, finalization, and future access semantics are one end-to-end security contract. Standard HTTP resumable-transfer and [tus](https://tus.io/) semantics are implementation references, not a compatibility target or a reason to extract a generic transfer library. Compatibility is gated once, up front, via the universal [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).
 
-This protocol is the most fragile contract between client and server: a client that misunderstands chunk alignment, offset semantics, or finalization can silently corrupt or orphan data. The endpoint table, the chunk rules, the session state machine, and the finalization steps below **are the contract** — every implementation MUST conform exactly. The client implementation lives in `capsule-sdk::upload`; the server in `capsule-api-upload`. The two are tested independently against the protocol surface.
+This protocol is the most fragile contract between client and server: a client that misunderstands chunk alignment, offset semantics, or finalization can silently corrupt or orphan data. The endpoint table, chunk rules, session state machine, and finalization steps below **are the contract** — every implementation MUST conform exactly. Implementations are planned in `capsule-sdk::upload` and `capsule-api::upload`; they will be tested independently against shared protocol fixtures.
 
 Every upload is **idempotent** but stateful. Uploads can complete partially and are identified by an *upload ID*.
 

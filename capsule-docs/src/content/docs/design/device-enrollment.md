@@ -10,7 +10,7 @@ A Capsule account has one or more devices, each holding a hardware-bound DSK + D
 
 These are distinct from **[cross-device recovery](/design/backup-recovery/#default-mechanisms)** (which is also a way to bring up a new device, but in the recovery context — the user has lost their other devices and is using the recovery passphrase + master-key escrow to restore).
 
-Implementation will live in `capsule-core::crypto::keys` (key generation and wrapping) and `capsule-api-auth::devices` (the device directory and the enrollment authentication surface). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt).
+Implementation will live in `capsule-core::crypto::keys` (key generation and wrapping) and the planned `capsule-api::auth::devices` module (the device directory and enrollment authentication surface). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt).
 
 ## First-Device Enrollment
 
@@ -60,7 +60,7 @@ The two ceremonies may share underlying code (channel-establishment, key-transfe
 // in capsule-core::crypto::keys
 fn first_device_setup(passphrase: &str) -> Result<EnrollmentResult, EnrollmentError>;
 
-// in capsule-api-auth::devices
+// planned in capsule-api::auth::devices
 fn issue_enrollment_code() -> EnrollmentCode;       // server stores a short-lived record
 fn redeem_enrollment_code(code: EnrollmentCode) -> Result<ChannelHandle, EnrollmentError>;
 

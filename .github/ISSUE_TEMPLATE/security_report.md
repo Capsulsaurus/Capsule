@@ -18,7 +18,6 @@ assignees: ''
 - [ ] capsule-core-rust
 - [ ] capsule-desktop
 - [ ] capsule-docs
-- [ ] capsule-media
 - [ ] capsule-swift
 - [ ] capsule-web
 - [ ] Other: _____________________

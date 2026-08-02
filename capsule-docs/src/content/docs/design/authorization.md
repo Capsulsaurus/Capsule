@@ -5,7 +5,7 @@ description: The closed lifecycle-action set and how every destructive operation
 
 Authorization in Capsule is **the same proof as a write**: every lifecycle transition — create, replace, delete, metadata-update, derivative add/replace, trash-restore — is an [asset manifest](/design/cryptography/provenance/#asset-manifest) signed under the album's per-epoch write-tier key. There is no weaker path to destroy data than to add it.
 
-This rule pulls authorization decisions out of any single trust boundary: the server can refuse to execute (it cannot forge destruction), and the client can refuse to apply (it cannot be tricked by a server-asserted change). The logic lives in two places that share the same verification machinery: `capsule-api-auth::roles` enforces structural envelope checks server-side, and `capsule-core::crypto::provenance` runs the [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint client-side. Both pull from the same closed action enum below.
+This rule pulls authorization decisions out of any single trust boundary: the server can refuse to execute (it cannot forge destruction), and the client can refuse to apply (it cannot be tricked by a server-asserted change). The logic lives in two places that share the same verification machinery: the planned `capsule-api::auth` module enforces structural envelope checks server-side, and `capsule-core::crypto::provenance` runs the [`verify_asset`](/design/cryptography/keys/#write-authorization) chokepoint client-side. Both pull from the same closed action enum below.
 
 ## The Closed Action Set
 
