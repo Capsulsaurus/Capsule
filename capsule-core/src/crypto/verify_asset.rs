@@ -80,8 +80,8 @@ impl VerifyOutcome {
 }
 
 fn rfc3339_le(a: &str, b: &str) -> Option<bool> {
-    let pa = chrono::DateTime::parse_from_rfc3339(a).ok()?;
-    let pb = chrono::DateTime::parse_from_rfc3339(b).ok()?;
+    let pa = a.parse::<jiff::Timestamp>().ok()?;
+    let pb = b.parse::<jiff::Timestamp>().ok()?;
     Some(pa <= pb)
 }
 
@@ -188,7 +188,7 @@ mod tests {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
+    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 
     const USER: u128 = 0x05E2;
     const DEVICE: u128 = 0xD1;
@@ -253,6 +253,9 @@ mod tests {
                 plaintext_size: 12,
                 chunk_size: 65_520,
                 nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
+                key_mode: KeyMode::Derived,
+                wrapped_file_key: None,
+                metadata_blob_hash: None,
                 created_by_user: Uuid::from_u128(USER),
                 created_by_device: Uuid::from_u128(DEVICE),
                 client_version: "capsule-cli/0.1.0".into(),

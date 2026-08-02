@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+#MISE description="Generate uniffi Kotlin/Swift bindings from the compiled cdylib"
+set -euo pipefail
+cargo build -p capsule-core --features ffi
+ext="so"; [ "$(uname)" = "Darwin" ] && ext="dylib"
+lib="target/debug/libcapsule_core.${ext}"
+out="target/bindings"
+rm -rf "$out"
+for lang in kotlin swift; do
+    cargo run -q -p capsule-core --features ffi-bindgen --bin uniffi-bindgen -- \
+        generate --library "$lib" --language "$lang" --out-dir "$out/$lang"
+done
+# Smoke: both languages must have produced non-empty sources.
+test -s "$out/kotlin/uniffi/capsule_core/capsule_core.kt"
+test -s "$out/swift/capsule_core.swift"
+echo "uniffi bindings written to $out"

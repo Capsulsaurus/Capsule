@@ -4,12 +4,12 @@
  */
 
 import {
-    type TokenPair,
     clearTokens,
     getAccessToken,
     getRefreshToken,
     isAccessTokenValid,
     saveTokens,
+    type TokenPair,
 } from './auth';
 
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';

@@ -1,9 +1,9 @@
-import { RouterProvider, createRouter } from '@tanstack/react-router';
+import { createRouter, RouterProvider } from '@tanstack/react-router';
 import { StrictMode } from 'react';
 import ReactDOM from 'react-dom/client';
 import { IntlProvider } from 'react-intl';
 
-import { SOURCE_LOCALE, messagesFor, resolveLocale } from '@/i18n/locale';
+import { messagesFor, resolveLocale, SOURCE_LOCALE } from '@/i18n/locale';
 
 // Import the generated route tree
 import { routeTree } from './routeTree.gen';
@@ -41,20 +41,4 @@ if (rootElement) {
             </IntlProvider>
         </StrictMode>,
     );
-}
-
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker
-            .register('/service-worker.js')
-            .then((registration) => {
-                console.info(
-                    'Service Worker registered with scope:',
-                    registration.scope,
-                );
-            })
-            .catch((error) => {
-                console.error('Service Worker registration failed:', error);
-            });
-    });
 }

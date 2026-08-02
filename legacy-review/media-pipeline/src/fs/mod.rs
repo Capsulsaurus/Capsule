@@ -3,21 +3,21 @@ use std::path::Path;
 use thiserror::Error;
 use tokio::fs;
 
-use crate::core::types::MediaType;
-use crate::image::formats::avif::AvifImage;
-use crate::image::formats::bmp::BmpImage;
-use crate::image::formats::gif::GifImage;
-use crate::image::formats::heif::HeifImage;
-use crate::image::formats::jpeg::JpegImage;
-use crate::image::formats::jxl::JxlImage;
-use crate::image::formats::png::PngImage;
-use crate::image::formats::raw::RawImage;
-use crate::image::formats::tiff::TiffImage;
-use crate::image::formats::webp::WebpImage as WebPImage;
-use crate::image::types::ImageFormat;
-use crate::image::{ImageFile, ImageReader, ImageWithMetadata};
-use crate::video::VideoFile;
-use crate::video::types::VideoFormat;
+use crate::media::core::types::MediaType;
+use crate::media::image::formats::avif::AvifImage;
+use crate::media::image::formats::bmp::BmpImage;
+use crate::media::image::formats::gif::GifImage;
+use crate::media::image::formats::heif::HeifImage;
+use crate::media::image::formats::jpeg::JpegImage;
+use crate::media::image::formats::jxl::JxlImage;
+use crate::media::image::formats::png::PngImage;
+use crate::media::image::formats::raw::RawImage;
+use crate::media::image::formats::tiff::TiffImage;
+use crate::media::image::formats::webp::WebpImage as WebPImage;
+use crate::media::image::types::ImageFormat;
+use crate::media::image::{ImageFile, ImageReader, ImageWithMetadata};
+use crate::media::video::VideoFile;
+use crate::media::video::types::VideoFormat;
 
 pub mod ext;
 
@@ -83,7 +83,7 @@ pub enum ReadMediaError {
     #[error("Join error: {0}")]
     JoinError(#[from] tokio::task::JoinError),
     #[error("Image error: {0}")]
-    Image(#[from] crate::image::ImageError),
+    Image(#[from] crate::media::image::ImageError),
 }
 
 #[derive(Debug)]
@@ -128,7 +128,7 @@ pub enum ImageParseError {
     #[error("Read image error: {0}")]
     ReadImageError(#[from] ReadImageError),
     #[error("Image error: {0}")]
-    ImageError(#[from] crate::image::ImageError),
+    ImageError(#[from] crate::media::image::ImageError),
     #[error("Image data error: {0}")]
     DataError(String),
 }

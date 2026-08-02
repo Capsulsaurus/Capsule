@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Auto-format Swift sources (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift format (not macOS)"; exit 0; fi
+# capsule-core-swift reuses capsule-swift's pinned swiftformat via `mise -C` while
+# running in its own dir (so it picks up its own .swiftformat).
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+for d in capsule-swift capsule-core-swift; do
+    (cd "$d" && mise -C "$root/capsule-swift" exec -- swiftformat .)
+done

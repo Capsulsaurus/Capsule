@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use eyre::{ContextCompat, Result, WrapErr, bail};
 use serde_json::Value;
 use toml_edit::DocumentMut;
 

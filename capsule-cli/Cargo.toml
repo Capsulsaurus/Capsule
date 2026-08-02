@@ -13,7 +13,7 @@ capsule-cli-migration = { path = "./migration" }
 capsule-core = { path = "../capsule-core" }
 base64 = { workspace = true }
 capitalize = "0.3.4"
-chrono = { workspace = true }
+jiff = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
 color-eyre = "0.6.5"
 colored = "3.1.1"

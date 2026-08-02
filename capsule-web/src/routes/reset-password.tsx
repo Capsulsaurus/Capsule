@@ -1,3 +1,8 @@
+import { createFileRoute, Link } from '@tanstack/react-router';
+import { MountainIcon } from 'lucide-react';
+import type React from 'react';
+import { useState } from 'react';
+import { z } from 'zod';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -10,11 +15,6 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, resetPassword } from '@/lib/api';
-import { Link, createFileRoute } from '@tanstack/react-router';
-import { MountainIcon } from 'lucide-react';
-import type React from 'react';
-import { useState } from 'react';
-import { z } from 'zod';
 
 const resetPasswordSearchSchema = z.object({
     token: z.string().optional(),

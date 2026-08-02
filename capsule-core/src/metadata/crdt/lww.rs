@@ -38,8 +38,8 @@ pub struct Lww<T: Clone + PartialEq> {
 /// Order two candidates: later timestamp wins; ties break on the larger device id.
 /// `None` if a timestamp is unparseable (caller treats as a structural reject upstream).
 fn beats(a: &Stamped<impl Clone>, b: &Stamped<impl Clone>) -> Option<bool> {
-    let ta = chrono::DateTime::parse_from_rfc3339(&a.ts).ok()?;
-    let tb = chrono::DateTime::parse_from_rfc3339(&b.ts).ok()?;
+    let ta = a.ts.parse::<jiff::Timestamp>().ok()?;
+    let tb = b.ts.parse::<jiff::Timestamp>().ok()?;
     Some((ta, a.by) > (tb, b.by))
 }
 

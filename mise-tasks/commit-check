@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+#MISE description="Validate one commit message (Conventional Commits, commit-msg hook)"
+set -euo pipefail
+# hk passes the commit-message file path ({{commit_msg_file}}); fall back to git's
+# COMMIT_EDITMSG so the task also works when invoked without an argument.
+msg_file="${1:-$(git rev-parse --git-path COMMIT_EDITMSG)}"
+# Skip the auto-generated subjects tooling writes (merge/revert/fixup/squash);
+# everything else must be conventional. `--strip` drops comments/whitespace.
+case "$(sed -n '1p' "$msg_file")" in
+    Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;;
+esac
+convco check --from-stdin --strip < "$msg_file"

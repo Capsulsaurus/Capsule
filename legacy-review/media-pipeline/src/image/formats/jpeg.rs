@@ -5,19 +5,19 @@ use zune_core::colorspace::ColorSpace as ZuneColorSpace;
 use zune_core::options::DecoderOptions;
 use zune_jpeg::JpegDecoder;
 
-use crate::image::buffer::{ComponentType, ImageBuffer, PixelFormat};
-use crate::image::metadata::exposure::CaptureSettings;
-use crate::image::metadata::iptc::IptcData;
-use crate::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
-use crate::image::metadata::raw::RawSensorInfo;
-use crate::image::metadata::{ContentMetadata, ImageMetadataExtractor};
-use crate::image::{Image, ImageDecode, ImageEncode, ImageError, ImageMetadata};
-use crate::metadata::c2pa::C2PAManifest;
-use crate::metadata::exif::ExifData;
-use crate::metadata::geo::GpsLocation;
-use crate::metadata::icc::IccProfile;
-use crate::metadata::xmp::XmpData;
-use crate::metadata::{ColorSpace, DeviceMetadata};
+use crate::media::image::buffer::{ComponentType, ImageBuffer, PixelFormat};
+use crate::media::image::metadata::exposure::CaptureSettings;
+use crate::media::image::metadata::iptc::IptcData;
+use crate::media::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
+use crate::media::image::metadata::raw::RawSensorInfo;
+use crate::media::image::metadata::{ContentMetadata, ImageMetadataExtractor};
+use crate::media::image::{Image, ImageDecode, ImageEncode, ImageError, ImageMetadata};
+use crate::media::metadata::c2pa::C2PAManifest;
+use crate::media::metadata::exif::ExifData;
+use crate::media::metadata::geo::GpsLocation;
+use crate::media::metadata::icc::IccProfile;
+use crate::media::metadata::xmp::XmpData;
+use crate::media::metadata::{ColorSpace, DeviceMetadata};
 
 #[derive(Debug, Clone)]
 pub struct JpegImage {
@@ -31,7 +31,7 @@ pub struct JpegImage {
 }
 
 impl ImageMetadataExtractor for JpegImage {
-    fn get_date_taken(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+    fn get_date_taken(&self) -> Option<jiff::civil::DateTime> {
         None
     }
     fn get_dimensions(&self) -> (u32, u32) {
@@ -85,8 +85,8 @@ impl ImageMetadataExtractor for JpegImage {
 }
 
 impl Image for JpegImage {
-    fn get_format(&self) -> crate::core::types::ImageFormat {
-        crate::core::types::ImageFormat::Jpeg
+    fn get_format(&self) -> crate::media::core::types::ImageFormat {
+        crate::media::core::types::ImageFormat::Jpeg
     }
 
     fn get_buffer(&self) -> ImageBuffer {

@@ -15,7 +15,7 @@ capsule-core = { path = "../../capsule-core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 data-encoding = { workspace = true }
 nanoid = { workspace = true }
 sea-orm = { workspace = true, features = [

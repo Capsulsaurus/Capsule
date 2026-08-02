@@ -1,4 +1,4 @@
-use crate::metadata::ColorSpace;
+use crate::media::metadata::ColorSpace;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {

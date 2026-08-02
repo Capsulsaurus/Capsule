@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+#MISE description="Build the iOS app: FFI xcframework, generate workspace, xcodebuild (macOS only)"
+#MISE depends=["build-ffi-apple"]
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift build (not macOS)"; exit 0; fi
+cd capsule-swift
+mise exec -- tuist generate --no-open
+xcodebuild -workspace Capsule.xcworkspace -scheme Capsule -configuration Debug \
+    -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build \
+    | mise exec -- xcbeautify

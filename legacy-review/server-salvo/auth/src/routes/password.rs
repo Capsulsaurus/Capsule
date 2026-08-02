@@ -119,7 +119,7 @@ pub async fn reset_password(
     // Check expiry
     if user
         .password_reset_expires_at
-        .is_none_or(|exp| exp < chrono::Utc::now())
+        .is_none_or(|exp| exp.timestamp() < jiff::Timestamp::now().as_second())
     {
         return PasswordResetResponses::InvalidToken;
     }

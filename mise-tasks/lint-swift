@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Auto-fix Swift lints (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swiftlint (not macOS)"; exit 0; fi
+root="${MISE_PROJECT_ROOT:-$(git rev-parse --show-toplevel)}"
+for d in capsule-swift capsule-core-swift; do
+    (cd "$d" && mise -C "$root/capsule-swift" exec -- swiftlint --fix --quiet && mise -C "$root/capsule-swift" exec -- swiftlint)
+done

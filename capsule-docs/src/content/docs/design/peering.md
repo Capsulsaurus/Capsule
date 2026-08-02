@@ -1,6 +1,7 @@
 ---
 title: Peering
 description: Direct LAN device-to-device sync within a single user's own devices
+status: draft
 ---
 
 Peering is **device-to-device** sync within a single user's own devices. It is distinct from [Federation](/design/federation/), which is server-to-server sharing across *different* users.
@@ -11,7 +12,7 @@ Peering exists as an **accelerator, never a replacement** for normal [server syn
 - **Offline operation.** When the server is unreachable, devices on a shared LAN still converge. This satisfies the [offline/online divide](/design/principles/) — peering works fully offline.
 - **Best-effort opportunism.** If no peer is found, peering simply does nothing and the device falls back to server sync. Nothing depends on it succeeding.
 
-Peering is the one module here that lives entirely on the client. It is implemented in `capsule-sdk::peering` (discovery, channel, transfer) over `capsule-core::backup` (the artifact format it ingests). The three contract surfaces — mDNS descriptor, TLS handshake parameters, delta-fetch protocol — are the only new primitives peering introduces; everything else is borrowed.
+Peering is the one module here that lives entirely on the client. It will live in `capsule-sdk::peering` (planned: discovery, channel, transfer) over `capsule-core::backup` (implemented — the artifact format it ingests). The three contract surfaces — mDNS descriptor, TLS handshake parameters, delta-fetch protocol — are the only new primitives peering introduces; everything else is borrowed.
 
 ## Peering Reuses, Not Reinvents
 
@@ -27,7 +28,7 @@ Identity-trusted is **not** content-trusted, however. A device can still be bugg
 
 ### Peer-Class Containment
 
-Even two of the same user's devices are separate failure-containment boundaries ([Threat Model — Damage Containment Layers](/design/threat-model/#damage-containment-layers)). A buggy $v_k$ device cannot overwrite a $v_{k+1}$ device's state via a stale-but-valid backup artifact, and a v_{k+1} device's writes are not retroactively applied to a v_k device's view of an older album. Specifically:
+Even two of the same user's devices are separate failure-containment boundaries ([Threat Model — Damage Containment Layers](/design/threat-model/#damage-containment-layers)). A buggy older-version device cannot overwrite a newer device's state via a stale-but-valid backup artifact, and a newer device's writes are not retroactively applied to an older device's view of an older-pinned album. Specifically:
 
 - Every received manifest is checked against the receiver's local `latest_provenance_hash` for that asset (see [Applying Received Data](#applying-received-data)) — a stale manifest is quarantined, not silently applied.
 - Every received structure that announces a `sidecar_schema`, `crypto_suite_id`, or `protocol_version` above the receiver's max known is rejected at decode — the receiver refuses to interpret bytes it cannot validate. This is the client-side counterpart of the [server-side schema lockdown](/design/threat-model/schema-rules/#schema-evolution-and-field-grammar).
@@ -37,19 +38,19 @@ Even two of the same user's devices are separate failure-containment boundaries 
 
 Discovery is the one genuinely new mechanism. Devices advertise a peering service over **mDNS** on the local network and accept connections over **TCP**.
 
-Discovery is **LAN-only** — there is no relay, no internet-wide rendezvous. mDNS broadcasts are visible to every host on the segment, so the advertisement must not leak identity: a device advertises an **opaque, rotating service instance**, not `user@server.tld` or a device name. Whether two advertisements belong to the same user is established *inside* the encrypted channel (below), never from the broadcast itself.
+Discovery is **LAN-only** — there is no relay, no internet-wide rendezvous. mDNS broadcasts are visible to every host on the segment, so the advertisement must not leak identity: a device advertises an **opaque service instance** — rotated at least per boot and at most every 24 hours (deployment-tunable within that band) — never `user@server.tld` or a device name. Whether two advertisements belong to the same user is established *inside* the encrypted channel (below), never from the broadcast itself.
 
 If no peer answers, discovery fails silently and the device proceeds with ordinary server sync.
 
 ## Establishing the Channel
 
-A peer connection is HTTP over a **mutually authenticated TLS 1.3** channel. The certificates presented are the **device keys themselves** — there is no CA. Each side verifies that the other's device certificate carries a valid hybrid signature chaining to the shared User IK, exactly as published in the [device directory](/design/cryptography/keys/#device-directory). The directory *is* the trust anchor; a device not in it cannot complete the handshake.
+A peer connection is HTTP over a **mutually authenticated TLS 1.3** channel. The certificates presented are the **device keys themselves** — there is no CA. Concretely: the TLS handshake authenticates with the device key's **classical half** (as a raw public key or self-signed certificate — TLS 1.3 has no ML-DSA certificate path), and the **hybrid** check — that the presented key carries a valid hybrid signature chaining to the shared User IK, covering both halves per the [signature scheme](/design/cryptography/primitives/#signature-scheme), exactly as published in the [device directory](/design/cryptography/keys/#device-directory) — runs at the application layer over the established channel, before any payload byte. The directory *is* the trust anchor; a device not in it cannot complete the handshake.
 
-This doc covers sync between devices that are **already provisioned** — both already hold the account master key. Bootstrapping a brand-new device (handing it the master key for the first time) is **cross-device recovery** and is specified in [Device Enrollment](/design/device-enrollment/); peering does not re-document it.
+This doc covers sync between devices that are **already provisioned** — both already hold the account master key. Bootstrapping a brand-new device (handing it the master key for the first time) is **cross-device add** — or, when every device was lost, **cross-device recovery** — owned by [Device Enrollment](/design/device-enrollment/) and [Backup and Recovery](/design/backup-recovery/#default-mechanisms) respectively; peering re-documents neither.
 
 ## Determining the Delta
 
-Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/import/download-sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the `/sync` feed — peering borrows that definition wholesale.
+Before building an artifact, the two devices must agree on what is missing. Peering reuses the [sync cursor](/design/import/download-sync/#discovering-what-changed) model rather than inventing a diff: each side offers its set of held [ciphertext content addresses](/design/cryptography/primitives/) and its cursor, and the delta is the complement. "What changed" is already defined by the sync feed — peering borrows that definition wholesale.
 
 ## What Moves Over the Wire
 
@@ -84,7 +85,7 @@ Peering does not fork a device's state away from the server. A peering-received 
 
 Peering has two independently versioned surfaces, both checked **once, up front**, crashing early on mismatch per [Principles](/design/principles/) and the universal [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation):
 
-- The peering **transport protocol** — date-based (`YYYY-MM-DD`), exchanged via `X-Capsule-Protocol` at channel establishment. Mismatch terminates the TLS connection **before any payload byte is sent** — `426 Upgrade Required` in the channel's framing layer. There is no degraded-mode fallback; peering simply fails and the device proceeds to ordinary server sync.
+- The peering **transport protocol** — date-based (`YYYY-MM-DD`), exchanged via `X-Capsule-Protocol` at channel establishment. It shares the header name and date format with the client-server wire protocol but is its **own version space**: peering-protocol values compare only against peering-protocol values, and the peering transport revs independently of the server protocol. Mismatch terminates the TLS connection **before any payload byte is sent** — `426 Upgrade Required` in the channel's framing layer. There is no degraded-mode fallback; peering simply fails and the device proceeds to ordinary server sync.
 - The **artifact format** — versioned by [Backup and Recovery](/design/backup-recovery/#backup-artifact), so a newer device can still ingest an artifact built by an older one. The artifact's `crypto_suite_id` and album `protocol_version` are validated against the receiver's max known on ingest; a forward-jumping value is rejected (refuse-by-default), never best-effort-parsed.
 
 These two surfaces are independent: a device with up-to-date transport protocol may still receive an artifact format it does not implement (and vice versa). Both checks must pass before any bytes are applied to local state.

@@ -56,23 +56,23 @@ Prerequisites: macOS, Xcode 16+, a Rust toolchain (pinned by
 ```sh
 cd capsule-swift
 mise install            # installs tuist, swiftlint, swiftformat, xcbeautify
-just setup              # builds the Rust FFI xcframework, then `tuist generate`
+mise run setup-swift    # builds the Rust FFI xcframework, then `tuist generate`
 open Capsule.xcworkspace
 ```
 
-`just setup` is equivalent to:
+`mise run setup-swift` is equivalent to:
 
 ```sh
-just build-ffi-apple            # cross-compiles capsule-core-ffi → .ffi/CapsuleCoreFFI.xcframework
+mise run build-ffi-apple        # cross-compiles capsule-core-ffi → .ffi/CapsuleCoreFFI.xcframework
 mise exec -- tuist generate     # generates Capsule.xcworkspace
 ```
 
-Re-run `just build-ffi-apple` whenever the Rust core changes. The generated
+Re-run `mise run build-ffi-apple` whenever the Rust core changes. The generated
 Xcode project/workspace and the `.ffi/` build output are not committed.
 
 ## Running on the iOS Simulator
 
-After `just setup` (or `just setup-swift` from the repo root), pick a simulator
+After `mise run setup-swift`, pick a simulator
 and launch the app from the command line:
 
 ```sh

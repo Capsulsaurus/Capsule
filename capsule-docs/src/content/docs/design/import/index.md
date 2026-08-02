@@ -1,6 +1,7 @@
 ---
 title: Import and Synchronization
 description: Overview of how Capsule imports assets and synchronizes them across devices
+status: draft
 ---
 
 We define **import** as the process of taking assets from an external source (a camera, a directory on the filesystem) and bringing them into Capsule's management. Once imported, assets travel between devices via the **upload protocol** (client → server) and the **sync feed** (server → client).

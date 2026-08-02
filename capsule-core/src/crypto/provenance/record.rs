@@ -139,7 +139,7 @@ mod tests {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore};
+    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
 
     const ASSET: u128 = 0xF11E;
 
@@ -162,6 +162,9 @@ mod tests {
             plaintext_size: 10,
             chunk_size: 65_520,
             nonce_prefix: [0; 7],
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: None,
             created_by_user: Uuid::from_u128(0x05E2),
             created_by_device: Uuid::from_u128(0xD1),
             client_version: "t".into(),

@@ -1,46 +1,8 @@
-import { GenerateSW } from '@aaroon/workbox-rspack-plugin';
 import { defineConfig } from '@rsbuild/core';
 import { pluginReact } from '@rsbuild/plugin-react';
 import { TanStackRouterRspack } from '@tanstack/router-plugin/rspack';
 
 const isDev = process.env.NODE_ENV === 'development';
-
-const swPlugin = new GenerateSW({
-    clientsClaim: true,
-    skipWaiting: true,
-    runtimeCaching: [
-        {
-            // TODO: Configure this vv
-            urlPattern: /^https:\/\/your-api\.com\/.*/, // Cache API calls
-            handler: 'NetworkFirst',
-            options: {
-                cacheName: 'api-cache',
-                expiration: {
-                    maxEntries: 50,
-                    maxAgeSeconds: 60 * 60 * 24, // 1 day
-                },
-            },
-        },
-        {
-            urlPattern: /\.(?:png|jpg|jpeg|svg|gif)$/, // Cache images
-            handler: 'CacheFirst',
-            options: {
-                cacheName: 'image-cache',
-                expiration: {
-                    maxEntries: 100,
-                    maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
-                },
-            },
-        },
-        {
-            urlPattern: ({ request }) => request.destination === 'document', // Cache HTML pages
-            handler: 'NetworkFirst',
-            options: {
-                cacheName: 'html-cache',
-            },
-        },
-    ],
-});
 
 export default defineConfig({
     plugins: [pluginReact()],
@@ -67,7 +29,7 @@ export default defineConfig({
     },
     tools: {
         rspack: {
-            plugins: [TanStackRouterRspack(), swPlugin],
+            plugins: [TanStackRouterRspack()],
             experiments: {
                 // Might break TailwindCSS V4/CSS Variables
                 incremental: isDev,

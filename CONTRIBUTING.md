@@ -11,17 +11,25 @@ First off, thank you for considering contributing! It’s people like you who ma
 
 ## Local Setup
 
-Tooling versions are pinned with [mise](https://mise.jdx.dev). From the repo root:
+Tooling versions are pinned with [mise](https://mise.jdx.dev), which is also the task
+runner and (via [hk](https://hk.jdx.dev)) the git-hook manager. From the repo root:
 
 ```sh
-mise install        # installs just, convco, lefthook (+ language tools)
-just hooks-install   # wires up the git hooks (lefthook)
+mise trust          # trust this repo's mise config (+ capsule-swift/mise.toml)
+mise install        # installs hk, convco, cargo-nextest (+ language tools)
+mise run setup      # installs the web/docs/vision package dependencies
+hk install          # wires up the git hooks
 ```
 
-The hooks run formatters/linters on commit and validate that every commit message is a
-[Conventional Commit](https://www.conventionalcommits.org) (via `convco`) — so `convco`
-must be on your `PATH` (hence `mise install`). The same check runs on `pre-push` and on
-every PR in CI.
+Run tasks with `mise run <task>` — `mise tasks` lists them all (plain name = auto-fix,
+`-check` suffix = verify-only). The pre-commit hook auto-formats and **stages** your
+changes; pre-push runs the format/lint checks plus the test suite; and `convco` validates
+every commit message as a [Conventional Commit](https://www.conventionalcommits.org). The
+same checks run on `pre-push` and on every PR in CI.
+
+> **Coming from the old `just` + `lefthook` setup?** Re-run `mise install && hk install`
+> (hk overwrites the stale `.git/hooks` that called lefthook). The `justfile` is gone —
+> every `just <recipe>` is now `mise run <task>` with the same name.
 
 ## Baseline for Ownership & Provenance
 
@@ -32,6 +40,7 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 ## Coding Standards
 
 * Linting: If you have LSPs configured in your editor for the various languages in your repo, it should lint using the appropriate tool with correct versions by default.
+* Tests: Rust tests run on [nextest](https://nexte.st) (`mise run test-rust`). Note nextest does **not** run doctests — if you add one, also run `cargo test --doc`.
 * Commit messaging: **Semantic Commits** (e.g., `feat:`, `fix:`, `docs:`, `test:`) are **required** — they drive version bumps and the changelog, and are enforced by `convco` on commit, push, and in CI.
 * Development Patterns: Refer to [Development](/capsule-docs/src/content/docs/development/).
 * AI usage: Refer to [AI.md](./AI.md).
@@ -49,8 +58,8 @@ compiles them into every platform's native format.
 
 1. Add your locale to `locales/config.json` and copy `en.json` to `<locale>.json`, translating
    each `message` (keep the keys identical).
-2. Run `just i18n` to regenerate the per-platform files, then `just i18n-check` to confirm there
-   is no drift.
+2. Run `mise run i18n` to regenerate the per-platform files, then `mise run i18n-check` to confirm
+   there is no drift.
 3. Open a PR following the workflow above.
 
 See [`locales/README.md`](locales/README.md) for the catalog format and the
@@ -60,7 +69,7 @@ translation UI (Weblate/Crowdin) backed by these same files is planned.
 ## Releasing
 
 Releases are automated from Conventional Commits; one version is kept in sync across every
-package (`just set-version` / the `xtask` crate).
+package (`mise run set-version` / the `xtask` crate).
 
 1. **Prepare** — run the **Prepare release** workflow (`workflow_dispatch`). It computes the
    next version with `convco` (or takes an explicit one), writes it into every package,

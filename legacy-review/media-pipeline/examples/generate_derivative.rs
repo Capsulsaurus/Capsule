@@ -1,6 +1,6 @@
 //! Example of generating a JpegXL derivative from an image file
 //!
-//! This example demonstrates how to use the `capsule_media` crate to read an image file,
+//! This example demonstrates how to use the `capsule_core::media` module (enable the `media` feature) to read an image file,
 //! detect its format, and generate a JpegXL derivative.
 //!
 //! Usage:
@@ -10,9 +10,9 @@
 
 use std::path::PathBuf;
 
-use capsule_media::fs::MediaFile;
-use capsule_media::image::formats::jxl::JxlImage;
-use capsule_media::image::{ConvertImage, ImageEncode};
+use capsule_core::media::fs::MediaFile;
+use capsule_core::media::image::formats::jxl::JxlImage;
+use capsule_core::media::image::{ConvertImage, ImageEncode};
 
 #[tokio::main]
 pub async fn main() {
@@ -29,7 +29,7 @@ pub async fn main() {
         input_path.with_extension("jxl")
     };
 
-    let media = capsule_media::fs::read(&input_path)
+    let media = capsule_core::media::fs::read(&input_path)
         .await
         .expect("Failed to create reader");
     let MediaFile::Image(file) = media else {

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+#MISE description="Generate the Xcode workspace with Tuist (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping tuist generate (not macOS)"; exit 0; fi
+cd capsule-swift && mise exec -- tuist generate --no-open

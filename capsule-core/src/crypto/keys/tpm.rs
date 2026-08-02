@@ -13,7 +13,7 @@
 //! therefore demonstrates the TPM key lifecycle and the non-exportability contract, but does
 //! **not** yet plug into [`HardwareBackedSigner`](super::HardwareBackedSigner), which composes an
 //! Ed25519 half. Wiring a TPM device in needs the P-256 hybrid-DSK variant tracked in
-//! `DEFERRED.md` — exactly the follow-up the Secure Enclave note calls out.
+//! `SLICES.md` (slice S-A4) — exactly the follow-up the Secure Enclave note calls out.
 //!
 //! # Non-exportability
 //!

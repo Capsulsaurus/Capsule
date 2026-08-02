@@ -588,7 +588,9 @@ mod tests {
     use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::PROTOCOL_VERSION;
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, ManifestCore as MCore};
+    use crate::crypto::provenance::manifest::{
+        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore as MCore,
+    };
 
     const ALBUM: u128 = 0xA1;
 
@@ -625,6 +627,9 @@ mod tests {
                 plaintext_size: enc.plaintext_size,
                 chunk_size: enc.chunk_size,
                 nonce_prefix: enc.nonce_prefix,
+                key_mode: KeyMode::Derived,
+                wrapped_file_key: None,
+                metadata_blob_hash: None,
                 created_by_user: Uuid::from_u128(0x05E2),
                 created_by_device: Uuid::from_u128(0xD1),
                 client_version: "t".into(),

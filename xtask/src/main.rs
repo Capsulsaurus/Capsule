@@ -18,7 +18,7 @@ mod i18n;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use eyre::{Context, ContextCompat, Result, bail};
 use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;

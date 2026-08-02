@@ -1,7 +1,7 @@
 use num_rational::Ratio;
 use serde::{Deserialize, Serialize};
 
-use crate::metadata::orientation::Orientation;
+use crate::media::metadata::orientation::Orientation;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ExifData {

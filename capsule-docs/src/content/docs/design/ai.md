@@ -1,6 +1,7 @@
 ---
 title: AI/ML Integrations
 description: AI feature architecture, the canonical model inventory, embedding provenance, and AI/user metadata separation
+status: draft
 ---
 
 Capsule runs a hierarchy of ML models, all **client-side** (the server never holds plaintext). The stable contract is the *structure*: three functional categories, the AI/user namespace separation in [AI Output Containment](#ai-output-containment), the canonical model inventory in [Models and Algorithms](#models-and-algorithms), and the [embedding-provenance](#embedding-provenance) invariant. The specific feature list and per-model choices are current defaults that will evolve with field testing.
@@ -24,6 +25,8 @@ AI inference can be wrong, biased, or hallucinatory. A core rule prevents it fro
 
 A hallucinating model can pollute its own namespace, never user intent. This is the structural defense against the "AI mistake silently overwrites user data" damage class — see [Threat Model — Forbidden Client Behaviors](/design/threat-model/schema-rules/#forbidden-client-behaviors).
 
+**AI grouping is a pure function.** Every automatic grouping output (clusters, similarity groups, scene groupings) is a deterministic function of `(input asset set, model_id, model_version)` — inputs are processed in sorted asset-id order and any stochastic step (cluster seeding, initialization) uses fixed seeds, because most clustering algorithms are otherwise order-sensitive. Re-running a grouping over the same inputs yields byte-identical output; growing the input set and re-running is the only way results change. This is what makes automatic grouping idempotent and order-independent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement).
+
 ## Semantic Indexing
 
 Semantic search converts an image and a text query into vectors and measures their distance. Because embeddings are generated client-side, every device must run the same canonical model along a deterministic path so vectors are comparable — the constraint and its platform-partition fallback are specified in [Embedding Provenance](#embedding-provenance).
@@ -40,6 +43,8 @@ Face Detection & Matching (clustering) runs the **Face Detection** and **Face Re
 
 Deferred to post-v1. The category and its sidecar fields are reserved in the [containment model](#ai-output-containment) so it can land later without a schema change; the Quality candidate models in the [inventory](#models-and-algorithms) are not part of the v1 pipeline.
 
+**Sequencing contract (fixed now so the deferral can't drift):** group-scoped evaluations — best shot, best framing, best exposure within a stack, burst, or similarity group — run strictly **after** grouping, never interleaved with it. Each evaluation result is keyed by `(group_id, membership_hash, model_id, model_version)`, where `membership_hash` is the hash of the group's sorted member ids. Any membership change therefore invalidates the group's evaluations *by key construction* — no invalidation bookkeeping to forget — and the recompute is deterministic (same members, same model → same result; ties broken by asset id). Evaluation outputs are derived, AI-namespaced state: the durable, user-visible outcome remains the [`role = primary` pointer](/design/organization/#asset-stacking) a user or the client sets from them. Implementation is slice `S-H4` (after semantic/face features).
+
 ## Model Batching
 
 On-device inference is memory- and power-bound, so execution mode is chosen per device:
@@ -55,7 +60,7 @@ Embeddings share a common vector space and are stored locally in **SQLite + `sql
 
 Every embedding Capsule stores — in the local SQLite vector index, in an encrypted backup, or inside a [`DerivativeManifest`](/design/cryptography/provenance/#derivative-provenance) for an embedding-class derivative — carries the tuple `(model_id, model_version)` identifying which [inventory](#models-and-algorithms) row produced it. Vector spaces differ across pairs, so embeddings are not comparable across `(model_id, model_version)`. Every `model_id` is declared in exactly one inventory row ([SSoT](/design/principles/#single-source-of-truth)); a swap is a one-row edit that propagates by `model_id` to every consumer. The invariant:
 
-- The vector index **refuses inserts** whose `model_id` is not the current canonical row for its task. A buggy or new client uploading embeddings from an unrecognized model is rejected at the insert API, never silently mixed in.
+- The vector index **refuses inserts** whose `(model_id, model_version)` is **unknown to the inventory** — a buggy or new client producing embeddings from an unrecognized model is rejected at the insert API, never silently mixed in. Entries from a *superseded-but-known* version are admitted as stale-flagged rows (they are the regeneration queue and are excluded from queries) — the refusal targets unknown models, not known-but-old ones.
 - A model swap increments `model_version` for that task. Old embeddings are **flagged stale** and excluded from queries until regenerated from the originals. Cross-version comparison is forbidden — see [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants).
 - Regeneration is a background task that walks the library producing fresh embeddings at the new version; old entries are removed only after new ones persist (per-asset replace, not a global truncate-and-rebuild).
 
@@ -116,7 +121,7 @@ Identifies individuals even when they turn away from the camera during an event:
 
 #### High-Dimensional Vector Search
 
-Exact KNN is too slow at millions of rows: use **HNSW** indexes on the vector columns, and the inner-product operator (`<#>`) for normalized embeddings (cheaper than $L_2$ or cosine at scale).
+Vectors live in `sqlite-vec` `vec0` virtual tables (the [engine declared above](#database-indexing-and-view-generation)) and are queried by **inner-product distance** over normalized embeddings — the cheapest of the metrics. `sqlite-vec`'s SIMD brute-force scan covers libraries into the hundreds of thousands of rows; at millions of rows the designated escalation is its ANN indexing as it matures, or a partitioned scan (by album/date bucket) until then. Server-side vector-database idioms (pgvector's HNSW indexes, the `<#>` operator) do not apply — the index is client-local SQLite by design.
 
 ## Validation
 

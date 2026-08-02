@@ -995,8 +995,8 @@ impl From<Passkey> for PasskeyModel {
         Self {
             id: passkey.id,
             name: passkey.name,
-            created_at: passkey.created_at.to_rfc3339(),
-            last_used_at: passkey.last_used_at.map(|t| t.to_rfc3339()),
+            created_at: passkey.created_at.to_string(),
+            last_used_at: passkey.last_used_at.map(|t| t.to_string()),
         }
     }
 }

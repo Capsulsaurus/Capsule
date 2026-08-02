@@ -8,7 +8,7 @@ private let appDeploymentTargets: DeploymentTargets = .iOS("18.0")
 
 /// The Swift-6 language settings shared by every Capsule target. MARKETING_VERSION is
 /// the iOS app's version source of truth, kept in sync across every package by
-/// `just set-version` (xtask).
+/// `mise run set-version` (xtask).
 private let baseSettings: SettingsDictionary = [
     "SWIFT_VERSION": "6.0",
     "SWIFT_STRICT_CONCURRENCY": "complete",

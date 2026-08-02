@@ -10,6 +10,7 @@ use crate::config::validate_config;
 use crate::state::AppState;
 
 mod config;
+mod envelope;
 mod error;
 mod models;
 mod routes;

@@ -1,6 +1,6 @@
 //! Extract metadata from an image
 //!
-//! This example demonstrates how to use the `capsule_media` crate to read an image file
+//! This example demonstrates how to use the `capsule_core::media` module (enable the `media` feature) to read an image file
 //! and extract its metadata, including EXIF, XMP, IPTC, and technical details.
 //!
 //! Usage:
@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use capsule_media::fs::MediaFile;
+use capsule_core::media::fs::MediaFile;
 
 #[tokio::main]
 pub async fn main() {
@@ -23,7 +23,7 @@ pub async fn main() {
     let input_path = PathBuf::from(&args[1]);
 
     // Read the media file. This automatically detects the format and decodes it.
-    let media = capsule_media::fs::read(&input_path)
+    let media = capsule_core::media::fs::read(&input_path)
         .await
         .expect("Failed to read media file");
 

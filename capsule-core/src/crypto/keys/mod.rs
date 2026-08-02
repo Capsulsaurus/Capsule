@@ -14,6 +14,7 @@ pub mod hybrid_sig;
 pub mod kem;
 pub mod keystore;
 pub mod master;
+pub mod p256;
 pub mod signer;
 pub mod software;
 #[cfg(feature = "tpm")]
@@ -26,6 +27,7 @@ pub use hybrid_sig::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
 pub use kem::DekKeypair;
 pub use keystore::{Account, AccountFile, DeviceKeys};
 pub use master::MasterKey;
+pub use p256::{ClassicalAlgorithm, P256HybridSigningKey};
 pub use signer::Signer;
 pub use software::SoftwareSigner;
 #[cfg(feature = "tpm")]

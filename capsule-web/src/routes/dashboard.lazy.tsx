@@ -1,3 +1,8 @@
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import { filesize } from 'filesize';
+import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
+import { useState } from 'react';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import {
     Table,
@@ -7,14 +12,7 @@ import {
     TableHeader,
     TableRow,
 } from '@/components/ui/table';
-import { filesize } from 'filesize';
-import { toast } from 'sonner';
-
-import { Link, createLazyFileRoute } from '@tanstack/react-router';
-import { Album, HardDrive, Image, Loader2, RotateCw } from 'lucide-react';
-
-import { mockAlbums, mockAssets } from '@/lib/mock-data';
-import { useState } from 'react';
+import { useAlbums, useAssets } from '@/data/hooks';
 
 export const Route = createLazyFileRoute('/dashboard')({
     component: () => <Dashboard />,
@@ -22,12 +20,14 @@ export const Route = createLazyFileRoute('/dashboard')({
 
 const Dashboard = () => {
     const [fetching, setFetching] = useState(false);
+    const { data: assets = [] } = useAssets();
+    const { data: albums = [] } = useAlbums();
 
     // Calculate mock stats
     const stats = {
-        totalPhotos: mockAssets.length,
-        totalAlbums: mockAlbums.length,
-        usedStorage: mockAssets.length * 1024 * 1024 * 5, // Mock 5MB per photo
+        totalPhotos: assets.length,
+        totalAlbums: albums.length,
+        usedStorage: assets.length * 1024 * 1024 * 5, // Mock 5MB per photo
     };
 
     return (

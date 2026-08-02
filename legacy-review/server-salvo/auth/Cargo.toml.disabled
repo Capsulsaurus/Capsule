@@ -16,7 +16,7 @@ capsule-i18n = { path = "../../capsule-i18n" }
 argon2 = { workspace = true }
 bb8 = { workspace = true }
 bb8-redis = { workspace = true }
-chrono = { workspace = true }
+jiff = { workspace = true }
 derive_more = { workspace = true, features = ["from"] }
 eyre = { workspace = true }
 jsonwebtoken = { workspace = true }

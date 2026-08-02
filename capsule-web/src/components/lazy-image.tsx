@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+
 type LazyImageProps = React.ImgHTMLAttributes<HTMLImageElement>;
 
 export function LazyImage({ src, alt, className, ...props }: LazyImageProps) {

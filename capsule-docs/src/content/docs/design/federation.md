@@ -1,11 +1,12 @@
 ---
 title: Federation
 description: How Capsule servers share albums across users on different home servers
+status: draft
 ---
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).
 
-Federation reuses the planned read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-api::federation`.
+Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-api::federation`.
 
 ## Threat Model
 
@@ -15,13 +16,15 @@ This extends the security posture established in the [cryptography](/design/cryp
 
 ## Federation Reuses Existing Primitives
 
-Federation deliberately introduces **no new data protocol**. A remote server fetches exactly the same content-addressed primitives a client uses (see [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed)):
+Federation deliberately introduces **no new data protocol**. A remote server fetches exactly the same content-addressed primitives a client uses over Kynos REST (see [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed) and the [API surface map](/design/api-surfaces/#surface--transport-map)):
 
-| Operation                  | Purpose                                                                                       |
-| -------------------------- | --------------------------------------------------------------------------------------------- |
-| `GET /sync` (album-scoped) | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
-| `GET /blob/{hash}`         | Fetch an opaque ciphertext blob by its content address.                                       |
-| `POST` capability proof    | Present a [federation capability](#federation-capabilities) to establish or refresh access.   |
+| Operation                 | Transport                                      | Purpose                                                                                       |
+| ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `GET /sync?album_id=…&cursor=…` | REST | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
+| `GET /blob/{hash}`        | REST (HTTP `Range`)                            | Fetch an opaque ciphertext blob by its content address.                                       |
+| Capability presentation   | REST `Authorization: Bearer`                   | Present a [federation capability](#federation-capabilities) to establish or refresh access.   |
+
+Rejection semantics are the HTTP status plus stable `error.*` body defined by [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).
 
 Everything else — notifications, presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
 
@@ -39,11 +42,49 @@ For v1, **each album has exactly one home server** — the server that issued th
 
 This rule keeps the v1 federation API surface small (no replication, no cross-server commit ordering) and forecloses several damage classes — split-brain ownership, two-server delete races, conflicting AMK-epoch advances — that would otherwise need explicit cross-server consensus to prevent.
 
-Cross-server replication of a *single* album (where two users on different home servers each want to write the same album) is **out of scope for v1** and deferred to v2. v1 supports cross-server sharing in the read direction (Alice on `home.tld` shares an album to Bob on `other.tld`; Bob reads via federation; Bob's writes either remain on `home.tld` via a registered or sponsored account, or are out of scope). The v2 design space is flagged in [Threat Model — Open Questions](/design/threat-model/schema-rules/#open-questions).
+Cross-server replication of a *single* album (where two users on different home servers each want to write the same album) is **out of scope for v1** and deferred to v2. v1 supports cross-server sharing in the read direction (Alice on `home.tld` shares an album to Bob on `other.tld`; Bob reads via federation; Bob's writes either remain on `home.tld` via a registered or sponsored account, or are out of scope). The v2 design space is flagged in [Threat Model — Open Questions](/design/threat-model/schema-rules/#open-questions). What ships *before* v2 is the aggregated album, next — multi-party sharing without multi-writer albums.
+
+## Federated Shared Albums (Aggregated Albums)
+
+The thing people actually want from federated sharing — "everyone on the trip puts their photos in the album, whichever server their account lives on" — does not require a multi-writer album. It requires the *view* of one. An **aggregated album** is N ordinary container albums, one per contributor, each homed on its contributor's own server and single-writer-domain as always, presented by clients as **one logical album**. Every rule above stays intact: one home server per constituent, pull-only replication, no cross-server commit ordering. There is **zero new server surface** — servers never learn that a group exists.
+
+### The Album-Group Assertion
+
+The group is client-side metadata, asserted per constituent:
+
+- The creator mints a `group_id` (UUIDv7) and shares it in the invite.
+- Each contributor's client writes an **album-group assertion** into *their own* container album's encrypted collaborative-metadata stream (the [operation path](/design/metadata/#how-operations-travel); this doc owns the assertion's schema):
+
+```rust
+AlbumGroupAssertion {
+  group_id:    UUIDv7,
+  group_name:  Lww<String>,          // converges across participants like caption_lww
+  member_hint: Vec<(album_id, home_server)>,  // advisory discovery only, never trusted
+}
+```
+
+There is deliberately **no shared mutable group object** — that would be exactly the multi-writer cross-server state v1 defers. A union of per-album assertions needs no cross-server consensus: each assertion lives in its author's own single-writer album and travels to readers through the existing feed/pull machinery.
+
+### Membership and Rendering
+
+- **Everyone writes their own, reads the others.** A participant contributes by writing to their own constituent (ordinary album writes on their home server) and reads the other constituents via ordinary per-album invites — same-server membership or [federation capabilities](#federation-capabilities) — with blobs pulled from each origin.
+- **Inclusion is injection-proof by construction.** A constituent appears in the local aggregate only if the local user is a *member* of that album (holds its AMK) **and** it asserts the `group_id`. A stranger's album cannot inject itself into anyone's view: without an invite, its assertion is never even decryptable. `member_hint` only tells the client where to *ask*; membership does the admitting.
+- **The aggregate is a computed view.** Merged ordering is `capture_timestamp` with `asset_id` as the tiebreak — computed at render, nothing stored, so it is idempotent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) by definition. It holds no keys and is no access-control boundary, exactly like every [view album](/design/organization/#system--smart-albums-views). Group name converges by LWW across assertions; the cover is a per-viewer preference in the library-settings document (falling back to newest asset) — deliberately not shared state.
+- **Partial views degrade visibly.** One origin unreachable → that constituent's entries render from the local index with the existing per-origin [degraded state](#robustness-against-connectivity-loss) ("photos from `other.tld` currently unavailable"); nothing is removed. [Search](#federated-breadcrumb-index) spans constituents through the breadcrumb index unchanged.
+
+### Leaving, Revocation, and Moderation
+
+- **Leaving** = removing your assertion — your constituent drops out of every participant's aggregate on their next sync. Optionally also unshare your container (AMK epoch bump + capability revocation) to cut read access to the historical photos.
+- **There is no group-level kick.** Each contributor is sovereign over their own constituent; you can stop someone from seeing *your* photos (unshare), but nobody can remove someone else's constituent from the group for other viewers. Stated as an honest limitation of the aggregation model rather than papered over — a true shared-governance album is precisely the v2 problem.
+- **Moderation is per-origin.** Blocking a server or user ([Moderation](/design/moderation/)) drops their constituent from your aggregate; the per-peer containment rules above apply to each origin independently.
+
+### Relationship to v2 Multi-Writer
+
+The aggregate neither depends on nor precludes true multi-writer albums. Nothing server-side encodes the group, so there is nothing to migrate: if v2 ships a genuinely co-written album, it joins a group as one more constituent and the group collapses to it when participants consolidate. [Open question #1](/design/threat-model/schema-rules/#open-questions) stays open; aggregated albums are the shipping answer until it closes.
 
 ## Federation Capabilities
 
-Sharing an album with `alice@other.tld` requires her server to be *able* to fetch that album's blobs. Capsule issues her server an **album-scoped capability token**: a signed, expiring, revocable grant naming the album, the scope, and an expiry, reusing the [EdDSA-JWT machinery](/design/authentication/#access-token) already built for access tokens — no separate macaroon or ZCAP format is introduced.
+Sharing an album with `alice@other.tld` requires her server to be *able* to fetch that album's blobs. Capsule issues her server an **album-scoped capability token**: a signed, expiring, revocable grant naming the album, the scope, and an expiry, reusing the [EdDSA-JWT machinery](/design/authentication/#access-token) already built for access tokens — no separate macaroon or ZCAP format is introduced. (Terminology note: this server-to-server JWT and the user-facing **link capabilities** — [share links](/design/share-links/) and [upload links](/design/web-upload/), opaque-id + fragment secret — share the *concept* of unforgeable possession granting scoped access, not a format; "capability token" always means this JWT.)
 
 The capability token format is the contract every federated peer parses and that this server signs. Its shape and lifecycle below are normative.
 
@@ -55,12 +96,13 @@ A federation capability token is an EdDSA-JWT with the following claims:
 | ---------------------- | -------- | ---------------------------------------------------------------------------------------- |
 | `iss`                  | string   | The issuing home server (`home.tld`).                                                    |
 | `sub`                  | string   | The peer server identity (`other.tld`).                                                  |
-| `aud`                  | string   | The album id this capability scopes to (`urn:capsule:album:UUID`).                       |
-| `scope`                | enum     | `read` (full) or `read-derivative-only` (thumbnails and previews only, never originals). |
+| `aud`                  | string   | The album id this capability scopes to (`urn:capsule:album:UUID`). Deviates from RFC 7519's recipient-oriented `aud` (the recipient is `sub`); verifiers MUST be configured to match `aud` against the *album*, never against themselves. |
+| `scope`                | enum     | `read` (full) or `read-derivative-only` (thumbnails and previews only, never originals). Enforced structurally: every blob's **role** is server-visible (recorded on its index row and named by its signed [envelope object](/design/cryptography/provenance/#asset-manifest)), so a `/blob/{hash}` fetch under a derivative-only capability is refused when the hash's role is `original`. |
+| `iat`                  | RFC 3339 | Issued-at; the anchor `exp` is bounded against.                                          |
 | `exp`                  | RFC 3339 | Expiry; never more than **24 h** after `iat`.                                            |
 | `nbf`                  | RFC 3339 | Not-before; clock-skew tolerance against the peer's wall-clock.                          |
 | `jti`                  | UUIDv7   | Unique token identifier; the revocation key.                                             |
-| `min_protocol_version` | string   | Lowest `protocol_version` the issuing server still serves; matches the album's pin.      |
+| `min_protocol_version` | string   | The **album's pinned** `protocol_version` — every event in the album conforms to it, so the peer selects its parser from this claim. (The issuing server's own supported window is discovered via `.well-known/capsule/server-info`, never from this claim.) |
 
 Signed under the home server's signing key — classical Ed25519 only, per the [operational-signature carve-out](/design/cryptography/primitives/#signature-scheme).
 
@@ -69,7 +111,7 @@ Signed under the home server's signing key — classical Ed25519 only, per the [
 1. **Issuance.** A user on `home.tld` shares an album with `alice@other.tld`. `home.tld` mints a capability token for `other.tld` and delivers it as part of the share-invite message to Alice's client. Alice's client posts the token to `other.tld`; `other.tld` caches it server-side and uses it on every subsequent pull.
 2. **Verification.** Capsule (the verifier, `home.tld` in this case) verifies the token offline against its own published signing key — no third-party PKI, no network call to a notary except for key rotation (see [Server Identity and Key Rotation](#server-identity-and-key-rotation)).
 3. **Refresh.** A token nearing `exp` is replaced by `other.tld` requesting a new one on Alice's behalf; the request is itself authenticated by the previous token. Idempotency keyed by `(peer_id, jti)` per [Threat Model — Idempotency Invariants](/design/threat-model/validation/#idempotency-invariants).
-4. **Revocation.** Revocation is a short TTL (`exp ≤ 24h`) plus a published **revocation list** at `/.well-known/capsule/revoked-jti`. Peers fetch and cache the list with a **maximum staleness of 15 minutes**. A peer holding a revoked-but-not-yet-expired token will still be honored for up to 15 minutes after revocation — this is the deliberate trade-off between revocation latency and revocation-list polling overhead. **List unavailability fails closed:** a verifier that relies on a *cached* copy of an issuer's revocation list and cannot refresh it must reject, past the 15-minute bound, any token whose `jti` it can no longer confirm against a current list — it never honors tokens indefinitely on a stale list. The `exp ≤ 24h` ceiling caps the worst case regardless, but the explicit rule means revocation cannot be outlived by making the list unreachable. (A server verifying its *own* tokens checks its own always-fresh list and is never stale.)
+4. **Revocation.** Revocation is a short TTL (`exp ≤ 24h`) plus a published **revocation list** at `/.well-known/capsule/revoked-jti`. Peers fetch and cache the list with a **maximum staleness of 15 minutes**. A peer holding a revoked-but-not-yet-expired token will still be honored for up to 15 minutes after revocation — this is the deliberate trade-off between revocation latency and revocation-list polling overhead. **List unavailability fails closed:** a verifier that relies on a *cached* copy of an issuer's revocation list and cannot refresh it must reject, past the 15-minute bound, any token whose `jti` it can no longer confirm against a current list — it never honors tokens indefinitely on a stale list. The `exp ≤ 24h` ceiling caps the worst case regardless, but the explicit rule means revocation cannot be outlived by making the list unreachable. (A server verifying its *own* tokens checks its own always-fresh list and is never stale.) Revoked `jti`s are **pruned** from the published list once their `exp` passes — an expired token is rejected unconditionally anyway — so the list stays bounded by at most 24 hours of revocations.
 5. **Expiry.** A token past `exp` is rejected unconditionally; the verifier returns `401` and the peer must obtain a fresh token before continuing.
 
 This capability is a **transport-scoped control, not a confidentiality control**: it gates *who may fetch at all* (rate-limiting, anti-enumeration, clean revocation of a sharing relationship), nothing more. Confidentiality is already enforced by [MLS album membership](/design/cryptography/mls/) — without the album master key, fetched bytes are unreadable.
@@ -82,7 +124,7 @@ Every byte from a peer crosses a hard boundary before it is trusted. The exhaust
 - **Closed enums.** `action`, `content_type`, `DerivativeManifest.role`, and `gps.source` are closed per protocol version. An unknown value is a structural error, not a "future to ignore."
 - **Hard caps.** Size caps on every field, depth caps on nested structures, length caps on bounded collections (e.g. `superseded_captions ≤ 16`), rate caps per peer. No unbounded input reaches a parser.
 - **Unknown fields within a known schema preserved, never executed.** Top-level unknown fields are rejected; field-level unknown CBOR keys within a known schema are preserved verbatim for forward compatibility but are never interpreted.
-- **Manifest envelope checks.** All items 1–18 of [Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants) apply — `protocol_version` in range, `crypto_suite_id` in inventory, hash length matches the suite's digest size, declared size against received bytes, `created_by_device` in the user's device directory, `timestamp` within the sanity bound, monotonic `amk_version`, and the [stale-revival check](/design/import/download-sync/#stale-revival-detection) on `prior_provenance_hash`.
+- **Manifest envelope checks.** All items 1–18 of [Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants) apply — `protocol_version` in range, `crypto_suite_id` in inventory, hash length matches the suite's digest size, declared size against received bytes, `created_by_device` in the user's device directory, `timestamp` within the sanity bound, monotonic `amk_version`, and the [stale-revival check](/design/import/download-sync/#stale-revival-detection) on `prior_provenance_hash`. Where a pulled bundle carries a metadata blob, **invariant 25** (the `metadata_blob_hash` match) applies too — federation never unlocks looser rules. (Invariants 26–32 are drop-path-only and cannot arise on a pull.)
 - **Capability token.** Items 19–21 of the same list: token verifies under the home server's signing key, `exp` in future, `jti` not in the revocation list, per-peer rate budgets unbroken.
 - **The parser is a security boundary.** Capsule's decoders for federated input are written in memory-safe Rust against audited libraries (`ciborium`, `serde_cbor`); we explicitly assume the host language and decoder are memory-safe (the same assumption [Security Against Malicious Files](#security-against-malicious-files) makes at the client edge). Decoder CVEs in client decode paths for *opaque media bytes* are handled by the [sandboxed decoder](/design/clients/#sandboxed-decoder), not by re-implementing the decoder. The federation CBOR decode path is additionally fuzzed.
 
@@ -143,8 +185,9 @@ Federation introduces moderation hooks for handling abuse across servers; the fu
 
 ## Server Identity and Key Rotation
 
-- Server-to-server requests are signed under the server's signing key (classical Ed25519 only, per the [operational-signature carve-out](/design/cryptography/primitives/#signature-scheme)), published at a well-known path. Matrix, ActivityPub (HTTP Signatures), and AT Protocol all converge on this pattern.
-- Servers cache each other's public keys (TOFU-pinned on first contact). A rotation is confirmed by a **perspective check**: before accepting a rotated key, a peer corroborates it against one or more independent vantage points (other servers, or a configured notary) and accepts only on agreement — so a single compromised network path cannot substitute a forged key. A rotation that fails corroboration is surfaced, not silently accepted. This is the mechanism behind [Threat Model — scenario #26](/design/threat-model/scenarios/#damage-scenario--invariant-map).
+- A server holds **two** signing identities, split by signature lifetime. The **operational key** signs server-to-server requests (classical Ed25519 only, per the [operational-signature carve-out](/design/cryptography/primitives/#signature-scheme)). The **attestation key** — hybrid Ed25519 + ML-DSA-65 — signs long-lived evidence: [custody receipts and storage attestations](/design/import/storage-verification/#custody-receipts). Both are published at the same well-known path; Matrix, ActivityPub (HTTP Signatures), and AT Protocol all converge on the well-known-key pattern.
+- The well-known document keeps an **append-only key history** for the attestation key (`key_id` → public key, active-from/active-to), never dropping a retired entry, so a receipt signed years ago still verifies; a receipt's `server_key_id` selects its verification key. The operational key needs no history — nothing it signs outlives it.
+- Servers cache each other's public keys (TOFU-pinned on first contact). A rotation is confirmed by a **perspective check**: before accepting a rotated key, a peer corroborates it against **at least two** independent vantage points — federated servers it already trusts, or a deployment-configured notary — and accepts only on **unanimous** agreement, so a single compromised network path (or a single colluding vantage) cannot substitute a forged key. A rotation that fails corroboration is surfaced, not silently accepted. This is the mechanism behind [Threat Model — scenario #26](/design/threat-model/scenarios/#damage-scenario--invariant-map).
 - Album protocol versions are pinned per album — see [Album Protocol Version Pinning](/design/versioning/#album-protocol-version-pinning).
 
 ## Validation

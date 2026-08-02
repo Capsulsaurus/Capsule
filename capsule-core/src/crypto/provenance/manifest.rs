@@ -23,6 +23,74 @@ pub const ASSET_MANIFEST_VERSION: &str = "asset-manifest/v1";
 /// Current derivative-manifest schema string.
 pub const DERIVATIVE_MANIFEST_VERSION: &str = "derivative-manifest/v1";
 
+/// How a reader obtains the asset's file key (closed enum; SSoT:
+/// [Cryptography — Provenance](https://docs/design/cryptography/provenance/)).
+///
+/// Wire-presence rule: `Derived` is the default and encodes as an **absent** map key in
+/// canonical CBOR (`skip_serializing_if`), so manifests signed before this field existed
+/// re-verify byte-identically. Emitting `key_mode: "derived"` explicitly would change the
+/// signed bytes and break verification.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum KeyMode {
+    /// The file key is recomputed from the AMK (`asset-file/v1`); nothing is stored.
+    #[default]
+    Derived,
+    /// The file key was chosen externally (an adopted web-upload drop) and is carried in
+    /// `wrapped_file_key`, sealed under the AMK (`asset-keywrap/v1`).
+    Wrapped,
+}
+
+impl KeyMode {
+    /// Serde helper: the default (`derived`) is wire-absent.
+    pub fn is_derived(&self) -> bool {
+        matches!(self, Self::Derived)
+    }
+}
+
+/// An externally-chosen file key sealed under the AMK: `wrap_nonce || AES-256-GCM(K) || tag`
+/// (the `asset-keywrap/v1` derivation — see
+/// [Encryption — Asset Key Derivation](https://docs/design/cryptography/encryption/)).
+/// Length is fixed by `crypto_suite_id`; the bytes are ciphertext, opaque to the server.
+///
+/// Serializes as a CBOR **byte string** (major type 2), like [`Hash32`] — never as an
+/// array of integers — so canonical encodings are byte-identical across implementations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrappedFileKey(pub Vec<u8>);
+
+impl Serialize for WrappedFileKey {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for WrappedFileKey {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        struct V;
+        impl<'de> serde::de::Visitor<'de> for V {
+            type Value = WrappedFileKey;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an AMK-wrapped file key as a byte string")
+            }
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<WrappedFileKey, E> {
+                Ok(WrappedFileKey(v.to_vec()))
+            }
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<WrappedFileKey, A::Error> {
+                // Tolerate decoders that surface a byte string as a sequence.
+                let mut out = Vec::new();
+                while let Some(b) = seq.next_element()? {
+                    out.push(b);
+                }
+                Ok(WrappedFileKey(out))
+            }
+        }
+        d.deserialize_bytes(V)
+    }
+}
+
 /// The signed core of an asset manifest — every field the two signatures cover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ManifestCore {
@@ -46,6 +114,18 @@ pub struct ManifestCore {
     pub chunk_size: u32,
     /// STREAM nonce prefix (random per file).
     pub nonce_prefix: [u8; 7],
+    /// How the file key is obtained: `derived` (default; wire-absent) or `wrapped` (an
+    /// adopted web-upload drop). Closed enum — see [`KeyMode`] for the wire-presence rule.
+    #[serde(default, skip_serializing_if = "KeyMode::is_derived")]
+    pub key_mode: KeyMode,
+    /// The AMK-sealed file key; present iff `key_mode = wrapped`, wire-absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wrapped_file_key: Option<WrappedFileKey>,
+    /// Content address of the asset's encrypted metadata blob. Present on
+    /// `create | replace | metadata-update`; wire-absent (key omitted, never null) on
+    /// `delete | derivative-* | trash-restore`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_blob_hash: Option<Hash32>,
     /// User who produced the asset.
     pub created_by_user: Uuid,
     /// Device that produced the asset (resolved in the device directory).
@@ -123,6 +203,15 @@ pub struct DerivativeCore {
     pub version: String,
     /// Primitive bundle.
     pub crypto_suite_id: u16,
+    /// Date-based wire protocol version; matches the album pin. Wire-absent only on
+    /// pre-binding fixtures; REQUIRED on every real write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol_version: Option<String>,
+    /// The AMK epoch whose write-tier key produced `write_sig` — the verifier needs it to
+    /// select the verification key. Wire-absent only on pre-binding fixtures; REQUIRED on
+    /// every real write (a derivative without it cannot be authorization-verified).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub amk_version: Option<AmkVersion>,
     /// The asset this derivative is generated from.
     pub source_asset_id: Uuid,
     /// Which kind of derivative.
@@ -196,6 +285,9 @@ mod tests {
             plaintext_size: 1024,
             chunk_size: 65_520,
             nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
+            key_mode: KeyMode::Derived,
+            wrapped_file_key: None,
+            metadata_blob_hash: None,
             created_by_user: Uuid::from_u128(0x05E2),
             created_by_device: Uuid::from_u128(0xD1),
             client_version: "capsule-cli/0.1.0".into(),
@@ -275,6 +367,8 @@ mod tests {
         let dm = DerivativeCore {
             version: DERIVATIVE_MANIFEST_VERSION.into(),
             crypto_suite_id: CRYPTO_SUITE_ID,
+            protocol_version: Some(PROTOCOL_VERSION.into()),
+            amk_version: Some(AmkVersion(1)),
             source_asset_id: Uuid::from_u128(0xF11E),
             role: DerivativeRole::Thumbnail,
             format: "image/avif".into(),
@@ -300,5 +394,51 @@ mod tests {
     }
     fn wt() -> HybridSigningKey {
         HybridSigningKey::from_seed_bytes(&[3; 32], &[4; 32])
+    }
+
+    /// The wire-presence contract for the fields added within `asset-manifest/v1`
+    /// (`key_mode`, `wrapped_file_key`, `metadata_blob_hash`): at their defaults they are
+    /// ABSENT map keys, so manifests signed before the fields existed re-verify
+    /// byte-identically. See the wire-presence rules in
+    /// <https://docs/design/cryptography/provenance/>.
+    #[test]
+    fn default_new_fields_are_wire_absent() {
+        let bytes = core(Action::Create, None).signing_bytes();
+        let value: ciborium::Value = cbor::from_slice(&bytes).unwrap();
+        let map = value.as_map().expect("manifest core encodes as a CBOR map");
+        let keys: Vec<&str> = map.iter().filter_map(|(k, _)| k.as_text()).collect();
+        assert!(
+            !keys.contains(&"key_mode"),
+            "derived key_mode must be wire-absent"
+        );
+        assert!(!keys.contains(&"wrapped_file_key"));
+        assert!(!keys.contains(&"metadata_blob_hash"));
+        // The pre-existing options keep their legacy present-null encoding.
+        assert!(keys.contains(&"prior_provenance_hash"));
+        assert!(keys.contains(&"retention_until"));
+    }
+
+    #[test]
+    fn wrapped_fields_round_trip_as_byte_strings() {
+        let mut c = core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; 60]));
+        c.metadata_blob_hash = Some(Hash32([0x4D; 32]));
+        let m = c.sign(&dev(), &wt()).unwrap();
+        let back: AssetManifest = cbor::from_slice(&cbor::to_canonical_vec(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
+        assert_eq!(back.signing_bytes(), m.signing_bytes());
+
+        let value: ciborium::Value = cbor::from_slice(&m.signing_bytes()).unwrap();
+        let map = value.as_map().unwrap();
+        let wrapped = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("wrapped_file_key"))
+            .map(|(_, v)| v)
+            .expect("wrapped_file_key present when key_mode = wrapped");
+        assert!(
+            wrapped.is_bytes(),
+            "wrapped_file_key must encode as a CBOR byte string"
+        );
     }
 }

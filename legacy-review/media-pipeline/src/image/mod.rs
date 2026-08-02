@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use crate::image::buffer::ImageBuffer;
-use crate::image::metadata::{ImageMetadata, ImageMetadataProvider};
-use crate::image::types::ImageFormat;
+use crate::media::image::buffer::ImageBuffer;
+use crate::media::image::metadata::{ImageMetadata, ImageMetadataProvider};
+use crate::media::image::types::ImageFormat;
 
 pub mod buffer;
 pub mod formats;
@@ -303,10 +303,10 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "PngImage not yet implemented"]
+    #[ignore = "S-B1: PngImage decoder not yet implemented — see SLICES.md"]
     fn test_image_conversion() {
-        use crate::image::formats::jpeg::JpegImage;
-        use crate::image::formats::png::PngImage;
+        use crate::media::image::formats::jpeg::JpegImage;
+        use crate::media::image::formats::png::PngImage;
 
         // Create a sample JPEG image buffer
         let width = 100;
@@ -319,7 +319,7 @@ mod tests {
             height,
             buffer::PixelFormat::Rgb,
             buffer::ComponentType::U8,
-            crate::metadata::ColorSpace::Srgb,
+            crate::media::metadata::ColorSpace::Srgb,
         )
         .unwrap();
 
@@ -329,7 +329,7 @@ mod tests {
             width: width as u32,
             height: height as u32,
             bit_depth: 8,
-            color_space: crate::metadata::ColorSpace::Srgb,
+            color_space: crate::media::metadata::ColorSpace::Srgb,
             ..Default::default()
         };
 
@@ -352,7 +352,7 @@ mod tests {
                 height,
                 buffer::PixelFormat::Rgb,
                 buffer::ComponentType::U8,
-                crate::metadata::ColorSpace::Srgb,
+                crate::media::metadata::ColorSpace::Srgb,
             )
             .unwrap(),
             ImageMetadata {
@@ -361,7 +361,7 @@ mod tests {
                 width: width as u32,
                 height: height as u32,
                 bit_depth: 8,
-                color_space: crate::metadata::ColorSpace::Srgb,
+                color_space: crate::media::metadata::ColorSpace::Srgb,
                 ..Default::default()
             },
         )

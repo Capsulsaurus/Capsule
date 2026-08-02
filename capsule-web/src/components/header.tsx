@@ -1,3 +1,5 @@
+import { Link, useNavigate } from '@tanstack/react-router';
+import { BellIcon, MountainIcon, UploadIcon } from 'lucide-react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {
@@ -8,11 +10,8 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
-
 import { useAuth } from '@/lib/auth-context';
 import { APP_NAME } from '@/lib/constant';
-import { Link, useNavigate } from '@tanstack/react-router';
-import { BellIcon, MountainIcon, UploadIcon } from 'lucide-react';
 import { ModeToggle } from './ui/mode-toggle';
 import { UploadDialog } from './upload-dialog';
 

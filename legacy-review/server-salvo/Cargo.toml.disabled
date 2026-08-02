@@ -8,7 +8,6 @@ default-run = "capsule-api"
 [dependencies]
 capsule-api-auth = { path = "./auth", optional = true }
 capsule-api-media = { path = "./media", optional = true }
-# TODO: Re-enable when upload is production-ready
 capsule-api-upload = { path = "./upload", optional = true }
 capsule-api-environment = { path = "./environment" }
 capsule-api-migration = { path = "./migration" }

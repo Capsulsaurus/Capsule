@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::image::types::{ImageFormat, ImageOutputSettings};
-use crate::video::types::{VideoFormat, VideoOutputSettings};
+use crate::media::image::types::{ImageFormat, ImageOutputSettings};
+use crate::media::video::types::{VideoFormat, VideoOutputSettings};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum TranscodeTask {

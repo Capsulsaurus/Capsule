@@ -7,17 +7,17 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type React from 'react';
 import { createContext, useCallback, useContext, useEffect } from 'react';
 import {
-    type UserProfile,
     logout as apiLogout,
     refreshAccessToken as apiRefresh,
     getProfile,
+    type UserProfile,
 } from './api';
 import {
-    type TokenPair,
     clearTokens,
     getTokenExpiry,
     hasTokens,
     saveTokens,
+    type TokenPair,
 } from './auth';
 
 export interface AuthState {

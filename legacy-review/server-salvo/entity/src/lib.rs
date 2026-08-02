@@ -13,4 +13,5 @@ pub mod person;
 pub mod share_link;
 pub mod smart_tag;
 pub mod stack_member;
+pub mod time;
 pub mod user;

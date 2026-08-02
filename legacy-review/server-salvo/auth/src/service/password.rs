@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use chrono::{Duration, Utc};
+use jiff::{SignedDuration, Timestamp};
 use model::errors::InternalServerError;
 use sea_orm::DatabaseConnection;
 use service::user as UserService;
@@ -30,7 +30,7 @@ impl PasswordService {
             Ok(Some(user)) => {
                 // Generate token
                 let token = nanoid::nanoid!();
-                let expires_at = Utc::now() + Duration::hours(1);
+                let expires_at = Timestamp::now() + SignedDuration::from_hours(1);
 
                 // Update user with token
                 UserService::Mutation::update_password_reset_token(

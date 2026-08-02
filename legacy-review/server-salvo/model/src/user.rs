@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 pub struct CreateUser {
@@ -44,13 +44,13 @@ pub struct User {
     pub is_admin: bool,
 
     /// Timestamp of when the user record was originally created.
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
 
     /// Timestamp of the last time the user record was updated.
-    pub modified_at: DateTime<Utc>,
+    pub modified_at: Timestamp,
 
     /// Timestamp of when the user was soft-deleted. If None, the user is active.
-    pub deleted_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<Timestamp>,
 
     /// How the account was created (e.g. 'invitation'); None for seeded/legacy/unknown.
     pub registered_via: Option<String>,
@@ -89,9 +89,9 @@ impl From<entity::user::Model> for User {
             profile_image_url,
             needs_onboarding,
             is_admin,
-            created_at,
-            modified_at,
-            deleted_at,
+            created_at: entity::time::entity_to_ts(created_at),
+            modified_at: entity::time::entity_to_ts(modified_at),
+            deleted_at: deleted_at.map(entity::time::entity_to_ts),
             registered_via,
         }
     }

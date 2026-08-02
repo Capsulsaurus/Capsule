@@ -22,7 +22,7 @@ swift test                 # software paths run anywhere; the Secure Enclave tes
                            # Apple-Silicon / T2 Macs and is skipped where no SE is present
 ```
 
-`./stage-bindings.sh` runs `just gen-bindings` at the repo root, which builds
+`./stage-bindings.sh` runs `mise run gen-bindings` at the repo root, which builds
 `target/debug/libcapsule_core.dylib`; `Package.swift` links it by absolute path with an `rpath`, so
 `swift test` needs no `DYLD_*` setup.
 
@@ -31,5 +31,5 @@ swift test                 # software paths run anywhere; the Secure Enclave tes
 - The **software** path is exercised end to end (the FFI + the hardware-signer foreign trait).
 - The **Secure Enclave** adapter is P-256 (the Enclave has no Ed25519), so it is not yet wired into
   the Ed25519 `createWithHardwareSigner` path; that needs the P-256 hybrid-DSK variant tracked in
-  the repo `DEFERRED.md`. Wiring the bindings + dylib into the real `capsule-swift` Xcode app is
+  `SLICES.md` (slice S-A4). Wiring the bindings + dylib into the real `capsule-swift` Xcode app is
   also a follow-up.

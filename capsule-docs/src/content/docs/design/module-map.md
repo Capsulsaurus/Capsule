@@ -1,6 +1,7 @@
 ---
 title: Module Map
 description: Current Rust modules, planned boundaries, and validation ownership
+status: draft
 ---
 
 This map distinguishes code that is active today from contracts that are planned or preserved only
@@ -10,7 +11,7 @@ for review. A name in the design does not imply that a deployable implementation
 
 | Area | Status | Ownership |
 | --- | --- | --- |
-| `capsule-core` | Active | Cryptography, canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite, import scan/plan |
+| `capsule-core` | Active | Cryptography, canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite, import scan/plan, share/drop contract skeletons |
 | `capsule-i18n` + `xtask::i18n` | Active | Canonical ICU catalogs, runtime localization, generated platform catalogs |
 | `capsule-core-ffi` | Active, consolidation pending | Legacy low-level UniFFI surface; the high-level `capsule-core` FFI is the intended destination |
 | `capsule-cli` + CLI entity/migration crates | Active, consolidation pending | Local CLI behavior and its legacy SQLite persistence stack |
@@ -31,6 +32,9 @@ status until rewritten against their owning contracts.
 | `backup` | [Backup and Recovery](/design/backup-recovery/) | Unit and smoke |
 | `library::{init,open,rebuild,scrub,trash,cache}` | [Client Filesystem](/design/filesystem/client/) and [Maintenance](/design/filesystem/maintenance/) | Unit and smoke |
 | `import::{scanner,planner,group,special}` | [Import Pipeline](/design/import/pipeline/) | Unit; executor smoke is blocked on Rawshift |
+| `drop`, `sharing` | [Web Upload](/design/web-upload/) and [Share Links](/design/share-links/) | Contract tests; crypto behavior remains sliced |
+| `cohort` | [Authentication](/design/authentication/) | Unit determinism |
+| `library::{space,storage_verify}` | [Import Pipeline](/design/import/pipeline/) and [Storage Verification](/design/import/storage-verification/) | Unit boundary and release-gate tests |
 | `metadata`, `sidecar` | [Metadata](/design/metadata/) | Unit determinism and round trips |
 | `db` | [Client Filesystem](/design/filesystem/client/) | Unit SQLite operations |
 | `domain`, `models` | [Organization](/design/organization/), [Metadata](/design/metadata/) | Closed-enum and model unit tests |
@@ -80,7 +84,7 @@ the named acceptance gaps are verified with contract fixtures or a minimal spike
 | Chromahash v1 | LQIP encode/decode only, imported directly by Capsule | Stable v1 wire format and versioning; deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. It remains absent from Cargo until v1 is released |
 | OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
 | PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
-| `redis-rs` | Optional Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; parity with PostgreSQL and in-memory test suites |
+| `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; parity with PostgreSQL and in-memory test suites |
 | RustCrypto, `ciborium`, `rusqlite`, UniFFI | Existing crypto primitives, canonical serialization, local catalog, and native bindings | Continue vectors, canonical-byte tests, migration tests, and binding smoke tests; these libraries do not own Capsule protocols or schemas |
 
 Explicit non-dependencies: no generic CAS crate, `object_store`, resumable-transfer library, generic

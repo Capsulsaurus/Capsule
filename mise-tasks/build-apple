@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+#MISE description="Build capsule-core FFI for the Apple targets (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping Apple targets (not macOS)"; exit 0; fi
+for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
+    echo ":: building capsule-core for $t"
+    cargo build -p capsule-core --features ffi --target "$t"
+done

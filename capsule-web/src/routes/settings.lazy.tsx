@@ -1,3 +1,7 @@
+import { useQueryClient } from '@tanstack/react-query';
+import { createLazyFileRoute, Link } from '@tanstack/react-router';
+import type React from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -10,10 +14,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { ApiError, updateProfile } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { useQueryClient } from '@tanstack/react-query';
-import { Link, createLazyFileRoute } from '@tanstack/react-router';
-import type React from 'react';
-import { useEffect, useState } from 'react';
 
 export const Route = createLazyFileRoute('/settings')({
     component: Settings,

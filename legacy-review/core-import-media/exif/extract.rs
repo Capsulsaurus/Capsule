@@ -2,12 +2,12 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 
-use chrono::NaiveDateTime;
 use exif::{In, Reader, Tag, Value};
+use jiff::civil;
 
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ExifExtract {
-    pub date_time_original: Option<NaiveDateTime>,
+    pub date_time_original: Option<civil::DateTime>,
     pub offset_time_original: Option<String>, // e.g. "+09:00"
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
@@ -44,7 +44,7 @@ pub fn extract_exif(path: &Path) -> Result<ExifExtract, Box<dyn std::error::Erro
         .get_field(Tag::DateTimeOriginal, In::PRIMARY)
         .and_then(|field| {
             let dt_str = field.display_value().to_string();
-            NaiveDateTime::parse_from_str(&dt_str, "%Y:%m:%d %H:%M:%S").ok()
+            civil::DateTime::strptime("%Y:%m:%d %H:%M:%S", &dt_str).ok()
         });
 
     // OffsetTimeOriginal

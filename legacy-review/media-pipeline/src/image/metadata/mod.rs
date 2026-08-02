@@ -1,18 +1,18 @@
-use chrono::{DateTime, Utc};
+use jiff::civil;
 use serde::{Deserialize, Serialize};
 
-use crate::core::types::ImageFormat;
-use crate::image::Image;
-use crate::image::metadata::exposure::CaptureSettings;
-use crate::image::metadata::iptc::IptcData;
-use crate::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
-use crate::image::metadata::raw::RawSensorInfo;
-use crate::metadata::c2pa::C2PAManifest;
-use crate::metadata::exif::ExifData;
-use crate::metadata::geo::GpsLocation;
-use crate::metadata::icc::IccProfile;
-use crate::metadata::xmp::XmpData;
-use crate::metadata::{ColorSpace, DeviceMetadata};
+use crate::media::core::types::ImageFormat;
+use crate::media::image::Image;
+use crate::media::image::metadata::exposure::CaptureSettings;
+use crate::media::image::metadata::iptc::IptcData;
+use crate::media::image::metadata::motion::{AuxiliaryImage, MotionPhotoInfo};
+use crate::media::image::metadata::raw::RawSensorInfo;
+use crate::media::metadata::c2pa::C2PAManifest;
+use crate::media::metadata::exif::ExifData;
+use crate::media::metadata::geo::GpsLocation;
+use crate::media::metadata::icc::IccProfile;
+use crate::media::metadata::xmp::XmpData;
+use crate::media::metadata::{ColorSpace, DeviceMetadata};
 
 pub mod exposure;
 pub mod iptc;
@@ -28,7 +28,7 @@ pub trait ImageMetadataExtractor {
     fn get_file_size(&self) -> u64;
 
     // Generic typed metadata
-    fn get_date_taken(&self) -> Option<DateTime<Utc>>;
+    fn get_date_taken(&self) -> Option<civil::DateTime>;
     fn get_device_metadata(&self) -> Option<DeviceMetadata>;
     fn get_capture_settings(&self) -> Option<CaptureSettings>;
     fn get_location(&self) -> Option<GpsLocation>;
@@ -93,7 +93,7 @@ pub struct ImageMetadata {
 
     // --- Extracted Typed Metadata (From your original struct) ---
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub date_taken: Option<DateTime<Utc>>,
+    pub date_taken: Option<civil::DateTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<DeviceMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]

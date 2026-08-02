@@ -1,6 +1,7 @@
 ---
 title: Import Pipeline
 description: How Capsule scans, plans, and executes a local import on a single device
+status: draft
 ---
 
 The import pipeline is the workflow a client runs to bring assets from an external source (a camera, a filesystem directory) into Capsule's management. It is implemented in `capsule-core::import` and runs entirely client-side — no server is contacted until the [upload protocol](/design/import/upload-protocol/) is invoked at the tail of the pipeline.
@@ -30,12 +31,12 @@ The server independently enforces a closed-enum `content_type` allow-list at ses
 
 The planner is **pure**: given the scanned files and their extracted metadata, it produces an `ImportPlan { added: [..], skipped: [..], conflicts: [..], total_size }` deterministically. The plan is shown to the user (summary of what will be imported, total size, any issues), and the user confirms or adjusts.
 
-**Free-space probe.** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
+**Free-space probe (planned).** Alongside `total_size`, the client probes the library volume's available space (`capsule-core::library::available_bytes()`, planned) and sets `streaming_recommended: bool` on the plan when `total_size` is near or over free space (a configurable headroom margin). The probe is I/O, so it runs *outside* the pure planner and is attached at confirmation — the planner stays deterministic — exactly as the destination-pointer snapshot is a planner input rather than a discovered-later value. `streaming_recommended` is what surfaces [import-upload streaming mode](#import-upload-streaming-mode) to the user before execution begins.
 
 - If an asset is already uploaded *locally* in the library, import refuses it — no merge needed.
 - If an asset already exists *remotely* under a different ciphertext (e.g. re-encrypted under a newer album key), import still admits it; the [upload protocol](/design/import/upload-protocol/#deduplication-and-merge) then resolves it as a merge (the existing blob is linked rather than re-uploaded).
 
-**Destination resolution.** Each added asset is assigned a destination [container album](/design/organization/#container-albums). If the user picks one explicitly the planner uses it; otherwise it calls `resolve_default_album(context)` — the active scope's override, else the owner [default-album](/design/organization/#the-default-album) pointer, else the derived de facto album. To keep the planner pure, the active context and a snapshot of the pointer/overrides are planner *inputs*, so the resolved `album_id` is deterministic and recorded in the `ImportPlan` rather than discovered later at upload time.
+**Destination resolution.** Each added asset is assigned a destination [container album](/design/organization/#container-albums). If the user picks one explicitly the planner uses it; otherwise it calls `resolve_default_album(context)` — the active scope's override, else the owner [default-album](/design/organization/#the-default-album) pointer, else the derived de facto album. To keep the planner pure, the active context and a snapshot of the pointer/overrides are planner *inputs*, so the resolved `album_id` is deterministic and recorded in the `ImportPlan` rather than discovered later at upload time. The snapshot is last-writer-wins by design: a concurrent re-point of the default album after the user confirms does **not** retarget the confirmed plan — the recorded `album_id` stands, exactly as if the user had picked that album explicitly.
 
 The planner's purity is what lets it be unit-tested exhaustively without filesystem fixtures: every edge case (overlapping selections, mixed formats, sidecar pairing, partial state from a prior interrupted import) becomes a table of `(scan_input → expected_plan)` pairs.
 
@@ -50,11 +51,15 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
+**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The standalone `import::executor` still writes the legacy **unsigned** `AssetSidecar`; unifying it onto the signed path waits on derivative generation (step 3, planned with [Thumbnails](/design/thumbnails/)).
+
 ## Import-Upload Streaming Mode
+
+**Status: planned.** The offline pipeline above (scan → plan → execute) is implemented in `capsule-core::import`; streaming mode, the free-space probe, and the verify-and-release loop are the planned seam over it — a new executor drive mode, with no change to the upload wire protocol.
 
 The default pipeline imports every file into the local library *before* upload, so the device temporarily holds the whole import on disk. That is impossible on a storage-constrained device — a laptop with a near-full SSD importing a library larger than its free space. **Streaming mode** removes the requirement that the full import ever land locally at once.
 
-It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
+It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `total_size` is near or over available space, the plan is marked `streaming_recommended` and the user confirms a streaming import. Streaming is **mutually exclusive with a [staged upload policy](/design/import/download-sync/#upload-tiering-staged-uploads)** for the same import — streaming exists to release local bytes quickly, staged defers exactly the upload that release depends on — and the planner rejects the combination at confirmation. Instead of executing all files and then uploading, the executor runs a bounded **sliding window**:
 
 1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
 2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).
@@ -64,9 +69,25 @@ It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `to
 
 Peak local disk is therefore bounded to the in-flight window, not the whole import, so an import far larger than free space can complete. The verify-before-release step *is* the [verify-before-destroy](/design/import/storage-verification/#verify-before-destroy) rule applied per asset — the device never drops the only copy of bytes the server has not confirmed it holds.
 
-**Halt on lost connectivity.** Streaming mode depends on the server: releasing local copies is safe only because the server is confirmed to hold them. If the connection to the server drops, the pipeline **pauses** — it stops admitting new source files into the library (continuing would refill the very disk the mode exists to spare) and waits, rather than importing ahead into space it does not have. In-flight uploads resume via the protocol's [`HEAD` resumption](/design/import/upload-protocol/#session-lifecycle) once connectivity returns; if the source media itself is removed mid-import, the deterministic planner re-derives the remaining work on resume. Bulk streaming import is a *large reconciliation* and obeys the same metered/Wi-Fi [connection rules](/design/import/download-sync/#synchronization-criteria) as auto-sync.
+**Minimum headroom.** The window must fully materialize at least one asset locally (original + derivatives + metadata) before that asset's upload and release complete, so streaming mode requires headroom for the **largest single asset in the plan**. If even one asset exceeds free space, the plan surfaces a hard "cannot import *X* without freeing *Y*" error at confirmation rather than stalling mid-stream — streaming bounds peak usage to the window; it cannot make a single file smaller than the disk.
+
+**Halt on lost connectivity.** Streaming mode depends on the server: releasing local copies is safe only because the server is confirmed to hold them. If the connection to the server drops, the pipeline **pauses** — it stops admitting new source files into the library (continuing would refill the very disk the mode exists to spare) and waits, rather than importing ahead into space it does not have. In-flight uploads resume via the protocol's [`HEAD` resumption](/design/import/upload-protocol/#session-state-machine) once connectivity returns; if the source media itself is removed mid-import, the deterministic planner re-derives the remaining work on resume. Bulk streaming import is a *large reconciliation* and obeys the same metered/Wi-Fi [connection rules](/design/import/download-sync/#synchronization-criteria) as auto-sync.
 
 **Quota.** Streaming creates one upload session per asset, so server [quota](/design/quota/#enforcement-points) is enforced exactly as for any upload — at session creation, no new enforcement point. If quota is exhausted mid-stream the next session creation is refused; the pipeline pauses and surfaces the remediable state rather than failing the whole import, and no local original is released for an asset that did not upload.
+
+## Third-Party Importers
+
+**Status: planned** (slices `S-B6` v1, `S-B7`/`S-B8` post-v1). Migration from another photo service is an import, not a new pipeline: an importer is a **source adapter** implementing the same contract as the filesystem scanner — it yields `(bytes-source, extracted-metadata)` entries into [Scan & Extract](#scan--extract), and the pure planner and executor are unchanged. Third-party migration adds no new pipeline stage and no new server surface.
+
+What an adapter owns is **structure awareness**: metadata the exporting service carries out-of-band is folded into the extracted metadata *before* planning, under a fixed precedence — **embedded EXIF wins over exporter-side records, except for constructs the exporter is authoritative for** (its album membership, favorites/rating flags, and user-typed descriptions that the file bytes never carried). The fold happens at extraction, so the planner's determinism contract holds: a given archive yields the same `ImportPlan` on every run, and re-running an importer over the same archive skips completed work exactly like a [resumed import](#validation).
+
+The committed adapters:
+
+- **Google Takeout (`S-B6`, v1).** Walks a Takeout archive; pairs each media file with its JSON sidecar (photo-taken time, GPS, description, favorites, album JSONs); folds per the precedence rule. Takeout's known quirks — truncated filenames, `(1)` duplicates, edited/original pairs, JSON files split across archive parts — are adapter concerns with fixture coverage, never planner special cases.
+- **iCloud Photos export (`S-B7`, post-v1).** The iCloud export layout (originals + CSV metadata).
+- **Immich (`S-B8`, post-v1).** Immich's export/API surface; format fixed when the slice starts.
+
+Tethered cameras plug into this same adapter seam — see [Import — Camera Import](/design/import/camera-import/). User-facing migration guides (per-provider export walkthroughs, verification checklists, robustness disclaimers) live in the docs site outside `design/` and ship gated on each importer stabilizing (slice `S-Z2`).
 
 ## Upload Prioritization
 
@@ -98,5 +119,6 @@ What the rest of the system depends on this module for:
 - **Streaming auto-detect (unit).** With `available_bytes()` mocked below and above `total_size + headroom`, assert `streaming_recommended` is set in the constrained case and clear otherwise.
 - **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
 - **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.
+- **Takeout mapping table (unit).** A fixture Takeout archive → expected plan, one row per metadata-mapping rule (taken-time vs EXIF precedence, GPS fold, description, favorites, album membership, truncated-filename pairing, duplicate suffixes). Re-running over the same fixture yields a plan that skips completed work.
 
-The cross-module case — pipeline → upload protocol → server finalization → assets visible in `/sync` — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).
+The cross-module case — pipeline → upload protocol → server finalization → assets visible in the sync feed — is bounded E2E surface listed in [Module Map](/design/module-map/#e2e-test-surface).

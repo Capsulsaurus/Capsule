@@ -1,6 +1,7 @@
 ---
 title: Share Links
 description: Non-registered-account share link generation, permission model, and public-share serving
+status: draft
 ---
 
 Share links let a Capsule user grant view (and possibly limited write) access to an album or a specific asset *without* requiring the recipient to have a Capsule account. The recipient is the [non-registered account](/design/authentication/#account-types) class — no master key, no User IK, no MLS membership. The cryptographic shape (the link secret carries the decryption material; an optional passphrase wraps it with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf)) is owned by [Cryptography — Keys: Non-registered accounts](/design/cryptography/keys/#non-registered-accounts); this doc owns everything else.
@@ -19,7 +20,7 @@ In scope:
 
 Out of scope for v1 (deliberate non-goals):
 
-- **Writable share links.** Writing requires a write-tier key + a place in the MLS group; a non-registered user has neither. Supporting writes would require an ephemeral link-scoped key hierarchy — a substantial new design that is not justified for v1.
+- **Writable share links.** Writing requires a write-tier key + a place in the MLS group; a non-registered user has neither. Supporting writes would require an ephemeral link-scoped key hierarchy — a substantial new design that is not justified for v1. Guest *contribution* (a non-registered user depositing assets) is instead provided by [Web Upload](/design/web-upload/)'s upload links — a distinct write-to-inbox capability whose product is a staged drop, which does **not** make these view links writable.
 - **Per-recipient analytics.** Link views are not tracked per-recipient. The link is the credential; the server knows it was used, not by whom.
 
 ## Security Contract
@@ -32,7 +33,7 @@ These are **normative** — the security-relevant decisions are committed; only 
 - **Passphrase unwrap is client-side.** When a passphrase protects a link, the server stores only the **wrapped** secret and never receives the passphrase: the client fetches the wrapped material and unwraps it locally via the [password-based KDF](/design/cryptography/primitives/#password-based-kdf). The server is never in the password-trust path, so a server compromise cannot brute-force passphrases beyond the [Argon2id](/design/cryptography/primitives/#password-based-kdf) cost already imposed. Because unwrap is client-side the server cannot observe a *failed* attempt, so the endpoint that returns the wrapped material is rate-limited per source IP and per `{opaque-id}` (the same limiter as the serve path); the Argon2id cost is the real brute-force backstop.
 - **Privacy strip on serve is mandatory.** The serve path **always** applies the boundary-crossing strip from [Metadata — Privacy on Export](/design/metadata/#privacy-on-export) (camera serial, device/session ids, GPS truncated to city level, contact tags). There is **no per-share opt-out** that could leak fingerprinting fields — a public share is, by definition, a boundary crossing.
 - **Home-server-only serving.** A share link is served **only by the album's [home server](/design/federation/#album-ownership-v1-single-home-server)**. A federated peer never serves a share; a share-scoped request at a peer returns a **structured `{ home_server }` JSON pointer** the client resolves — explicitly *not* an HTTP redirect, to avoid an open-redirect surface — never content. This keeps revocation and rate-limiting at a single authoritative point.
-- **Revocation cache.** Per-link revocation is checked against a **short-TTL cache (default 60 s)** with the same fail-closed posture as the [federation revocation list](/design/federation/#token-lifecycle-and-chain-of-trust): a serve path that cannot confirm a link is still live past the TTL refuses rather than serving on stale-allowed state.
+- **Revocation cache.** Home-server-only serving still leaves *intra-server* staleness: the serve path may run on several processes or replicas of the one home server, which consult revocation state through a **short-TTL cache (default 60 s)** rather than an authoritative read per request. The posture is fail-closed, matching the [federation revocation list](/design/federation/#token-lifecycle-and-chain-of-trust): a serving process that cannot confirm a link is still live past the TTL refuses rather than serving on stale-allowed state. (A single-process deployment reads revocation state directly and the cache is a no-op.)
 
 ## Contract Skeleton
 
@@ -46,9 +47,11 @@ trait ShareLinkIssuer {
 }
 
 // planned in capsule-api::shares
-//   GET  /s/{opaque-id}              → metadata blob + LQIP (mandatory server-side strip — see Security Contract)
-//   GET  /s/{opaque-id}/blob/{hash}  → ciphertext blob; client decrypts using link-derived key
-//   POST /s/{opaque-id}/passphrase   → if passphrase-wrapped, exchange passphrase for unwrap material
+//   GET  /s/{opaque-id}                 → metadata blob + LQIP (mandatory server-side strip — see Security Contract)
+//   GET  /s/{opaque-id}/blob/{hash}     → ciphertext blob; client decrypts using link-derived key
+//   GET  /s/{opaque-id}/wrapped-secret  → the passphrase-WRAPPED link material, when the link is
+//                                          passphrase-protected; unwrap is client-side via the password-based
+//                                          KDF. The passphrase itself is NEVER transmitted (Security Contract).
 ```
 
 Concrete error variants are an implementation detail; the rate-limit, opaque-id entropy, privacy-strip, and revocation policies are fixed by the [Security Contract](#security-contract) above.

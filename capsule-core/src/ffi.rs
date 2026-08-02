@@ -77,7 +77,7 @@ impl FfiWorkspace {
 impl FfiWorkspace {
     /// Create a brand-new workspace rooted at `root`, guarded by `passphrase` at the Argon2id
     /// cost for `tier`. (Re-opening an existing workspace is a separate core capability still
-    /// pending; see `DEFERRED.md`.)
+    /// pending; see `SLICES.md`.)
     #[uniffi::constructor]
     pub fn create(root: String, passphrase: Vec<u8>, tier: DeviceTier) -> FfiResult<Arc<Self>> {
         let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?;

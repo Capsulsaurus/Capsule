@@ -1,6 +1,7 @@
 ---
 title: Client Filesystem
 description: How clients lay out a library on disk — desktop, mobile, local index, and space recovery
+status: draft
 ---
 
 Clients hold keys, so a client stores plaintext. Desktop clients keep a self-contained library directory; mobile clients use platform-sandboxed storage. The cross-platform logic lives in `capsule-core::library` (paths, init, open) and `capsule-core::db` (SQLite cache); per-platform glue lives in `capsule-sdk` and native client code.
@@ -8,6 +9,8 @@ Clients hold keys, so a client stores plaintext. Desktop clients keep a self-con
 What a client keeps locally depends on its sync setting — *metadata only*, *metadata + thumbnails*, or *metadata + thumbnails + original* (see [Import — Synchronization Scope](/design/import/download-sync/#synchronization-scope)). A library therefore routinely contains assets whose original is server-only, and the layout must represent an asset whether or not its original bytes are present locally.
 
 The directory layout below is itself a contract — the recovery-first rebuild assumes exactly these filenames and sharding rules.
+
+This doc owns the on-disk mechanisms; the offline-first requirement contract they serve (FRs/NFRs, gated views, at-rest posture) is owned by [Local Gallery](/design/local-gallery/).
 
 ## Desktop Library Layout
 
@@ -35,7 +38,7 @@ The directory layout below is itself a contract — the recovery-first rebuild a
         └── {uuid}.reason.json      # parse error / signature failure / schema mismatch
 ```
 
-- **`media/`**: originals, their sidecars, and their provenance chains. Filenames are `{UUIDv7}.{extension}` (always lowercase), `{UUIDv7}.cbor`, and `{UUIDv7}.provenance.cbor` respectively. The CBOR sidecar is the client's canonical, self-describing metadata record (see [Metadata — Sidecar Schema v1](/design/metadata/#sidecar-schema-v1)) — the plaintext counterpart of the encrypted metadata blob the server stores. The `.provenance.cbor` file is an append-only signed log per asset (see [Cryptography — Provenance](/design/cryptography/provenance/#provenance-of-library-modifications)); the client never deletes it, so a hard-deleted asset leaves a tombstone-with-history. Per the recovery-first principle, the entire library is reconstructible from these three files alone. Files are date-bucketed by capture timestamp because the client, unlike the server, can read capture dates.
+- **`media/`**: originals, their sidecars, and their provenance chains. Filenames are `{UUIDv7}.{extension}` (always lowercase), `{UUIDv7}.cbor`, and `{UUIDv7}.provenance.cbor` respectively. The CBOR sidecar is the client's canonical, self-describing metadata record (see [Metadata — Sidecar Schema v1](/design/metadata/#sidecar-schema-v1)) — the plaintext counterpart of the encrypted metadata blob the server stores. The `.provenance.cbor` file is an append-only signed log per asset (see [Cryptography — Provenance](/design/cryptography/provenance/#provenance-of-library-modifications)); the client never deletes it, so a hard-deleted asset leaves a tombstone-with-history. Per the recovery-first principle, the entire library is reconstructible from these three files alone. Files are date-bucketed by capture timestamp because the client, unlike the server, can read capture dates. The bucket is **fixed at import** from the capture timestamp known then: a later capture-date correction (a `metadata-update`) does not relocate the bundle — the sidecar is authoritative for date and the path is only a shard — so bucket-vs-timestamp drift after such an edit is expected, and [maintenance](/design/filesystem/maintenance/#self-validation) repairs it opportunistically rather than treating it as a fault.
 - **`cache/`**: purely derived and rebuildable — thumbnails and previews (formats declared in [Thumbnails — Thumbnail and Preview Formats](/design/thumbnails/#thumbnail-and-preview-formats)), verbose parsed-metadata caches, and transcodes. Sharded by UUID prefix to bound directory sizes. Deletable at any time; never a source of truth.
 - **`index/library.sqlite`**: a rebuildable query cache over the sidecars, and the local vector index backing AI features (`sqlite-vec` — see [AI/ML Integrations](/design/ai/)). It is also the substrate for [view albums](/design/organization/#system--smart-albums-views) — system aggregations like *All* and user-defined smart albums are materialized by querying this index entirely client-side, with no server involvement. On a schema change it may be dropped and rebuilt rather than migrated, since it is always reconstructible.
 - **`.library/`**: library-scoped state — schema version, user configuration, a process lock file that prevents two app instances from opening the same library, the trash (soft-delete retention area), and `quarantine/` (where irreplaceable bytes that failed structural or signature validation are preserved verbatim alongside a `.reason.json` recording the rejection). The quarantine area is the union surface listed in [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces). The `version` file pins the on-disk layout schema; a layout bump rebuilds derived structures (cache, index) and never touches the canonical original/sidecar/provenance files, so it cannot lose data.
@@ -57,6 +60,8 @@ Rebuildable data is deliberately **not** stored in OS-managed cache locations: t
 What is eligible for reclamation is exactly the rebuildable-or-refetchable set: the `cache/` tree (thumbnails, previews, parsed-metadata caches, transcodes) and fetched-but-unpinned originals. The canonical files under `media/` — originals the device itself holds as source of truth, their `.cbor` sidecars, and their `.provenance.cbor` chains — are **never** eviction targets; neither is the rebuildable `index/library.sqlite`, which is dropped and rebuilt only on a schema change.
 
 ### Automatic cache management
+
+Implemented (issue #23): last-access tracking lives in the `cached_representations` table in `capsule-core::db`, and the sweep is `capsule-core::library::cache_sweep`. The [connection-class detection](/design/networking/#connection-classes) that would *drive* the byte budget from `capsule-sdk` is planned — the budget is a plain parameter today.
 
 The reclaimable set is held within a **user-configurable cache budget**. When it grows past budget — typically while browsing a large library on a device that cannot hold everything — Capsule reclaims space itself rather than waiting for the user or letting the OS decide:
 

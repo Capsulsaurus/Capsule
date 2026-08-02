@@ -10,7 +10,7 @@
 //!    in flight apart from a forged epoch).
 //!
 //! Real OpenMLS integration is deferred (its PQ ciphersuite is a non-final draft on a C
-//! backend — see `DEFERRED.md`); [`ReferenceAuthority`] is a deterministic,
+//! backend — see `SLICES.md`); [`ReferenceAuthority`] is a deterministic,
 //! admin-signature-backed stand-in that preserves every property `verify_asset` tests for.
 //! Because `verify_asset` consumes only `&dyn AlbumAuthority`, swapping in an
 //! `OpenMlsAuthority` later is transparent.

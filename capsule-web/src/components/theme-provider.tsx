@@ -18,8 +18,6 @@ const initialState: ThemeProviderState = {
     setTheme: () => null,
 };
 
-// TODO: Currently doesn't work with Tailwind v4. Need to fix.
-
 const ThemeProviderContext = createContext<ThemeProviderState>(initialState);
 
 export function ThemeProvider({
@@ -33,20 +31,16 @@ export function ThemeProvider({
     );
 
     useEffect(() => {
-        // This is the key change for Tailwind v4 compatibility
         if (theme === 'dark') {
             document.documentElement.classList.add('dark');
-            localStorage.theme = 'dark';
         } else if (theme === 'light') {
             document.documentElement.classList.remove('dark');
-            localStorage.theme = 'light';
         } else {
             // "system" - follow OS preference
             const systemIsDark = window.matchMedia(
                 '(prefers-color-scheme: dark)',
             ).matches;
             document.documentElement.classList.toggle('dark', systemIsDark);
-            localStorage.removeItem('theme'); // Remove theme from localStorage
         }
     }, [theme]);
 
@@ -85,49 +79,6 @@ export function ThemeProvider({
         </ThemeProviderContext.Provider>
     );
 }
-
-// export function ThemeProvider({
-//     children,
-//     defaultTheme = "system",
-//     storageKey = "theme",
-//     ...props
-// }: ThemeProviderProps) {
-//     const [theme, setTheme] = useState<Theme>(
-//         () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
-//     )
-
-//     useEffect(() => {
-//         const root = window.document.documentElement
-
-//         root.classList.remove("light", "dark")
-
-//         if (theme === "system") {
-//             const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-//                 .matches
-//                 ? "dark"
-//                 : "light"
-
-//             root.classList.add(systemTheme)
-//             return
-//         }
-
-//         root.classList.add(theme)
-//     }, [theme])
-
-//     const value = {
-//         theme,
-//         setTheme: (theme: Theme) => {
-//             localStorage.setItem(storageKey, theme)
-//             setTheme(theme)
-//         },
-//     }
-
-//     return (
-//         <ThemeProviderContext.Provider {...props} value={value}>
-//             {children}
-//         </ThemeProviderContext.Provider>
-//     )
-// }
 
 export const useTheme = () => {
     const context = useContext(ThemeProviderContext);

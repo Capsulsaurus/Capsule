@@ -14,6 +14,10 @@ pub mod tags {
     pub const UPLOAD: &str = "upload";
     pub const MEDIA: &str = "media";
     pub const SHARE: &str = "share";
+    pub const STORAGE: &str = "storage";
+    pub const DROPS: &str = "drops";
+    pub const LIBRARY: &str = "library";
+    pub const SYNC: &str = "sync";
 }
 
 /// Create OpenAPI specification with proper metadata
@@ -32,6 +36,10 @@ pub fn create_openapi_spec() -> OpenApi {
             Tag::new(tags::UPLOAD).description("Capsule Upload API"),
             Tag::new(tags::MEDIA).description("Capsule Media Serving API"),
             Tag::new(tags::SHARE).description("Capsule Public Share API"),
+            Tag::new(tags::STORAGE).description("Capsule Storage Verification API"),
+            Tag::new(tags::DROPS).description("Capsule Web-Upload Drops API"),
+            Tag::new(tags::LIBRARY).description("Capsule Library API (GraphQL)"),
+            Tag::new(tags::SYNC).description("Capsule Sync API (gRPC)"),
         ])
         .add_security_scheme(
             "bearer",
@@ -69,7 +77,29 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
             .push(
                 Router::with_path("s")
                     .push(media::get_share_router(conn.clone(), &env.server).await?),
+            )
+            // Key-free durability verdicts (skeleton — slice S-C3 in SLICES.md).
+            .push(
+                Router::with_path("storage")
+                    .push(media::get_storage_router(conn.clone(), &env.server).await?),
+            )
+            // Guest drop sessions + owner inbox (skeleton — slice S-C5 in SLICES.md).
+            .push(
+                Router::with_path("u")
+                    .push(media::get_drop_link_router(conn.clone(), &env.server).await?),
+            )
+            .push(
+                Router::with_path("drops")
+                    .push(media::get_drops_router(conn.clone(), &env.server).await?),
             );
+    }
+    // The gRPC-over-salvo bridge is exercised end-to-end by slice S-C2 (SLICES.md).
+    #[cfg(feature = "sync")]
+    {
+        // gRPC sync routes
+        v1_router = v1_router.push(
+            Router::with_path("sync").push(sync::get_router(conn.clone(), &env.server).await?),
+        );
     }
 
     // Add version endpoint

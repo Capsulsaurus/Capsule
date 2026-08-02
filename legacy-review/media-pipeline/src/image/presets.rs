@@ -14,14 +14,14 @@
 //! # Example
 //!
 //! ```rust
-//! use capsule_media::image::presets::ImagePresets;
-//! use capsule_media::image::types::ImageOutputSettings;
+//! use capsule_core::media::image::presets::ImagePresets;
+//! use capsule_core::media::image::types::ImageOutputSettings;
 //!
 //! // Get a preset for web streaming in JXL format
 //! let settings = ImagePresets::web_streaming_jxl();
 //! ```
 
-use crate::image::types::{
+use crate::media::image::types::{
     AvifSettings, ChromaSubsampling, ImageOutputSettings, ImageResolution, JpegSettings,
     JxlSettings, PngSettings, StandardImageSize, TiffCompression, TiffSettings, WebPSettings,
 };

@@ -1,3 +1,15 @@
+import { createLazyFileRoute } from '@tanstack/react-router';
+import {
+    createColumnHelper,
+    flexRender,
+    getCoreRowModel,
+    getSortedRowModel,
+    type SortingState,
+    useReactTable,
+} from '@tanstack/react-table';
+import { filesize } from 'filesize';
+import { FileText, FileVideo, Image, RefreshCw, Trash2 } from 'lucide-react';
+import React, { useState } from 'react';
 import {
     Dialog,
     DialogContent,
@@ -5,21 +17,8 @@ import {
     DialogHeader,
     DialogTitle,
 } from '@/components/ui/dialog';
-import { TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Tabs } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { cn } from '@/lib/utils';
-import { createLazyFileRoute } from '@tanstack/react-router';
-import {
-    type SortingState,
-    createColumnHelper,
-    flexRender,
-    getCoreRowModel,
-    getSortedRowModel,
-    useReactTable,
-} from '@tanstack/react-table';
-import { filesize } from 'filesize';
-import { FileText, FileVideo, Image, RefreshCw, Trash2 } from 'lucide-react';
-import React, { useState } from 'react';
 
 export const Route = createLazyFileRoute('/storage')({
     component: () => <Storage />,
@@ -336,7 +335,7 @@ function Storage() {
                                                                     <button
                                                                         type="button"
                                                                         onClick={() =>
-                                                                            console.log(
+                                                                            console.info(
                                                                                 'Refresh',
                                                                             )
                                                                         }
@@ -374,10 +373,6 @@ function Storage() {
 
 // AssetList component
 function AssetList({ assets }: { assets: Asset[] }) {
-    if (assets.length === 0) {
-        return <div>Empty asset list</div>;
-    }
-
     // Column helper for type safety
     const columnHelper = createColumnHelper<Asset>();
 
@@ -465,93 +460,92 @@ function AssetList({ assets }: { assets: Asset[] }) {
         getSortedRowModel: getSortedRowModel(),
     });
 
+    if (assets.length === 0) {
+        return <div>Empty asset list</div>;
+    }
+
     return (
-        <>
-            <div className="rounded-md border">
-                <table className="w-full">
-                    <thead>
-                        {table.getHeaderGroups().map((headerGroup) => (
-                            <tr
-                                key={headerGroup.id}
-                                className="border-b bg-gray-50"
-                            >
-                                {headerGroup.headers.map((header) => (
-                                    <th
-                                        key={header.id}
-                                        className="px-4 py-3 text-left text-sm font-medium text-gray-700"
-                                        onClick={header.column.getToggleSortingHandler()}
-                                        onKeyDown={(e) => {
-                                            if (
-                                                e.key === 'Enter' ||
-                                                e.key === ' '
-                                            ) {
-                                                header.column.getToggleSortingHandler();
-                                            }
-                                        }}
-                                        style={{
-                                            cursor: header.column.getCanSort()
-                                                ? 'pointer'
-                                                : 'default',
-                                        }}
-                                        tabIndex={
-                                            header.column.getCanSort()
-                                                ? 0
-                                                : undefined
+        <div className="rounded-md border">
+            <table className="w-full">
+                <thead>
+                    {table.getHeaderGroups().map((headerGroup) => (
+                        <tr
+                            key={headerGroup.id}
+                            className="border-b bg-gray-50"
+                        >
+                            {headerGroup.headers.map((header) => (
+                                <th
+                                    key={header.id}
+                                    className="px-4 py-3 text-left text-sm font-medium text-gray-700"
+                                    onClick={header.column.getToggleSortingHandler()}
+                                    onKeyDown={(e) => {
+                                        if (
+                                            e.key === 'Enter' ||
+                                            e.key === ' '
+                                        ) {
+                                            header.column.getToggleSortingHandler();
                                         }
-                                        role={
-                                            header.column.getCanSort()
-                                                ? 'button'
-                                                : undefined
-                                        }
-                                    >
-                                        <div className="flex items-center">
-                                            {flexRender(
-                                                header.column.columnDef.header,
-                                                header.getContext(),
-                                            )}
-                                            {header.column.getCanSort() && (
-                                                <span className="ml-1">
-                                                    {header.column.getIsSorted() ===
-                                                    'asc'
-                                                        ? '🔼'
-                                                        : header.column.getIsSorted() ===
-                                                            'desc'
-                                                          ? '🔽'
-                                                          : '⏺️'}
-                                                </span>
-                                            )}
-                                        </div>
-                                    </th>
-                                ))}
-                            </tr>
-                        ))}
-                    </thead>
-                    <tbody>
-                        {table.getRowModel().rows.map((row) => (
-                            <tr
-                                key={row.id}
-                                className="border-b hover:bg-gray-50"
-                            >
-                                {row.getVisibleCells().map((cell) => (
-                                    <td
-                                        key={cell.id}
-                                        className="px-4 py-3 text-sm"
-                                        // onKeyDown={() => {
-                                        //   setPreviewAssetId(row.id);
-                                        //   setPreviewOpen(true);
-                                        // }} // TODO: Fix this
-                                    >
+                                    }}
+                                    style={{
+                                        cursor: header.column.getCanSort()
+                                            ? 'pointer'
+                                            : 'default',
+                                    }}
+                                    tabIndex={
+                                        header.column.getCanSort()
+                                            ? 0
+                                            : undefined
+                                    }
+                                    role={
+                                        header.column.getCanSort()
+                                            ? 'button'
+                                            : undefined
+                                    }
+                                >
+                                    <div className="flex items-center">
                                         {flexRender(
-                                            cell.column.columnDef.cell,
-                                            cell.getContext(),
+                                            header.column.columnDef.header,
+                                            header.getContext(),
                                         )}
-                                    </td>
-                                ))}
-                            </tr>
-                        ))}
-                    </tbody>
-                </table>
-            </div>
-        </>
+                                        {header.column.getCanSort() && (
+                                            <span className="ml-1">
+                                                {header.column.getIsSorted() ===
+                                                'asc'
+                                                    ? '🔼'
+                                                    : header.column.getIsSorted() ===
+                                                        'desc'
+                                                      ? '🔽'
+                                                      : '⏺️'}
+                                            </span>
+                                        )}
+                                    </div>
+                                </th>
+                            ))}
+                        </tr>
+                    ))}
+                </thead>
+                <tbody>
+                    {table.getRowModel().rows.map((row) => (
+                        <tr key={row.id} className="border-b hover:bg-gray-50">
+                            {row.getVisibleCells().map((cell) => (
+                                <td
+                                    key={cell.id}
+                                    className="px-4 py-3 text-sm"
+                                    // onKeyDown={() => {
+                                    //   setPreviewAssetId(row.id);
+                                    //   setPreviewOpen(true);
+                                    // }} // TODO: Fix this
+                                >
+                                    {flexRender(
+                                        cell.column.columnDef.cell,
+                                        cell.getContext(),
+                                    )}
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
     );
 }

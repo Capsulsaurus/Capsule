@@ -17,6 +17,13 @@ concurrency:
   group: build-ios-${{ github.ref }}
   cancel-in-progress: true
 
+# mise is only a tool installer / exec shim here; never let it implicitly install the
+# root mise.toml [tools]. The cargo-built convco/cargo-nextest in particular build from
+# source and race rustup's toolchain bootstrap, which breaks this job. Same convention
+# as ci.yml: each job installs exactly what it needs.
+env:
+  MISE_AUTO_INSTALL: "false"
+
 jobs:
   build:
     name: Build & test Capsule.app
@@ -34,10 +41,13 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      # Install only the Swift tools this job actually uses (tuist to generate the
+      # project, xcbeautify to format the build/test log) — not the root [tools].
       - name: Set up mise
         uses: jdx/mise-action@v2
         with:
           working_directory: capsule-swift
+          install_args: tuist xcbeautify
 
       - name: Build Rust FFI xcframework
         run: bash capsule-swift/Scripts/build-rust-ffi.sh

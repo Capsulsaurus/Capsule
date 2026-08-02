@@ -1,31 +1,14 @@
-export type Asset = {
-    id: string;
-    url: string;
-    thumbnailUrl: string;
-    date: Date;
-    type: 'image' | 'video';
-    duration?: string; // For videos
-    location?: string;
-    width: number;
-    height: number;
-};
-
-export type Album = {
-    id: string;
-    title: string;
-    coverUrl: string;
-    assetCount: number;
-};
+import type { Album, Asset } from '@/domain';
+import type { CapsuleGateway } from '../gateway';
 
 const randomInt = (min: number, max: number) =>
     Math.floor(Math.random() * (max - min + 1)) + min;
 const randomId = () => Math.random().toString(36).substring(7);
 
-const randomDate = (start: Date, end: Date) => {
-    return new Date(
+const randomDate = (start: Date, end: Date) =>
+    new Date(
         start.getTime() + Math.random() * (end.getTime() - start.getTime()),
     );
-};
 
 const CITIES = [
     'New York',
@@ -38,20 +21,20 @@ const CITIES = [
     undefined,
 ];
 
-export const generateAssets = (count: number): Asset[] => {
-    return Array.from({ length: count })
+const generateAssets = (count: number): Asset[] =>
+    Array.from({ length: count })
         .map(() => {
             const width = randomInt(400, 1600);
             const height = randomInt(400, 1600);
             return {
                 id: randomId(),
-                // using picsum for images
+                // Random placeholder imagery via picsum.
                 url: `https://picsum.photos/seed/${randomId()}/${width}/${height}`,
                 thumbnailUrl: `https://picsum.photos/seed/${randomId()}/400/${Math.floor(400 * (height / width))}`,
                 date: randomDate(new Date(2023, 0, 1), new Date()),
-                type: (Math.random() > 0.8 ? 'video' : 'image') as
-                    | 'video'
-                    | 'image',
+                type: (Math.random() > 0.8
+                    ? 'video'
+                    : 'image') as Asset['type'],
                 duration: Math.random() > 0.8 ? '0:15' : undefined,
                 location: CITIES[randomInt(0, CITIES.length - 1)],
                 width,
@@ -59,16 +42,29 @@ export const generateAssets = (count: number): Asset[] => {
             };
         })
         .sort((a, b) => b.date.getTime() - a.date.getTime());
-};
 
-export const generateAlbums = (count: number): Album[] => {
-    return Array.from({ length: count }).map((_, i) => ({
+const generateAlbums = (count: number): Album[] =>
+    Array.from({ length: count }).map((_, i) => ({
         id: randomId(),
         title: `Album ${i + 1}`,
         coverUrl: `https://picsum.photos/seed/${randomId()}/300/300`,
         assetCount: randomInt(10, 500),
     }));
-};
 
-export const mockAssets = generateAssets(100);
-export const mockAlbums = generateAlbums(10);
+const assets = generateAssets(100);
+const albums = generateAlbums(10);
+
+/**
+ * In-memory gateway backed by randomly generated sample data. Lets the read-only
+ * UI run end-to-end before the real server/SDK adapter exists; selected via
+ * `gateway` in ../index.ts.
+ */
+export const mockGateway: CapsuleGateway = {
+    listAssets: async () => assets,
+    listAlbums: async () => albums,
+    getAlbum: async (id) => albums.find((album) => album.id === id) ?? null,
+    getAlbumAssets: async (albumId) => {
+        const album = albums.find((a) => a.id === albumId);
+        return assets.slice(0, album?.assetCount ?? 0);
+    },
+};

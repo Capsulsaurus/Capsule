@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="Build capsule-core FFI for the Android targets (needs cargo-ndk + NDK)"
+set -euo pipefail
+if ! command -v cargo-ndk >/dev/null 2>&1; then echo "build-android: cargo-ndk missing; run 'mise run targets-add'" >&2; exit 1; fi
+if [ -z "${ANDROID_NDK_HOME:-}${ANDROID_NDK_ROOT:-}" ]; then echo "build-android: set ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) to your Android NDK" >&2; exit 1; fi
+cargo ndk -t arm64-v8a -t armeabi-v7a -t x86_64 -t x86 --platform 26 build -p capsule-core --features ffi

@@ -25,7 +25,7 @@ cd capsule-core-kotlin
 On-device StrongBox (a physical device with a secure element; an emulator only has a TEE):
 
 ```sh
-(cd .. && just build-android)      # per-ABI libcapsule_core.so via cargo-ndk
+(cd .. && mise run build-android)      # per-ABI libcapsule_core.so via cargo-ndk
 # copy the .so into src/main/jniLibs/<abi>/ (see stage-bindings.sh), then:
 ./gradlew connectedAndroidTest
 ```
@@ -39,5 +39,5 @@ On-device StrongBox (a physical device with a secure element; an emulator only h
 - **Android SDK.** `./gradlew` needs the Android SDK (`ANDROID_HOME` / `local.properties`).
 - **StrongBox** is on-device only and (like Secure Enclave and the TPM) exposes ECDSA-P256, not
   Ed25519, so `StrongBoxSigner` does not yet wire into the Ed25519 `createWithHardwareSigner` path;
-  that needs the P-256 hybrid-DSK variant tracked in the repo `DEFERRED.md`. Use `SoftwareSigner`
+  that needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). Use `SoftwareSigner`
   for an end-to-end FFI round trip.

@@ -1,10 +1,12 @@
 //! UniFFI bindings exposing the `capsule-core` SQLite catalog and CBOR sidecar
 //! to Swift (and, in future, other UniFFI targets such as Android/Kotlin).
 //!
-//! This is the **only** FFI-aware crate in the workspace. `capsule-core` stays a
-//! pure, portable library; everything platform-specific (filesystem layout,
-//! file I/O, PhotoKit, hashing) lives in the Swift client. The types defined
-//! here form the explicit Rust ↔ Swift contract:
+//! One of **two** uniffi surfaces in the workspace — `capsule-core`'s `ffi` feature
+//! exports the crypto `FfiWorkspace` + `HardwareSigner` foreign trait separately, on a
+//! different uniffi version; consolidating the two is slice `S-F1` in the repo-root
+//! `SLICES.md`. Everything platform-specific (filesystem layout, file I/O, PhotoKit,
+//! hashing) lives in the Swift client. The types defined here form the explicit
+//! Rust ↔ Swift contract:
 //!
 //! - [`Catalog`] — a thread-safe handle over the SQLite catalog.
 //! - [`AssetRecord`], [`AssetStackRecord`], [`StackMemberRecord`],
