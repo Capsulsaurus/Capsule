@@ -183,7 +183,7 @@ mod tests {
         let img = src.path().join("p.jpg");
         std::fs::write(&img, bytes).unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("A");
+        let album = ws.create_album("A").unwrap();
         let id = ws.import_asset(album, &img).unwrap();
         (ws, id)
     }

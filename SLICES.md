@@ -174,8 +174,8 @@ their owed remainder now lives.
 | ID    | Slice                                                  | Lane        | Depends on   | Size | Status  |
 | ----- | ------------------------------------------------------ | ----------- | ------------ | ---- | ------- |
 | S-A8  | BD-09 bounded input fold (flip `FoldGated`)            | core-crypto | —            | S    | ready   |
-| S-A9  | Add-id counter reseed at `Workspace` open              | core-crypto | —            | S    | ready   |
-| S-A10 | Durable album-key persistence + library open plumbing  | core-crypto | —            | L    | ready   |
+| S-A9  | Add-id counter reseed at `Workspace` open              | core-crypto | —            | S    | done    |
+| S-A10 | Durable album-key persistence + library open plumbing  | core-crypto | —            | L    | done    |
 | S-B10 | Takeout metadata → signed sidecar enrichment           | import      | S-A10        | M    | blocked |
 | S-B11 | CLI `import --provider takeout` + real-archive run     | import      | S-B10        | S    | blocked |
 | S-B12 | Base default-album resolution (`resolve_default_album`)| import      | —            | M    | ready   |
