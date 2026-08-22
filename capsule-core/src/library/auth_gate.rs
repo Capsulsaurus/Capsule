@@ -243,6 +243,25 @@ impl<C: GraceClock> GateKeeper<C> {
         db.query_trash(offset, limit)
             .map_err(|e| GatedQueryError::Db(e.to_string()))
     }
+
+    /// The **Hidden** listing, gated: refuses with [`GateError::Locked`] unless a live
+    /// [`GatedView::Hidden`] grant exists. The same 5-minute-grace contract as
+    /// [`query_recently_deleted`](Self::query_recently_deleted) — one policy, two views —
+    /// and the grants are independent, so opening the trash never opens this. Ordering /
+    /// paging are the driver's ([`DatabaseDriver::query_hidden`]).
+    ///
+    /// This is the *only* way hidden assets surface: every default projection
+    /// (timeline, album) excludes them (SSoT: design/organization § Hidden Assets).
+    pub fn query_hidden(
+        &self,
+        db: &DatabaseDriver,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<AssetRow>, GatedQueryError> {
+        let _guard = self.guard(GatedView::Hidden)?;
+        db.query_hidden(offset, limit)
+            .map_err(|e| GatedQueryError::Db(e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -474,6 +493,7 @@ mod tests {
             rating: 0,
             is_deleted: true,
             deleted_at: Some(100),
+            is_hidden: false,
         };
         db.insert_asset(&row).unwrap();
         row.uuid = "11110000-0000-0000-0000-000000000002".to_string();
@@ -500,5 +520,91 @@ mod tests {
         gk.open(GatedView::Hidden, &AllowGate::new()).unwrap();
         let err = gk.query_recently_deleted(&db, 0, 100).unwrap_err();
         assert!(matches!(err, GatedQueryError::Gate(GateError::Locked)));
+    }
+
+    /// S-D19 — the Hidden view under the *same* gate contract as Recently Deleted. This is
+    /// the deliberate mirror of `gated_trash_query_refuses_without_grant_and_serves_with_one`
+    /// above: one policy, two views. Refuses without a grant, serves with one, and a
+    /// Recently Deleted grant never substitutes for a Hidden one.
+    #[test]
+    fn gated_hidden_query_refuses_without_grant_and_serves_with_one() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.init_schema().unwrap();
+
+        // One hidden asset in the index, plus a visible one that must never appear.
+        let mut row = AssetRow {
+            uuid: "22220000-0000-0000-0000-000000000001".to_string(),
+            asset_type: "photo".to_string(),
+            capture_timestamp: 1,
+            capture_utc: None,
+            capture_tz_source: None,
+            import_timestamp: 1,
+            hash_sha256: "a".repeat(64),
+            width: None,
+            height: None,
+            duration_ms: None,
+            stack_id: None,
+            is_stack_hidden: false,
+            chromahash: None,
+            dominant_color: None,
+            album_id: None,
+            rating: 0,
+            is_deleted: false,
+            deleted_at: None,
+            is_hidden: true,
+        };
+        db.insert_asset(&row).unwrap();
+        row.uuid = "22220000-0000-0000-0000-000000000002".to_string();
+        row.is_hidden = false;
+        row.hash_sha256 = "b".repeat(64);
+        db.insert_asset(&row).unwrap();
+
+        let mut gk = GateKeeper::with_clock(ManualClock::new());
+
+        // Refuses before a grant.
+        let err = gk.query_hidden(&db, 0, 100).unwrap_err();
+        assert!(matches!(err, GatedQueryError::Gate(GateError::Locked)));
+
+        // Serves the hidden asset once a grant exists.
+        gk.open(GatedView::Hidden, &AllowGate::new()).unwrap();
+        let hidden = gk.query_hidden(&db, 0, 100).unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert!(hidden[0].is_hidden);
+
+        // A Recently Deleted grant does NOT unlock the Hidden query.
+        gk.revoke(GatedView::Hidden);
+        gk.open(GatedView::RecentlyDeleted, &AllowGate::new())
+            .unwrap();
+        let err = gk.query_hidden(&db, 0, 100).unwrap_err();
+        assert!(matches!(err, GatedQueryError::Gate(GateError::Locked)));
+    }
+
+    /// The Hidden view inherits the *same* 5-minute grace window as Recently Deleted — not a
+    /// second policy. Mirrors `locked_until_opened_then_refuses_after_grace_expiry`, but
+    /// asserted through the gated query rather than `is_open`.
+    #[test]
+    fn hidden_view_re_locks_on_the_same_five_minute_grace_as_recently_deleted() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.init_schema().unwrap();
+
+        let clock = ManualClock::new();
+        let mut gk = GateKeeper::with_clock_and_grace(clock, DEFAULT_GRACE);
+        let gate = AllowGate::new();
+        gk.open(GatedView::Hidden, &gate).unwrap();
+
+        // Within the window the query is served without re-authenticating.
+        gk.clock.advance(Duration::from_mins(4));
+        assert!(gk.query_hidden(&db, 0, 100).is_ok());
+        assert_eq!(gate.calls(), 1, "re-query within grace does not re-auth");
+
+        // Past the window, measured from the original mint, the view re-locks.
+        gk.clock.advance(Duration::from_mins(2));
+        let err = gk.query_hidden(&db, 0, 100).unwrap_err();
+        assert!(matches!(err, GatedQueryError::Gate(GateError::Locked)));
+
+        // Re-opening issues a fresh challenge, exactly as for the trash.
+        gk.open(GatedView::Hidden, &gate).unwrap();
+        assert_eq!(gate.calls(), 2, "re-open after expiry re-auths");
+        assert!(gk.query_hidden(&db, 0, 100).is_ok());
     }
 }

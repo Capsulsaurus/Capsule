@@ -102,6 +102,9 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
         rating: asset.sidecar.rating.get().copied().unwrap_or(0) as i64,
         is_deleted,
         deleted_at,
+        // Projection of the sidecar `hidden` LWW register (S-D19): a never-written register
+        // means visible, the wire-absent default.
+        is_hidden: asset.sidecar.hidden.get().copied().unwrap_or(false),
     }
 }
 

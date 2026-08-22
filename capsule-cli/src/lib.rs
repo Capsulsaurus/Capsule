@@ -15,7 +15,8 @@ use capsule_core::domain::ImportMode;
 use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
-    CancellationToken, ImportConfig, ImportOutcome, ImportProgressEvent, execute, plan,
+    CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
+    execute, plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;
@@ -204,7 +205,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     ImportMode::Copy
                 },
                 force_reimport_duplicates: force,
-                target_album_id: None,
+                // No explicit pick and no owner pointer on the CLI yet: bind the library's
+                // derived de facto album so the plan records the rule that fired (S-B12).
+                album: DefaultAlbumContext::derived(ws.default_album_id()),
                 ..Default::default()
             };
 

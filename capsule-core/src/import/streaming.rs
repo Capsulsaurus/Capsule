@@ -264,11 +264,18 @@ where
     // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
     crate::import::upload::ensure_streaming_compatible(config.upload_policy, true)?;
 
-    let album_id = match &config.target_album_id {
-        Some(s) => Uuid::parse_str(s)
-            .map_err(|e| StreamingError::Import(format!("invalid target album id {s:?}: {e}")))?,
-        None => workspace.default_album_id(),
-    };
+    // Same single resolution the executor runs: bind the library's derived de facto album
+    // (rule 3), then apply the order (SSoT: organization § The Default Album).
+    let resolved = crate::import::default_album::resolve_default_album(
+        &config.album.with_derived(workspace.default_album_id()),
+    )
+    .map_err(|e| StreamingError::Import(format!("cannot resolve a destination album: {e}")))?;
+    tracing::info!(
+        album_id = %resolved.album_id,
+        rule = resolved.rule.as_str(),
+        "streaming import destination resolved"
+    );
+    let album_id = resolved.album_id;
 
     // ── Pre-flight: minimum-headroom hard error ─────────────────────────────────
     // Streaming bounds peak disk to the window, but the largest single asset must still fully

@@ -135,6 +135,9 @@ fn asset_row_from_sidecar(s: &crate::sidecar::AssetSidecar) -> AssetRow {
         rating: s.rating as i64,
         is_deleted: s.is_deleted,
         deleted_at: s.deleted_at,
+        // `AssetSidecar` (this legacy on-disk shape) carries no `hidden` register — that
+        // lives on `SidecarV1`, projected by `lifecycle::import`. Rebuilt rows are visible.
+        is_hidden: false,
     }
 }
 

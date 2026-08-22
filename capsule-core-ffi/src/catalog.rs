@@ -267,6 +267,7 @@ mod tests {
             rating: 0,
             is_deleted: false,
             deleted_at: None,
+            is_hidden: false,
         }
     }
 

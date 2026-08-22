@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::db::DatabaseDriver;
 use crate::domain::ImportMode;
+use crate::import::default_album::{DefaultAlbumContext, ResolvedAlbum, resolve_default_album};
 use crate::import::scan::{ImportCandidate, ScanResult};
 use crate::import::upload::{StagedStreamingConflict, UploadPolicy, ensure_streaming_compatible};
 use crate::library::{LibraryError, available_bytes};
@@ -10,7 +11,12 @@ use crate::library::{LibraryError, available_bytes};
 #[derive(Debug, Clone)]
 pub struct ImportConfig {
     pub import_mode: ImportMode,
-    pub target_album_id: Option<String>,
+    /// Where this import should land, as the **inputs to the resolution order** rather than
+    /// a raw destination id (SSoT: organization § The Default Album). The planner runs
+    /// [`resolve_default_album`] over it and records the fired rule on the plan; the
+    /// executor binds the library's derived de facto album (rule 3) before running the same
+    /// single resolution. Default is unbound — "the user filed this nowhere".
+    pub album: DefaultAlbumContext,
     /// If true, import even if a file with the same SHA-256 hash already exists.
     pub force_reimport_duplicates: bool,
     /// The per-device upload policy (staged uploads, slice `S-B4`). `Full` (the
@@ -26,7 +32,7 @@ impl Default for ImportConfig {
     fn default() -> Self {
         Self {
             import_mode: ImportMode::Copy,
-            target_album_id: None,
+            album: DefaultAlbumContext::default(),
             force_reimport_duplicates: false,
             upload_policy: UploadPolicy::Full,
         }
@@ -68,6 +74,14 @@ pub struct ImportActionPlan {
     /// [streaming import](crate::import::streaming). Recording it on the plan (like the resolved
     /// destination `album_id`) keeps the planner deterministic.
     pub streaming_recommended: Option<bool>,
+    /// The destination album and **which resolution rule chose it** (SSoT: organization
+    /// § The Default Album), so a surprising destination is explainable after the fact.
+    ///
+    /// `None` when [`ImportConfig::album`] was still unbound at plan time — the library's
+    /// derived de facto album (rule 3) is the workspace's to supply, and the executor binds
+    /// it and runs the same [`resolve_default_album`] before writing anything. There is one
+    /// resolution policy, never two.
+    pub album: Option<ResolvedAlbum>,
 }
 
 impl ImportActionPlan {
@@ -147,11 +161,10 @@ pub fn plan(
     db: &DatabaseDriver,
     config: &ImportConfig,
 ) -> Result<ImportActionPlan, Box<dyn std::error::Error + Send + Sync>> {
-    // Validate target album if specified (fail fast before hashing anything).
-    if let Some(ref _album_id) = config.target_album_id {
-        // TODO: when album DB is implemented, validate here.
-        // For now, pass through.
-    }
+    // Resolve the destination album before hashing anything, so a surprising destination is
+    // explainable from the plan alone. An unbound context is not an error here: the executor
+    // binds the library's derived de facto album and runs the same resolution.
+    let album = resolve_default_album(&config.album).ok();
 
     let mut actions = Vec::new();
     let mut counts = PlanCounts::default();
@@ -175,6 +188,7 @@ pub fn plan(
         actions,
         counts,
         streaming_recommended: None,
+        album,
     })
 }
 
@@ -230,6 +244,7 @@ mod tests {
     use std::fs;
 
     use tempfile::TempDir;
+    use uuid::Uuid;
 
     use super::*;
     use crate::db::DatabaseDriver;
@@ -287,6 +302,7 @@ mod tests {
             rating: 0,
             is_deleted: false,
             deleted_at: None,
+            is_hidden: false,
         };
         db.insert_asset(&row).unwrap();
 
@@ -331,6 +347,7 @@ mod tests {
             rating: 0,
             is_deleted: false,
             deleted_at: None,
+            is_hidden: false,
         };
         db.insert_asset(&row).unwrap();
 
@@ -478,6 +495,7 @@ mod tests {
             rating: 0,
             is_deleted: false,
             deleted_at: None,
+            is_hidden: false,
         };
         db.insert_asset(&row).unwrap();
 
@@ -490,5 +508,64 @@ mod tests {
             plan.counts.to_import, 1,
             "force_reimport should produce Import action"
         );
+    }
+
+    /// S-B12: the planner consumes the resolution context instead of a raw album id, and
+    /// records **which rule fired** so a surprising destination is explainable from the plan
+    /// alone (SSoT: organization § The Default Album).
+    #[test]
+    fn plan_records_the_resolved_album_and_the_rule_that_chose_it() {
+        use crate::import::default_album::ResolutionRule;
+
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.jpg"), b"aaa").unwrap();
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let scan = scan(&[tmp.path().to_path_buf()]).unwrap();
+
+        let derived = Uuid::from_u128(0x33);
+        let pick = Uuid::from_u128(0x11);
+
+        // Bound with only the derived de facto album: the terminal rule fires.
+        let mut config = ImportConfig {
+            album: DefaultAlbumContext::derived(derived),
+            ..ImportConfig::default()
+        };
+        let recorded = plan(&scan, &db, &config).unwrap().album.unwrap();
+        assert_eq!(recorded.album_id, derived);
+        assert_eq!(recorded.rule, ResolutionRule::DerivedDeFacto);
+
+        // An explicit pick outranks it, and that is what the plan records.
+        config.album.explicit_pick = Some(pick);
+        let recorded = plan(&scan, &db, &config).unwrap().album.unwrap();
+        assert_eq!(recorded.album_id, pick);
+        assert_eq!(recorded.rule, ResolutionRule::ExplicitPick);
+
+        // An unbound context records nothing — the executor binds the library's derived
+        // album and runs the same resolution. Planning still succeeds.
+        let plan_unbound = plan(&scan, &db, &ImportConfig::default()).unwrap();
+        assert!(plan_unbound.album.is_none());
+        assert_eq!(plan_unbound.counts.to_import, 1);
+    }
+
+    /// Planning is deterministic in the destination too: the same context yields the same
+    /// recorded resolution on every run.
+    #[test]
+    fn recorded_resolution_is_deterministic_across_runs() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("a.jpg"), b"aaa").unwrap();
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let scan = scan(&[tmp.path().to_path_buf()]).unwrap();
+        let config = ImportConfig {
+            album: DefaultAlbumContext {
+                owner_default_album_id: Some(Uuid::from_u128(0x22)),
+                ..DefaultAlbumContext::derived(Uuid::from_u128(0x33))
+            },
+            ..ImportConfig::default()
+        };
+
+        let first = plan(&scan, &db, &config).unwrap().album;
+        for _ in 0..4 {
+            assert_eq!(plan(&scan, &db, &config).unwrap().album, first);
+        }
     }
 }

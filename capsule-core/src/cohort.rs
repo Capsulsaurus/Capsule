@@ -24,7 +24,7 @@ pub const DEVICE_COHORT_V1: &str = "capsule-device-cohort/v1";
 
 /// Closed platform tag (wire value is the lowercase name; a new platform is an
 /// additive protocol change).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlatformTag {
     Ios,
     Android,
