@@ -57,13 +57,27 @@ class FakePeopleRepository(
             if (at < 0) throw LocalError.NotFound("cluster ${clusterId.value}")
             state.clusters[at] = state.clusters[at].copy(personId = personId)
             state.detachedClusters -= clusterId
+            val cluster = state.clusters[at]
             val personAt = state.people.indexOfFirst { it.id == personId }
             if (personAt >= 0) {
                 val person = state.people[personAt]
                 state.people[personAt] =
                     person.copy(
                         clusterIds = (person.clusterIds + clusterId).distinct(),
-                        assetCount = person.assetCount + state.clusters[at].assetIds.size,
+                        assetCount = person.assetCount + cluster.assetIds.size,
+                    )
+            } else {
+                // Naming an unnamed grouping is how a person first comes into existence —
+                // there is no separate create call on the contract. Without this the id
+                // would be attached to the cluster while no person row existed, and the
+                // very next rename of that id would fail as not-found.
+                state.people +=
+                    Person(
+                        id = personId,
+                        displayName = "",
+                        clusterIds = listOf(clusterId),
+                        coverAssetId = cluster.assetIds.firstOrNull(),
+                        assetCount = cluster.assetIds.size,
                     )
             }
         }

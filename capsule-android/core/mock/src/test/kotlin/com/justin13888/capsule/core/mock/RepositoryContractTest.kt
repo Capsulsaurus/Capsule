@@ -10,6 +10,7 @@ import com.justin13888.capsule.core.model.DefaultAlbumRule
 import com.justin13888.capsule.core.model.GatedView
 import com.justin13888.capsule.core.model.Operand
 import com.justin13888.capsule.core.model.Operator
+import com.justin13888.capsule.core.model.PersonId
 import com.justin13888.capsule.core.model.PlatformTag
 import com.justin13888.capsule.core.model.Predicate
 import com.justin13888.capsule.core.model.QueryField
@@ -33,6 +34,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import java.time.Duration
+import java.util.UUID
 
 /**
  * The contracts the scenario and write tests do not otherwise reach.
@@ -585,4 +587,23 @@ class RepositoryContractTest {
         /** Where the version nibble sits in a canonical UUID string. */
         const val UUID_VERSION_INDEX = 14
     }
+
+    @Test
+    fun `attaching a grouping to a new id creates the person it names`() =
+        runTest {
+            val mock = MockFixtures.freshRepositories()
+            val people = mock.people
+            val cluster = mock.backend.read { it.clusters.first() }
+            val fresh = PersonId(UUID.randomUUID().toString())
+
+            // Naming an unnamed grouping is the only way a person is created — there is no
+            // create call on the contract — so the rename that follows has to find them.
+            people.assignCluster(cluster.id, fresh)
+            people.renamePerson(fresh, "Ada")
+
+            val named = people.people().first().single { it.id == fresh }
+            assertEquals("Ada", named.displayName)
+            assertTrue(cluster.id in named.clusterIds)
+            assertEquals(cluster.assetIds.size, named.assetCount)
+        }
 }
