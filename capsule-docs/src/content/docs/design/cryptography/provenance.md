@@ -83,8 +83,8 @@ The closed action enum is owned by [Authorization — The Closed Action Set](/de
 client_version = client_id "/" semver "+" commit [".dirty"]
 
 client_id      the client product, which also names the platform:
-               capsule-ios | capsule-android | capsule-desktop | capsule-cli
-               | capsule-web | an out-of-repo client's own stable id
+               capsule-ios | capsule-android | capsule-web | capsule-cli
+               | an out-of-repo client's own stable id
 commit         git commit hash of the client's own source tree
                (full, or a prefix of ≥ 12 hex chars)
 ".dirty"       appended when built from a modified tree

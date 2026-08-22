@@ -1,9 +1,11 @@
 ---
 title: Architecture
-description: How Capsule combines gRPC, REST/OpenAPI, TUS, and more to deliver a high-performance and robust API.
+description: How Capsule combines gRPC, REST/OpenAPI, and a TUS-style resumable upload into one server surface, and which clients consume it.
 ---
 
 Capsule is a cross-platform photo service designed for professional and enthusiast photographers who expect fast syncing, seamless uploads, and powerful search—regardless of device or network conditions.
+
+This page is the orientation view for contributors. The normative contracts live in the design docs: [API Surfaces](/design/api-surfaces/) owns the surface ↔ transport map, and the [Module Map](/design/module-map/) maps every crate and module to its owning doc.
 
 ## API
 
@@ -13,35 +15,38 @@ To achieve this, Capsule employs a **hybrid API strategy** that balances perform
 
 ### Requirements
 
-- **Performance Optimization:** Each data channel should use the best-fit protocol:
+- **Performance Optimization:** Each data channel should use the best-fit protocol.
 - **Developer Experience:** UI and backend teams can move independently with tools tailored to their workflows.
 - **Cross-Platform Consistency:** Various data models should be serializable and deserializable across platforms.
 - **Network Efficiency:** Use binary formats where necessary to reduce payload size and energy use, especially on mobile.
-- **Scalability:** Decoupled subsystems (sync, search, uploads, UI) with differing performance requirements and domains must be able to scale independently.
+- **Scalability:** Decoupled subsystems (sync, uploads, media serving, UI) with differing performance requirements and domains must be able to scale independently.
 
 ### Technology Stack
 
 | Technology | Use Case | Benefits |
 |------------|----------|----------|
-| **gRPC + Protocol Buffers** | Bulk metadata sync, initial sync, delta updates | - 60–80% smaller payloads than JSON<br>- Highly efficient for syncing thousands of records<br>- Strongly typed to reduce data corruption |
+| **gRPC + Protocol Buffers** | Bulk metadata sync, initial sync, delta updates, federation pull | - Substantially smaller payloads than JSON<br>- Efficient for syncing thousands of records<br>- Strongly typed to reduce data corruption |
 | **REST + OpenAPI 3.1** | Request/response surfaces (auth, media, upload control); UI queries answered client-side over the synced `library.sqlite` | - Debuggable with plain HTTP tooling<br>- Generates the typed `capsule-sdk` REST client<br>- No server-readable content required (key-free model) |
-| **HTTP + TUS Protocol** | Uploading and downloading original photo assets | - Resume-capable uploads for poor networks<br>- CDN-compatible<br>- Built for large file transfers |
+| **HTTP + TUS-style resumable upload** | Uploading and downloading original photo assets | - Resume-capable uploads for poor networks<br>- CDN-compatible<br>- Built for large file transfers |
 | **Offline-First Architecture** | Local caching, editing, and sync | - Guarantees smooth experience regardless of connectivity<br>- Local-first UX with background resolution and merge |
+
+The upload protocol is modeled on [TUS](https://tus.io/) v1's offset/`PATCH` model rather than adopting it wholesale — see [Import — Upload Protocol](/design/import/upload-protocol/) for the exact header set and strictness rules.
 
 ### Some Technical Notes
 
-- For gRPC and gRPC-Web traffic, we use Envoy as proxy (or via Istio for Kubernetes deployments) because at the time of creation, it is the most mature and robust solution. As such, for Kubernetes deployments, Envoy needs to be installed as a sidecar on every pod hosting Capsule services using gRPC (e.g. capsule-metadata​)
-- Object storage vs. File storage: While we use object storage for ephermal storage, we use file storage for long-term storage. The use of object storage for the former needs no explanation (standard industry practice). However, for the latter, we use file storage for high-throughput and low-latency block-level access. For most self-hosted deployments, filesystems are also easier to manage and maintain. By storing (potentially large) files on file storage, we could save network bandwidth on back-and-forth copies and have faster block-level access essential to metadata and thumbnail generation.
-- Filesystems: While Kubernetes abstracts filesystem features behind POSIX standards. For consistency, we officially target and support ZFS and XFS via NFS and Ceph RBD
+- **No gRPC proxy is required.** `capsule-api-sync` mounts the `capsule.sync.v1` tonic service on the same Salvo router as the REST surfaces, and wraps it in `tonic_web::GrpcWebLayer` so the *same* service answers both native gRPC (`application/grpc`, over h2c) and browser gRPC-web calls. There is no Envoy or Istio sidecar in the deployment, and no separate metadata service: one binary serves every surface.
+- **Object storage vs. file storage:** long-term blob storage is a plain filesystem tree under `UPLOAD_DIR` (see [Filesystem — Server](/design/filesystem/server/)), addressed by content hash. File storage gives high-throughput, low-latency block-level access, avoids network round-trips for large originals, and is far easier to reason about in a self-hosted deployment. There is no object-storage dependency in the server today.
+- **Filesystem requirements:** the only hard requirement the server states is that the whole blob tree live on a **single** filesystem, so that the finalization `rename` into `blobs/{hash}.bin` is atomic — see [Filesystem — Server](/design/filesystem/server/) and [Filesystem — Maintenance](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery). Any POSIX filesystem meeting that holds; no particular filesystem is certified.
 
 ## Clients
 
 We prefer native client applications where possible for consistent UX and leveraging platform-specific features.
 
-Capsule has several native clients for the following platforms:
+Capsule has clients for the following platforms:
 
-- [Android](https://github.com/justin13888/Capsule/tree/master/capsule-android)
-- [iOS/macOS](https://github.com/justin13888/Capsule/tree/master/capsule-swift)
-- [Desktop](https://github.com/justin13888/Capsule/tree/master/capsule-desktop) (supports Windows and Linux)
-- [Web](https://github.com/justin13888/Capsule/tree/master/capsule-web)
-- [CLI](https://github.com/justin13888/Capsule/tree/master/capsule-cli) (for development and advanced users primarily)
+- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android) — Jetpack Compose app over the `capsule-core-kotlin` shared library
+- [iOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift) — SwiftUI app over the `capsule-core-swift` shared library
+- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web) — React client (guest drops and the share-link viewer; the authenticated read path is a key-free projection of the sync feed)
+- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli) — for development and advanced users primarily
+
+The native apps and the CLI share their client logic through `capsule-core` and `capsule-sdk`, exposed to Swift and Kotlin as uniffi bindings. There is no desktop application: Windows and Linux users are served by the CLI and the web client. See [Clients](/design/clients/) for the per-platform contract.

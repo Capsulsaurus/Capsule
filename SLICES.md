@@ -214,9 +214,9 @@ their owed remainder now lives.
 | S-Q4  | E2E case 12: cross-device enrollment                   | e2e         | —            | M    | ready   |
 | S-Q5  | Live-browser smokes (gRPC-web, share, drop)            | e2e         | S-P7         | M    | blocked |
 | S-Z3  | Design-doc scope-out + amendment notes                 | docs        | —            | M    | done    |
-| S-Z4  | README GraphQL scrub (13 READMEs + web) + regen        | docs        | —            | S    | ready   |
+| S-Z4  | README GraphQL scrub (13 READMEs + web) + regen        | docs        | —            | S    | done    |
 | S-Z5  | Dead-code removal (exports stub, CLI import planner)    | docs        | —            | S    | done    |
-| S-Z6  | Developer-docs parity pass                             | docs        | —            | M    | ready   |
+| S-Z6  | Developer-docs parity pass                             | docs        | —            | M    | done    |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
 ordering. `blocked` = a dependency gates the start, not review priority.
