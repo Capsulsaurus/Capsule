@@ -387,11 +387,22 @@ run = "./gradlew detekt"
 # build inputs, so a clean checkout compiles/packages without a manual staging step.
 # Needs a Rust toolchain (+ cargo-ndk & the Android NDK for the jniLibs). The lint-only
 # `check-kotlin` (ktlint/detekt) deliberately omits the flag — it needs no cargo.
+# The uniffi harness is the only Gradle module that needs a Rust toolchain, so it is
+# the only one this task passes the FFI flag for. The Compose app's own tests are
+# `test-android`, which needs no cargo at all.
 [tasks.test-kotlin]
-run = "./gradlew test -Pcapsule.wireFfi"
+run = "./gradlew :core:test -Pcapsule.wireFfi"
+
+[tasks.test-android]
+description = "Unit tests for the Compose app"
+run = "./gradlew testDebugUnitTest --project-dir . -x :core:test"
 
 [tasks.build-kotlin]
 run = "./gradlew build -Pcapsule.wireFfi"
+
+[tasks.build-android-app]
+description = "Assemble the Compose app's debug APK"
+run = "./gradlew :capsule-android:app:assembleDebug"
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 # Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses

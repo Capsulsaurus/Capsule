@@ -304,8 +304,12 @@ fn flat_json(map: &BTreeMap<String, String>) -> Result<String> {
 }
 
 /// The Android `strings.xml` path for `locale` (the source locale has no qualifier).
+///
+/// The catalog lands in the `core:i18n` library module rather than the application
+/// module: a feature module cannot see the application's generated `R` class, and every
+/// feature needs these keys.
 fn android_path(source: &str, locale: &str) -> PathBuf {
-    let base = "capsule-android/src/androidMain/res";
+    let base = "capsule-android/core/i18n/src/main/res";
     if locale == source {
         PathBuf::from(format!("{base}/values/strings.xml"))
     } else {
