@@ -13,6 +13,14 @@
 //! - Status taxonomy: `unknown_hash_is_404`, `malformed_hash_is_404`, `quarantined_is_410`,
 //!   `mid_gc_is_410`, `dangling_reference_is_410`, `awaiting_original_is_pending_upload_not_410`,
 //!   `missing_token_is_401`.
+//! - The takedown gate on this path (slice `S-C17`; SSoT: [Moderation — Takedown]):
+//!   `taken_down_asset_is_410_with_bytes_intact`,
+//!   `takedown_is_decided_before_disk_access` (a taken-down *awaiting-original* asset is `410`,
+//!   not the transient `409` the disk branch would produce — proving the gate precedes the
+//!   stat), and `taken_down_blob_is_410_to_an_authorized_federated_peer` (the federation-fetch
+//!   shape: the peer's capability scope covers the blob's role, and it still gets `410`).
+//!
+//! [Moderation — Takedown]: ../../../../../capsule-docs/src/content/docs/design/moderation.md
 
 use capsule_core::crypto::encryption::stream::{
     CIPHERTEXT_CHUNK, PLAINTEXT_CHUNK, decrypt_asset_vec, decrypt_chunk, encrypt_asset_vec_full,
@@ -302,4 +310,124 @@ async fn missing_token_is_401() {
         .send(&svc)
         .await;
     assert_eq!(res.status_code, Some(StatusCode::UNAUTHORIZED));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Takedown gate on the content-addressed path (slice `S-C17`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// **Taken down → 410 Gone, bytes intact.** `served = false` refuses the fetch on the real
+/// client/federation path, and the ciphertext stays on disk — a takedown is a *serving*
+/// constraint, never destruction (Moderation — Takedown).
+#[tokio::test]
+async fn taken_down_asset_is_410_with_bytes_intact() {
+    let ctx = setup().await;
+    let asset_id = nanoid::nanoid!();
+    let hash = ctx
+        .finalize_blob(&asset_id, "original", b"moderated ciphertext")
+        .await;
+    ctx.seed_asset_row(&asset_id, &hash, true).await;
+    let svc = ctx.blob_service();
+
+    // Servable first: the gate is live state, not a property of the fixture.
+    let before = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(before.status_code, Some(StatusCode::OK));
+
+    service::moderation::Takedown::take_down(&ctx.db, &asset_id, Some("report upheld"), false)
+        .await
+        .expect("takedown");
+
+    let res = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(
+        res.status_code,
+        Some(StatusCode::GONE),
+        "a taken-down asset is 410 on GET /blob/{{hash}}"
+    );
+    assert!(
+        service::blob_store::blob_path(&ctx.upload_dir, &hash).exists(),
+        "the takedown must not delete the ciphertext"
+    );
+}
+
+/// **The gate is decided before disk access.** A taken-down asset that is *also*
+/// `awaiting-original` (no bytes on disk, `original_held = false`) is `410` — not the `409`
+/// `error.blob.pending_upload` the disk branch produces. The only way to see `410` here is for
+/// the `served` check to run before the stat, so this pins the ordering the GC checks use.
+#[tokio::test]
+async fn takedown_is_decided_before_disk_access() {
+    let ctx = setup().await;
+    let asset_id = nanoid::nanoid!();
+    let hash = TestCtx::address(b"a taken-down original still on the phone");
+    ctx.index_original(&asset_id, &hash, 64, false).await;
+    ctx.seed_asset_row(&asset_id, &hash, true).await;
+    let svc = ctx.blob_service();
+
+    // Without the takedown this address is the transient awaiting-original state.
+    let staged = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(staged.status_code, Some(StatusCode::CONFLICT));
+
+    service::moderation::Takedown::take_down(&ctx.db, &asset_id, None, true)
+        .await
+        .expect("takedown");
+
+    let res = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(
+        res.status_code,
+        Some(StatusCode::GONE),
+        "the takedown is answered before the disk stat, so it wins over pending_upload"
+    );
+}
+
+/// **The federation-fetch shape.** A peer holding a capability whose scope *does* cover the
+/// blob's server-visible role — the invariant-19 gate a federated pull passes before the bytes
+/// are read — still receives `410` for a taken-down asset. This is the moderation doc's
+/// per-surface rule: capability-URL serving answers `404`, a takedown of content the peer
+/// already knows answers `410`.
+#[tokio::test]
+async fn taken_down_blob_is_410_to_an_authorized_federated_peer() {
+    use sync::federation::FederationScope;
+    use sync::federation::pull::authorize_blob_fetch;
+
+    let ctx = setup().await;
+    let asset_id = nanoid::nanoid!();
+    // A derivative: the role a `read-derivative-only` peer is allowed to pull.
+    let hash = ctx
+        .finalize_blob(&asset_id, "thumbnail", b"moderated derivative ciphertext")
+        .await;
+    ctx.seed_asset_row(&asset_id, &hash, true).await;
+    let svc = ctx.blob_service();
+
+    // The peer's capability scope covers this role — the fetch is authorized, not scope-refused.
+    authorize_blob_fetch(FederationScope::ReadDerivativeOnly, "thumbnail")
+        .expect("a derivative-only capability covers a thumbnail");
+    let before = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(before.status_code, Some(StatusCode::OK));
+
+    service::moderation::Takedown::take_down(&ctx.db, &asset_id, Some("peer report"), false)
+        .await
+        .expect("takedown");
+
+    let res = get(&format!("http://localhost/{hash}"), &ctx.token())
+        .send(&svc)
+        .await;
+    assert_eq!(
+        res.status_code,
+        Some(StatusCode::GONE),
+        "peers fetching a taken-down asset receive 410, never a masked 404"
+    );
+    assert_ne!(
+        res.status_code,
+        Some(StatusCode::NOT_FOUND),
+        "410 is deliberately distinct from the capability-URL surfaces' 404"
+    );
 }

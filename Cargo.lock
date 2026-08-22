@@ -957,6 +957,7 @@ dependencies = [
  "capsule-api-migration",
  "capsule-api-model",
  "capsule-api-service",
+ "capsule-api-sync",
  "capsule-api-upload",
  "capsule-core",
  "capsule-i18n",

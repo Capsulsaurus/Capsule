@@ -40,6 +40,13 @@ uuid = { workspace = true }
 
 [dev-dependencies]
 migration = { path = "../migration", package = "capsule-api-migration" }
+# The peer half of the federation surfaces this crate *publishes*: the capability
+# scope gate (`authorize_blob_fetch`) a federated `/blob/{hash}` fetch passes before
+# the takedown gate answers `410` (S-C17), and the verifier-side `RevocationList`
+# that consumes the `.well-known/capsule/revoked-jti` document (S-C18). A dev-dep so
+# the published document and the second server that reads it are exercised together;
+# nothing in the media server depends on `sync` at build time.
+sync = { path = "../sync", package = "capsule-api-sync" }
 base64 = { workspace = true }
 ed25519-dalek = { workspace = true }
 nanoid = { workspace = true }

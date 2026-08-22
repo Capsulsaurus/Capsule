@@ -4,16 +4,16 @@
 //! Serves an opaque ciphertext blob by its **content address**, with HTTP `Range` at the
 //! 65,536-byte ciphertext stride (core's `stream::CIPHERTEXT_CHUNK`) so a client resumes and
 //! reads mid-file chunks (each chunk decrypts in isolation under core's `decrypt_chunk`). The
-//! server holds no key: it serves ciphertext octets, never plaintext,
-//! and this endpoint replaces the plaintext-era assumptions in the `LEGACY-PLAINTEXT` asset
-//! routes (their retirement is owned by S-G1/S-G3).
+//! server holds no key: it serves ciphertext octets, never plaintext. This endpoint fully
+//! replaced the plaintext-era per-id asset routes, deleted with slice `S-C17` once the
+//! moderation takedown gate they hosted moved onto this path.
 //!
 //! **Auth per route.** A valid session access token is required (bearer), validated exactly
 //! as the storage-verify surface does; a missing/invalid token is `401`.
 //!
 //! **Status taxonomy** (the load-bearing contract — see [`ServeResolution`]):
-//! `200`/`206` served · `404` unknown content address · `410 Gone` taken-down / mid-GC /
-//! dangling · `409 error.blob.pending_upload` for a not-yet-uploaded original
+//! `200`/`206` served · `404` unknown content address · `410 Gone` taken down (moderation,
+//! `served = false`) / quarantined / mid-GC / dangling · `409 error.blob.pending_upload` for a not-yet-uploaded original
 //! (`awaiting-original`, transient, **never** `410`). A client switches on the `error.*`
 //! code, never the transport status alone ([API Surfaces]).
 //!
@@ -50,8 +50,8 @@ pub(super) enum BlobServeResponse {
     Serve(Box<NamedFile>),
     /// Unknown / malformed content address — `404`, bodyless (no blob-existence oracle).
     NotFound,
-    /// Referenced but gone per policy (quarantined / mid-GC / dangling) — `410 Gone`,
-    /// permanent; the client degrades to a lower representation.
+    /// Referenced but gone per policy (taken down / quarantined / mid-GC / dangling) —
+    /// `410 Gone`, permanent; the client degrades to a lower representation.
     Gone,
     /// The original is not yet uploaded (`awaiting-original`) — `409` + the transient
     /// `error.blob.pending_upload` code, explicitly **distinct from `410`**.
@@ -113,7 +113,7 @@ impl EndpointOutRegister for BlobServeResponse {
         );
         operation.responses.insert(
             String::from("410"),
-            salvo::oapi::Response::new("Blob gone (taken down, mid-GC, or dangling)"),
+            salvo::oapi::Response::new("Blob gone (taken down, quarantined, mid-GC, or dangling)"),
         );
         operation.responses.insert(
             String::from("416"),

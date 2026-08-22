@@ -299,6 +299,32 @@ impl TestCtx {
             .expect("record finalization");
     }
 
+    /// Seed the `assets` row for `asset_id` carrying the moderation `served` flag — the row
+    /// the takedown gate (slice `S-C17`) reads on the content-addressed serve path. The
+    /// key-free feed reference is seeded separately; this is the moderation state beside it.
+    pub(crate) async fn seed_asset_row(&self, asset_id: &str, hash: &str, served: bool) {
+        entity::asset::ActiveModel {
+            id: Set(asset_id.to_string()),
+            owner_id: Set(self.user_id.clone()),
+            album_id: Set(Some(self.album_id.clone())),
+            asset_type: Set(entity::asset::AssetType::Photo),
+            file_size: Set(64),
+            file_hash: Set(hash.to_string()),
+            content_type: Set("image/jpeg".to_string()),
+            is_stack_hidden: Set(false),
+            uploaded: Set(true),
+            upload_user_id: Set(self.user_id.clone()),
+            uploaded_at: Set(entity::time::now_entity()),
+            modified_at: Set(entity::time::now_entity().into()),
+            deleted_at: Set(None),
+            served: Set(served),
+            ..Default::default()
+        }
+        .insert(&self.db)
+        .await
+        .expect("seed asset row");
+    }
+
     /// Mark a blob's GC state — the seam the S-C11 GC worker owns and this endpoint reads.
     pub(crate) async fn mark_gc(
         &self,
@@ -343,12 +369,63 @@ pub(crate) async fn setup() -> TestCtx {
 
     let (encoding_key, decoding_key) = decode_keys();
 
+    // Seed user U, owner group id=U, member U∈U, album A owned by U — the rows the `assets`
+    // foreign keys require, so a test can seed an asset row beside a feed reference (the
+    // takedown gate's state, slice `S-C17`).
+    let user_id = nanoid!();
+    let album_id = nanoid!();
+    let created = Timestamp::now() - SignedDuration::from_hours(24);
+    entity::user::ActiveModel {
+        id: Set(user_id.clone()),
+        username: Set(format!("u{}", nanoid!(8))),
+        name: Set(format!("Test {}", nanoid!(8))),
+        email: Set(format!("{}@example.com", nanoid!(8))),
+        account_verified: Set(true),
+        needs_onboarding: Set(false),
+        password_hash: Set(format!("hash-{}", nanoid!(12))),
+        is_admin: Set(false),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        modified_at: Set(entity::time::ts_to_entity(created)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert user");
+    entity::owner::ActiveModel {
+        id: Set(user_id.clone()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+    }
+    .insert(&db)
+    .await
+    .expect("insert owner");
+    entity::owner_member::ActiveModel {
+        owner_id: Set(user_id.clone()),
+        user_id: Set(user_id.clone()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .expect("insert owner_member");
+    entity::album::ActiveModel {
+        id: Set(album_id.clone()),
+        owner_id: Set(user_id.clone()),
+        name: Set(format!("Album {}", nanoid!(6))),
+        description: Set(String::new()),
+        created_at: Set(entity::time::ts_to_entity(created)),
+        modified_at: Set(entity::time::ts_to_entity(created)),
+        deleted_at: Set(None),
+    }
+    .insert(&db)
+    .await
+    .expect("insert album");
+
     TestCtx {
         _postgres: container,
         db,
         upload_dir,
-        album_id: nanoid!(),
-        user_id: nanoid!(),
+        album_id,
+        user_id,
         encoding_key,
         decoding_key,
     }

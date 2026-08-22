@@ -1228,7 +1228,7 @@
             "description": "Original not yet uploaded (error.blob.pending_upload)"
           },
           "410": {
-            "description": "Blob gone (taken down, mid-GC, or dangling)"
+            "description": "Blob gone (taken down, quarantined, mid-GC, or dangling)"
           },
           "416": {
             "description": "Requested range not satisfiable"

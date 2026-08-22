@@ -51,34 +51,9 @@ async fn issue_receipt(
         .expect("issue receipt")
 }
 
-/// Seed an `assets` row owned by the test user (so the receipts endpoint authorizes it),
-/// including the `users`/`owners` rows its foreign keys reference.
+/// Seed an `assets` row owned by the test user (so the receipts endpoint authorizes it). The
+/// `users` / `owners` rows its foreign keys reference are seeded by [`setup`].
 async fn seed_asset(ctx: &TestCtx, asset_id: &str, hash: &str, size: i64) {
-    let created = Timestamp::now() - jiff::SignedDuration::from_hours(24);
-    entity::user::ActiveModel {
-        id: Set(ctx.user_id.clone()),
-        username: Set(format!("u{}", nanoid!(8))),
-        name: Set(format!("Test {}", nanoid!(8))),
-        email: Set(format!("{}@example.com", nanoid!(8))),
-        account_verified: Set(true),
-        needs_onboarding: Set(false),
-        password_hash: Set(format!("hash-{}", nanoid!(12))),
-        is_admin: Set(false),
-        created_at: Set(entity::time::ts_to_entity(created)),
-        modified_at: Set(entity::time::ts_to_entity(created)),
-        ..Default::default()
-    }
-    .insert(&ctx.db)
-    .await
-    .expect("seed user");
-    entity::owner::ActiveModel {
-        id: Set(ctx.user_id.clone()),
-        created_at: Set(entity::time::ts_to_entity(created)),
-    }
-    .insert(&ctx.db)
-    .await
-    .expect("seed owner");
-
     entity::asset::ActiveModel {
         id: Set(asset_id.to_string()),
         owner_id: Set(ctx.user_id.clone()),
