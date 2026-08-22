@@ -158,15 +158,14 @@ The teardown verdict is final; the **order** is not "retire, then rebuild". It i
   `gen_openapi` binary. Slices whose target is the SDK are marked `RETIRED` because their
   wire contract is re-sourced — not because the crate is being thrown away.
 
-**Environment blocker — lane P rides CI.** `sudo rm -rf /Library/Developer/PrivateFrameworks`
-(the documented fix for the stale `DVTDownloads.framework` shadowing Xcode 26.6) removed
-`CoreSimulator.framework` along with it. `xcodebuild -create-xcframework` now fails with
-**exit 70**, so `mise run setup-swift` and every simulator-backed lane-P verification must
-ride the `build-ios` CI lane until `sudo xcodebuild -runFirstLaunch` is run on the dev host
-to restore the framework. Everything upstream is unaffected: `build-ffi-apple`
-cross-compiles all three Apple targets, uniffi emits both `capsule_core_ffi.swift` and
-`capsule_sdk.swift`, and `lipo` produces the universal simulator slice. **`S-P1` is
-unaffected** — it is pure Rust and verifies with `cargo nextest`.
+**Environment — lane P builds locally again (2026-08-22).** The recorded blocker
+(`CoreSimulator.framework` removed by `sudo rm -rf /Library/Developer/PrivateFrameworks`,
+`xcodebuild -create-xcframework` exit 70) is resolved, as is the separate gap that had
+replaced it: Xcode 26.6 ships the iOS 26.5 SDK but the host carried only 26.0/26.3 runtimes,
+so `xcodebuild` enumerated no iOS simulator destinations at all. `xcodebuild -downloadPlatform
+iOS` fixed that with **no sudo**. `mise run check-swift` now runs format, lint, and the unit
+suites on macOS, iOS, and iPadOS from this host. **`S-P1` is unaffected either way** — it is
+pure Rust and verifies with `cargo nextest`.
 
 ## Unified Slice Index
 
@@ -342,8 +341,8 @@ when" cannot fully pass until the gate lifts.
 | `rawshift` (in-house RAW decode) | stabilizing, unconsumed | Full RAW support in thumbnails/import; `media::image::formats::raw` is the integration stub. Also the target the `RETIRED` media slices (`S-B1`, `S-B5`, `S-B13`) rebuild onto. |
 | `ptpip-rs` (in-house PTP/IP) | repo not created | `S-B9` (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: `S-F2` Kotlin run, `S-F3` first Android/iOS CI runs + device lanes, `S-F4` Windows ffi build + clippy + real-TPM smoke, `S-F5` Kotlin ECDH adapter, `S-D9` Kotlin harness. |
-| swiftformat 0.55 (mise) | broken on dev host | Binary SIGKILLed (invalid signature); `format-swift` can't run locally. |
-| Xcode 26.6 on the dev host | **broken — blocks simulator-backed lane P locally** | The documented fix for the stale `DVTDownloads.framework` (`sudo rm -rf /Library/Developer/PrivateFrameworks`) also removed `CoreSimulator.framework`, so `xcodebuild -create-xcframework` now fails with **exit 70**. Everything upstream is fine: `build-ffi-apple` cross-compiles all three Apple targets, uniffi emits both `capsule_core_ffi.swift` and `capsule_sdk.swift`, and `lipo` produces the universal simulator slice. **Fix (needs sudo, outside the repo):** `sudo xcodebuild -runFirstLaunch`, then re-run `mise run setup-swift`. Until then `S-P2`–`S-P8` ride the `build-ios` CI lane. **`S-P1` is unaffected** — pure Rust. |
+| swiftformat 0.55 (mise) | **resolved 2026-08-22** | The install was a corrupt app-bundle extraction whose `Info.plist` no longer matched its signature, so the hardened runtime SIGKILLed it (exit 137). `mise uninstall swiftformat@0.55 && mise install` yields a plain 0.55.6 binary that runs. Running it for the first time surfaced a real config conflict — swiftformat's `wrapMultilineStatementBraces` versus swiftlint's `opening_brace` — now resolved by disabling the swiftformat rule. |
+| Xcode 26.6 on the dev host | **resolved 2026-08-22** | `CoreSimulator.framework` is present again and `xcodebuild -create-xcframework` exits 0. The residual failure was different from the recorded one: Xcode 26.6 ships the iOS **26.5** SDK but the host had only 26.0/26.3 runtimes, so `xcodebuild` enumerated *no* iOS simulator destinations at all (`-showdestinations` listed only ineligible device entries). `xcodebuild -downloadPlatform iOS` — **no sudo needed** — installed the 26.5 runtime and restored them. Both the simulator and macOS destinations now build and test locally; the older 18.3/26.0/26.3 runtimes were deleted to reclaim ~16 GB. Lane P no longer has to ride CI. |
 | Translation seeds | pending human review | ~350 machine-seeded entries across 12 locales (`S-I1`/`S-I2`/`S-E1`/`S-D3`) flagged in the `context` field; human review is the gate, not agent work. |
 
 ## Lane A — core crypto
@@ -1826,10 +1825,9 @@ CLI. Architecture decision 2026-07-12: the app-reachable crypto surface is expos
 the **`capsule_sdk` uniffi namespace** (the SDK owns user flows; `S-F1`'s
 never-same-binary invariant for the `capsule_core` namespace stays intact).
 
-**Environment:** `xcodebuild -create-xcframework` fails with exit 70 on the dev host
-(`CoreSimulator.framework` was removed alongside `/Library/Developer/PrivateFrameworks`),
-so every simulator-backed verification in this lane rides the `build-ios` CI lane until
-`sudo xcodebuild -runFirstLaunch` restores it. **`S-P1` is unaffected — it is pure Rust.**
+**Environment: resolved 2026-08-22.** The dev host builds and tests locally again on all
+three Apple destinations — see the environment table above. Simulator-backed verification in
+this lane no longer has to ride CI. **`S-P1` is unaffected — it is pure Rust.**
 
 ### S-P1 — `capsule_sdk` FFI workspace verbs
 

@@ -1,8 +1,31 @@
 # capsule-swift
 
-The native Capsule client for Apple platforms (iPhone & iPad today, macOS
-later), written in Swift 6. A local-only, high-performance photo app — the
-foundation that Capsule's networked features are wired into later.
+The native Capsule client for Apple platforms — **iPhone, iPad, and Mac from one
+codebase**, written in Swift 6. macOS is a native destination, not Catalyst: the
+Mac build gets a real `NavigationSplitView`, menu-bar commands, a `Settings`
+scene, and multiple windows.
+
+The deployment floor is **iOS/iPadOS 26 and macOS 26**. That is deliberate: it
+makes the Liquid Glass design system, `.tabBarMinimizeBehavior`, and
+`.navigationTransition(.zoom)` available unconditionally, so no UI code carries an
+`#available` fence and there is one visual language to design and audit.
+
+## Two lanes
+
+The app builds in one of two configurations, selected by a Tuist environment flag.
+
+| Lane | How | What backs the data |
+| --- | --- | --- |
+| **Mock** (default) | `mise run setup-swift` | `CapsuleMock` — in-memory adapters for every port, with a scenario switcher that drives edge states (quarantine, quota grace, degraded federation, awaiting-originals…) |
+| **FFI** | `TUIST_FFI=1`, after `mise run setup-swift-ffi` | The Rust core over UniFFI: `CapsuleCatalogFFI` compiles the generated glue and links `CapsuleCoreFFI.xcframework` |
+
+The mock lane needs **no Rust toolchain, no cross-compile, and no `.ffi/`
+directory** — `tuist generate && xcodebuild test` works from a clean checkout with
+only Xcode installed. That is what keeps the UI lane fast to build and verify
+while `capsule-core` and `capsule-sdk` are being rebuilt.
+
+Both lanes compile against the same protocols in `CapsulePorts`, so a signature
+change breaks both at compile time rather than letting the FFI lane rot.
 
 ## Architecture
 
@@ -10,16 +33,31 @@ A single Tuist project: a thin `Capsule` app target over a graph of framework
 modules in `Modules/`.
 
 ```text
-App/iOS/            thin app target — composition root only
+App/                 thin app target — composition root only
 Modules/
-  CapsuleFoundation   value types, logging, utilities
-  CapsuleCatalog      Swift adapter over the Rust UniFFI catalog
+  CapsuleFoundation   value types, logging, utilities, Platform/ (the shim)
+  CapsuleDomain       display/domain models mirroring the future uniffi records
+  CapsulePorts        the async protocol seams — one per capability
+  CapsuleMock         in-memory adapters, deterministic fixtures, scenarios
+  CapsuleCatalog      the catalog contract, models, and in-memory reference impl
+  CapsuleCatalogFFI   the Rust-backed half (FFI lane only)
   ManagedStore        Swift filesystem layer + import pipeline
   AssetKit            unified AssetProvider (PhotoKit + managed)
   ImagePipeline       decode / downsample / cache / prefetch
-  CapsuleUI           design system + shared components
-  FeatureTimeline / FeatureViewer / FeatureAlbums / FeatureSearch
+  CapsuleUI           design system, shared components, PlatformCollection/
+  CapsuleNavigation   routes, split-view state, deep links, macOS commands
+  Feature*            one module per screen group
 ```
+
+### The platform rule
+
+`import UIKit` and `import AppKit` appear in exactly two places:
+`CapsuleFoundation/Sources/Platform/` (the type shim — `PlatformImage`,
+`PlatformColor`, `PlatformEnvironment`, `PlatformLifecycle`) and
+`CapsuleUI/Sources/PlatformCollection/` (the collection-view island that backs
+every grid). Everything else is SwiftUI written once. Feature code branches on
+*capability* (`PlatformEnvironment.hasMenuBar`) rather than on `#if os(...)`, so a
+future destination is a matter of extending the shim, not auditing every view.
 
 The SQLite catalog and CBOR sidecar are owned by Rust (`../capsule-core`) and
 exposed to Swift via UniFFI, packaged as `CapsuleCoreFFI.xcframework`. Everything
@@ -50,30 +88,54 @@ Photos library and a Capsule-managed on-disk store merged into one timeline.
 
 ## Development
 
-Prerequisites: macOS, Xcode 16+, a Rust toolchain (pinned by
-`/rust-toolchain.toml`), and [mise](https://mise.jdx.dev).
+Prerequisites: macOS, Xcode 26+, and [mise](https://mise.jdx.dev). **No Rust
+toolchain is required for the default lane.**
 
 ```sh
 cd capsule-swift
 mise install            # installs tuist, swiftlint, swiftformat, xcbeautify
-mise run setup-swift    # builds the Rust FFI xcframework, then `tuist generate`
+mise run setup-swift    # `tuist generate` — that is all the mock lane needs
 open Capsule.xcworkspace
 ```
 
-`mise run setup-swift` is equivalent to:
+To work on the Rust-backed half instead:
 
 ```sh
-mise run build-ffi-apple        # cross-compiles capsule-core-ffi → .ffi/CapsuleCoreFFI.xcframework
-mise exec -- tuist generate     # generates Capsule.xcworkspace
+mise run setup-swift-ffi   # build-ffi-apple, then TUIST_FFI=1 tuist generate
 ```
+
+### Checks
+
+```sh
+mise run check-swift    # format + lint + tests on macOS, iOS, and iPadOS
+```
+
+`check-swift` is the CI gate and maps 1:1 to the `swift` job in `ci.yml`. The
+Rust-backed lane has its own workflow, `build-ios.yml`.
 
 Re-run `mise run build-ffi-apple` whenever the Rust core changes. The generated
 Xcode project/workspace and the `.ffi/` build output are not committed.
 
+## Running on the Mac
+
+The Mac build needs no simulator at all — it is the fastest way to see a change:
+
+```sh
+xcodebuild -workspace Capsule.xcworkspace -scheme Capsule \
+           -configuration Debug -destination 'platform=macOS' \
+           CODE_SIGNING_ALLOWED=NO build | mise exec -- xcbeautify
+
+open "$(find ~/Library/Developer/Xcode/DerivedData -name 'Capsule.app' \
+        -path '*Debug*' -not -path '*iphonesimulator*' | head -1)"
+```
+
+Or select **My Mac** in the scheme selector and press **⌘R**.
+
 ## Running on the iOS Simulator
 
-After `mise run setup-swift`, pick a simulator
-and launch the app from the command line:
+After `mise run setup-swift`, pick a simulator and launch the app from the
+command line. The app needs an iOS 26 runtime; if `xcodebuild` reports no
+simulator destinations, run `xcodebuild -downloadPlatform iOS` (no sudo).
 
 ```sh
 # List available simulators — find the UDID for the device you want
