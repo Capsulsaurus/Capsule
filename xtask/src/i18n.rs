@@ -313,13 +313,48 @@ fn android_path(source: &str, locale: &str) -> PathBuf {
     }
 }
 
-/// Map a BCP-47 tag to an Android resource qualifier: `language[-rREGION]`.
+/// Map a BCP-47 tag to an Android resource qualifier.
+///
+/// The second subtag of a BCP-47 tag is not necessarily a region: `pt-BR` carries a
+/// region, `zh-Hans` carries a *script*. Android's legacy `-r` qualifier means region
+/// only, so emitting `values-zh-rHANS` produces a directory aapt2 rejects outright with
+/// "Invalid resource directory name". Script-bearing tags therefore use the BCP-47
+/// qualifier form (`values-b+zh+Hans`), supported since API 24 and so available to every
+/// build here (minSdk 26).
+///
+/// - `fr`            -> `fr`
+/// - `pt-BR`         -> `pt-rBR`
+/// - `zh-Hans`       -> `b+zh+Hans`
+/// - `zh-Hant-HK`    -> `b+zh+Hant+HK`
 fn android_qualifier(locale: &str) -> String {
     let mut parts = locale.split('-');
     let lang = parts.next().unwrap_or(locale).to_ascii_lowercase();
-    match parts.next() {
-        Some(region) => format!("{lang}-r{}", region.to_ascii_uppercase()),
-        None => lang,
+    let Some(second) = parts.next() else {
+        return lang;
+    };
+
+    if is_script_subtag(second) {
+        let script = titlecase(second);
+        return match parts.next() {
+            Some(region) => format!("b+{lang}+{script}+{}", region.to_ascii_uppercase()),
+            None => format!("b+{lang}+{script}"),
+        };
+    }
+
+    format!("{lang}-r{}", second.to_ascii_uppercase())
+}
+
+/// A BCP-47 script subtag is exactly four ASCII letters (`Hans`, `Cyrl`, `Latn`).
+fn is_script_subtag(subtag: &str) -> bool {
+    subtag.len() == 4 && subtag.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Render a subtag in the canonical script casing (`hans` -> `Hans`).
+fn titlecase(subtag: &str) -> String {
+    let mut chars = subtag.chars();
+    match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase(),
+        None => String::new(),
     }
 }
 
@@ -399,12 +434,60 @@ fn check_outputs(root: &Path, outputs: &[(PathBuf, String)]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::str_slice_const;
+    use super::{android_qualifier, str_slice_const};
 
     const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
 
     fn owned(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// A bare language tag is the qualifier verbatim.
+    #[test]
+    fn language_only_qualifier() {
+        assert_eq!(android_qualifier("fr"), "fr");
+        assert_eq!(android_qualifier("ar"), "ar");
+    }
+
+    /// A region subtag keeps the legacy `-rREGION` form every Android version accepts.
+    #[test]
+    fn region_qualifier_uses_legacy_r_form() {
+        assert_eq!(android_qualifier("pt-BR"), "pt-rBR");
+        assert_eq!(android_qualifier("en-us"), "en-rUS");
+    }
+
+    /// A *script* subtag must not be emitted as a region: `values-zh-rHANS` is rejected
+    /// by aapt2 as an invalid resource directory name, which is what shipped before.
+    #[test]
+    fn script_qualifier_uses_bcp47_form() {
+        assert_eq!(android_qualifier("zh-Hans"), "b+zh+Hans");
+        assert_eq!(android_qualifier("zh-Hant"), "b+zh+Hant");
+    }
+
+    /// Script casing is canonicalised, and a trailing region rides along.
+    #[test]
+    fn script_qualifier_normalises_case_and_keeps_region() {
+        assert_eq!(android_qualifier("zh-hans"), "b+zh+Hans");
+        assert_eq!(android_qualifier("zh-Hant-HK"), "b+zh+Hant+HK");
+    }
+
+    /// Every locale the repo actually ships renders to a directory aapt2 accepts.
+    #[test]
+    fn every_supported_locale_renders_a_valid_directory() {
+        for locale in [
+            "en", "zh-Hans", "zh-Hant", "ja", "ko", "fr", "de", "es", "pt-BR", "it", "ru", "hi",
+            "ar",
+        ] {
+            let qualifier = android_qualifier(locale);
+            // aapt2 accepts `lang`, `lang-rREGION` and `b+...` and nothing else here.
+            let valid = qualifier.starts_with("b+")
+                || qualifier.chars().all(|c| c.is_ascii_lowercase())
+                || qualifier.split_once("-r").is_some_and(|(lang, region)| {
+                    lang.chars().all(|c| c.is_ascii_lowercase())
+                        && region.chars().all(|c| c.is_ascii_uppercase())
+                });
+            assert!(valid, "{locale} rendered invalid qualifier {qualifier}");
+        }
     }
 
     /// A short list (the source-only build) stays on one line — matching rustfmt and
