@@ -2238,5 +2238,9 @@
     "android.shell.back": {
         "message": "Back",
         "context": "Android shell: accessibility label for the navigation-icon back affordance in the placeholder top app bar."
+    },
+    "sharing.create_link": {
+        "message": "Create link",
+        "context": "Primary action of a split button that shares the current selection; the attached menu offers the other share options."
     }
 }

@@ -526,6 +526,7 @@
     <string name="sharing_collaborative_hint">Allow others to add photos</string>
     <string name="sharing_create_album">Create Album</string>
     <string name="sharing_create_button">Create Shared Album</string>
+    <string name="sharing_create_link">Create link</string>
     <string name="sharing_created">Shared album \"{title}\" created!</string>
     <string name="sharing_description">Share your photos and albums with friends and family. Shared content will appear here.</string>
     <string name="sharing_dialog_description">Create a new album to share with friends and family.</string>

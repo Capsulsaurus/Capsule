@@ -525,6 +525,7 @@
   "sharing.collaborative_hint": "Allow others to add photos",
   "sharing.create_album": "Create Album",
   "sharing.create_button": "Create Shared Album",
+  "sharing.create_link": "Create link",
   "sharing.created": "Shared album \"{title}\" created!",
   "sharing.description": "Share your photos and albums with friends and family. Shared content will appear here.",
   "sharing.dialog_description": "Create a new album to share with friends and family.",

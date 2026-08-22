@@ -131,7 +131,7 @@ private fun SelectionGallery() {
     )
     CapsuleSplitButton(
         onClick = {},
-        label = stringResource(R.string.common_share),
+        label = stringResource(R.string.sharing_create_link),
         expanded = expanded,
         onExpandedChange = { expanded = it },
         menuDescription = stringResource(R.string.explore_view_all),

@@ -34,7 +34,11 @@ class DesignSystemScreenshotTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun capture(name: String, darkTheme: Boolean, contrast: CapsuleContrast) {
+    private fun capture(
+        name: String,
+        darkTheme: Boolean,
+        contrast: CapsuleContrast,
+    ) {
         compose.setContent {
             CapsulePreviewSurface(darkTheme = darkTheme, contrast = contrast) {
                 Box(Modifier.fillMaxSize()) { CapsuleComponentGallery() }

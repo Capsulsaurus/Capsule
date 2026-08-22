@@ -35717,6 +35717,16 @@
         }
       }
     },
+    "sharing.create_link": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create link"
+          }
+        }
+      }
+    },
     "sharing.created": {
       "localizations": {
         "ar": {
