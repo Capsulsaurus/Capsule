@@ -129,12 +129,10 @@ pub fn trash_path(root: &Path, uuid: &Uuid, ext: &str) -> PathBuf {
         .join(format!("{}.{}", uuid.simple(), ext))
 }
 
-/// Appends `.tmp` to any path
-pub fn tmp_path(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
-}
+// `tmp_path` encodes no library layout, so it lives in `crate::utils::paths` where
+// `crate::sidecar` can reach it without depending on `library`. Re-exported here so
+// `library::paths::tmp_path` and `library::tmp_path` keep resolving for existing callers.
+pub use crate::utils::paths::tmp_path;
 
 #[cfg(test)]
 mod tests {

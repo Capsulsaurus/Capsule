@@ -2,8 +2,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
-use crate::library::paths::tmp_path;
 use crate::sidecar::{AssetSidecar, LibraryConfigCbor, LibraryVersionCbor};
+use crate::utils::paths::tmp_path;
 
 pub fn read_sidecar(path: &Path) -> Result<AssetSidecar, Box<dyn std::error::Error + Send + Sync>> {
     let file = fs::File::open(path)?;
