@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
+
 plugins {
     id("capsule.android.application")
     alias(libs.plugins.kotlinxSerialization)
@@ -16,6 +18,21 @@ android {
             // only artifact anyone builds today is the debug APK.
             isMinifyEnabled = false
         }
+    }
+}
+
+// The adaptive shell is built almost entirely out of surfaces that are still opt-in in
+// material3 1.5.0-alpha26 and adaptive 1.3.0. Opting in once for the module beats an @OptIn
+// on every call site: `allWarningsAsErrors` turns a redundant file-level opt-in into a build
+// failure, so per-file annotations would have to be re-audited every time a composable moved
+// between files. This mirrors what `core:designsystem` already does.
+tasks.withType<KotlinCompile>().configureEach {
+    compilerOptions {
+        optIn.addAll(
+            "androidx.compose.material3.ExperimentalMaterial3Api",
+            "androidx.compose.material3.ExperimentalMaterial3ExpressiveApi",
+            "androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi",
+        )
     }
 }
 
@@ -60,4 +77,7 @@ dependencies {
     implementation(libs.compose.material3.navigation.suite)
     implementation(libs.androidx.window)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.coroutines.core)
+
+    testImplementation(projects.capsuleAndroid.core.testing)
 }
