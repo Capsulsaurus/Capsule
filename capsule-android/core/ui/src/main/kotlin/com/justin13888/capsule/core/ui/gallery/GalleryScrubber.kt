@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -52,6 +53,20 @@ private val ThumbWidth = 40.dp
 private val TrackInset = 4.dp
 private val BubbleInset = 8.dp
 private val TickTextInset = 6.dp
+
+/**
+ * The least vertical distance between two rail labels.
+ *
+ * Sized so two `labelSmall` lines cannot touch. Ticks closer than this are dropped rather
+ * than drawn on top of one another.
+ */
+private val TickMinimumGap = 28.dp
+
+/** How opaque the ground behind a rail label is. Enough to read against, not a band. */
+private const val TICK_SCRIM_ALPHA = 0.82f
+
+/** Vertical breathing room inside a label's scrim. */
+private val TickScrimInset = 2.dp
 private const val FADE_MILLIS = 180
 
 /**
@@ -240,19 +255,59 @@ private fun BoxScope.ScrubberTicks(
 ) {
     if (ticks.isEmpty()) return
     val viewportHeight = state.viewportHeight
-    for (tick in ticks) {
-        val slot = headerSlotOf(plan, tick.section)
-        if (slot < 0) continue
-        val at = GalleryScroll.fractionOf(plan, plan.offsetOf(slot), viewportHeight)
+
+    // Thin the ticks to what the rail can actually show. A five-year library offers a
+    // label per month, and at a phone's height those land a few pixels apart and stack
+    // into an illegible smear down the grid — a rail that names nothing while covering
+    // photographs is worse than no rail. Whichever labels survive are spread evenly, so
+    // the rail still reads as a map of the whole library rather than of its first months.
+    val minimumGap = with(LocalDensity.current) { TickMinimumGap.toPx() }
+    val placed =
+        remember(plan, ticks, travel, viewportHeight, minimumGap) {
+            val kept = ArrayList<Pair<GalleryScrubberTick, Float>>(ticks.size)
+            var lastY = Float.NEGATIVE_INFINITY
+            ticks
+                .mapNotNull { tick ->
+                    headerSlotOf(plan, tick.section)
+                        .takeIf { it >= 0 }
+                        ?.let { slot ->
+                            tick to GalleryScroll.fractionOf(plan, plan.offsetOf(slot), viewportHeight)
+                        }
+                }.forEach { placement ->
+                    val y = placement.second * travel
+                    if (y - lastY >= minimumGap) {
+                        lastY = y
+                        kept += placement
+                    }
+                }
+            kept
+        }
+
+    for ((tick, at) in placed) {
         Text(
             text = tick.label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            // A month name is one line. Without this the label inherits the rail's own
+            // narrow width, and Compose wraps it one *character* per line — which is what
+            // produced a column of stacked glyphs down the middle of the grid rather than
+            // anything a reader could use. Unbounded width lets it lay out at its natural
+            // size and extend left of the rail, which is where there is room for it.
+            maxLines = 1,
+            softWrap = false,
             modifier =
                 Modifier
                     .align(Alignment.TopEnd)
                     .railOffset({ at }, travel, centreOn = thumbHeight)
-                    .padding(end = TrackInset + ThumbWidth + TickTextInset),
+                    .padding(end = TrackInset + ThumbWidth + TickTextInset)
+                    .wrapContentWidth(align = Alignment.End, unbounded = true)
+                    // The grid runs edge to edge, so a rail label is always over a
+                    // photograph and its legibility would otherwise depend on whatever
+                    // happens to be behind it. The scrim is what makes the date readable
+                    // against a bright sky and a dark interior alike.
+                    .clip(CapsuleShapes.small)
+                    .background(MaterialTheme.colorScheme.surface.copy(alpha = TICK_SCRIM_ALPHA))
+                    .padding(horizontal = TickTextInset, vertical = TickScrimInset),
         )
     }
 }
