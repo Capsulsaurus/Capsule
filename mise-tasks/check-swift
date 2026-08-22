@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+#MISE description="The Swift CI gate: format, lint, and test on every Apple destination"
+#MISE depends=["format-check-swift", "lint-check-swift", "test-swift"]
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift checks (not macOS)"; exit 0; fi
+echo "✓ swift: format, lint, and tests are green on macOS, iOS, and iPadOS"

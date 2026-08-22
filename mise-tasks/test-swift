@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+#MISE description="Run the Apple client's unit tests on every destination (macOS only)"
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift tests (not macOS)"; exit 0; fi
+
+# The mock lane: no Rust core, no xcframework, no cross-compile. Set TUIST_FFI=1 to
+# build and test the Rust-backed graph instead (requires `mise run build-ffi-apple`).
+cd capsule-swift
+mise exec -- tuist generate --no-open
+
+# One destination per form factor. The iOS pair is resolved by name so the script
+# survives a runtime upgrade; `xcodebuild` picks the newest matching simulator.
+destinations=(
+    "platform=macOS"
+    "platform=iOS Simulator,name=iPhone 17 Pro"
+    "platform=iOS Simulator,name=iPad Pro 13-inch (M5)"
+)
+for destination in "${destinations[@]}"; do
+    echo "▸ Testing on ${destination}"
+    set -o pipefail
+    xcodebuild test \
+        -workspace Capsule.xcworkspace \
+        -scheme Capsule \
+        -configuration Debug \
+        -destination "${destination}" \
+        CODE_SIGNING_ALLOWED=NO \
+        | mise exec -- xcbeautify
+done

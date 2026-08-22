@@ -31,6 +31,7 @@ jobs:
       vision: ${{ steps.filter.outputs.vision }}
       markdown: ${{ steps.filter.outputs.markdown }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
+      swift: ${{ steps.filter.outputs.swift }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -72,6 +73,13 @@ jobs:
             markdown:
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+              - 'mise.toml'
+              - 'mise-tasks/**'
+              - '.github/workflows/ci.yml'
+            swift:
+              - 'capsule-swift/**'
+              - 'capsule-core-swift/**'
+              - 'locales/**'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
@@ -361,13 +369,35 @@ jobs:
       - name: Check (ktlint + detekt)
         run: mise run check-kotlin
 
+  # The Apple client's mock lane: no Rust core, no xcframework, no cross-compile — so
+  # this gate is fast and runs on every PR that touches the app. The Rust-backed lane
+  # lives in build-ios.yml behind its own path filter.
+  swift:
+    name: Swift (format + lint + test on macOS/iOS/iPadOS)
+    needs: changes
+    if: ${{ needs.changes.outputs.swift == 'true' }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: capsule-swift
+          install_args: tuist swiftlint swiftformat xcbeautify
+      - name: Check (format + lint + test)
+        run: mise run check-swift
+
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
   # treats as a pass. rust-test is non-blocking and intentionally excluded.
   required:
     name: required
     if: always()
-    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
+    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin, swift]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
@@ -375,7 +405,8 @@ jobs:
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
                    "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
-                   "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do
+                   "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}" \
+                   "${{ needs.swift.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
               exit 1

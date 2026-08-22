@@ -55,8 +55,8 @@ description = "Verify lints, every toolchain"
 depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md"]
 
 [tasks.test]
-description = "Run tests (rust + web + kotlin)"
-depends = ["test-rust", "test-web", "test-kotlin"]
+description = "Run tests (rust + web + kotlin + swift)"
+depends = ["test-rust", "test-web", "test-kotlin", "test-swift"]
 
 [tasks.test-coverage]
 description = "Coverage report (rust)"
@@ -396,9 +396,15 @@ run = "./gradlew build -Pcapsule.wireFfi"
 
 # One-shot: build the FFI xcframework, then generate the workspace. Sequential —
 # tuist generate consumes the xcframework build-ffi-apple produces.
+# The default (mock) lane needs no Rust at all — `generate-swift` is enough to open
+# and run the app. Use `setup-swift-ffi` only when working on the Rust-backed half.
 [tasks.setup-swift]
-description = "Build the FFI xcframework, then generate the Xcode workspace"
-run = ["mise run build-ffi-apple", "mise run generate-swift"]
+description = "Generate the Xcode workspace for the mock lane (no Rust required)"
+run = ["mise run generate-swift"]
+
+[tasks.setup-swift-ffi]
+description = "Build the FFI xcframework, then generate the Rust-backed workspace"
+run = ["mise run build-ffi-apple", "TUIST_FFI=1 mise run generate-swift"]
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 
