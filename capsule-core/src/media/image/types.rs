@@ -72,14 +72,50 @@ impl ImageFormat {
     ///
     /// `false` means the format's module is an uninhabited stub: dispatching to it returns
     /// [`ImageError::UnsupportedFormat`](crate::media::image::ImageError::UnsupportedFormat)
-    /// rather than producing an image. Callers that would rather not attempt the decode at all
-    /// (the import planner, for one) branch on this **before** dispatch.
+    /// rather than producing an image.
+    ///
+    /// **This is a statement about *derivatives*, never about admission.** Capsule is a backup
+    /// tool: an original whose format has no codec is still imported as a signed, encrypted,
+    /// verifiable asset — it just has no thumbnail/preview until the codec lands. Callers use
+    /// this to decide what to *generate* and what to *report*, never what to accept. See
+    /// [`Workspace::prepare_still`](crate::lifecycle::Workspace) and
+    /// [`DerivativeStatus`](crate::lifecycle::DerivativeStatus).
     ///
     /// Kept as a `matches!` over the literal supported set rather than a scan of
     /// [`SUPPORTED_IMAGE_FORMATS`] so it stays `const`; the two are asserted equivalent by the
     /// regression gate.
     pub const fn is_decodable(self) -> bool {
         matches!(self, Self::Jpeg | Self::Png)
+    }
+
+    /// The format a file extension denotes, or `None` when `ext` names no still image this
+    /// build models (a video container, an XMP sidecar, an unknown suffix, or one of the exotic
+    /// RAW flavours [`RawImageFormat`] has no variant for).
+    ///
+    /// `ext` is matched case-insensitively and without a leading dot. This is the **single**
+    /// extension table in the crate: derivative generation uses it to tell "no codec for this
+    /// format" apart from "a format we support failed to decode", and the regression gate
+    /// asserts every [`ALL_IMAGE_FORMATS`] entry is reachable through it.
+    pub fn from_extension(ext: &str) -> Option<Self> {
+        let ext = ext.trim_start_matches('.').to_ascii_lowercase();
+        Some(match ext.as_str() {
+            "jpg" | "jpeg" | "jpe" | "jfif" => Self::Jpeg,
+            "jxl" => Self::Jxl,
+            "heic" | "heif" | "hif" => Self::Heic,
+            "png" => Self::Png,
+            "tif" | "tiff" => Self::Tiff,
+            "avif" => Self::Avif,
+            "webp" => Self::WebP,
+            "gif" => Self::Gif,
+            "bmp" | "dib" => Self::Bmp,
+            "dng" => Self::Raw(RawImageFormat::Dng),
+            "arw" => Self::Raw(RawImageFormat::Arw),
+            "cr2" => Self::Raw(RawImageFormat::Cr2),
+            "cr3" => Self::Raw(RawImageFormat::Cr3),
+            "nef" => Self::Raw(RawImageFormat::Nef),
+            "raf" => Self::Raw(RawImageFormat::Raf),
+            _ => return None,
+        })
     }
 }
 

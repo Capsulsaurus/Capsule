@@ -2,10 +2,13 @@
 //! reaches [`crate::media`].
 
 use std::fs;
+use std::path::Path;
 
 use uuid::Uuid;
 
-use super::{AssetState, LifecycleError, Result, Workspace, media_dir, now_rfc3339};
+use super::{
+    AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir, now_rfc3339,
+};
 use crate::cbor;
 use crate::crypto::keys::AmkVersion;
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
@@ -15,30 +18,103 @@ use crate::media::image::derivative::{
 };
 use crate::sidecar::sidecar_v1::Dimensions;
 
+/// Everything [`Workspace::prepare_still`] derives from a still in one pass: the sidecar fields
+/// (`dimensions`, `lqip`), the signed derivatives to persist after the commit, and the
+/// [`DerivativeStatus`] explaining what was or was not produced.
+pub(super) struct PreparedStill {
+    /// Pixel dimensions when the still decoded, EXIF dimensions otherwise, `None` if neither.
+    pub(super) dimensions: Option<Dimensions>,
+    /// The sidecar LQIP, present only when the still decoded.
+    pub(super) lqip: Option<crate::sidecar::sidecar_v1::Lqip>,
+    /// Signed thumbnail/preview derivatives; empty when the still did not decode or no
+    /// [`StillEncoder`](crate::media::image::derivative::StillEncoder) is attached.
+    pub(super) derivatives: Vec<GeneratedDerivative>,
+    /// Whether derivatives were generated, and if not, why.
+    pub(super) status: DerivativeStatus,
+}
+
 /// Still-derivative generation for the signed import path (S-B1 → S-B2). Compiled only with the
 /// `media` feature: decode the still, compute its LQIP, and generate + sign the thumbnail/preview
 /// [`DerivativeManifest`](crate::crypto::provenance::DerivativeManifest)s through the injected
 /// [`StillEncoder`](crate::media::image::derivative::StillEncoder).
 #[cfg(feature = "media")]
 impl Workspace {
-    /// Decode a still into an in-memory pixel buffer, dispatching on extension. Unsupported or
-    /// undecodable bytes yield `None` (the import proceeds signed-original-only).
+    /// Decode a still into an in-memory pixel buffer, dispatching on extension, and classify
+    /// *why* when it cannot (slice `S-B13`).
+    ///
+    /// A `None` buffer never fails the import — the original is backed up regardless — but the
+    /// two reasons for it are very different and must be distinguishable in the logs and in the
+    /// run summary:
+    ///
+    /// - [`DeferredNoCodec`](DerivativeStatus::DeferredNoCodec): this build links no codec for
+    ///   the format (HEIC, RAW, …). Expected and deferred; warned once per asset so the gap is
+    ///   visible rather than silent.
+    /// - [`DecodeFailed`](DerivativeStatus::DecodeFailed): a format we *do* support did not
+    ///   decode. A real problem, warned with the underlying error.
     fn decode_still(
         &self,
         bytes: &[u8],
         ext: &str,
-    ) -> Option<crate::media::image::buffer::ImageBuffer> {
-        use crate::media::image::{Image, ImageDecode};
-        match ext {
-            "jpg" | "jpeg" => {
+        src: &Path,
+    ) -> (
+        Option<crate::media::image::buffer::ImageBuffer>,
+        DerivativeStatus,
+    ) {
+        use crate::media::image::types::{ImageFormat, SUPPORTED_IMAGE_FORMATS};
+        use crate::media::image::{FormatOp, Image, ImageDecode, ImageError};
+
+        let Some(format) = ImageFormat::from_extension(ext) else {
+            tracing::debug!(
+                path = %src.display(),
+                %ext,
+                "derivatives: not a known still format; nothing to decode"
+            );
+            return (None, DerivativeStatus::NotAKnownStill);
+        };
+
+        if !format.is_decodable() {
+            tracing::warn!(
+                path = %src.display(),
+                ?format,
+                supported = ?SUPPORTED_IMAGE_FORMATS,
+                "derivatives: no codec for this format in this build; the original is imported \
+                 signed and encrypted, but without a thumbnail/preview or LQIP until the codec \
+                 lands (S-B13)"
+            );
+            return (None, DerivativeStatus::DeferredNoCodec);
+        }
+
+        // Only formats `is_decodable` vouches for reach here. The catch-all keeps the match
+        // total without a panicking stub: every other format module is uninhabited and its
+        // `decode_from_bytes` returns exactly this error, so a table drift degrades to a
+        // `DecodeFailed` warning instead of aborting the import.
+        let decoded = match format {
+            ImageFormat::Jpeg => {
                 crate::media::image::formats::jpeg::JpegImage::decode_from_bytes(bytes)
-                    .ok()
                     .map(|img| img.get_buffer())
             }
-            "png" => crate::media::image::formats::png::PngImage::decode_from_bytes(bytes)
-                .ok()
-                .map(|img| img.get_buffer()),
-            _ => None,
+            ImageFormat::Png => {
+                crate::media::image::formats::png::PngImage::decode_from_bytes(bytes)
+                    .map(|img| img.get_buffer())
+            }
+            other => Err(ImageError::UnsupportedFormat {
+                format: other,
+                op: FormatOp::Decode,
+            }),
+        };
+
+        match decoded {
+            Ok(buffer) => (Some(buffer), DerivativeStatus::Decoded),
+            Err(error) => {
+                tracing::warn!(
+                    path = %src.display(),
+                    ?format,
+                    %error,
+                    "derivatives: a supported format failed to decode; the original is imported \
+                     signed and encrypted, but without a thumbnail/preview or LQIP"
+                );
+                (None, DerivativeStatus::DecodeFailed)
+            }
         }
     }
 
@@ -54,26 +130,35 @@ impl Workspace {
     /// Decode the still once and derive: pixel `dimensions`, the sidecar `lqip`, and the signed
     /// thumbnail/preview derivatives (empty when no encoder is attached). All are attached before
     /// the sidecar is sealed / after the manifest is signed, per the pipeline's Execute step.
+    ///
+    /// **Never fails the import.** A still this build cannot decode still commits as a signed,
+    /// encrypted original — it just falls back to EXIF dimensions with no LQIP and no
+    /// derivatives. The returned [`DerivativeStatus`] says whether that happened and why, so
+    /// the caller can report the gap instead of it being invisible.
     pub(super) fn prepare_still(
         &self,
         plaintext: &[u8],
         ext: &str,
+        src: &Path,
         exif: &crate::exif::extract::ExifExtract,
         asset_id: Uuid,
         album_id: Uuid,
-    ) -> Result<(
-        Option<Dimensions>,
-        Option<crate::sidecar::sidecar_v1::Lqip>,
-        Vec<GeneratedDerivative>,
-    )> {
+    ) -> Result<PreparedStill> {
         let exif_dimensions = exif
             .width
             .zip(exif.height)
             .map(|(width, height)| Dimensions { width, height });
 
-        let Some(buffer) = self.decode_still(plaintext, ext) else {
+        let (buffer, status) = self.decode_still(plaintext, ext, src);
+        let Some(buffer) = buffer else {
             // Undecodable / unsupported still: EXIF dimensions only, no LQIP or derivatives.
-            return Ok((exif_dimensions, None, Vec::new()));
+            // `status` carries which of the two it was; `decode_still` already logged it.
+            return Ok(PreparedStill {
+                dimensions: exif_dimensions,
+                lqip: None,
+                derivatives: Vec::new(),
+                status,
+            });
         };
 
         let dimensions = Some(Dimensions {
@@ -107,7 +192,12 @@ impl Workspace {
             }
             None => Vec::new(),
         };
-        Ok((dimensions, lqip, derivatives))
+        Ok(PreparedStill {
+            dimensions,
+            lqip,
+            derivatives,
+            status,
+        })
     }
 
     /// Write the generated derivative bytes + their signed manifest bundle under the asset's

@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{
-    AssetState, LifecycleError, Result, SignedImportOptions, StackPlacement, StreamedImport,
-    Workspace, asset_is_deleted, media_dir, now_rfc3339,
+    AssetState, LifecycleError, Result, SignedImport, SignedImportOptions, StackPlacement,
+    StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
 };
 use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_metadata_blob};
@@ -165,7 +165,9 @@ impl Workspace {
     ///
     /// [sealing order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
     pub fn import_asset(&mut self, album_id: Uuid, src: &Path) -> Result<Uuid> {
-        self.import_asset_with(album_id, src, &SignedImportOptions::default())
+        Ok(self
+            .import_asset_with(album_id, src, &SignedImportOptions::default())?
+            .asset_id)
     }
 
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
@@ -174,13 +176,18 @@ impl Workspace {
     /// manifest + append-only provenance, self-verified through [`verify_asset`], and — behind
     /// the `media` feature, when a [`StillEncoder`](crate::media::image::derivative::StillEncoder)
     /// is attached — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+    ///
+    /// Returns a [`SignedImport`]: the asset id, plus the [`DerivativeStatus`](super::DerivativeStatus)
+    /// saying whether derivatives were generated and, if not, why. A format this build has no
+    /// codec for **still imports** — the original is the backup, the thumbnail is a bonus — so
+    /// the status is a report, never a rejection (slice `S-B13`).
     #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display()))]
     pub fn import_asset_with(
         &mut self,
         album_id: Uuid,
         src: &Path,
         opts: &SignedImportOptions,
-    ) -> Result<Uuid> {
+    ) -> Result<SignedImport> {
         let plaintext = fs::read(src)
             .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
         let ext = src
@@ -207,15 +214,27 @@ impl Workspace {
         // Still-derived sidecar metadata (dimensions + LQIP) and the derivatives to persist
         // after the commit. Behind `media` this decodes the still once and generates the signed
         // derivatives; without it, dimensions come from EXIF and no derivatives are generated.
+        // Either way the import proceeds: a still this build cannot decode is still backed up as
+        // a signed, encrypted original — `derivative_status` records the gap so it is reportable
+        // rather than silent (S-B13).
         #[cfg(feature = "media")]
-        let (dimensions, lqip, pending_derivatives) =
-            self.prepare_still(&plaintext, &ext, &exif, asset_id, album_id)?;
+        let (dimensions, lqip, pending_derivatives, derivative_status) = {
+            let prepared = self.prepare_still(&plaintext, &ext, src, &exif, asset_id, album_id)?;
+            (
+                prepared.dimensions,
+                prepared.lqip,
+                prepared.derivatives,
+                prepared.status,
+            )
+        };
+        // No `media` feature means no codecs at all, so every still is a deferral.
         #[cfg(not(feature = "media"))]
-        let (dimensions, lqip) = (
+        let (dimensions, lqip, derivative_status) = (
             exif.width
                 .zip(exif.height)
                 .map(|(width, height)| Dimensions { width, height }),
             None::<crate::sidecar::sidecar_v1::Lqip>,
+            super::DerivativeStatus::DeferredNoCodec,
         );
 
         let album = self.album(&album_id)?;
@@ -338,7 +357,10 @@ impl Workspace {
         }
 
         self.assets.insert(asset_id, asset);
-        Ok(asset_id)
+        Ok(SignedImport {
+            asset_id,
+            derivatives: derivative_status,
+        })
     }
 
     /// Import a file on the signed path for a **streaming** import: identical to
@@ -360,7 +382,7 @@ impl Workspace {
             defer_source_release: true,
             stack,
         };
-        let asset_id = self.import_asset_with(album_id, src, &opts)?;
+        let asset_id = self.import_asset_with(album_id, src, &opts)?.asset_id;
         let asset = self
             .assets
             .get(&asset_id)

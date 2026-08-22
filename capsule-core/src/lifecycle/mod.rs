@@ -171,6 +171,66 @@ pub struct SignedImportOptions {
     pub stack: Option<StackPlacement>,
 }
 
+/// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**
+/// (slice `S-B13`).
+///
+/// Capsule is a backup tool, so this never gates admission: the original is imported as a
+/// signed, encrypted, verifiable asset in every case below. What varies is only whether a
+/// thumbnail/preview and an LQIP could be produced alongside it. The point of the enum is to
+/// keep the two "no derivative" reasons apart, because one is expected and one is a bug:
+/// a missing codec is a known, deferred gap, while a *supported* format that fails to decode
+/// is a real problem someone should look at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DerivativeStatus {
+    /// The still decoded: dimensions and LQIP came from real pixels, and signed derivatives
+    /// were generated if a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is
+    /// attached to the workspace.
+    Decoded,
+    /// **Expected deferral.** This build links no codec for the asset's format — see
+    /// [`SUPPORTED_IMAGE_FORMATS`](crate::media::image::types::SUPPORTED_IMAGE_FORMATS). The
+    /// original is safely backed up; dimensions fall back to EXIF and there is no LQIP or
+    /// preview until the codec lands, at which point derivatives can be backfilled from the
+    /// stored original. Counted by
+    /// [`ImportExecutionSummary::deferred_derivative_count`](crate::import::progress::ImportExecutionSummary::deferred_derivative_count).
+    ///
+    /// A build compiled without the `media` feature has no codecs at all, so every asset it
+    /// imports reports this.
+    DeferredNoCodec,
+    /// **A real problem.** The format *is* one this build can decode, but these particular
+    /// bytes did not decode — truncation, corruption, or a decoder bug. The original is still
+    /// imported (the bytes are backed up verbatim, whatever they are), but this is worth
+    /// investigating rather than shrugging at.
+    DecodeFailed,
+    /// Nothing to decode: the extension names no still image this build models — a video, an
+    /// XMP sidecar, an unknown suffix, or an exotic RAW flavour
+    /// [`RawImageFormat`](crate::media::image::types::RawImageFormat) has no variant for. Video
+    /// derivatives are generated on their own path.
+    NotAKnownStill,
+}
+
+impl DerivativeStatus {
+    /// Whether the asset was imported *without* thumbnail/preview derivatives because no codec
+    /// exists for it — the deferred-gap count, excluding genuine decode failures and non-stills.
+    pub const fn is_deferred_for_missing_codec(self) -> bool {
+        matches!(self, Self::DeferredNoCodec)
+    }
+}
+
+/// What one signed import produced: the asset's id plus whether derivatives could be generated
+/// for it.
+///
+/// Returned by [`Workspace::import_asset_with`] so the executor can report the derivative gap
+/// without re-deriving it from the file extension.
+/// [`import_asset`](Workspace::import_asset) keeps returning the bare [`Uuid`] for the many
+/// callers that only need the id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SignedImport {
+    /// The imported asset's id.
+    pub asset_id: Uuid,
+    /// Whether thumbnail/preview derivatives were generated, and if not, why.
+    pub derivatives: DerivativeStatus,
+}
+
 /// A streamed import: everything the [streaming window](crate::import::streaming) needs about one
 /// just-imported asset to drive its upload → verify → release step, without exposing workspace
 /// internals. Produced by [`Workspace::import_asset_streaming`], which commits on the signed path

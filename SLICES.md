@@ -341,14 +341,32 @@ graph LR
   The only two ways to obtain one (`ImageDecode::decode_from_bytes`, `Image::from_raw_parts`)
   already return `Result`, so they return a new
   `ImageError::UnsupportedFormat { format, op }`. `media/fs` dispatch is unchanged — the `?`
-  now propagates instead of aborting. Add `ImageFormat::is_decodable()` +
-  `SUPPORTED_IMAGE_FORMATS` and wire them into the import planner's `unsupported` bucket so
-  such files are **planned as skipped, never attempted**.
+  now propagates instead of aborting. Add `ImageFormat::is_decodable()`,
+  `SUPPORTED_IMAGE_FORMATS`, and `ImageFormat::from_extension()` as the single codec-coverage
+  table.
+- **Originals always import.** Codec coverage gates *derivatives*, never *admission*. Capsule
+  is a backup tool and the reference library is HEIC end to end; refusing to back up a photo
+  because we cannot thumbnail it would turn a cosmetic gap into data loss. A still with no
+  codec commits on the signed path exactly like a JPEG — encrypted, signed, `verify_asset`-
+  accepting — with EXIF dimensions, no LQIP, and no thumbnail/preview until the codec lands,
+  at which point derivatives are backfillable from the stored original.
+  `ImportDecision::SkipUnsupported` keeps its original meaning: "not an importable file at
+  all".
+- **The gap is visible at derivative time.** `Workspace::prepare_still` returns a
+  `DerivativeStatus` (`Decoded` / `DeferredNoCodec` / `DecodeFailed` / `NotAKnownStill`)
+  carried on `ImportOutcome::Imported` and counted by
+  `ImportExecutionSummary::deferred_derivative_count()`, so a run can report "N imported
+  without derivatives". `decode_still` warns per asset, and the two no-derivative reasons stay
+  distinguishable in the logs: *no codec for HEIC* is an expected deferral, *this JPEG failed
+  to decode* is a real problem.
 - **Scope-out:** real JXL/AVIF/WebP encode and RAW decode stay deferred (see the gates
   table). This slice makes the gap honest, not smaller.
 - **Done when:** `rg 'unimplemented!\(|todo!\(' capsule-core/src/media` is empty; a
   table-driven test asserts every unsupported format returns `UnsupportedFormat` and that
-  `is_decodable` agrees with the dispatch table; `mise run check-rust` green. **Tier:** Unit.
+  `is_decodable` / `from_extension` / the `media::fs` dispatch table agree; an executor test
+  pins that HEIC and RAW-only originals import and self-verify **without** derivatives, and a
+  planner test guards that undecodable stills are never skipped at plan time;
+  `mise run check-rust` green. **Tier:** Unit.
 
 ## Lane D — SDK / clients
 
@@ -860,7 +878,7 @@ table hides what it would cost.
 | --- | --- | --- | --- |
 | `salvo` → [`kynos`](https://github.com/getkono/kynos) | **deferred, no target date** | ~648 `salvo` occurrences across 84 files: 63 `#[handler]`/`#[endpoint]` route fns, 51 `impl Writer`, 41 `EndpointOutRegister`, 67 `ToSchema`, 109 `Depot` references. Critically this is **not a transport swap** — the wire-contract types are themselves salvo-typed (`capsule-api/auth/src/models/responses.rs` alone is 1440 LOC / 113 occurrences), and the gRPC-web bridge is a hand-written salvo `Handler` over a `tower::Service`. | `kynos` stabilizes (it is WIP, and has zero references in this repo today). **Precondition, and the only tractable first step: a separate `feat(api): decouple wire-contract types from salvo` slice** moving `models/{requests,responses}` onto plain serde behind a thin per-framework adapter. Attempting the migration before that lands would stall every other lane. |
 | `progenitor` → [`spargen`](https://github.com/getkono/spargen) | **done** | — | Complete. See the `spargen` gates row above; the only open item is spargen's object-typed-query-param lowering. `capsule-sdk/README.md` still claims `AuthenticatedClient` is "parked (commented out)" — stale prose, fixed by S-Z6. |
-| Real image codecs (JXL/AVIF/WebP encode, RAW decode) | **deferred** | Nine format modules are decode/encode stubs; only JPEG and PNG are real. | `rawshift` stabilizes for RAW; the JXL/AVIF/WebP encode half is picked up separately against the thumbnails.md format table. S-B13 makes the gap a typed `UnsupportedFormat` error and has the import planner skip such inputs, so the deferral cannot cause incorrect behaviour — only visibly absent behaviour. |
+| Real image codecs (JXL/AVIF/WebP encode, RAW decode) | **deferred** | Nine format modules are decode/encode stubs; only JPEG and PNG are real. | `rawshift` stabilizes for RAW; the JXL/AVIF/WebP encode half is picked up separately against the thumbnails.md format table. S-B13 makes the gap a typed `UnsupportedFormat` error and reports it at derivative time (`DerivativeStatus::DeferredNoCodec`, warned + counted per run); originals still import signed and verifiable, so the deferral cannot cause incorrect behaviour — only visibly absent thumbnails. |
 
 ## Post-v1 Register
 

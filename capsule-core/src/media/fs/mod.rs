@@ -300,6 +300,62 @@ mod tests {
         }
     }
 
+    /// **(c)** [`ImageFormat::from_extension`] — the crate's single extension table, and what
+    /// derivative generation uses to tell "no codec for this format" apart from "a supported
+    /// format failed to decode" — reaches every format that exists, and agrees with
+    /// [`ImageFormat::is_decodable`] about which of them this build can actually read.
+    ///
+    /// Adding a codec means touching `SUPPORTED_IMAGE_FORMATS`, the stub module, *and* this
+    /// table; a codec whose extensions were forgotten fails here.
+    #[test]
+    fn from_extension_reaches_every_format_and_agrees_with_is_decodable() {
+        // Every modelled format is reachable from at least one extension. Without this, a
+        // format could silently classify as "not a known still" and never be reported.
+        for &format in ALL_IMAGE_FORMATS {
+            assert!(
+                EXTENSIONS
+                    .iter()
+                    .any(|ext| ImageFormat::from_extension(ext) == Some(format)),
+                "{format:?} is not reachable through ImageFormat::from_extension"
+            );
+        }
+
+        // The mapping is case- and dot-insensitive, and agrees with is_decodable both ways.
+        for &ext in EXTENSIONS {
+            let format = ImageFormat::from_extension(ext)
+                .unwrap_or_else(|| panic!("{ext} should map to a format"));
+            assert_eq!(
+                ImageFormat::from_extension(&ext.to_uppercase()),
+                Some(format)
+            );
+            assert_eq!(
+                ImageFormat::from_extension(&format!(".{ext}")),
+                Some(format)
+            );
+            assert_eq!(
+                format.is_decodable(),
+                matches!(ext, "jpg" | "jpeg" | "jpe" | "jfif" | "png"),
+                "{ext} disagrees with is_decodable()"
+            );
+        }
+
+        // Non-stills and unknown suffixes map to nothing at all — the third classification the
+        // derivative path needs, distinct from "still we cannot decode".
+        for ext in ["mp4", "mov", "mkv", "xmp", "pdf", "", "jpgx"] {
+            assert_eq!(
+                ImageFormat::from_extension(ext),
+                None,
+                "{ext} is not a still image this build models"
+            );
+        }
+    }
+
+    /// One extension per modelled format, plus the aliases worth pinning.
+    const EXTENSIONS: &[&str] = &[
+        "jpg", "jpeg", "jpe", "jfif", "jxl", "heic", "heif", "hif", "png", "tif", "tiff", "avif",
+        "webp", "gif", "bmp", "dib", "dng", "arw", "cr2", "cr3", "nef", "raf",
+    ];
+
     /// The video read path is under the same contract: a typed error, not a panicking stub.
     #[tokio::test]
     async fn video_read_reports_unsupported_video_format() {

@@ -252,7 +252,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                         for (path, outcome) in &outcomes {
                             let msg = format!("  {}", path.display());
                             match outcome {
-                                ImportOutcome::Imported => {
+                                ImportOutcome::Imported { .. } => {
                                     println!("{}", format!("✓ {msg}").green());
                                 }
                                 ImportOutcome::DuplicateSkipped { .. } => {

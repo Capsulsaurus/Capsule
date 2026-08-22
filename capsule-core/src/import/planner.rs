@@ -408,6 +408,48 @@ mod tests {
         );
     }
 
+    /// **Regression guard (slice `S-B13`).** Codec coverage must never gate *admission*.
+    ///
+    /// Capsule is a backup tool: declining to back up every HEIC because we cannot thumbnail it
+    /// turns a cosmetic gap into data loss. Formats with no decoder in this build —
+    /// HEIC/AVIF/TIFF and every RAW flavour — plan as `Import` exactly like JPEG, and the
+    /// plan's `unsupported` bucket stays empty. That bucket means "not an importable file at
+    /// all", never "we cannot thumbnail it".
+    ///
+    /// If someone reintroduces an admission-time codec gate, this test is what fails.
+    #[test]
+    fn undecodable_stills_are_never_skipped_at_plan_time() {
+        let tmp = TempDir::new().unwrap();
+        let db = make_db();
+        // Distinct stems: same-stem files are grouped into a single candidate.
+        let scan = make_scan(
+            tmp.path(),
+            &[
+                "a.jpg", "b.png", "c.heic", "d.avif", "e.tiff", "f.ARW", "g.dng", "h.CR2",
+            ],
+        );
+
+        let plan = plan(&scan, &db, &ImportConfig::default()).unwrap();
+
+        assert_eq!(
+            plan.counts.unsupported, 0,
+            "a missing codec must never make a file unimportable"
+        );
+        assert_eq!(
+            plan.counts.to_import, 8,
+            "every still is admitted regardless of codec coverage"
+        );
+        assert!(
+            plan.actions
+                .iter()
+                .all(|(_, d)| matches!(d, ImportDecision::Import)),
+            "every candidate must plan as Import"
+        );
+        // Undecodable originals are charged against the import byte total like any other file —
+        // they really are being copied into the library.
+        assert!(plan.counts.total_size > 0);
+    }
+
     #[test]
     fn test_force_reimport_duplicates() {
         let tmp = TempDir::new().unwrap();

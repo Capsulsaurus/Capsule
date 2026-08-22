@@ -113,6 +113,10 @@ pub fn execute(
         imported = summary.imported_count(),
         duplicates = summary.duplicate_count(),
         errors = summary.error_count(),
+        // Imported, but with no thumbnail/preview: the first is the expected S-B13 codec gap,
+        // the second a genuine decode failure of a format we do support.
+        derivatives_deferred = summary.deferred_derivative_count(),
+        derivatives_decode_failed = summary.decode_failed_count(),
         "import: execution complete"
     );
     Ok(summary)
@@ -152,9 +156,14 @@ fn execute_candidate(
         };
 
         match workspace.import_asset_with(album_id, path, &opts) {
-            Ok(uuid) => {
-                imported.push((uuid.to_string(), *role));
-                outcomes.push((path.clone(), ImportOutcome::Imported));
+            Ok(receipt) => {
+                imported.push((receipt.asset_id.to_string(), *role));
+                outcomes.push((
+                    path.clone(),
+                    ImportOutcome::Imported {
+                        derivatives: receipt.derivatives,
+                    },
+                ));
             }
             Err(e) => outcomes.push((path.clone(), import_error_outcome(&e))),
         }
@@ -285,6 +294,107 @@ mod tests {
         let default = ws.default_album_id();
         ws.create_album_with_id(default, "Imports");
         ws
+    }
+
+    /// **The S-B13 contract (slice `S-B13`).** An original whose format has no codec in this
+    /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
+    /// thumbnail/preview, and the run summary says so.
+    ///
+    /// This also pins the distinction the logs must preserve: `iphone.heic` is an *expected*
+    /// deferral (no HEIC codec), while `snap.jpg` holds bytes that are not really a JPEG, so it
+    /// is a *genuine* decode failure of a format we do support. Both import; only the second is
+    /// a problem worth investigating.
+    #[cfg(feature = "media")]
+    #[test]
+    fn heic_originals_are_imported_without_derivatives() {
+        use crate::lifecycle::DerivativeStatus;
+
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        fs::write(src.path().join("iphone.heic"), b"fake heic bytes").unwrap();
+        fs::write(src.path().join("snap.jpg"), b"not really a jpeg").unwrap();
+
+        let mut ws = signed_workspace(lib_dir.path());
+        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+        let config = ImportConfig::default();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+
+        // Admission is untouched by codec coverage.
+        assert_eq!(plan_result.counts.to_import, 2);
+        assert_eq!(plan_result.counts.unsupported, 0);
+
+        let token = CancellationToken::new();
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+
+        assert_eq!(summary.imported_count(), 2, "both originals are backed up");
+        assert_eq!(
+            summary.deferred_derivative_count(),
+            1,
+            "the HEIC is an expected codec deferral"
+        );
+        assert_eq!(
+            summary.decode_failed_count(),
+            1,
+            "the bogus JPEG is a real decode failure, reported separately"
+        );
+
+        // The two reasons are distinguishable per file, not just in aggregate.
+        for (path, outcome) in &summary.outcomes {
+            let ImportOutcome::Imported { derivatives } = outcome else {
+                panic!("{} should have imported, got {outcome:?}", path.display());
+            };
+            let expected = match path.extension().unwrap().to_str().unwrap() {
+                "heic" => DerivativeStatus::DeferredNoCodec,
+                "jpg" => DerivativeStatus::DecodeFailed,
+                other => panic!("unexpected member extension {other}"),
+            };
+            assert_eq!(*derivatives, expected, "for {}", path.display());
+        }
+
+        // Both land on the signed path and self-verify — a missing thumbnail is not a missing
+        // backup.
+        let ids = ws.asset_ids();
+        assert_eq!(ids.len(), 2);
+        for id in &ids {
+            assert_eq!(ws.verify(id).unwrap(), VerifyOutcome::Accept);
+        }
+    }
+
+    /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
+    /// self-verifying original. RAW has no decoder in this build, which is exactly why this
+    /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
+    #[cfg(feature = "media")]
+    #[test]
+    fn raw_only_candidate_lands_as_a_signed_original() {
+        use crate::lifecycle::DerivativeStatus;
+
+        let src = TempDir::new().unwrap();
+        let lib_dir = TempDir::new().unwrap();
+        fs::write(src.path().join("shot.ARW"), b"fake sony raw bytes").unwrap();
+
+        let mut ws = signed_workspace(lib_dir.path());
+        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
+        let config = ImportConfig::default();
+        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
+        assert_eq!(plan_result.counts.to_import, 1);
+        assert_eq!(plan_result.counts.unsupported, 0);
+
+        let token = CancellationToken::new();
+        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
+
+        assert_eq!(summary.imported_count(), 1);
+        assert_eq!(summary.deferred_derivative_count(), 1);
+        assert_eq!(summary.decode_failed_count(), 0);
+        assert!(matches!(
+            summary.outcomes[0].1,
+            ImportOutcome::Imported {
+                derivatives: DerivativeStatus::DeferredNoCodec
+            }
+        ));
+
+        let ids = ws.asset_ids();
+        assert_eq!(ids.len(), 1);
+        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
     }
 
     #[test]
