@@ -2,10 +2,11 @@ package com.justin13888.capsule.navigation.entries
 
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
+import com.justin13888.capsule.feature.albums.HiddenRoute
+import com.justin13888.capsule.feature.albums.RecentlyDeletedRoute
 import com.justin13888.capsule.feature.timeline.TimelineRoute
 import com.justin13888.capsule.navigation.CapsuleDestination
 import com.justin13888.capsule.navigation.CapsuleEntryScope
-import com.justin13888.capsule.navigation.Placeholder
 import com.justin13888.capsule.navigation.destination
 
 /**
@@ -34,6 +35,13 @@ fun EntryProviderScope<NavKey>.timelineEntries(scope: CapsuleEntryScope) {
             onAddToAlbum = { scope.navigator.goTo(CapsuleDestination.Collections) },
         )
     }
-    destination<CapsuleDestination.Trash>(scope) { scope.Placeholder(it) }
-    destination<CapsuleDestination.Hidden>(scope) { scope.Placeholder(it) }
+    // The screens live in feature:albums — it owns retention, restore and unhide — while
+    // the destinations are declared here because the gate, not the subject matter, is what
+    // these two have in common with the timeline.
+    destination<CapsuleDestination.Trash>(scope) {
+        RecentlyDeletedRoute(onBack = scope.navigator::goBack)
+    }
+    destination<CapsuleDestination.Hidden>(scope) {
+        HiddenRoute(onBack = scope.navigator::goBack)
+    }
 }

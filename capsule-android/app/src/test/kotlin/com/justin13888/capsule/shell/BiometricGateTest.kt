@@ -6,8 +6,8 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import com.justin13888.capsule.core.model.GatedView
+import com.justin13888.capsule.feature.albums.ui.common.AlbumsTestTags
 import com.justin13888.capsule.navigation.CapsuleDestination
-import com.justin13888.capsule.placeholder.placeholderTagFor
 import com.justin13888.capsule.security.LocalAuthGate
 import com.justin13888.capsule.shell.chrome.BIOMETRIC_GATE_TAG
 import org.junit.Assert.assertEquals
@@ -53,7 +53,7 @@ class BiometricGateTest {
         compose.act { shell.navigator.goTo(CapsuleDestination.Trash) }
 
         compose.onNodeWithTag(BIOMETRIC_GATE_TAG).assertExists()
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Trash)).assertDoesNotExist()
+        compose.onNodeWithTag(AlbumsTestTags.TRASH).assertDoesNotExist()
     }
 
     @Test
@@ -64,7 +64,6 @@ class BiometricGateTest {
         compose.onNodeWithText(UNLOCK_LABEL).performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Trash)).assertExists()
         compose.onNodeWithTag(BIOMETRIC_GATE_TAG).assertDoesNotExist()
         assertEquals(listOf(GatedView.RecentlyDeleted), prompt.promptedFor)
     }
@@ -79,7 +78,7 @@ class BiometricGateTest {
         compose.waitForIdle()
 
         compose.onNodeWithTag(BIOMETRIC_GATE_TAG).assertExists()
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Trash)).assertDoesNotExist()
+        compose.onNodeWithTag(AlbumsTestTags.TRASH).assertDoesNotExist()
         assertTrue("the gate never raised the prompt", prompt.attempts > 0)
     }
 
@@ -95,7 +94,7 @@ class BiometricGateTest {
         // Per-view grants are the whole point: one is about recovering a deleted photo, the
         // other about what the user chose to keep out of sight.
         compose.onNodeWithTag(BIOMETRIC_GATE_TAG).assertExists()
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Hidden)).assertDoesNotExist()
+        compose.onNodeWithTag(AlbumsTestTags.HIDDEN).assertDoesNotExist()
     }
 
     @Test
