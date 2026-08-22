@@ -69,7 +69,9 @@ This section owns the per-platform test-framework and performance-tooling pins (
 
 - **Apple platforms:** **swift-testing** (`@Suite`/`@Test`) is the sole unit/smoke framework. XCTest is sanctioned **only** inside XCUITest UI-automation bundles, where no swift-testing analogue exists. The `capsule-core-swift` harness's existing XCTest smoke migrates (slice `S-F7` in the repo-root `SLICES.md`); new XCTest unit tests are not accepted.
 - **Apple performance work:** **Instruments** (Time Profiler, Allocations, Leaks, Network, Core Animation) for interactive profiling, and **MetricKit** for field metrics (launch time, hangs, memory, disk writes) — no third-party APM runs on-device.
-- **Kotlin/Android:** JUnit 5 (Jupiter) is the current harness for the `capsule-core-kotlin` bindings; the canonical pin for the Compose app is recorded here when its test harness stabilizes, under the same one-framework-per-platform principle.
+- **Kotlin/Android:** **JUnit 5 (Jupiter)** is the sole unit harness — for the `capsule-core-kotlin` bindings and for every pure-JVM module of the Compose app. JUnit 4 is sanctioned **only** inside the harnesses that have no Jupiter equivalent upstream: Robolectric, Compose UI test, and on-device instrumentation. Those run on the same JUnit Platform task through the Vintage engine, so there is still one test task per module. This is the same carve-out Apple platforms make for XCTest inside XCUITest bundles; new plain unit tests are written against Jupiter.
+- **Android screenshots:** **Roborazzi** over Robolectric, on the JVM. Screenshot coverage is deliberately host-side rather than on-device so it runs in the ordinary unit-test lane; the emulator is reserved for the launch smoke across the three window size classes.
+- **Android performance:** **Macrobenchmark** for frame timing on the timeline, with a committed baseline profile. No third-party APM runs on-device, matching the Apple posture above.
 - **Web:** the test runner rides the toolchain pinned in [Dependencies — Web](/design/dependencies/#web) (bun's built-in runner today).
 
 ## Validation
