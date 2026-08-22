@@ -1890,5 +1890,353 @@
     "drop.error.passphrase": {
         "message": "This upload needs the link's password. Unlock the page and try again.",
         "context": "Per-file guest-drop upload failure when the passphrase gate rejected the request."
+    },
+    "gallery.a11y.grid": {
+        "message": "Photo timeline",
+        "context": "Screen-reader label for the justified photo grid on the timeline screen."
+    },
+    "gallery.a11y.section": {
+        "message": "{label}, {count} photos",
+        "context": "Screen-reader label for a day section header in the photo grid. {label} is the already-formatted date, {count} the number of photos in that day."
+    },
+    "gallery.a11y.stack": {
+        "message": "Stack of {count}",
+        "context": "Screen-reader label for a grid cell that represents a burst or stack of {count} photos."
+    },
+    "gallery.a11y.favorite": {
+        "message": "Favorite",
+        "context": "Screen-reader label for the heart marker drawn on a favorited grid cell."
+    },
+    "gallery.a11y.video_duration": {
+        "message": "Video, {duration}",
+        "context": "Screen-reader label for the duration marker on a video grid cell. {duration} is an already-formatted running time such as 1:23."
+    },
+    "gallery.a11y.sync_pending": {
+        "message": "Waiting to upload",
+        "context": "Screen-reader label for the sync marker on a grid cell whose photo has not reached the server yet."
+    },
+    "gallery.a11y.sync_failed": {
+        "message": "Upload failed",
+        "context": "Screen-reader label for the sync marker on a grid cell whose upload gave up."
+    },
+    "gallery.a11y.degraded": {
+        "message": "Original unavailable, showing a preview",
+        "context": "Screen-reader label for the marker on a grid cell that can only be shown as a derivative."
+    },
+    "gallery.a11y.selected": {
+        "message": "Selected",
+        "context": "Screen-reader state description for a grid cell that is part of the current selection."
+    },
+    "gallery.a11y.not_selected": {
+        "message": "Not selected",
+        "context": "Screen-reader state description for a grid cell that is not part of the current selection."
+    },
+    "gallery.action.select": {
+        "message": "Select",
+        "context": "Screen-reader action that adds a grid cell to the current selection."
+    },
+    "gallery.action.deselect": {
+        "message": "Deselect",
+        "context": "Screen-reader action that removes a grid cell from the current selection."
+    },
+    "gallery.stack_count": {
+        "message": "\u29c9 {count}",
+        "context": "Badge drawn on a stacked grid cell: a stack glyph followed by how many photos the stack holds."
+    },
+    "gallery.scrubber.a11y": {
+        "message": "Timeline scrubber",
+        "context": "Screen-reader label for the right-edge rail that jumps through the timeline by date."
+    },
+    "gallery.scrubber.action_earlier": {
+        "message": "Jump to older photos",
+        "context": "Screen-reader action on the timeline scrubber that moves one section further back in time."
+    },
+    "gallery.scrubber.action_later": {
+        "message": "Jump to newer photos",
+        "context": "Screen-reader action on the timeline scrubber that moves one section forward in time."
+    },
+    "gallery.zoom.action_in": {
+        "message": "Show fewer, larger photos",
+        "context": "Screen-reader action that steps the photo grid to a coarser density level."
+    },
+    "gallery.zoom.action_out": {
+        "message": "Show more, smaller photos",
+        "context": "Screen-reader action that steps the photo grid to a denser density level."
+    },
+    "nav.collections": {
+        "message": "Collections",
+        "context": "Top-level navigation destination: albums, smart albums, people, places and the utility views. Mirrors the iOS Collections tab."
+    },
+    "nav.search": {
+        "message": "Search",
+        "context": "Top-level navigation destination for searching the library."
+    },
+    "nav.settings": {
+        "message": "Settings",
+        "context": "Top-level navigation destination for app and account settings."
+    },
+    "nav.hidden": {
+        "message": "Hidden",
+        "context": "Navigation label for the Hidden view, which sits behind the same fresh-local-auth gate as Trash."
+    },
+    "android.destination.album_detail": {
+        "message": "Album",
+        "context": "Android shell: title of the album detail destination."
+    },
+    "android.destination.stack_detail": {
+        "message": "Stack",
+        "context": "Android shell: title of the stack detail destination, a group of related shots."
+    },
+    "android.destination.smart_albums": {
+        "message": "Smart albums",
+        "context": "Android shell: title of the saved-search album list."
+    },
+    "android.destination.smart_album_builder": {
+        "message": "Edit smart album",
+        "context": "Android shell: title of the smart album rule builder."
+    },
+    "android.destination.people": {
+        "message": "People",
+        "context": "Android shell: title of the people and pets destination."
+    },
+    "android.destination.person_detail": {
+        "message": "Person",
+        "context": "Android shell: title of one person's asset listing."
+    },
+    "android.destination.places": {
+        "message": "Places",
+        "context": "Android shell: title of the map/places destination."
+    },
+    "android.destination.duplicates": {
+        "message": "Duplicates",
+        "context": "Android shell: title of the duplicate review destination."
+    },
+    "android.destination.asset_viewer": {
+        "message": "Photo",
+        "context": "Android shell: title of the full-screen single asset viewer."
+    },
+    "android.destination.asset_info": {
+        "message": "Info",
+        "context": "Android shell: title of the asset metadata panel shown beside the viewer on large windows."
+    },
+    "android.destination.provenance": {
+        "message": "Provenance",
+        "context": "Android shell: title of the destination showing an asset's signed edit chain."
+    },
+    "android.destination.metadata_edit": {
+        "message": "Edit details",
+        "context": "Android shell: title of the asset metadata editing destination."
+    },
+    "android.destination.import_sources": {
+        "message": "Import from",
+        "context": "Android shell: title of the import source picker."
+    },
+    "android.destination.import_plan": {
+        "message": "Import plan",
+        "context": "Android shell: title of the screen reviewing what an import run will do before it starts."
+    },
+    "android.destination.import_progress": {
+        "message": "Importing",
+        "context": "Android shell: title of the running import progress destination."
+    },
+    "android.destination.share_links": {
+        "message": "Share links",
+        "context": "Android shell: title of the outbound share link list."
+    },
+    "android.destination.share_link_create": {
+        "message": "New share link",
+        "context": "Android shell: title of the share link creation destination."
+    },
+    "android.destination.share_link_detail": {
+        "message": "Share link",
+        "context": "Android shell: title of one share link's detail destination."
+    },
+    "android.destination.upload_links": {
+        "message": "Upload links",
+        "context": "Android shell: title of the inbound upload link list. An upload link lets someone send files in without seeing the library."
+    },
+    "android.destination.upload_link_create": {
+        "message": "New upload link",
+        "context": "Android shell: title of the upload link creation destination."
+    },
+    "android.destination.upload_link_detail": {
+        "message": "Upload link",
+        "context": "Android shell: title of one upload link's detail destination."
+    },
+    "android.destination.drop_inbox": {
+        "message": "Drop inbox",
+        "context": "Android shell: title of the destination holding files that arrived through an upload link and are awaiting review."
+    },
+    "android.destination.sync_centre": {
+        "message": "Sync",
+        "context": "Android shell: title of the sync status destination."
+    },
+    "android.destination.upload_queue": {
+        "message": "Upload queue",
+        "context": "Android shell: title of the pending upload listing."
+    },
+    "android.destination.quarantine": {
+        "message": "Needs attention",
+        "context": "Android shell: title of the quarantine destination, holding items the client refused to accept as-is."
+    },
+    "android.destination.quota": {
+        "message": "Quota",
+        "context": "Android shell: title of the account storage quota destination."
+    },
+    "android.destination.recovery_status": {
+        "message": "Recovery",
+        "context": "Android shell: title of the account key recovery status destination."
+    },
+    "android.destination.recovery_verify": {
+        "message": "Verify recovery",
+        "context": "Android shell: title of the destination that checks a recovery secret still works."
+    },
+    "android.destination.recovery_rewrap": {
+        "message": "Re-wrap keys",
+        "context": "Android shell: title of the destination that re-wraps the account master key under a new secret."
+    },
+    "android.destination.shamir": {
+        "message": "Recovery guardians",
+        "context": "Android shell: title of the split-secret (Shamir) guardian management destination."
+    },
+    "android.destination.backup_export": {
+        "message": "Export backup",
+        "context": "Android shell: title of the destination that writes an encrypted library backup."
+    },
+    "android.destination.backup_restore": {
+        "message": "Restore backup",
+        "context": "Android shell: title of the destination that restores from an encrypted library backup."
+    },
+    "android.destination.moderation_report": {
+        "message": "Report",
+        "context": "Android shell: title of the destination for reporting content or an account."
+    },
+    "android.destination.moderation_blocks": {
+        "message": "Blocked",
+        "context": "Android shell: title of the list of blocked accounts and servers."
+    },
+    "android.destination.moderation_appeal": {
+        "message": "Appeal",
+        "context": "Android shell: title of the destination for appealing a moderation decision."
+    },
+    "android.destination.audit_log": {
+        "message": "Audit log",
+        "context": "Android shell: title of the destination listing security-relevant events on the account."
+    },
+    "android.destination.settings_appearance": {
+        "message": "Appearance",
+        "context": "Android shell: title of the appearance settings sub-page."
+    },
+    "android.destination.settings_library": {
+        "message": "Library",
+        "context": "Android shell: title of the library settings sub-page."
+    },
+    "android.destination.settings_sync": {
+        "message": "Sync and network",
+        "context": "Android shell: title of the sync and network settings sub-page."
+    },
+    "android.destination.settings_privacy": {
+        "message": "Privacy",
+        "context": "Android shell: title of the privacy settings sub-page."
+    },
+    "android.destination.settings_about": {
+        "message": "About",
+        "context": "Android shell: title of the about settings sub-page."
+    },
+    "android.destination.onboarding_welcome": {
+        "message": "Welcome",
+        "context": "Android shell: first onboarding step."
+    },
+    "android.destination.onboarding_server": {
+        "message": "Choose a server",
+        "context": "Android shell: onboarding step where the user names the server that holds their library."
+    },
+    "android.destination.onboarding_sign_in": {
+        "message": "Sign in",
+        "context": "Android shell: onboarding step for signing in to the chosen server."
+    },
+    "android.destination.onboarding_passphrase": {
+        "message": "Set a passphrase",
+        "context": "Android shell: onboarding step for creating the passphrase that protects the account keys."
+    },
+    "android.destination.onboarding_complete": {
+        "message": "You are set up",
+        "context": "Android shell: final onboarding step."
+    },
+    "android.destination.enrollment_start": {
+        "message": "Add this device",
+        "context": "Android shell: first device-enrollment step."
+    },
+    "android.destination.enrollment_scan": {
+        "message": "Scan the code",
+        "context": "Android shell: enrollment step where this device scans the code shown by an already-enrolled device."
+    },
+    "android.destination.enrollment_code": {
+        "message": "Enrollment code",
+        "context": "Android shell: enrollment step showing the code an already-enrolled device must approve."
+    },
+    "android.destination.enrollment_approve": {
+        "message": "Approve device",
+        "context": "Android shell: enrollment step where an enrolled device approves a new one."
+    },
+    "android.destination.enrollment_complete": {
+        "message": "Device added",
+        "context": "Android shell: final device-enrollment step."
+    },
+    "android.shell.offline_title": {
+        "message": "You are offline",
+        "context": "Android shell: banner headline shown while the device has no usable network path. The library stays readable, so this is a condition, not an error."
+    },
+    "android.shell.offline_body": {
+        "message": "Your library is still readable. Changes will sync when a connection comes back.",
+        "context": "Android shell: banner body explaining that offline is not a degraded start path."
+    },
+    "android.shell.protocol_block_title": {
+        "message": "Update Capsule to continue",
+        "context": "Android shell: headline of the hard-block screen shown after the server answers 426 Upgrade Required. Must read as an update prompt, never as an error."
+    },
+    "android.shell.protocol_block_body": {
+        "message": "This version of Capsule is too old for your server and can no longer save changes. Update the app, then sign in again.",
+        "context": "Android shell: body of the 426 hard-block screen. The client must stop rather than silently downgrade."
+    },
+    "android.shell.protocol_block_action": {
+        "message": "Update the app",
+        "context": "Android shell: action on the 426 hard-block screen; opens the store listing."
+    },
+    "android.shell.gate_title": {
+        "message": "Locked",
+        "context": "Android shell: headline of the local-auth gate in front of Trash and Hidden (security requirement SR1)."
+    },
+    "android.shell.gate_body": {
+        "message": "Confirm it is you to open this view. Access stays open for five minutes.",
+        "context": "Android shell: body of the local-auth gate, naming the per-view grace window from SR1."
+    },
+    "android.shell.gate_unlock": {
+        "message": "Unlock",
+        "context": "Android shell: action that raises the biometric or device-credential prompt in front of a gated view."
+    },
+    "android.shell.gate_failed": {
+        "message": "That did not unlock the view. Try again.",
+        "context": "Android shell: message shown after the local-auth prompt was cancelled or refused."
+    },
+    "android.shell.gate_prompt_title": {
+        "message": "Confirm it is you",
+        "context": "Android shell: title of the system biometric prompt raised in front of a gated view."
+    },
+    "android.shell.gate_prompt_cancel": {
+        "message": "Cancel",
+        "context": "Android shell: negative button of the system biometric prompt raised in front of a gated view."
+    },
+    "android.shell.placeholder_title": {
+        "message": "Not built yet",
+        "context": "Android shell: headline of the placeholder rendered for a destination whose feature module is still empty."
+    },
+    "android.shell.placeholder_body": {
+        "message": "The shell routes here already. The feature that fills this screen lands in a later slice.",
+        "context": "Android shell: body of the placeholder rendered for a destination whose feature module is still empty."
+    },
+    "android.shell.back": {
+        "message": "Back",
+        "context": "Android shell: accessibility label for the navigation-icon back affordance in the placeholder top app bar."
     }
 }
