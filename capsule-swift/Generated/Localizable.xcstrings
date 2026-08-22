@@ -4305,6 +4305,126 @@
         }
       }
     },
+    "cli.cull.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cull failed: {reason}"
+          }
+        }
+      }
+    },
+    "cli.cull.filter_empty": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No assets are flagged {flag}."
+          }
+        }
+      }
+    },
+    "cli.cull.filter_header": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{count} asset(s) flagged {flag}:"
+          }
+        }
+      }
+    },
+    "cli.cull.flag.neutral": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "neutral"
+          }
+        }
+      }
+    },
+    "cli.cull.flag.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "pick"
+          }
+        }
+      }
+    },
+    "cli.cull.flag.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "reject"
+          }
+        }
+      }
+    },
+    "cli.cull.flagged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flagged {count} asset(s) as {flag}."
+          }
+        }
+      }
+    },
+    "cli.cull.nothing_to_sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No rejected assets to sweep."
+          }
+        }
+      }
+    },
+    "cli.cull.row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  {asset_id}"
+          }
+        }
+      }
+    },
+    "cli.cull.swept": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swept {count} rejected asset(s) to trash; recoverable for {retain_days} day(s)."
+          }
+        }
+      }
+    },
+    "cli.cull.unknown_asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown asset {asset_id} in this library."
+          }
+        }
+      }
+    },
+    "cli.cull.view": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cull view: {pick} pick, {neutral} neutral, {reject} reject."
+          }
+        }
+      }
+    },
     "cli.list.empty": {
       "localizations": {
         "ar": {

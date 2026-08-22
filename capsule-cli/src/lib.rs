@@ -33,6 +33,7 @@ use crate::utils::directories::{
 };
 
 pub mod cli;
+pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod i18n;
@@ -300,6 +301,39 @@ async fn dispatch(cli: Cli) -> Result<()> {
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
             push_workspace(&ws, push_options(dry_run, force, staged)).await?;
+        }
+
+        // ── Cull ──────────────────────────────────────────────────────────
+        Commands::Cull {
+            library,
+            passphrase_stdin,
+            pick,
+            neutral,
+            reject,
+            filter,
+            sweep,
+            retain_days,
+        } => {
+            let request = cull::CullRequest {
+                pick,
+                neutral,
+                reject,
+                filter: filter.map(Into::into),
+                sweep,
+                retain_days,
+            };
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            let bundle = i18n::cli_bundle();
+            match cull::apply(&mut ws, &request) {
+                Ok(summary) => cull::render(&bundle, &request, &summary),
+                Err(error) => {
+                    let reason = cull::describe_error(&bundle, &error);
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::CULL_FAILED, &[("reason", Value::Str(&reason))])
+                    ));
+                }
+            }
         }
 
         // ── Demo ──────────────────────────────────────────────────────────

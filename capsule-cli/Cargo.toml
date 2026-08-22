@@ -51,4 +51,7 @@ tracing-subscriber = { version = "0.3.23", features = [
     "json",
     "fmt",
 ] }
+# Asset ids on the `capsule cull` argument surface (S-D16). Already the workspace-wide
+# identifier pin; the CLI simply needs to name and parse the type it prints.
+uuid = { workspace = true }
 walkdir = "2.5.0"

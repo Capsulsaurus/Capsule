@@ -59,4 +59,17 @@ pub mod keys {
     pub const PUSH_COMPLETE: &str = "cli.push.complete";
     pub const PUSH_DRY_RUN_COMPLETE: &str = "cli.push.dry_run_complete";
     pub const PUSH_FAILED: &str = "cli.push.failed";
+    // `capsule cull` — the standalone culling command (slice `S-D16`).
+    pub const CULL_FLAGGED: &str = "cli.cull.flagged";
+    pub const CULL_VIEW: &str = "cli.cull.view";
+    pub const CULL_FILTER_HEADER: &str = "cli.cull.filter_header";
+    pub const CULL_FILTER_EMPTY: &str = "cli.cull.filter_empty";
+    pub const CULL_ROW: &str = "cli.cull.row";
+    pub const CULL_SWEPT: &str = "cli.cull.swept";
+    pub const CULL_NOTHING_TO_SWEEP: &str = "cli.cull.nothing_to_sweep";
+    pub const CULL_UNKNOWN_ASSET: &str = "cli.cull.unknown_asset";
+    pub const CULL_FAILED: &str = "cli.cull.failed";
+    pub const CULL_FLAG_PICK: &str = "cli.cull.flag.pick";
+    pub const CULL_FLAG_NEUTRAL: &str = "cli.cull.flag.neutral";
+    pub const CULL_FLAG_REJECT: &str = "cli.cull.flag.reject";
 }
