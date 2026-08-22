@@ -287,6 +287,8 @@
     <string name="ios_recently_deleted_empty_title">No Recently Deleted</string>
     <string name="ios_recently_deleted_recover">Recover</string>
     <string name="ios_recently_deleted_title">Recently Deleted</string>
+    <string name="ios_scaffold_body">This screen is wired into navigation but has no interface yet.</string>
+    <string name="ios_scaffold_title">Not built yet</string>
     <string name="ios_search_clear_recents">Clear</string>
     <string name="ios_search_empty_description">No photos match these filters.</string>
     <string name="ios_search_empty_title">No Matches</string>

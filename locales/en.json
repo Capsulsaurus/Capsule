@@ -2150,5 +2150,13 @@
     "ios.menu.zoom.all": {
         "message": "All Photos",
         "context": "Menu item that shows every photo in one dense grid."
+    },
+    "ios.scaffold.title": {
+        "message": "Not built yet",
+        "context": "Heading on a placeholder screen that is reachable by navigation but has no implementation yet."
+    },
+    "ios.scaffold.body": {
+        "message": "This screen is wired into navigation but has no interface yet.",
+        "context": "Body text on a placeholder screen, explaining that the destination exists and routes correctly but is unimplemented."
     }
 }

@@ -286,6 +286,8 @@
   "ios.recently_deleted.empty.title": "No Recently Deleted",
   "ios.recently_deleted.recover": "Recover",
   "ios.recently_deleted.title": "Recently Deleted",
+  "ios.scaffold.body": "This screen is wired into navigation but has no interface yet.",
+  "ios.scaffold.title": "Not built yet",
   "ios.search.clear_recents": "Clear",
   "ios.search.empty.description": "No photos match these filters.",
   "ios.search.empty.title": "No Matches",

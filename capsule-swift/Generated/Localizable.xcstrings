@@ -20799,6 +20799,26 @@
         }
       }
     },
+    "ios.scaffold.body": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This screen is wired into navigation but has no interface yet."
+          }
+        }
+      }
+    },
+    "ios.scaffold.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not built yet"
+          }
+        }
+      }
+    },
     "ios.search.clear_recents": {
       "localizations": {
         "ar": {

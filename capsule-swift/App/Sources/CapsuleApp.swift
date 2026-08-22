@@ -20,7 +20,7 @@ struct CapsuleApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView(environment: environment)
+            RootShell(environment: environment)
         }
         // A window opening at an iPhone's intrinsic size would be unusable for a
         // photo grid. Ignored where the platform owns window sizing.
