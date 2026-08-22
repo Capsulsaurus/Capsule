@@ -360,7 +360,9 @@ fn is_script_subtag(subtag: &str) -> bool {
 fn titlecase(subtag: &str) -> String {
     let mut chars = subtag.chars();
     match chars.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase(),
+        Some(first) => {
+            first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase()
+        }
         None => String::new(),
     }
 }
