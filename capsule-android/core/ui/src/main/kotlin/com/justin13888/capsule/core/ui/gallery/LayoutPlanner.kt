@@ -51,14 +51,15 @@ object LayoutPlanner {
             slotRow += -1
             y += metrics.headerHeight
 
-            val rows = RowSolver.solve(
-                aspects = aspects,
-                from = start,
-                until = end,
-                targetHeight = metrics.targetRowHeight,
-                viewportWidth = metrics.viewportWidth,
-                spacing = metrics.spacing,
-            )
+            val rows =
+                RowSolver.solve(
+                    aspects = aspects,
+                    from = start,
+                    until = end,
+                    targetHeight = metrics.targetRowHeight,
+                    viewportWidth = metrics.viewportWidth,
+                    spacing = metrics.spacing,
+                )
 
             rows.forEachIndexed { indexInSection, row ->
                 if (indexInSection > 0) y += metrics.spacing
@@ -77,24 +78,29 @@ object LayoutPlanner {
         return LayoutPlan(
             metrics = metrics,
             aspects = aspects,
-            slots = LayoutPlan.SlotTable(
-                y = slotY.toFloatArray(),
-                height = slotHeight.toFloatArray(),
-                section = slotSection.toIntArray(),
-                row = slotRow.toIntArray(),
-            ),
-            rows = LayoutPlan.RowTable(
-                from = rowFrom.toIntArray(),
-                until = rowUntil.toIntArray(),
-                height = rowHeight.toFloatArray(),
-                slot = rowSlot.toIntArray(),
-            ),
+            slots =
+                LayoutPlan.SlotTable(
+                    y = slotY.toFloatArray(),
+                    height = slotHeight.toFloatArray(),
+                    section = slotSection.toIntArray(),
+                    row = slotRow.toIntArray(),
+                ),
+            rows =
+                LayoutPlan.RowTable(
+                    from = rowFrom.toIntArray(),
+                    until = rowUntil.toIntArray(),
+                    height = rowHeight.toFloatArray(),
+                    slot = rowSlot.toIntArray(),
+                ),
             sectionStart = sectionStarts.copyOf(),
             totalHeight = y,
         )
     }
 
-    private fun requireValidSections(assetCount: Int, sectionStarts: IntArray) {
+    private fun requireValidSections(
+        assetCount: Int,
+        sectionStarts: IntArray,
+    ) {
         require(sectionStarts.isNotEmpty()) { "a plan needs at least one section" }
         require(sectionStarts.first() == 0) { "sections must start at asset 0, got ${sectionStarts.first()}" }
         require(sectionStarts.last() <= assetCount) {

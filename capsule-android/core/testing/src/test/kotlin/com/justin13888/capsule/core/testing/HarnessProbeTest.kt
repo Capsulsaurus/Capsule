@@ -21,7 +21,11 @@ class HarnessProbeTest {
 
     @Test
     fun robolectric_provides_an_android_runtime() {
-        assertEquals("robolectric", android.os.Build.FINGERPRINT.substringBefore('-'))
+        assertEquals(
+            "robolectric",
+            android.os.Build.FINGERPRINT
+                .substringBefore('-'),
+        )
     }
 
     @Test

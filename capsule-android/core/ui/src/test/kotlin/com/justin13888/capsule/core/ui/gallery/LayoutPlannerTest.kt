@@ -14,24 +14,30 @@ import kotlin.system.measureTimeMillis
  * built here, so the plan's internal consistency is what those features rest on.
  */
 class LayoutPlannerTest {
-    private val metrics = GalleryMetrics(
-        viewportWidth = 1080f,
-        targetRowHeight = 220f,
-        spacing = 4f,
-        headerHeight = 56f,
-        sectionSpacing = 16f,
-    )
+    private val metrics =
+        GalleryMetrics(
+            viewportWidth = 1080f,
+            targetRowHeight = 220f,
+            spacing = 4f,
+            headerHeight = 56f,
+            sectionSpacing = 16f,
+        )
 
-    private fun library(assets: Int, sections: Int, seed: Int = 42): Pair<FloatArray, IntArray> {
+    private fun library(
+        assets: Int,
+        sections: Int,
+        seed: Int = 42,
+    ): Pair<FloatArray, IntArray> {
         val random = Random(seed)
-        val aspects = FloatArray(assets) {
-            when (random.nextInt(10)) {
-                0 -> random.nextFloat() * 3f + 2f
-                in 1..5 -> 1.5f
-                in 6..7 -> 1.333f
-                else -> 0.666f
+        val aspects =
+            FloatArray(assets) {
+                when (random.nextInt(10)) {
+                    0 -> random.nextFloat() * 3f + 2f
+                    in 1..5 -> 1.5f
+                    in 6..7 -> 1.333f
+                    else -> 0.666f
+                }
             }
-        }
         // Uneven sections, like real capture days.
         val starts = sortedSetOf(0)
         while (starts.size < sections) starts += random.nextInt(1, assets)

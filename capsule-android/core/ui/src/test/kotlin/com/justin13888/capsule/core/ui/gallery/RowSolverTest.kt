@@ -16,7 +16,10 @@ class RowSolverTest {
     private val target = 200f
 
     /** Every row a solve produces must fill the viewport, or be the capped trailing row. */
-    private fun assertRowsFillWidth(aspects: FloatArray, rows: List<JustifiedRow>) {
+    private fun assertRowsFillWidth(
+        aspects: FloatArray,
+        rows: List<JustifiedRow>,
+    ) {
         rows.dropLast(1).forEach { row ->
             val content = (row.from until row.until).sumOf { RowSolver.widthOf(aspects, row, it).toDouble() }
             val total = content + spacing * (row.count - 1)
@@ -28,7 +31,11 @@ class RowSolverTest {
     }
 
     /** Rows must tile the range exactly: no gaps, no overlaps, nothing dropped. */
-    private fun assertRowsTile(rows: List<JustifiedRow>, from: Int, until: Int) {
+    private fun assertRowsTile(
+        rows: List<JustifiedRow>,
+        from: Int,
+        until: Int,
+    ) {
         if (from == until) {
             assertTrue(rows.isEmpty(), "empty range produced $rows")
             return
@@ -83,14 +90,15 @@ class RowSolverTest {
     fun `rows tile the range and fill the width across a large random library`() {
         val random = Random(0xC4B5)
         // A plausible mix: mostly 3:2 and 4:3 both ways up, with occasional panoramas.
-        val aspects = FloatArray(5_000) {
-            when (random.nextInt(10)) {
-                0 -> random.nextFloat() * 3f + 2f
-                in 1..5 -> 1.5f
-                in 6..7 -> 1.333f
-                else -> 0.666f
+        val aspects =
+            FloatArray(5_000) {
+                when (random.nextInt(10)) {
+                    0 -> random.nextFloat() * 3f + 2f
+                    in 1..5 -> 1.5f
+                    in 6..7 -> 1.333f
+                    else -> 0.666f
+                }
             }
-        }
         val rows = RowSolver.solve(aspects, 0, aspects.size, target, width, spacing)
         assertRowsTile(rows, 0, aspects.size)
         assertRowsFillWidth(aspects, rows)

@@ -14,13 +14,14 @@ import kotlin.random.Random
  */
 class GalleryScrollTest {
     private val viewportHeight = 2000f
-    private val metrics = GalleryMetrics(
-        viewportWidth = 1080f,
-        targetRowHeight = 220f,
-        spacing = 4f,
-        headerHeight = 56f,
-        sectionSpacing = 16f,
-    )
+    private val metrics =
+        GalleryMetrics(
+            viewportWidth = 1080f,
+            targetRowHeight = 220f,
+            spacing = 4f,
+            headerHeight = 56f,
+            sectionSpacing = 16f,
+        )
 
     private fun plan(
         assets: Int = 5_000,
@@ -86,8 +87,9 @@ class GalleryScrollTest {
         requireNotNull(anchor)
 
         val restored = GalleryScroll.applyAnchor(sparse, anchor, viewportHeight)
-        val before = plan(metrics = metrics.copy(targetRowHeight = 140f))
-            .let { it.offsetOf(it.slotOfAsset(anchor.asset)) - scrollY }
+        val before =
+            plan(metrics = metrics.copy(targetRowHeight = 140f))
+                .let { it.offsetOf(it.slotOfAsset(anchor.asset)) - scrollY }
         val after = sparse.offsetOf(sparse.slotOfAsset(anchor.asset)) - restored
 
         // The anchored asset sits at the same place in the viewport, within a row height.

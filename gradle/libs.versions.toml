@@ -14,7 +14,7 @@ kotlin = "2.4.10"
 # Kept at the last release published to Maven Central. Bump with the Kotlin pin only
 # after confirming detekt parses the newer language level.
 detekt = "1.23.8"
-ktlint = "12.1.2"
+ktlint = "14.2.0"
 
 # ── Android platform ─────────────────────────────────────────────────────────
 # compileSdk is 37 because androidx.compose.material3 1.5.x requires it. targetSdk
@@ -87,6 +87,9 @@ compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
 
 # Material 3 — pinned above the BOM, see the composeMaterial3 note.
 compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "composeMaterial3" }
+# Frozen at 1.7.8 upstream (the BOM pins it there); the icon set is stable and the
+# design system re-exports only what it uses, so R8 strips the rest in release.
+compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
 compose-material3-navigation-suite = { module = "androidx.compose.material3:material3-adaptive-navigation-suite", version.ref = "composeMaterial3" }
 compose-material3-window-size = { module = "androidx.compose.material3:material3-window-size-class", version.ref = "composeMaterial3" }
 compose-adaptive = { module = "androidx.compose.material3.adaptive:adaptive", version.ref = "composeAdaptive" }

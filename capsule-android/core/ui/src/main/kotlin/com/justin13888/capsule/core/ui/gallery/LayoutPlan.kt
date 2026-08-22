@@ -90,8 +90,7 @@ class LayoutPlan internal constructor(
     fun sectionStart(section: Int): Int = sectionStart[section]
 
     /** One past the last asset of section [section]. */
-    fun sectionEnd(section: Int): Int =
-        if (section + 1 < sectionStart.size) sectionStart[section + 1] else aspects.size
+    fun sectionEnd(section: Int): Int = if (section + 1 < sectionStart.size) sectionStart[section + 1] else aspects.size
 
     /** How many assets section [section] holds. */
     fun sectionSize(section: Int): Int = sectionEnd(section) - sectionStart(section)
@@ -100,10 +99,16 @@ class LayoutPlan internal constructor(
      * The width asset [asset] is drawn at inside the row slot [slot], and its horizontal
      * offset from the row's left edge. Callers lay a row out left to right.
      */
-    fun assetWidth(slot: Int, asset: Int): Float = aspects[asset] * rowHeight(slot)
+    fun assetWidth(
+        slot: Int,
+        asset: Int,
+    ): Float = aspects[asset] * rowHeight(slot)
 
     /** The horizontal offset of [asset] within its row slot [slot]. */
-    fun assetX(slot: Int, asset: Int): Float {
+    fun assetX(
+        slot: Int,
+        asset: Int,
+    ): Float {
         var x = 0f
         for (i in rowFrom(slot) until asset) {
             x += aspects[i] * rowHeight(slot) + metrics.spacing
@@ -160,7 +165,10 @@ class LayoutPlan internal constructor(
      * Drag-to-select hit-tests against this rather than against composed nodes, so a drag
      * that outruns composition still selects the right range.
      */
-    fun assetAt(x: Float, y: Float): Int {
+    fun assetAt(
+        x: Float,
+        y: Float,
+    ): Int {
         val slot = slotAt(y)
         if (slot < 0 || isHeader(slot)) return -1
         if (y > slots.y[slot] + slots.height[slot]) return -1
@@ -178,7 +186,10 @@ class LayoutPlan internal constructor(
      * Scroll offset that puts asset [asset] at the top of the viewport, clamped so the
      * caller never scrolls past the end. Used to restore position across a re-plan.
      */
-    fun offsetOfAsset(asset: Int, viewportHeight: Float): Float {
+    fun offsetOfAsset(
+        asset: Int,
+        viewportHeight: Float,
+    ): Float {
         val slot = slotOfAsset(asset)
         if (slot < 0) return 0f
         return slots.y[slot].coerceIn(0f, (totalHeight - viewportHeight).coerceAtLeast(0f))

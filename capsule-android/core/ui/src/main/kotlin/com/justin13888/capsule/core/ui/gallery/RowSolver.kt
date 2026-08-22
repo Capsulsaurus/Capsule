@@ -102,11 +102,12 @@ object RowSolver {
                 // so leaving it ragged is the right answer and costs nothing. An
                 // overfull trailing row is charged like any other; without that, one row
                 // swallowing the whole section would always score zero and win.
-                val rowCost = if (reachesEnd && height >= targetHeight) {
-                    0.0
-                } else {
-                    badnessOf(height, targetHeight)
-                }
+                val rowCost =
+                    if (reachesEnd && height >= targetHeight) {
+                        0.0
+                    } else {
+                        badnessOf(height, targetHeight)
+                    }
                 val total = rowCost + cost[i + run]
                 if (total < bestCost) {
                     bestCost = total
@@ -140,13 +141,21 @@ object RowSolver {
      * Scale-invariant row badness: a row twice the target height is exactly as wrong as
      * one half of it, which absolute difference would not capture.
      */
-    private fun badnessOf(height: Float, targetHeight: Float): Double {
+    private fun badnessOf(
+        height: Float,
+        targetHeight: Float,
+    ): Double {
         val ratio = ln((height / targetHeight).toDouble())
         return ratio * ratio
     }
 
     /** The height at which `count` assets of total aspect [sumOfAspects] fill the width. */
-    private fun heightOf(sumOfAspects: Float, count: Int, viewportWidth: Float, spacing: Float): Float {
+    private fun heightOf(
+        sumOfAspects: Float,
+        count: Int,
+        viewportWidth: Float,
+        spacing: Float,
+    ): Float {
         val available = viewportWidth - spacing * (count - 1)
         return if (available <= 0f || sumOfAspects <= 0f) Float.MAX_VALUE else available / sumOfAspects
     }
@@ -156,7 +165,11 @@ object RowSolver {
      * row's common height. Callers place assets left to right, adding the row spacing
      * between them.
      */
-    fun widthOf(aspects: FloatArray, row: JustifiedRow, index: Int): Float {
+    fun widthOf(
+        aspects: FloatArray,
+        row: JustifiedRow,
+        index: Int,
+    ): Float {
         require(index in row.from until row.until) { "asset $index is not in row $row" }
         return aspects[index] * row.height
     }

@@ -109,9 +109,11 @@ if (project.hasProperty("capsule.wireFfi")) {
     // JNI libs are only needed when a native artifact is actually produced or run:
     // the APK's merged jniLibs and on-device instrumented tests. Keeping them off the
     // compile path means a plain JVM `test` (host dylib via JNA) needs no NDK.
-    tasks.matching {
-        (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders")) ||
-            it.name.startsWith("connected") ||
-            it.name.startsWith("bundle") && it.name.endsWith("Aar")
-    }.configureEach { dependsOn(buildAndroidJniLibs) }
+    tasks
+        .matching {
+            (it.name.startsWith("merge") && it.name.endsWith("JniLibFolders")) ||
+                it.name.startsWith("connected") ||
+                it.name.startsWith("bundle") &&
+                it.name.endsWith("Aar")
+        }.configureEach { dependsOn(buildAndroidJniLibs) }
 }
