@@ -200,7 +200,7 @@ mod tests {
         std::fs::write(&img, b"\xFF\xD8\xFF ai-tag provenance bytes").unwrap();
 
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Trip");
+        let album = ws.create_album("Trip").unwrap();
         let id = ws.import_asset(album, &img).unwrap();
 
         let ai = |tag: &str, ver: &str| AiTag {
@@ -273,7 +273,7 @@ mod tests {
         let img = src.path().join("p.jpg");
         std::fs::write(&img, b"\xFF\xD8\xFF stale ai bytes").unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("A");
+        let album = ws.create_album("A").unwrap();
         let id = ws.import_asset(album, &img).unwrap();
 
         let tag = |ver: &str| AiTag {

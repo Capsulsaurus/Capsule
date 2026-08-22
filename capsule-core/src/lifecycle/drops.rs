@@ -311,12 +311,19 @@ impl crate::drop::DropAdopter for Workspace {
             retention_until: None,
         };
         let manifest = core
-            .sign(self.device_signer.as_ref(), &album.write_tier)
+            .sign(
+                self.device_signer.as_ref(),
+                album
+                    .write_tier_signer()
+                    .map_err(|_| DropError::Crypto("album holds no write capability"))?,
+            )
             .map_err(|_| DropError::Crypto("adopting manifest signing failed"))?;
 
         // Self-verify through the one chokepoint against the unchanged staged ciphertext, and
         // confirm the sealed metadata blob binds to the signed sidecar, before committing.
-        let authority = &self.authorities[&album_id];
+        let authority = self
+            .authority(&album_id)
+            .map_err(|_| DropError::Crypto("album has no attested authority"))?;
         if verify_asset(&manifest, &ciphertext, &self.directory, authority, None)
             != VerifyOutcome::Accept
         {
@@ -368,7 +375,7 @@ mod tests {
 
         let lib = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Guest contributions");
+        let album = ws.create_album("Guest contributions").unwrap();
 
         // Provision an upload link with a passphrase abuse gate.
         let caps = LinkCaps {

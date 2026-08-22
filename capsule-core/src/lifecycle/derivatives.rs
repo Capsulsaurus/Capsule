@@ -179,7 +179,7 @@ impl Workspace {
                     generated_by_client: self.client_version.clone(),
                     generated_at: now_rfc3339(),
                     device_signer: self.device_signer.as_ref(),
-                    write_tier_signer: &album.write_tier,
+                    write_tier_signer: album.write_tier_signer()?,
                 };
                 generate_still_derivatives(
                     &buffer,

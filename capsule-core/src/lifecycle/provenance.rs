@@ -6,7 +6,6 @@ use std::fs;
 use uuid::Uuid;
 
 use super::{AlbumKeys, LifecycleError, Result, Workspace, now_rfc3339};
-use crate::crypto::CryptoError;
 use crate::crypto::encryption::{blob_ciphertext_hash, blob_nonce, seal_metadata_blob, stream};
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::Amk;
@@ -32,7 +31,7 @@ impl Workspace {
         prior: Option<Hash32>,
         retention_until: Option<String>,
         metadata_blob_hash: Option<Hash32>,
-    ) -> std::result::Result<AssetManifest, CryptoError> {
+    ) -> Result<AssetManifest> {
         let core = ManifestCore {
             action,
             prior_provenance_hash: prior,
@@ -44,7 +43,7 @@ impl Workspace {
             client_version: self.client_version.clone(),
             ..base.clone()
         };
-        core.sign(self.device_signer.as_ref(), &album.write_tier)
+        Ok(core.sign(self.device_signer.as_ref(), album.write_tier_signer()?)?)
     }
 
     /// Run `verify_asset` for a managed asset (regenerating its ciphertext deterministically).
@@ -82,7 +81,7 @@ impl Workspace {
             head,
             &ciphertext,
             &self.directory,
-            &self.authorities[&asset.album_id],
+            self.authority(&asset.album_id)?,
             prior,
         ))
     }
@@ -227,7 +226,7 @@ mod tests {
         fs::write(&img, b"\xFF\xD8\xFF metadata-binding bytes").unwrap();
 
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Trip");
+        let album = ws.create_album("Trip").unwrap();
         let asset = ws.import_asset(album, &img).unwrap();
 
         // The create manifest commits to a metadata blob; its sidecar references no prior head,

@@ -216,7 +216,7 @@ mod tests {
     fn album_group_assertion_op_is_amk_sealed_and_opaque() {
         let lib = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Alice trip");
+        let album = ws.create_album("Alice trip").unwrap();
 
         let invite = ws
             .create_album_group(album, "Summer-Roadtrip-Secret", "alice.tld")
@@ -263,8 +263,8 @@ mod tests {
 
         // Alice creates the group on her constituent and imports one asset.
         let mut alice = fast_workspace(alice_lib.path());
-        let a_album = alice.create_album("Alice");
-        let a_other = alice.create_album("Alice-unrelated"); // a member album NOT in the group.
+        let a_album = alice.create_album("Alice").unwrap();
+        let a_other = alice.create_album("Alice-unrelated").unwrap(); // a member album NOT in the group.
         alice.import_asset(a_album, &img).unwrap();
         alice.import_asset(a_other, &img).unwrap();
         let invite = alice
@@ -273,7 +273,7 @@ mod tests {
 
         // Bob joins the group on his own constituent (the invite rides as data) and imports.
         let mut bob = fast_workspace(bob_lib.path());
-        let b_album = bob.create_album("Bob");
+        let b_album = bob.create_album("Bob").unwrap();
         bob.import_asset(b_album, &img).unwrap();
         bob.join_album_group(b_album, &invite, "bob.tld").unwrap();
 

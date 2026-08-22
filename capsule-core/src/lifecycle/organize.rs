@@ -204,7 +204,7 @@ mod tests {
         let lib = TempDir::new().unwrap();
         let src = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Shoot");
+        let album = ws.create_album("Shoot").unwrap();
         let [pick, reject, neutral] = import_trio(&mut ws, album, src.path());
 
         // Flag: single write per asset, never touches bytes, and the sidecar stays signed.
@@ -281,7 +281,7 @@ mod tests {
         let img = src.path().join("photo.jpg");
         fs::write(&img, b"\xFF\xD8\xFF two-device cull").unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Shoot");
+        let album = ws.create_album("Shoot").unwrap();
         let asset = ws.import_asset(album, &img).unwrap();
 
         ws.set_cull(&asset, CullFlag::Pick).unwrap();
@@ -305,7 +305,7 @@ mod tests {
         let lib = TempDir::new().unwrap();
         let src = TempDir::new().unwrap();
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Shoot");
+        let album = ws.create_album("Shoot").unwrap();
         let [a, b, standalone] = import_trio(&mut ws, album, src.path());
 
         // a + b form a burst; `standalone` stays out of the stack.

@@ -117,6 +117,14 @@ impl Workspace {
             .map_err(|e| LifecycleError::Cbor(e.to_string()))?;
         fs::write(self.provenance_path(asset), prov)
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        // The sealed metadata blob (`S-A10`). Un-regenerable (its nonce is folded into the blob
+        // key), AMK ciphertext, and required by `export_backup` and upload — so it is written
+        // beside the chain rather than held only in memory. An action that mints no blob
+        // (`delete` / `trash-restore`) leaves the previous file in place.
+        if !asset.metadata_blob.is_empty() {
+            fs::write(self.metadata_blob_path(asset), &asset.metadata_blob)
+                .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        }
         Ok(())
     }
 
@@ -303,7 +311,7 @@ impl Workspace {
             prior_provenance_hash: None,
             retention_until: None,
         };
-        let manifest = core.sign(self.device_signer.as_ref(), &album.write_tier)?;
+        let manifest = core.sign(self.device_signer.as_ref(), album.write_tier_signer()?)?;
 
         let mut chain = ProvenanceChain::new();
         chain
@@ -316,7 +324,7 @@ impl Workspace {
 
         // Self-check: the asset must verify through the one chokepoint, and the sealed metadata
         // blob must round-trip to the signed sidecar and the committed hash, before we accept it.
-        let authority = &self.authorities[&album_id];
+        let authority = self.authority(&album_id)?;
         let outcome = verify_asset(&manifest, &ciphertext, &self.directory, authority, None);
         if outcome != VerifyOutcome::Accept {
             return Err(LifecycleError::SelfVerify(outcome));
@@ -428,7 +436,7 @@ mod tests {
         .unwrap();
 
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Trip");
+        let album = ws.create_album("Trip").unwrap();
 
         // Import → encrypt → manifest+provenance+signed sidecar → verify_asset(Accept).
         let asset = ws.import_asset(album, &img).unwrap();
@@ -508,7 +516,7 @@ mod tests {
         fs::write(&img, b"\xFF\xD8\xFF indexed photo").unwrap();
 
         let mut ws = fast_workspace(lib.path());
-        let album = ws.create_album("Trip");
+        let album = ws.create_album("Trip").unwrap();
         let id = ws.import_asset(album, &img).unwrap();
         let uuid = id.to_string();
 

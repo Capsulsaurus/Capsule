@@ -145,7 +145,7 @@ mod tests {
         let src = TempDir::new().unwrap();
         let img = src.path().join("photo.jpg");
         fs::write(&img, bytes).unwrap();
-        let album = ws.create_album("Shared");
+        let album = ws.create_album("Shared").unwrap();
         let asset = ws.import_asset(album, &img).unwrap();
         // Keep the tempdir alive only until import copies the bytes in; return ids.
         (album, asset)

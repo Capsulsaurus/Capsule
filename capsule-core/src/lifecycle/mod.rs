@@ -50,6 +50,7 @@ use crate::backup::BackupError;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;
 use crate::crypto::hash::Hash32;
+use crate::crypto::keys::albumstore::AlbumStoreError;
 use crate::crypto::keys::{Account, DeviceDirectory, HybridSigningKey, HybridVerifyingKey, Signer};
 use crate::crypto::primitives::Argon2Params;
 use crate::crypto::provenance::ProvenanceChain;
@@ -92,11 +93,34 @@ pub enum LifecycleError {
     /// Library index (SQLite) error.
     #[error("db: {0}")]
     Db(String),
+    /// The durable album-key store could not be read or written (slice `S-A10`). Never
+    /// swallowed: losing album keys silently is exactly the failure this store exists to fix.
+    #[error(transparent)]
+    AlbumStore(#[from] AlbumStoreError),
+    /// The album holds AMKs but no write capability — it was recovered from a backup artifact,
+    /// which escrows content keys (read access) but never the write-tier / admin signing keys or
+    /// the admin-signed epoch ledger. Its assets decrypt and re-export; authoring a *new* write
+    /// into it needs its authority re-established first.
+    #[error("album {0} is read-only: recovered without write-tier/admin key material")]
+    AlbumReadOnly(Uuid),
+    /// [`create_album_with_id`](Workspace::create_album_with_id) was called for an album that
+    /// already holds key material. Minting over it would discard the AMKs every existing asset in
+    /// that album was encrypted under, so it is refused; use
+    /// [`ensure_album`](Workspace::ensure_album) for resolve-or-create.
+    #[error("album {0} already exists")]
+    AlbumExists(Uuid),
 }
 
 type Result<T> = std::result::Result<T, LifecycleError>;
 
 /// One album's key material across one or more epochs.
+///
+/// Capsule separates **secrecy** from **authorization**: the per-epoch `amks` are the content
+/// keys (read access), while `write_tier` / `admin` are signing *capabilities*. A backup artifact
+/// escrows only the former, so an album restored into a library that never held it arrives with
+/// its content keys and no capabilities — see [`AlbumStore`](crate::crypto::keys::AlbumStore).
+/// That state is modelled honestly here rather than papered over by minting fresh signing keys
+/// that attest nothing and no peer trusts.
 pub struct AlbumKeys {
     /// Album id.
     pub album_id: Uuid,
@@ -104,12 +128,30 @@ pub struct AlbumKeys {
     pub name: String,
     /// AMKs by epoch.
     pub amks: BTreeMap<u32, [u8; 32]>,
-    /// Per-album write-tier signing key.
-    pub write_tier: HybridSigningKey,
-    /// Per-album admin signing key.
-    pub admin: HybridSigningKey,
+    /// Per-album write-tier signing key; `None` for a read-only recovered album.
+    pub write_tier: Option<HybridSigningKey>,
+    /// Per-album admin signing key (the epoch-ledger root); `None` for a read-only recovered
+    /// album.
+    pub admin: Option<HybridSigningKey>,
     /// The current (highest) epoch — the one new imports are written under.
     pub current_epoch: u32,
+}
+
+impl AlbumKeys {
+    /// The write-tier signing key every asset manifest in this album is signed under, or
+    /// [`LifecycleError::AlbumReadOnly`] if this album carries no write capability.
+    pub fn write_tier_signer(&self) -> Result<&HybridSigningKey> {
+        self.write_tier
+            .as_ref()
+            .ok_or(LifecycleError::AlbumReadOnly(self.album_id))
+    }
+
+    /// The admin signing key that roots the epoch ledger, or [`LifecycleError::AlbumReadOnly`].
+    pub fn admin_signer(&self) -> Result<&HybridSigningKey> {
+        self.admin
+            .as_ref()
+            .ok_or(LifecycleError::AlbumReadOnly(self.album_id))
+    }
 }
 
 /// In-memory state for one managed asset.
@@ -272,7 +314,9 @@ pub struct Workspace {
     /// seam (`&Authority` coerces to `&dyn AlbumAuthority` at every `verify_asset` call site). The
     /// offline [`ReferenceAuthority`] is the shipped default; the enum lets the live
     /// [`OpenMlsAuthority`](crate::crypto::authority::OpenMlsAuthority) drop in without the
-    /// lifecycle naming a concrete backend. Session-scoped (not persisted), like the album keys.
+    /// lifecycle naming a concrete backend. **Persisted** alongside the album keys in
+    /// [`AlbumStore`](crate::crypto::keys::AlbumStore) and restored on open (`S-A10`) — without
+    /// it a reopened library could hold an AMK and still not verify a single manifest.
     authorities: HashMap<Uuid, Authority>,
     assets: HashMap<Uuid, AssetState>,
     /// The reconciled [aggregated-album](crate::federation) group assertion for each album the
@@ -281,6 +325,10 @@ pub struct Workspace {
     /// a peer constituent's entry is folded in from the feed via
     /// [`merge_album_group_assertion`](Self::merge_album_group_assertion). Removing an entry is a
     /// group *leave* — it drops the constituent from every viewer's aggregate on their next sync.
+    ///
+    /// **Deliberately session-scoped** (`S-A10`): every entry is a self-verifying signed
+    /// assertion that the federation feed re-delivers, so it is a cache of reconcilable state,
+    /// not key material. Losing it on close costs one reconcile, not access.
     group_assertions: HashMap<Uuid, AlbumGroupAssertion>,
     /// The open, locked library — its `library.sqlite` is the queryable index the crypto
     /// lifecycle writes through to. Held for the workspace's lifetime so the lock is retained.
@@ -290,16 +338,32 @@ pub struct Workspace {
     argon2_params: Argon2Params,
     /// Issued share links keyed by their revocation handle — the authoritative link records
     /// the serving endpoint (S-C4) consults for scope, expiry, and revocation state.
+    ///
+    /// **Deliberately session-scoped** (`S-A10`): the durable registry these mirror lives on the
+    /// serving side, and a link's *secret* travels in the URL rather than here, so persisting the
+    /// local copy is a link-management concern (revoke-after-restart) rather than a data-plane
+    /// key-loss one. Tracked with the share-link slices, not with album keys.
     share_links: HashMap<ShareLinkId, ShareLinkRecord>,
     /// Issued upload (guest-drop) links keyed by their revocation handle. Each holds the
     /// escrow-wrapped Drop Key private half so any of this owner's adopting devices can
     /// later decapsulate a drop sealed to it (SSoT: [Web Upload]).
+    ///
+    /// **Session-scoped, and the one deferral here that is real key material** (`S-A10`): closing
+    /// a workspace with an outstanding upload link drops the escrowed Drop Key private half, so a
+    /// drop sealed to that link can no longer be adopted. It is deferred rather than folded into
+    /// [`AlbumStore`](crate::crypto::keys::AlbumStore) because the link registry is
+    /// server-authoritative and its durable shape belongs with the guest-drop slices — an album
+    /// keystore is the wrong home for a per-link escrow table. Until then a guest-drop flow must
+    /// complete within one workspace session.
     ///
     /// [Web Upload]: https://docs/design/web-upload/
     upload_links: HashMap<UploadLinkId, IssuedLink>,
     /// Pending guest drops in this user's inbox, keyed by drop id. Models the server's
     /// staging store (`capsule-api-media::drops`, S-C5) so the offline core can drive the
     /// full seal → stage → adopt path; a real client fills it from server responses.
+    ///
+    /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
+    /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
     /// The per-platform still-derivative byte encoder (the `capsule-sdk` codec seam). When set
     /// (behind the `media` feature), a signed import additionally decodes the still, computes its
@@ -377,6 +441,21 @@ impl Workspace {
             asset.asset_id.simple(),
             asset.ext
         ))
+    }
+    /// `media/{YYYY}/{YYYY-MM}/{uuid}.metadata.bin` — the **exact** sealed metadata-blob wire
+    /// bytes the asset's metadata-bearing manifest commits to via `metadata_blob_hash`
+    /// ([`AssetState::metadata_blob`]).
+    ///
+    /// Persisted since `S-A10`. The blob is AMK ciphertext, so it is safe at rest beside the
+    /// plaintext original, and it cannot be regenerated: [`seal_metadata_blob`] draws a fresh
+    /// nonce per call which is folded into the blob key, so re-sealing the same sidecar produces
+    /// different bytes and a different content address. Without these bytes on disk a reopened
+    /// library can neither `export_backup` nor upload the asset.
+    ///
+    /// [`seal_metadata_blob`]: crate::crypto::encryption::seal_metadata_blob
+    fn metadata_blob_path(&self, asset: &AssetState) -> PathBuf {
+        media_dir(&self.root, asset.capture_utc)
+            .join(format!("{}.metadata.bin", asset.asset_id.simple()))
     }
 
     /// The plaintext bytes of a managed asset (reads from disk).

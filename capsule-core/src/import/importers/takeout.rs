@@ -956,7 +956,7 @@ mod tests {
         )
         .unwrap();
         let default = ws.default_album_id();
-        ws.create_album_with_id(default, "Imports");
+        ws.create_album_with_id(default, "Imports").unwrap();
 
         let adapter = TakeoutAdapter::new();
         let config = ImportConfig::default();

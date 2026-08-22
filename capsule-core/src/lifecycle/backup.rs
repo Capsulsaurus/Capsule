@@ -18,6 +18,10 @@ use crate::crypto::provenance::{AssetManifest, ProvenanceChain};
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
+/// Display name given to an album that arrives only as escrowed keys in a backup artifact — the
+/// artifact carries AMKs, not album metadata, so there is no original name to restore.
+const RECOVERED_ALBUM_NAME: &str = "Recovered album";
+
 impl Workspace {
     /// The current provenance head hash for each managed asset (for backup reconciliation).
     pub fn local_heads(&self) -> BTreeMap<Uuid, Hash32> {
@@ -103,6 +107,13 @@ impl Workspace {
         let artifact = BackupArtifact::open(&bytes, passphrase, exporter_pub)?;
         let report = artifact.restore(RestoreMode::Commit, &self.local_heads())?;
 
+        // Fold the artifact's escrowed AMKs into the durable keystore **before** writing any
+        // asset: this is the step that makes a keyless library whole again, and an asset on disk
+        // whose key was never persisted is exactly the failure `S-A10` exists to end. An album
+        // already known keeps its write capability and simply gains missing epochs; an unknown
+        // album lands read-only, since a backup escrows content keys but no signing capability.
+        self.absorb_recovered_amks(&artifact)?;
+
         let mut added = 0;
         for restored in &report.applied {
             // Rebuild on-disk artifacts for the restored asset.
@@ -111,7 +122,16 @@ impl Workspace {
                 .last()
                 .expect("restored provenance is never empty")
                 .manifest;
-            let capture_utc = Timestamp::now().as_second();
+            // Keep `capture_utc` and the sidecar's `capture_timestamp` in agreement: the restored
+            // sidecar is stamped with the head manifest's timestamp (see
+            // `decode_restored_sidecar`), and a reopened workspace derives an asset's media
+            // directory from that field. Using wall-clock "now" here would file the asset under a
+            // month its own sidecar disagrees with.
+            let capture_utc = head
+                .core
+                .timestamp
+                .parse::<Timestamp>()
+                .map_or_else(|_| Timestamp::now().as_second(), Timestamp::as_second);
             let mut chain = ProvenanceChain::new();
             for rec in &restored.provenance {
                 chain
@@ -140,6 +160,45 @@ impl Workspace {
         }
         tracing::info!(added, "backup: import complete");
         Ok(added)
+    }
+
+    /// Merge a verified artifact's escrowed `(album_id, epoch, amk)` rows into the durable album
+    /// keystore, persist it, and re-apply it to the live workspace so the recovered keys are
+    /// usable in this session as well as the next one.
+    #[tracing::instrument(skip_all)]
+    fn absorb_recovered_amks(&mut self, artifact: &BackupArtifact) -> Result<()> {
+        let rows = artifact.amk_rows();
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut by_album: BTreeMap<Uuid, Vec<(Uuid, u32, [u8; 32])>> = BTreeMap::new();
+        for row in rows {
+            by_album.entry(row.0).or_default().push(row);
+        }
+
+        let mut store = self.album_store_snapshot()?;
+        let mut recovered_epochs = 0;
+        for (album_id, rows) in by_album {
+            let known = store.get(&album_id).is_some();
+            let name = store
+                .get(&album_id)
+                .map_or_else(|| RECOVERED_ALBUM_NAME.to_string(), |a| a.name.clone());
+            let added = store.merge_amks(album_id, &name, rows);
+            recovered_epochs += added;
+            tracing::info!(
+                album_id = %album_id,
+                known_album = known,
+                epochs_added = added,
+                "backup: escrowed album keys absorbed into the keystore"
+            );
+        }
+        store.save(&self.root, &self.account.master)?;
+        self.apply_album_store(&store);
+        tracing::info!(
+            recovered_epochs,
+            "backup: album keystore updated from the artifact"
+        );
+        Ok(())
     }
 
     fn decode_restored_sidecar(

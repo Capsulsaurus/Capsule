@@ -186,10 +186,13 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 Workspace::open(&library, passphrase.as_bytes(), DeviceTier::Normal.params())
                     .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
             );
-            // Album key material is session-scoped for now (durable album-key persistence is a
-            // separate slice); ensure the default album exists to receive this import.
+            // Resolve-or-create the default album (`S-A10`). Album keys are durable now, so a
+            // second run MUST resolve the album the first run minted rather than replacing it —
+            // minting a fresh one per run is exactly what left a reopened library unable to
+            // decrypt or extend its own prior imports.
             let default_album = ws.default_album_id();
-            ws.create_album_with_id(default_album, "Imports");
+            ws.ensure_album(default_album, "Imports")
+                .map_err(|e| eyre!("Failed to resolve the default album: {e}"))?;
 
             // Phase 1: Scan
             println!("{}", "Scanning source files...".cyan());
@@ -745,7 +748,7 @@ mod client_build_wiring_tests {
             .unwrap(),
         );
         let album = ws.default_album_id();
-        ws.create_album_with_id(album, "Imports");
+        ws.create_album_with_id(album, "Imports").unwrap();
         let id = ws.import_asset(album, &src).unwrap();
 
         let cv = ws

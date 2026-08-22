@@ -77,7 +77,9 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
         2,
         "Create a container album (mint AMK + write-tier + admin keys)",
     );
-    let album = ws.create_album("Trip to the Coast");
+    let album = ws
+        .create_album("Trip to the Coast")
+        .map_err(|e| eyre!("create album: {e}"))?;
     ok("AMK_v1 minted; admin-signed authority attests epoch 1");
     info("album_id", album);
 

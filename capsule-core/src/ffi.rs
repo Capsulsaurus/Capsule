@@ -194,7 +194,7 @@ impl FfiWorkspace {
 
     /// Create an album, returning its id (UUID string).
     pub fn create_album(&self, name: String) -> FfiResult<String> {
-        self.with(|ws| Ok(ws.create_album(&name).to_string()))
+        self.with(|ws| Ok(ws.create_album(&name)?.to_string()))
     }
 
     /// Rotate an album to a fresh epoch; returns the new epoch.
