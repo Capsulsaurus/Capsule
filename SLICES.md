@@ -206,7 +206,7 @@ their owed remainder now lives.
 | S-P4  | Import→seal→upload bridge + status UI                  | iOS path    | S-P1–P3      | L    | blocked |
 | S-P5  | Sync-apply into local catalog + render                 | iOS path    | S-P1         | L    | blocked |
 | S-P6  | SE signer wiring into the app + iOS cohort reader      | iOS path    | S-P1         | M    | blocked |
-| S-P7  | Dev-server bring-up (task, keys, blob backend, ATS)    | iOS path    | —            | M    | ready   |
+| S-P7  | Dev-server bring-up (task, keys, blob backend, ATS)    | iOS path    | —            | M    | done    |
 | S-P8  | Swift behavioral FFI harness (flips S-D9)              | iOS path    | S-P1, S-P7   | M    | blocked |
 | S-Q1  | Mark/complete E2E cases 2, 3, 11                       | e2e         | —            | S    | ready   |
 | S-Q2  | E2E case 6: backup → fresh-device restore              | e2e         | —            | M    | ready   |

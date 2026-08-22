@@ -855,6 +855,7 @@ checksum = "6b5271031022835ee8c7582fe67403bd6cb3d962095787af7921027234bab5bf"
 name = "capsule-api"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "capsule-api-auth",
  "capsule-api-environment",
  "capsule-api-media",

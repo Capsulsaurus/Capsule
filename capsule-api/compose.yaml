@@ -1,3 +1,11 @@
+# Local dependencies for `mise run serve-api`.
+#
+# Postgres and Valkey are the server's only external services. There is deliberately no
+# object store: blobs are written to the filesystem `UPLOAD_DIR` (see
+# capsule-api/environment, capsule-api/src/bin/{gc,scrub}.rs). A MinIO service used to sit
+# here and was never wired to anything — removed in S-P7 so this file describes what the
+# code actually needs.
+
 services:
   postgres:
     image: docker.io/library/postgres:17
@@ -11,19 +19,6 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data:Z,U
 
-  minio:
-    image: docker.io/minio/minio:RELEASE.2025-02-28T09-55-16Z
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000" # Minio API port
-      - "9001:9001" # Minio Console port
-    environment:
-      # Default credentials; override via environment or .env file.
-      MINIO_ROOT_USER: capsule
-      MINIO_ROOT_PASSWORD: password
-    volumes:
-      - minio_data:/data:Z,U
-
   valkey:
     image: docker.io/valkey/valkey:8.1.1
     ports:
@@ -36,5 +31,4 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
   valkey_data:

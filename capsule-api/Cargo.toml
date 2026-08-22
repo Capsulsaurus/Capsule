@@ -28,6 +28,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { version = "4.6.1", features = ["derive"] }
+# `keygen` (S-P7) base64-encodes the minted PKCS#8 DER for pasting into `.env`.
+base64 = { workspace = true }
 
 [features]
 default = ["full"]

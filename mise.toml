@@ -170,6 +170,14 @@ run = "cargo run -q -p xtask -- i18n-guard"
 description = "Dump the server OpenAPI 3.1 schema to capsule-sdk/openapi.json"
 run = "cargo run -q -p capsule-api --bin gen_openapi"
 
+# Mint a JWT_ED25519_DER signing key for a local or self-hosted server (slice S-P7). The key
+# comes from the same `capsule-api-environment` module that parses it at boot, so anything this
+# prints is guaranteed to be accepted. `serve-api` calls this automatically on first run; use
+# it directly when provisioning a real deployment.
+[tasks.keygen]
+description = "Mint a JWT_ED25519_DER signing key for a Capsule server"
+run = "cargo run -q -p capsule-api --bin keygen"
+
 # Verify the committed schema still matches the server (CI drift gate; mirrors i18n-check).
 # The spargen-generated client is regenerated from this schema on every build, so this guards
 # the one drift the build cannot: the committed schema falling behind the server surface.

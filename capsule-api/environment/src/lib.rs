@@ -22,6 +22,8 @@ pub mod constants;
 mod jwt;
 pub mod wrapper;
 
+pub use crate::jwt::generate_signing_key_der;
+
 #[derive(Debug, Error)]
 pub enum EnvironmentError {
     /// MissingVariable(key)
