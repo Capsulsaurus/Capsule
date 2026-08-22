@@ -4,8 +4,12 @@ This file is the executable index of everything the [design docs](capsule-docs/s
 specify that is **not yet implemented**, decomposed into independently shippable
 **slices**. The v1 campaign (completed 2026-07-12) landed all 74 original slices; their
 one-line record is the [Landed Register](#landed-register-v1-campaign) below, and this
-index now carries **wave 2**: the full design-docs↔code gap census (2026-07-12 audit)
-plus everything needed to exercise the iOS app against the server end to end.
+index now carries **wave 2**: the full design-docs↔code gap census (2026-07-12 audit,
+re-verified against the code 2026-08-21) plus everything needed to exercise the iOS app
+against the server end to end. The 2026-08-21 pass confirmed every claimed gap is still
+open, corrected three entries that were wrong as written (S-C20, S-Z4, and a dangling
+`geocoordinates-rs` gates reference), and added five slices the original census missed —
+most importantly **S-D18**, since the CLI has no upload path at all.
 
 **How to use this file.**
 
@@ -155,9 +159,10 @@ their owed remainder now lives.
 
 | Library / environment | Status | Gates |
 | --- | --- | --- |
-| `spargen` 0.1.0 | released; one known gap | Object-typed query params mis-lower, so the media asset-serve tree stays out of the generated client (hand-written byte path anyway); re-include when fixed. W003 multi-error-body ops type as `serde_json::Value` (cosmetic). |
+| `spargen` 0.1.0 | adopted; progenitor migration **complete**; one known gap | The progenitor→spargen migration is done — progenitor is gone from `Cargo.lock` and every manifest, and the OpenAPI 3.0 down-convert script (`capsule-sdk/generate_openapi.sh`) was deleted in `2996a13`; the server emits 3.1 directly via `gen_openapi`. Remaining gap: object-typed query params mis-lower, so the media asset-serve tree stays out of the generated client (hand-written byte path anyway); re-include when fixed. W003 multi-error-body ops type as `serde_json::Value` (cosmetic). |
 | `openmls` 0.8.x | adopted (X-Wing `0x004D`) | Key serialization surfaces are `test-utils`-gated — persistence rides public fields + ungated codecs; fragile if upstream privatizes (upstream ask filed against openmls). Version pairing is load-bearing (0.8.x ↔ traits/storage 0.5.x ↔ libcrux-crypto 0.3.x). |
 | `libcrux` provider | no wasm32 target | `mls` feature is host-only; a browser MLS surface would need another provider. |
+| BD-09 datum fold (`geocoordinates-rs`) | **not adopted** | The wave-2 rewrite dropped this row while `capsule-core/src/domain/gps_datum.rs` and `metadata.md` still pointed at it. Decision 2026-08-21: S-A8 implements the error-bounded refined BD-09→GCJ-02 inverse **in-house** (~40 LOC, deterministic, unit-testable) rather than taking a dependency for one function. No crate to adopt. |
 | `rawshift` (in-house RAW decode) | stabilizing, unconsumed | Full RAW support in thumbnails/import; `media::image::formats::raw` is the integration stub. |
 | `ptpip-rs` (in-house PTP/IP) | repo not created | S-B9 (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: S-F2 Kotlin run, S-F3 first Android/iOS CI runs + device lanes, S-F4 Windows ffi build + clippy + real-TPM smoke, S-F5 Kotlin ECDH adapter, S-D9 Kotlin harness. |
@@ -174,16 +179,19 @@ their owed remainder now lives.
 | S-B10 | Takeout metadata → signed sidecar enrichment           | import      | S-A10        | M    | blocked |
 | S-B11 | CLI `import --provider takeout` + real-archive run     | import      | S-B10        | S    | blocked |
 | S-B12 | Base default-album resolution (`resolve_default_album`)| import      | —            | M    | ready   |
+| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics)     | import      | —            | M    | ready   |
 | S-D16 | Standalone `capsule cull` command                      | sdk/clients | S-A10        | S    | blocked |
 | S-D17 | Typed REST client reactive 401-retry-once              | sdk/clients | —            | S    | ready   |
+| S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI   | sdk/clients | S-A10        | M    | blocked |
 | S-D19 | Hidden-view DB projection + gate wiring                | sdk/clients | —            | S    | ready   |
+| S-D20 | CLI truthfulness pass (status/register/endpoints/flags)| sdk/clients | —            | M    | ready   |
 | S-N1  | OIDC relying party (server)                            | auth        | —            | L    | ready   |
 | S-N2  | SDK/CLI OIDC login flows                               | auth        | S-N1         | M    | blocked |
 | S-N3  | `device_id` on session listing + ceremony cohorts      | auth        | —            | S    | ready   |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server      | —            | M    | ready   |
 | S-C18 | `.well-known/capsule` registry completion              | server      | —            | M    | ready   |
 | S-C19 | Authoritative album `protocol_version` pin             | server      | —            | M    | ready   |
-| S-C20 | Device identity on uploads (invariant-7 floor)         | server      | —            | M    | ready   |
+| S-C20 | Invariant-7 floor grounded in the device directory     | server      | —            | M    | ready   |
 | S-C21 | `feed_seq` visibility-order race fix                   | server      | —            | M    | ready   |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI     | server      | —            | S    | ready   |
 | S-C23 | `revoke_all_sessions` with master-key proof            | server      | —            | M    | ready   |
@@ -206,7 +214,9 @@ their owed remainder now lives.
 | S-Q4  | E2E case 12: cross-device enrollment                   | e2e         | —            | M    | ready   |
 | S-Q5  | Live-browser smokes (gRPC-web, share, drop)            | e2e         | S-P7         | M    | blocked |
 | S-Z3  | Design-doc scope-out + amendment notes                 | docs        | —            | M    | done    |
-| S-Z4  | README GraphQL scrub + "ln" artifact + regen           | docs        | —            | S    | ready   |
+| S-Z4  | README GraphQL scrub (13 READMEs + web) + regen        | docs        | —            | S    | ready   |
+| S-Z5  | Dead-code removal (exports stub, CLI import planner)    | docs        | —            | S    | ready   |
+| S-Z6  | Developer-docs parity pass                             | docs        | —            | M    | ready   |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
 ordering. `blocked` = a dependency gates the start, not review priority.
@@ -237,9 +247,12 @@ graph LR
 - **Contract:** [Metadata — Geolocation](capsule-docs/src/content/docs/design/metadata.md)
   (amended 2026-07-12: the fold is the error-bounded refined inverse, not "exact").
 - **Deliverable:** `fold_bd09_to_gcj02` in `capsule-core::domain::gps_datum` swaps the
-  `FoldGated` refusal for `geocoordinates`' refined BD-09→GCJ-02 inverse (deterministic,
-  sub-meter bound), no signature change; drop `DatumFoldError::FoldGated` if nothing
-  else needs it. Flips S-A7 done*→done (update the register row).
+  `FoldGated` refusal for an **in-house** error-bounded refined BD-09→GCJ-02 inverse
+  (deterministic, sub-meter bound), no signature change; drop `DatumFoldError::FoldGated`
+  if nothing else needs it. Flips S-A7 done*→done (update the register row).
+  Decision 2026-08-21: implemented in-crate rather than via a `geocoordinates` dependency —
+  it is one ~40-LOC iterative refinement, and the dangling gates-table reference the file
+  comments pointed at is replaced by the "BD-09 datum fold" row above.
 - **Done when:** the metadata doc's amended datum-verbatim-storage bullet passes (BD-09
   folds within bound, deterministically; GCJ-02 verbatim; WGS-84 wire-absent
   byte-identical); `mise run check-rust` green. **Tier:** Unit.
@@ -313,6 +326,30 @@ graph LR
 - **Done when:** the organization doc's resolution-order bullets (minus override rows)
   pass; planner determinism suite unchanged. **Tier:** Unit.
 
+### S-B13 — Codec stubs → typed `UnsupportedFormat`
+
+- **Contract:** [Thumbnails and Previews](capsule-docs/src/content/docs/design/thumbnails.md);
+  [Module Map](capsule-docs/src/content/docs/design/module-map.md) (`capsule-core::media` row,
+  "only JPEG decode is implemented today").
+- **Gap:** `capsule-core/src/media/image/formats/` ships eight pure-stub modules
+  (`avif`, `bmp`, `dng`, `gif`, `heif`, `jxl`, `tiff`, `webp`) at 22 `unimplemented!()`
+  each, plus `raw.rs` at 21 and `media/fs/mod.rs` at 1 — **197 of the repo's 199 panicking
+  stubs**. `media/fs/mod.rs` dispatches to them by `ImageFormat`, so any non-JPEG/PNG image
+  aborts the process rather than failing.
+- **Deliverable:** make the stub types **uninhabited** (`pub enum AvifImage {}`), so every
+  `&self` body is `match *self {}` — total, non-panicking, and unreachable by construction.
+  The only two ways to obtain one (`ImageDecode::decode_from_bytes`, `Image::from_raw_parts`)
+  already return `Result`, so they return a new
+  `ImageError::UnsupportedFormat { format, op }`. `media/fs` dispatch is unchanged — the `?`
+  now propagates instead of aborting. Add `ImageFormat::is_decodable()` +
+  `SUPPORTED_IMAGE_FORMATS` and wire them into the import planner's `unsupported` bucket so
+  such files are **planned as skipped, never attempted**.
+- **Scope-out:** real JXL/AVIF/WebP encode and RAW decode stay deferred (see the gates
+  table). This slice makes the gap honest, not smaller.
+- **Done when:** `rg 'unimplemented!\(|todo!\(' capsule-core/src/media` is empty; a
+  table-driven test asserts every unsupported format returns `UnsupportedFormat` and that
+  `is_decodable` agrees with the dispatch table; `mise run check-rust` green. **Tier:** Unit.
+
 ## Lane D — SDK / clients
 
 ### S-D16 — Standalone `capsule cull`
@@ -345,6 +382,53 @@ graph LR
   (same 5-minute-grace contract as Recently Deleted).
 - **Done when:** hidden assets vanish from default views, appear only in the gated
   Hidden view; gate test mirrors `query_recently_deleted`'s. **Tier:** Unit.
+
+### S-D18 — `capsule push`
+
+- **Contract:** [Import — Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md),
+  [Clients](capsule-docs/src/content/docs/design/clients.md).
+- **Gap** (found 2026-08-21; the wave-2 census never named it): **the CLI has no upload
+  path at all.** `capsule-sdk/src/upload.rs` is a complete resumable upload client with
+  `create_session`/`upload`/`upload_resuming`/`head`/`list_sessions`, and
+  `capsule-cli/src/remote.rs` imports only `capsule_sdk::{auth, sync}`. `capsule import` is
+  local-only; `capsule sync` is pull-only (`SyncConsumer::pull_into`). Nothing in the CLI
+  moves a byte to the server, which makes the primary user flow — offload my photos —
+  impossible. This is the single biggest gap in the product today.
+- **Deliverable:** a **separate `capsule push`** command (with `capsule import --push` as
+  sugar — import must stay offline because its determinism suite depends on it, and push
+  must be re-runnable against an unchanged library). Add a `Workspace::upload_bundle(asset_id)`
+  accessor, extracted from the per-asset re-encrypt loop `export_backup` already runs, so no
+  crypto is duplicated. Note `AssetUploader` (`import/streaming.rs`) is unusable here: it has
+  zero implementations and `stream_candidate` holds `&mut Workspace` across the call, so push
+  is a **post-import pass**, not a streaming-path impl. Drive the staged tier ladder through
+  the landed `staged::StagedScheduler`. Resume derives from **server truth** (feed pull →
+  `staged::held_from_feed`), so there is no new client state file.
+- **Depends on:** S-A10 (a session-scoped album cannot be pushed and re-pushed).
+- **Done when:** a testcontainer round trip — register → import → push → `/storage/verify`
+  reports durable → sync → `capsule list` shows the asset — passes; re-running `push` is a
+  no-op. **Tier:** Unit + E2E (case 2's CLI shape).
+
+### S-D20 — CLI truthfulness pass
+
+- **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md) (the CLI is a
+  first-class client), [Authentication](capsule-docs/src/content/docs/design/authentication.md).
+- **Gap** (found 2026-08-21): several CLI surfaces report fiction.
+  `capsule auth status` and `capsule status` read `CAPSULE_AUTH_TOKEN` from the environment
+  and never `session.json`, fabricate a 30-day expiry, and hardcode `Disconnected` /
+  "Backend not implemented" — so after a **successful** `capsule auth login` the CLI still
+  says "Not logged in". `config.rs` never parses `config.toml` and fabricates
+  `user_id = "user@example.com"`. `--force` (sync), `--local`/`--remote` (list) are parsed
+  and silently discarded. Endpoint defaults point at ports 8080/8081 while the server serves
+  one port (3000) under `/v1/auth` and `/v1/sync`. There is no `capsule auth register`, so
+  account creation requires a hand-written `curl`.
+- **Deliverable:** single `CAPSULE_ENDPOINT` base (default `http://127.0.0.1:3000`) deriving
+  the auth/upload/sync paths, per-endpoint overrides retained; `capsule auth register` over
+  the existing `AuthClient::register`; real `AuthStatus` off `session.json`, real
+  `ServerStatus` off `GET /v1/version`, real `SyncStatus` off the sync store; delete
+  `config.rs`; honor the three discarded flags. Every new string is a catalog key.
+- **Done when:** `rg "not implemented|user@example" capsule-cli/src` is empty;
+  `cargo nextest run -p capsule-cli` green including a test that `auth status` reflects a
+  persisted session. **Tier:** Unit.
 
 ## Lane N — auth (OIDC first-class alongside local auth)
 
@@ -426,16 +510,23 @@ carries the audience split. Today OIDC is a config struct with zero routes
 - **Done when:** invariant 6's rejecting test covers the first-write case (fresh album,
   mismatched request → reject). **Tier:** Unit.
 
-### S-C20 — Device identity on uploads
+### S-C20 — Ground invariant-7's floor in the device directory
 
 - **Contract:** [Validation invariant 7](capsule-docs/src/content/docs/design/threat-model/validation.md),
   [Keys — Device Directory](capsule-docs/src/content/docs/design/cryptography/keys.md).
-- **Gap:** the upload contract carries no device id, so the `added_at` floor still uses
-  account-creation time even though the directory table exists (S-C9's note).
-- **Deliverable:** `created_by_device` carried on the upload/ops wire (envelope
-  battery updated), verified against the published directory (membership +
-  per-device `added_at` ≺ request timestamp), with the account-creation floor as the
-  documented fallback for directory-less accounts.
+- **Gap** (corrected 2026-08-21 — the original census claim that "the upload contract
+  carries no device id" was wrong): `created_by_device` is already carried on the wire
+  (`capsule-api/upload/src/models/requests.rs`, `capsule-sdk/src/upload.rs`) and persisted
+  into receipts (`capsule-api/upload/src/service/upload.rs`). What is missing is narrower:
+  the invariant-7 `added_at` floor is still account-creation time. `uploader_added_at`
+  (`capsule-api/upload/src/service/upload.rs`, `service/ops.rs`) returns `user.created_at`,
+  and its comment "until the directory table lands" is itself stale — S-C9 landed that
+  table. `EnvelopeContext.device_added_at` is fed the account floor, and the invariant-7
+  test asserts against that floor rather than a directory row.
+- **Deliverable:** resolve `added_at` from the published device directory for the
+  `created_by_device` already on the request — membership check plus per-device
+  `added_at` ≺ request timestamp — keeping the account-creation floor as the documented
+  fallback for directory-less accounts. The wire and envelope battery need no change.
 - **Done when:** invariant 7's test uses a real directory entry's `added_at` (pre-dating
   entry accepted; post-dating rejected; unknown device rejected). **Tier:** Unit + Smoke.
 
@@ -716,11 +807,60 @@ shape = 5, 8 (server half = S-C24), 13; this lane closes the rest.
 
 - **Contract:** [API Surfaces — Legacy: GraphQL](capsule-docs/src/content/docs/design/api-surfaces.md);
   S-G1's residual note.
-- **Deliverable:** remove the GraphQL mentions from the 10 translated READMEs, fix the
-  English README's botched scrub artifact ("HTTP, gRPC, ln, WebSockets"), and re-run
-  `xtask translate-readme` so fingerprints agree.
-- **Done when:** `rg -i graphql README*` is empty; `translate-readme-check` green.
+- **Deliverable** (corrected 2026-08-21 — the census claimed a botched scrub artifact
+  "HTTP, gRPC, ln, WebSockets" in the English README; **no such string exists**, and the
+  English README is not already clean): remove the GraphQL mentions from **all 13**
+  READMEs — `README.md` included, at the "HTTP, gRPC, GraphQL, WebSockets" and "multiple
+  APIs (GraphQL, REST, gRPC)" lines — plus the historical mention in
+  `capsule-web/src/data/server/server-gateway.ts`, then re-run `xtask translate-readme`
+  so fingerprints agree.
+- **Done when:** `rg -i graphql README* capsule-web/src` is empty; `translate-readme-check`
+  green.
 - **Tier:** docs build.
+
+### S-Z5 — Dead-code removal
+
+- **Gap:** `capsule-api/media/src/routes/exports.rs` is a five-line comment block listing
+  four unimplemented `/v1/exports` endpoints and is mounted nowhere.
+  `capsule-cli/src/import/plan.rs` is an `#[allow(dead_code)]` stub whose
+  `create_import_plan` returns `Err("not yet implemented — use Phase 9 CLI commands")`, and
+  `capsule-cli/src/import/mod.rs` is `mod plan;` plus `// TODO: Use this ^^`. Phase 9
+  shipped; both are residue that reads as planned work.
+- **Deliverable:** delete both, plus their `mod`/route registrations. If a data-export
+  surface is still wanted, it belongs in the Post-v1 Register as a named item, not as an
+  unmounted file.
+- **Done when:** both files are gone, `mise run check-rust` green. **Tier:** build.
+
+### S-Z6 — Developer-docs parity pass
+
+- **Gap:** the non-design docs describe a system that does not exist.
+  `development/architecture.md` links a `capsule-desktop` package that was never created,
+  points at the wrong GitHub org, and describes Envoy/Istio sidecars.
+  `development/local-development.md` is entirely K3d + Skaffold + cargo-watch and has no
+  relationship to the real `mise` task graph. `guides/self-hosting.md` has bare
+  `<!-- TODO -->` sections and lists MinIO as a live dependency (the code uses a filesystem
+  `UPLOAD_DIR`; S-P7 removes the compose service). `design/module-map.md` carries 60
+  "planned" markers for modules that landed in the v1 campaign, and a status paragraph
+  claiming "none of the 13 E2E cases is runnable today" when seven now carry markers.
+- **Deliverable:** bring all four into line with what is actually built and actually run.
+  The module-map status paragraph and "planned" annotations are the load-bearing half —
+  they are what a reader uses to decide whether a module exists.
+- **Done when:** `rg -n 'capsule-desktop|Skaffold|K3d' capsule-docs` is empty; no
+  `<!-- TODO -->` remains in `guides/`; the module-map's E2E status paragraph names the live
+  cases; `mise run check-docs` and `check-md` green. **Tier:** docs build.
+
+## Deferred Migrations Register
+
+Framework migrations we have decided **not** to start, with the cost that decision is
+buying. These are neither slices (no deliverable) nor post-v1 features (no user-visible
+capability) — they get their own section because burying a migration this size in the gates
+table hides what it would cost.
+
+| Migration | Status | Measured cost today | Unblocks when |
+| --- | --- | --- | --- |
+| `salvo` → [`kynos`](https://github.com/getkono/kynos) | **deferred, no target date** | ~648 `salvo` occurrences across 84 files: 63 `#[handler]`/`#[endpoint]` route fns, 51 `impl Writer`, 41 `EndpointOutRegister`, 67 `ToSchema`, 109 `Depot` references. Critically this is **not a transport swap** — the wire-contract types are themselves salvo-typed (`capsule-api/auth/src/models/responses.rs` alone is 1440 LOC / 113 occurrences), and the gRPC-web bridge is a hand-written salvo `Handler` over a `tower::Service`. | `kynos` stabilizes (it is WIP, and has zero references in this repo today). **Precondition, and the only tractable first step: a separate `feat(api): decouple wire-contract types from salvo` slice** moving `models/{requests,responses}` onto plain serde behind a thin per-framework adapter. Attempting the migration before that lands would stall every other lane. |
+| `progenitor` → [`spargen`](https://github.com/getkono/spargen) | **done** | — | Complete. See the `spargen` gates row above; the only open item is spargen's object-typed-query-param lowering. `capsule-sdk/README.md` still claims `AuthenticatedClient` is "parked (commented out)" — stale prose, fixed by S-Z6. |
+| Real image codecs (JXL/AVIF/WebP encode, RAW decode) | **deferred** | Nine format modules are decode/encode stubs; only JPEG and PNG are real. | `rawshift` stabilizes for RAW; the JXL/AVIF/WebP encode half is picked up separately against the thumbnails.md format table. S-B13 makes the gap a typed `UnsupportedFormat` error and has the import planner skip such inputs, so the deferral cannot cause incorrect behaviour — only visibly absent behaviour. |
 
 ## Post-v1 Register
 
