@@ -164,6 +164,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             library,
             r#move,
             force,
+            passphrase_stdin,
         } => {
             println!(
                 "{}",
@@ -178,10 +179,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             // Open the library as a signed workspace: imports land on the signed lifecycle path
             // (signed sidecar + manifest + provenance + derivatives), never the legacy unsigned
             // sidecar (S-B2). A first import initializes the account under the given passphrase.
-            let passphrase = Password::new()
-                .with_prompt("Library passphrase")
-                .interact()
-                .map_err(|e| eyre!("Failed to read passphrase: {e}"))?;
+            let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
             let mut ws = as_capsule_cli(
                 Workspace::open(&library, passphrase.as_bytes(), DeviceTier::Normal.params())
                     .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,

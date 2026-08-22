@@ -22,6 +22,10 @@ pub(crate) enum Commands {
         /// Re-import files even if they already exist (duplicate override)
         #[arg(long)]
         force: bool,
+        /// Read the library passphrase from stdin instead of prompting, so imports
+        /// work in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
     },
     /// Manage the local library
     Library {
