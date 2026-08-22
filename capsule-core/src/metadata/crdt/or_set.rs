@@ -92,6 +92,26 @@ impl<T: Ord + Clone> OrSet<T> {
         self.adds.contains_key(add_id)
     }
 
+    /// The highest `add_id.counter` this set has ever observed from `device`, or `None` if it
+    /// has observed none.
+    ///
+    /// Deliberately spans **tombstoned adds as well as live ones**: a removed add still *burned*
+    /// its counter, so the high-water mark a restarting device reseeds from
+    /// ([`Counter::reseed_from_max`](super::counter::Counter::reseed_from_max)) must count it.
+    /// Using [`entries`](Self::entries) here instead would let a device re-issue the `add_id` of
+    /// a tag it had removed, aliasing two distinct adds — exactly the failure the add-id binding
+    /// rule exists to prevent (SSoT: [Metadata — Add-id Binding]).
+    ///
+    /// [Metadata — Add-id Binding]: https://docs/design/metadata/#add-id-binding
+    pub fn max_add_counter_for(&self, device: &Uuid) -> Option<u64> {
+        self.adds
+            .keys()
+            .chain(self.removes.iter())
+            .filter(|id| &id.device == device)
+            .map(|id| id.counter)
+            .max()
+    }
+
     /// The live `(add_id, element)` pairs — those not tombstoned. Unlike [`value`](Self::value)
     /// this preserves each element's `add_id`, so a caller can surface elements (e.g. AI tags) and
     /// later target a specific one by `add_id` (dismiss, promote).
@@ -116,6 +136,35 @@ mod tests {
             device: dev(device),
             counter,
         }
+    }
+
+    #[test]
+    fn max_add_counter_is_per_device_and_counts_tombstones() {
+        let mut s: OrSet<String> = OrSet::new();
+        assert_eq!(s.max_add_counter_for(&dev(1)), None);
+
+        s.add("a".into(), id(1, 0));
+        s.add("b".into(), id(1, 7));
+        s.add("c".into(), id(2, 99));
+        // A tombstoned add still burned its counter, so it must raise the high-water mark.
+        s.remove(id(1, 7)).unwrap();
+
+        assert_eq!(s.max_add_counter_for(&dev(1)), Some(7));
+        assert_eq!(s.max_add_counter_for(&dev(2)), Some(99));
+        assert_eq!(s.max_add_counter_for(&dev(3)), None);
+    }
+
+    /// A remove merged in from a peer names an `add_id` this replica may hold no add for once
+    /// the sets are pruned; the high-water mark still has to see it.
+    #[test]
+    fn max_add_counter_sees_a_merged_remove_without_its_add() {
+        let mut a: OrSet<String> = OrSet::new();
+        a.add("x".into(), id(4, 12));
+        a.remove(id(4, 12)).unwrap();
+
+        let mut b: OrSet<String> = OrSet::new();
+        b.merge(&a);
+        assert_eq!(b.max_add_counter_for(&dev(4)), Some(12));
     }
 
     #[test]

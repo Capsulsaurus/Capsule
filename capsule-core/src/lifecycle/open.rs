@@ -5,14 +5,97 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
+use uuid::Uuid;
+use walkdir::WalkDir;
+
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
 use crate::cbor;
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{Account, AccountFile, DeviceDirectory, HybridVerifyingKey, Signer};
 use crate::metadata::crdt::Counter;
+use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
 const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
+
+/// Recover `device`'s `add_id` high-water mark by sweeping the signed sidecars under
+/// `root/media` — the maximum `add_id.counter` this device has ever written, across every
+/// `AddId`-bearing OR-set of every sidecar (slice `S-A9`).
+///
+/// `None` means the device provably issued nothing: no sidecar on disk bears its `device_id` in
+/// any OR-set, so [`Counter::reseed_from_max`] may safely reset to zero. Anything else is one
+/// past the maximum, which is what makes the counter monotonic over the `device_id`'s lifetime
+/// rather than merely within one process (SSoT: [Metadata — Add-id Binding § Counter durability
+/// across restarts]).
+///
+/// The sweep reads the sidecars **without re-verifying their signatures**, for the same reason
+/// [`rebuild_index`](crate::library::rebuild::rebuild_index) does not: these are the device's own
+/// local plaintext files, and the value recovered is only ever a *floor* on the next counter.
+/// An unreadable or foreign-schema sidecar is warned about and skipped rather than failing the
+/// open — but note that skipping can only lower the floor, so the warning is load-bearing for
+/// after-the-fact recovery, not cosmetic.
+///
+/// [Metadata — Add-id Binding § Counter durability across restarts]: https://docs/design/metadata/#add-id-binding
+#[tracing::instrument(skip_all, fields(root = %root.display(), device = %device))]
+fn sweep_max_add_counter(root: &Path, device: &Uuid) -> Option<u64> {
+    let media = root.join("media");
+    if !media.exists() {
+        tracing::debug!("add-id reseed: no media directory; device has issued nothing");
+        return None;
+    }
+
+    let mut max: Option<u64> = None;
+    let mut scanned = 0usize;
+    let mut skipped = 0usize;
+    for entry in WalkDir::new(&media)
+        .into_iter()
+        .filter_map(std::result::Result::ok)
+    {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        // The signed sidecar is exactly `{uuid}.cbor`; the sibling `{uuid}.provenance.cbor` and
+        // `{uuid}.receipts.cbor` logs carry no OR-sets and must not be parsed as sidecars.
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if !name.ends_with(".cbor")
+            || name.ends_with(".provenance.cbor")
+            || name.ends_with(".receipts.cbor")
+        {
+            continue;
+        }
+        let bytes = match fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                skipped += 1;
+                tracing::warn!(sidecar = %path.display(), error = %e, "add-id reseed: unreadable sidecar; skipping");
+                continue;
+            }
+        };
+        match SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1) {
+            Ok(sidecar) => {
+                scanned += 1;
+                // Every `AddId`-bearing OR-set on the sidecar. The LWW registers (caption,
+                // rating, cull, hidden, stack) stamp `(ts, device_id)` and issue no `add_id`.
+                for candidate in [
+                    sidecar.tags_user.max_add_counter_for(device),
+                    sidecar.tags_ai.max_add_counter_for(device),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    max = Some(max.map_or(candidate, |m: u64| m.max(candidate)));
+                }
+            }
+            Err(e) => {
+                skipped += 1;
+                tracing::warn!(sidecar = %path.display(), error = %e, "add-id reseed: undecodable sidecar; skipping");
+            }
+        }
+    }
+    tracing::debug!(scanned, skipped, max_issued = ?max, "add-id reseed: sidecar sweep complete");
+    max
+}
 
 impl Workspace {
     /// Create a fresh workspace: initialise the library directory and a new account, and
@@ -67,6 +150,10 @@ impl Workspace {
         let device_signer: Box<dyn Signer> =
             device_signer.unwrap_or_else(|| Box::new(account.device.dsk.clone()));
         let directory = Self::build_directory(&account, device_signer.verifying_key());
+        // A freshly minted `device_id` over a freshly initialised (provably empty) library has
+        // provably issued no `add_id`, so it starts at zero with no sweep — the one case the
+        // add-id durability rule licenses a reset (`S-A9`). Every *re*-open goes through
+        // [`open`](Self::open), which reseeds from the sidecars on disk.
         let counter = Counter::new(account.device.device_id);
         Ok(Self {
             root: root.to_path_buf(),
@@ -143,7 +230,17 @@ impl Workspace {
 
         let device_signer: Box<dyn Signer> = Box::new(account.device.dsk.clone());
         let directory = Self::build_directory(&account, device_signer.verifying_key());
-        let counter = Counter::new(account.device.device_id);
+        // `S-A9`: reseed the `add_id` counter to one past the maximum this device has ever
+        // written, recovered from its own signed sidecars. Without this a reopened library
+        // reissues counters from zero and aliases two distinct OR-set adds.
+        let device_id = account.device.device_id;
+        let mut counter = Counter::new(device_id);
+        counter.reseed_from_max(sweep_max_add_counter(root, &device_id));
+        tracing::info!(
+            device = %device_id,
+            next_add_counter = counter.peek(),
+            "workspace open: add-id counter reseeded"
+        );
         Ok(Self {
             root: root.to_path_buf(),
             account,
@@ -189,6 +286,127 @@ mod tests {
     use super::*;
     use crate::crypto::primitives::Argon2Params;
     use crate::crypto::verify_asset::VerifyOutcome;
+
+    /// Fast-Argon2 params for a reopen in these tests (the production cost would dominate).
+    fn fast_params() -> Argon2Params {
+        Argon2Params {
+            mem_kib: 64,
+            t_cost: 1,
+            p_cost: 1,
+        }
+    }
+
+    /// **S-A9.** A reopened library must never reissue an `add_id` counter it has already
+    /// written: `Workspace::open` reseeds from the maximum counter this device's own signed
+    /// sidecars record, so the next issued counter is strictly greater than every prior one.
+    #[test]
+    fn add_id_counter_reseeds_strictly_greater_after_reopen() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF add-id durability bytes").unwrap();
+
+        // Session 1: two tag adds burn counters 0 and 1 into the signed sidecar.
+        let (device, issued) = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Trip");
+            let id = ws.import_asset(album, &img).unwrap();
+            ws.tag_add(&id, "vacation").unwrap();
+            ws.tag_add(&id, "coast").unwrap();
+            let issued: Vec<u64> = ws
+                .asset(&id)
+                .unwrap()
+                .sidecar
+                .tags_user
+                .entries()
+                .iter()
+                .map(|(add_id, _)| add_id.counter)
+                .collect();
+            assert_eq!(issued, vec![0, 1], "session 1 issues 0 and 1");
+            (ws.account.device.device_id, issued)
+        };
+
+        // Session 2: a brand-new process over the same library.
+        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert_eq!(
+            ws2.account.device.device_id, device,
+            "reopening resumes the same device identity"
+        );
+        let mut counter = ws2.counter.clone();
+        let next = counter.issue().counter;
+        assert!(
+            next > *issued.iter().max().unwrap(),
+            "reseeded counter {next} must be strictly greater than every written counter {issued:?}"
+        );
+        assert_eq!(next, 2);
+    }
+
+    /// **S-A9.** The reset-to-zero case is the *only* one the durability rule licenses: a device
+    /// whose sidecars bear none of its `add_id`s has provably issued nothing.
+    #[test]
+    fn add_id_counter_resets_to_zero_for_a_device_that_issued_nothing() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF no tags were ever added").unwrap();
+
+        {
+            // Import writes a sidecar, but an import issues no `add_id` — the OR-sets are empty.
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Trip");
+            ws.import_asset(album, &img).unwrap();
+        }
+
+        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert_eq!(
+            ws2.counter.peek(),
+            0,
+            "a device with no written add_id starts at zero"
+        );
+    }
+
+    /// **S-A9.** The high-water mark is per-device: another device's much larger counters in the
+    /// same sidecar must not inflate this device's next `add_id` (they are a different key in the
+    /// `(device, counter)` space, and consuming them would burn 500 of our own counters for
+    /// nothing).
+    #[test]
+    fn add_id_reseed_ignores_other_devices_counters() {
+        use crate::metadata::crdt::AddId;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF two devices tagged this asset").unwrap();
+
+        let asset_id = {
+            let mut ws = fast_workspace(lib.path());
+            let album = ws.create_album("Trip");
+            let id = ws.import_asset(album, &img).unwrap();
+            ws.tag_add(&id, "ours").unwrap(); // our device: counter 0
+
+            // Fold in a peer device's add at a far higher counter, exactly as a merge from that
+            // peer's sidecar would, and re-persist the sidecar.
+            let asset = ws.assets.get_mut(&id).unwrap();
+            asset.sidecar.tags_user.add(
+                "theirs".to_string(),
+                AddId {
+                    device: Uuid::from_u128(0xBEEF),
+                    counter: 500,
+                },
+            );
+            let path = ws.sidecar_path(ws.asset(&id).unwrap());
+            fs::write(path, ws.asset(&id).unwrap().sidecar.to_canonical_vec()).unwrap();
+            id
+        };
+        assert_ne!(asset_id, Uuid::nil());
+
+        let ws2 = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert_eq!(
+            ws2.counter.peek(),
+            1,
+            "our next counter is one past OUR max (0), not one past the peer's 500"
+        );
+    }
 
     /// S-D15: an injected `client_id` flows onto every write the workspace authors — the create
     /// manifest and a later metadata-update record both report the app's identity (not the bare
