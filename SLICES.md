@@ -70,6 +70,20 @@ Everything the v1 campaign shipped, now the floor wave 2 stands on:
   cadence, CLI auth/sync/list/demo (E2E case 1), web guest-drop + share-viewer
   (wasm), aggregated federated albums, uniffi FFI for catalog + SDK user flows.
 - **Legacy retired**: GraphQL, plaintext proto/entities/import-executor gone.
+- **Cohesion floor** (2026-08-21, wave-0 ground clearing): `lifecycle.rs` (3501 LOC, reaching
+  17 of 24 sibling modules) split into a 12-file `lifecycle/` module, none over 600 LOC, with
+  `Workspace` still one type and every public path preserved — eleven wave-2 slices touch this
+  area and serialized on it before. The three real module cycles are broken (`db → ml` via a
+  `domain::model_identity` leaf plus an `EmbeddingProvenance` seam, `sidecar → library` via
+  `utils::paths`, `ml → lifecycle` via `AssetSource`/`AiTagSink`), giving
+  `domain ← db ← ml ← lifecycle`. The other seven reported "cycles" are rustdoc intra-doc
+  links only, with no `use` and no call sites — recorded in module-map.md so a future audit
+  does not re-flag them.
+- **Operable server** (`S-P7`): `mise run serve-api` brings up deps, seeds `.env`, mints a
+  signing key, migrates and serves in one command. The gRPC sync service moved to the server
+  **root** — tonic's `AddOrigin` keeps only scheme and authority, so the previous
+  `/v1/sync/...` mount was unreachable from every native client and `capsule sync` could not
+  work against a real deployment at all.
 - **i18n**: catalog infra + 13 locales + error-code contract + three-surface guard +
   README translation pipeline.
 
@@ -179,7 +193,7 @@ their owed remainder now lives.
 | S-B10 | Takeout metadata → signed sidecar enrichment           | import      | S-A10        | M    | blocked |
 | S-B11 | CLI `import --provider takeout` + real-archive run     | import      | S-B10        | S    | blocked |
 | S-B12 | Base default-album resolution (`resolve_default_album`)| import      | —            | M    | ready   |
-| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics)     | import      | —            | M    | ready   |
+| S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics)     | import      | —            | M    | done    |
 | S-D16 | Standalone `capsule cull` command                      | sdk/clients | S-A10        | S    | blocked |
 | S-D17 | Typed REST client reactive 401-retry-once              | sdk/clients | —            | S    | ready   |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI   | sdk/clients | S-A10        | M    | blocked |
