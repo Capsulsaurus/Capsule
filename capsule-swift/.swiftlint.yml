@@ -5,6 +5,12 @@ included:
 
 excluded:
   - .build
+  # Parked: both modules are in the repository and typecheck clean, but are not
+  # in the Tuist graph because they crash the Swift 6.3 compiler in IRGen (see
+  # the note in Project.swift). Linting code that cannot be compiled produces
+  # findings nobody can verify, so they are excluded until they build again.
+  - Modules/FeatureTransfer
+  - Modules/FeatureSharing
   - .ffi
   - Derived
 
@@ -43,6 +49,16 @@ opt_in_rules:
   - vertical_whitespace_closing_braces
   - weak_delegate
   - yoda_condition
+
+# `master` is this project's own cryptographic vocabulary, not the master/slave
+# usage the rule exists to catch: the master key is the root of the key chain
+# (`capsule-core::crypto::keys::MasterKey`), and master-key *proof* is the
+# specific authentication the docs require for `revoke_all_sessions`. Renaming it
+# in Swift alone would put the client out of step with the design docs, the Rust
+# core, and the wire contract — so the term is allowed, and only here.
+inclusive_language:
+  override_allowed_terms:
+    - master
 
 disabled_rules:
   # swiftformat owns line wrapping (--maxwidth none); avoid a turf war.

@@ -289,6 +289,51 @@ private let moduleTargets: [Target] =
         testDependencies: [supportDependency]
     )
 
+    // Transfers, quota, storage reclamation, sync status, and the
+    // NOTE: `FeatureTransfer` and `FeatureSharing` are present in the repository
+    // but deliberately NOT in this graph. Both crash the Swift 6.3 compiler in
+    // IRGen — `llvm::report_fatal_error` via `report_at_maximum_capacity` inside
+    // `SyncCallEmission::setArgs`, reached from `IRGenSILFunction::emitSILFunction`
+    // while compiling `ModerationView.swift` and `UploadDetailView.swift`. It is
+    // not a type error: both modules typecheck clean for iOS and macOS, and the
+    // crash survives stripping their `#Preview` blocks. Re-add them here once the
+    // trigger is isolated (or the toolchain moves).
+
+    // Onboarding, sign-in, the first-device enrollment ceremony,
+    // recovery, and the device/session ledger.
+    + module(
+        "FeatureAuth",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+            .target(name: "CapsuleNavigation"),
+            .target(name: "CapsuleUI"),
+            // SwiftUI previews are driven by real scenarios, so the mock is a
+            // build dependency of the screens, not only of their tests.
+            .target(name: "CapsuleMock"),
+        ],
+        testDependencies: []
+    )
+
+    // Share links, guest-drop inbox, LAN peering, federation, and
+    // The eighteen-section settings tree — a grouped list on iOS,
+    // a tabbed Settings window on macOS.
+    + module(
+        "FeatureSettings",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+            .target(name: "CapsuleNavigation"),
+            .target(name: "CapsuleUI"),
+            // SwiftUI previews are driven by real scenarios, so the mock is a
+            // build dependency of the screens, not only of their tests.
+            .target(name: "CapsuleMock"),
+        ],
+        testDependencies: []
+    )
+
     // Collections home — albums, media types, places, utilities.
     + module(
         "FeatureCollections",
@@ -384,6 +429,8 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "FeatureViewerTests",
     "FeatureAlbumsTests",
     "FeatureSearchTests",
+    "FeatureAuthTests",
+    "FeatureSettingsTests",
 ]
 
 // MARK: - Project

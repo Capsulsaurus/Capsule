@@ -23,13 +23,13 @@ public enum MockPalette {
     /// The dominant colour: a mid-saturation, mid-value tone, which is what a
     /// photograph's average actually looks like. Fully saturated primaries would
     /// make the mock library look like a colour picker.
-    public static func dominantColour(seed: UInt64, derivationIndex: Int) -> RGBColor {
+    public static func dominantColour(seed: UInt64, derivationIndex: Int) -> CapsuleDomain.RGBColor {
         let hueValue = hue(seed: seed, derivationIndex: derivationIndex)
         let spread = MockHash.value(seed: seed, index: derivationIndex, salt: .colour, sub: 1)
         let saturation = 0.28 + MockHash.fraction(spread) * 0.34
         let brightness = 0.42 + MockHash.fraction(MockHash.mix(spread)) * 0.36
         let components = rgb(hue: hueValue, saturation: saturation, brightness: brightness)
-        return RGBColor(
+        return CapsuleDomain.RGBColor(
             red: UInt8(components.red * 255),
             green: UInt8(components.green * 255),
             blue: UInt8(components.blue * 255)
@@ -38,12 +38,12 @@ public enum MockPalette {
 
     /// The gradient's far end — the same hue rotated a little and darkened, the
     /// way light actually falls across a frame.
-    public static func shadowColour(seed: UInt64, derivationIndex: Int) -> RGBColor {
+    public static func shadowColour(seed: UInt64, derivationIndex: Int) -> CapsuleDomain.RGBColor {
         let hueValue = (hue(seed: seed, derivationIndex: derivationIndex) + 0.08).truncatingRemainder(dividingBy: 1)
         let spread = MockHash.value(seed: seed, index: derivationIndex, salt: .colour, sub: 2)
         let saturation = 0.34 + MockHash.fraction(spread) * 0.3
         let components = rgb(hue: hueValue, saturation: saturation, brightness: 0.22)
-        return RGBColor(
+        return CapsuleDomain.RGBColor(
             red: UInt8(components.red * 255),
             green: UInt8(components.green * 255),
             blue: UInt8(components.blue * 255)
@@ -94,9 +94,9 @@ public struct MockThumbnail: Sendable, Equatable {
     /// 8-bit RGBA, alpha last and premultiplied, tightly packed row-major.
     public let pixels: Data
     /// The colour the LQIP reports for the same asset.
-    public let dominantColor: RGBColor
+    public let dominantColor: CapsuleDomain.RGBColor
 
-    public init(width: Int, height: Int, pixels: Data, dominantColor: RGBColor) {
+    public init(width: Int, height: Int, pixels: Data, dominantColor: CapsuleDomain.RGBColor) {
         self.width = width
         self.height = height
         self.pixels = pixels

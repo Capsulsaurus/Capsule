@@ -107,8 +107,8 @@ public actor MockThumbnailRenderer {
     private func paintGradient(
         in context: CGContext,
         size: (width: Int, height: Int),
-        from start: RGBColor,
-        to end: RGBColor
+        from start: CapsuleDomain.RGBColor,
+        to end: CapsuleDomain.RGBColor
     ) {
         let colours = [start, end].map { colour in
             CGColor(
