@@ -175,6 +175,13 @@ pub enum OpenMlsAuthorityError {
     /// A [resilience](resilience) operation (reconciliation / re-keying) failed.
     #[error("mls resilience: {0}")]
     Resilience(String),
+    /// [`block_user`](OpenMlsAuthority::block_user) was asked to block the **local** user. A device
+    /// cannot evict itself from its own group, and returning success would tell the caller a block
+    /// took effect when nothing was removed (`S-X4`).
+    #[error(
+        "refusing to block the local user {0}: a device cannot remove itself from its own album"
+    )]
+    BlockSelf(Uuid),
 }
 
 type Result<T> = std::result::Result<T, OpenMlsAuthorityError>;
@@ -268,6 +275,33 @@ pub struct RemoveOutcome {
     /// The fresh (re-keyed) epoch's [`AlbumKeyDistribution`] (all remaining members) and
     /// [`WriteTierDistribution`] (the remaining [writers](OpenMlsAuthority::writers)).
     pub key_delivery: Vec<MlsMessageOut>,
+}
+
+/// The outcome of a [`block_user`](OpenMlsAuthority::block_user) ceremony (`S-X4`).
+///
+/// Deliberately distinguishes "removed them" from "they were not here", because the two have
+/// different consequences for the caller: only the first produces a commit to deliver and a new
+/// epoch to publish keys for.
+pub struct BlockOutcome {
+    /// The user that was blocked.
+    pub user_id: Uuid,
+    /// The leaf indices removed — one per device the blocked user had in this album. Empty iff
+    /// they were not a member.
+    pub removed_leaves: Vec<u32>,
+    /// The epoch new writes are authorized under after the block. Bumped by exactly one when a
+    /// removal happened; the unchanged ceiling otherwise.
+    pub amk_version: AmkVersion,
+    /// The `Remove` commit + the fresh epoch's key delivery, or `None` when the blocked user held
+    /// no leaves in this album (nothing to commit, no epoch burnt).
+    pub removal: Option<RemoveOutcome>,
+}
+
+impl BlockOutcome {
+    /// Whether the blocked user was already absent from this album, so no MLS commit was produced
+    /// and the epoch did not move.
+    pub fn already_absent(&self) -> bool {
+        self.removal.is_none()
+    }
 }
 
 /// An [`AlbumAuthority`] backed by a live OpenMLS group pinned to [`PINNED_CIPHERSUITE`].
@@ -450,6 +484,18 @@ impl OpenMlsAuthority {
     /// remaining members (SSoT: MLS § Remove user).
     #[tracing::instrument(skip_all, fields(album_id = %self.album_id, from_epoch = self.ceiling, leaf = leaf.u32()))]
     pub fn remove_member(&mut self, leaf: LeafNodeIndex) -> Result<RemoveOutcome> {
+        self.remove_leaves(&[leaf])
+    }
+
+    /// The one remove ceremony, over **one or more** leaves in a single `Remove` + `Commit`.
+    ///
+    /// A per-device removal passes one leaf; a [per-user block](Self::block_user) passes all of
+    /// that user's leaves, which is what the design's "MLS `Remove` proposal + `Commit` removing
+    /// **all** Charlie's devices" means — one commit, therefore exactly **one** epoch bump, not
+    /// one per device. Both spellings share this body so there is a single re-key path to reason
+    /// about.
+    #[tracing::instrument(skip_all, fields(album_id = %self.album_id, from_epoch = self.ceiling, leaves = leaves.len()))]
+    fn remove_leaves(&mut self, leaves: &[LeafNodeIndex]) -> Result<RemoveOutcome> {
         self.ensure_not_tombstoned()?;
         // Mint the re-keyed epoch's write-tier keypair; the removed member never receives its
         // private half (it cannot even decrypt the distribution — it is evicted by the commit).
@@ -457,7 +503,7 @@ impl OpenMlsAuthority {
         self.set_write_tier_aad(&minted)?;
         let (commit, _welcome, _group_info) = self
             .group
-            .remove_members(&self.identity.provider, &self.identity.mls_signer, &[leaf])
+            .remove_members(&self.identity.provider, &self.identity.mls_signer, leaves)
             .map_err(|e| OpenMlsAuthorityError::RemoveMember(format!("{e:?}")))?;
         self.group
             .merge_pending_commit(&self.identity.provider)
@@ -468,7 +514,7 @@ impl OpenMlsAuthority {
             self.build_key_distribution(new_version)?,
             self.build_write_tier_distribution(new_version)?,
         ];
-        tracing::info!(album_id = %self.album_id, to_epoch = new_version.0, "OpenMLS member removed + re-keyed");
+        tracing::info!(album_id = %self.album_id, to_epoch = new_version.0, removed = leaves.len(), "OpenMLS member removed + re-keyed");
         Ok(RemoveOutcome {
             commit,
             key_delivery,
@@ -484,6 +530,90 @@ impl OpenMlsAuthority {
                 identity::LeafBinding::from_credential_bytes(m.credential.serialized_content())
                     .ok()?;
             (binding.core.device_id == device_id).then_some(m.index)
+        })
+    }
+
+    /// Every leaf index whose LeafNode binding names `user_id` — a user's **whole device set** in
+    /// this album, which is the unit a per-user block removes. Sorted, so the removal is
+    /// deterministic; empty when the user is not a member.
+    ///
+    /// Reads the same hybrid identity binding [`leaf_index_of_device`](Self::leaf_index_of_device)
+    /// does, so a leaf that never passed `verify_leaf_binding` cannot smuggle in a `user_id`.
+    pub fn leaf_indices_of_user(&self, user_id: Uuid) -> Vec<LeafNodeIndex> {
+        let mut leaves: Vec<LeafNodeIndex> = self
+            .group
+            .members()
+            .filter_map(|m| {
+                let binding =
+                    identity::LeafBinding::from_credential_bytes(m.credential.serialized_content())
+                        .ok()?;
+                (binding.core.user_id == user_id).then_some(m.index)
+            })
+            .collect();
+        leaves.sort_by_key(LeafNodeIndex::u32);
+        leaves
+    }
+
+    // ── Ceremony 3b: per-user block (moderation) ─────────────────────────────
+
+    /// **Block a user** from this album (`S-X4`): remove *all* of their devices in one MLS
+    /// `Remove` + `Commit` and bump the AMK epoch, so the blocked user loses read access to every
+    /// future epoch and their write-tier capability is rotated out from under them.
+    ///
+    /// This is the crypto half of the [moderation doc's per-user block]; the server-visible half
+    /// (revoking the blocker's `album_share` rows) is enforced independently, so a block is
+    /// complete only when both have run. Per the design, prior epochs' keys the blocked user
+    /// already holds are **not** clawed back — assets they could already read stay readable, which
+    /// is the same removal semantics as any [`remove_member`](Self::remove_member).
+    ///
+    /// Blocking a user who is not a member is a **no-op**, not an error: it reports
+    /// [`BlockOutcome::already_absent`] with the unchanged epoch and no commit. That makes the
+    /// ceremony idempotent, which matters because the server-side block row is itself idempotent
+    /// and a retry must not burn an epoch (and a spurious epoch bump would strand every honest
+    /// concurrent uploader in the pending window for nothing).
+    ///
+    /// Refuses to block the **local** user: a device cannot evict itself from its own group, and
+    /// silently succeeding would leave the caller believing a block took effect.
+    ///
+    /// [moderation doc's per-user block]: https://docs/design/moderation/#blocklists
+    #[tracing::instrument(skip_all, fields(album_id = %self.album_id, from_epoch = self.ceiling, blocked = %user_id))]
+    pub fn block_user(&mut self, user_id: Uuid) -> Result<BlockOutcome> {
+        self.ensure_not_tombstoned()?;
+        if user_id == self.identity.user_id() {
+            return Err(OpenMlsAuthorityError::BlockSelf(user_id));
+        }
+
+        let leaves = self.leaf_indices_of_user(user_id);
+        if leaves.is_empty() {
+            tracing::info!(
+                album_id = %self.album_id,
+                blocked = %user_id,
+                "per-user block: not a member of this album; no MLS Remove, no epoch bump"
+            );
+            return Ok(BlockOutcome {
+                user_id,
+                removed_leaves: Vec::new(),
+                amk_version: AmkVersion(self.ceiling),
+                removal: None,
+            });
+        }
+
+        let removed_leaves: Vec<u32> = leaves.iter().map(LeafNodeIndex::u32).collect();
+        let removal = self.remove_leaves(&leaves)?;
+        let amk_version = AmkVersion(self.ceiling);
+        tracing::info!(
+            album_id = %self.album_id,
+            blocked = %user_id,
+            devices = removed_leaves.len(),
+            to_epoch = amk_version.0,
+            "per-user block: every device removed in one commit; AMK epoch bumped and write-tier \
+             key rotated"
+        );
+        Ok(BlockOutcome {
+            user_id,
+            removed_leaves,
+            amk_version,
+            removal: Some(removal),
         })
     }
 
