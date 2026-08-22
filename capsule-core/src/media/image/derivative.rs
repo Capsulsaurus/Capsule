@@ -118,7 +118,15 @@ impl DerivativeTier {
 /// `tier`, produce the encoded bytes for `format`. `capsule-sdk` implements this over each
 /// platform's encoder libraries; `capsule-core` owns only the resize + manifest logic around
 /// it. `Original` is never routed here — the pipeline emits the source bytes directly.
-pub trait StillEncoder {
+///
+/// `Send + Sync` because an attached encoder is stored *in* a [`Workspace`], and a `Workspace`
+/// is handed across the FFI boundary behind a `Mutex` in a uniffi object — which uniffi
+/// requires to be `Send + Sync`. Without this bound a `media`-enabled build makes every
+/// workspace-bearing FFI surface unrepresentable. A real per-platform encoder is a stateless
+/// (or internally-synchronized) wrapper over a system codec, so the bound costs nothing.
+///
+/// [`Workspace`]: crate::lifecycle::Workspace
+pub trait StillEncoder: Send + Sync {
     /// Encode `buffer` to `format` for `tier`. The returned bytes are what the manifest's
     /// `ciphertext_hash` binds.
     fn encode(
