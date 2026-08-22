@@ -107,3 +107,12 @@ hex = "0.4"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Debug info dominates `target/debug` (12 GB with full DWARF on this workspace), which caps
+# how many concurrent worktrees fit on a dev machine. Line tables keep `file:line` in every
+# backtrace and panic — what we actually read day to day — while dropping the variable-level
+# DWARF only a step debugger uses. `unpacked` leaves the remainder in per-object files rather
+# than copying it into every binary.
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
