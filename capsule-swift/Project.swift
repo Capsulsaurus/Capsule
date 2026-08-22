@@ -141,6 +141,19 @@ private let moduleTargets: [Target] =
         testDependencies: []
     )
 
+    // Mock — the in-memory implementation of every port, and the app's only
+    // data source while the Rust core is being rebuilt. Ships (rather than
+    // living in a test target) because the app itself runs on it.
+    + module(
+        "CapsuleMock",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+        ],
+        testDependencies: []
+    )
+
     // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
     // redacted bug-report bundles, and an opt-in self-hosted uploader.
     + module(
@@ -355,6 +368,7 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "CapsuleDomainTests",
     "CapsulePortsTests",
     "CapsuleNavigationTests",
+    "CapsuleMockTests",
     "CapsuleUITests",
     "ManagedStoreTests",
     "AssetKitTests",
