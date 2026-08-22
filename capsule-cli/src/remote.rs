@@ -36,18 +36,38 @@ pub struct RemoteConfig {
     pub protocol_version: String,
 }
 
+/// The default server origin — one host, one port, matching `mise run serve-api`.
+pub const DEFAULT_ENDPOINT: &str = "http://127.0.0.1:3000";
+
 impl RemoteConfig {
-    /// Build from `CAPSULE_AUTH_ENDPOINT`, `CAPSULE_SYNC_ENDPOINT`, and
-    /// `CAPSULE_PROTOCOL`, each with a local dev-server default.
+    /// Build from `CAPSULE_ENDPOINT` (one origin for the whole server), with
+    /// `CAPSULE_AUTH_ENDPOINT` / `CAPSULE_SYNC_ENDPOINT` / `CAPSULE_PROTOCOL` as
+    /// per-surface overrides for split deployments.
+    ///
+    /// The previous defaults pointed at `127.0.0.1:8080` and `:8081` — two ports that only
+    /// ever existed in the integration test, which spins the auth and sync routers on
+    /// separate listeners. A real server serves both from one port, so the defaults could
+    /// never reach it and every CLI invocation needed two environment variables set by hand.
     pub fn from_env() -> Self {
+        let base = std::env::var("CAPSULE_ENDPOINT")
+            .unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string())
+            .trim_end_matches('/')
+            .to_string();
         Self {
             auth_endpoint: std::env::var("CAPSULE_AUTH_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
-            sync_endpoint: std::env::var("CAPSULE_SYNC_ENDPOINT")
-                .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string()),
+                .unwrap_or_else(|_| Self::auth_endpoint_for(&base)),
+            // The gRPC service mounts at the server root: tonic discards any path on the
+            // endpoint URI (`AddOrigin` keeps scheme + authority only), so a prefixed sync
+            // URL is silently unreachable. Pass the bare origin.
+            sync_endpoint: std::env::var("CAPSULE_SYNC_ENDPOINT").unwrap_or(base),
             protocol_version: std::env::var("CAPSULE_PROTOCOL")
                 .unwrap_or_else(|_| DEFAULT_PROTOCOL_VERSION.to_string()),
         }
+    }
+
+    /// The auth surface hangs off `/v1/auth` on the shared origin.
+    fn auth_endpoint_for(base: &str) -> String {
+        format!("{base}/v1/auth")
     }
 }
 
@@ -103,6 +123,29 @@ pub async fn auth_login(
     let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
     store.save(&persisted)?;
     tracing::info!("login persisted to the session store");
+    Ok(())
+}
+
+/// Create an account and persist the resulting session, exactly as [`auth_login`] does.
+///
+/// Account creation previously had no CLI surface at all: the only documented route was a
+/// hand-written `curl` against `/v1/auth/register`, which put a raw HTTP call in the
+/// getting-started path of a client whose whole contract is that it never hand-rolls a
+/// network flow. This goes through the SDK's `register` like every other command.
+#[instrument(skip(store, password), fields(email = %email))]
+pub async fn auth_register(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    username: &str,
+    name: &str,
+    email: &str,
+    password: &str,
+) -> Result<(), RemoteError> {
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    let session = client.register(username, name, email, password).await?;
+    let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
+    store.save(&persisted)?;
+    tracing::info!("registration persisted to the session store");
     Ok(())
 }
 
@@ -206,4 +249,101 @@ pub async fn list<C: ConnectionTrait>(
     include_tombstoned: bool,
 ) -> Result<Vec<SyncedAssetView>, RemoteError> {
     Ok(syncstore::list_assets(db, include_tombstoned).await?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `from_env` reads process-wide state, so these run under one lock and restore what they
+    /// touched — otherwise a parallel test would see another's variables.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Clear every endpoint variable, run `f`, and restore the prior values.
+    fn with_clean_env<T>(f: impl FnOnce() -> T) -> T {
+        const VARS: [&str; 4] = [
+            "CAPSULE_ENDPOINT",
+            "CAPSULE_AUTH_ENDPOINT",
+            "CAPSULE_SYNC_ENDPOINT",
+            "CAPSULE_PROTOCOL",
+        ];
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved: Vec<_> = VARS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
+        for k in VARS {
+            unsafe { std::env::remove_var(k) };
+        }
+        let out = f();
+        for (k, v) in saved {
+            match v {
+                Some(v) => unsafe { std::env::set_var(k, v) },
+                None => unsafe { std::env::remove_var(k) },
+            }
+        }
+        drop(guard);
+        out
+    }
+
+    #[test]
+    fn endpoint_defaults_target_a_single_origin() {
+        let cfg = with_clean_env(RemoteConfig::from_env);
+        // The old defaults were :8080 and :8081 — two ports that exist only in the
+        // integration harness. A real server serves everything from one.
+        assert_eq!(cfg.auth_endpoint, "http://127.0.0.1:3000/v1/auth");
+        assert_eq!(cfg.sync_endpoint, "http://127.0.0.1:3000");
+        assert_eq!(cfg.protocol_version, DEFAULT_PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn a_single_base_derives_every_surface() {
+        let cfg = with_clean_env(|| {
+            unsafe { std::env::set_var("CAPSULE_ENDPOINT", "https://capsule.example.com") };
+            RemoteConfig::from_env()
+        });
+        assert_eq!(cfg.auth_endpoint, "https://capsule.example.com/v1/auth");
+        assert_eq!(cfg.sync_endpoint, "https://capsule.example.com");
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_double_up() {
+        let cfg = with_clean_env(|| {
+            unsafe { std::env::set_var("CAPSULE_ENDPOINT", "http://host:3000/") };
+            RemoteConfig::from_env()
+        });
+        assert_eq!(cfg.auth_endpoint, "http://host:3000/v1/auth");
+        assert_eq!(cfg.sync_endpoint, "http://host:3000");
+    }
+
+    /// Split deployments (auth behind one ingress, sync behind another) stay expressible.
+    #[test]
+    fn per_surface_overrides_win_over_the_base() {
+        let cfg = with_clean_env(|| {
+            unsafe {
+                std::env::set_var("CAPSULE_ENDPOINT", "http://ignored:1");
+                std::env::set_var("CAPSULE_AUTH_ENDPOINT", "https://auth.example.com/v1/auth");
+                std::env::set_var("CAPSULE_SYNC_ENDPOINT", "https://sync.example.com");
+            }
+            RemoteConfig::from_env()
+        });
+        assert_eq!(cfg.auth_endpoint, "https://auth.example.com/v1/auth");
+        assert_eq!(cfg.sync_endpoint, "https://sync.example.com");
+    }
+
+    /// The sync endpoint must stay a bare origin. tonic's `AddOrigin` keeps only the scheme
+    /// and authority of the endpoint URI and lets the generated stub write the path, so any
+    /// prefix here is silently dropped and the request lands on a path the server does not
+    /// serve. This is the regression guard for that.
+    #[test]
+    fn the_default_sync_endpoint_carries_no_path() {
+        let cfg = with_clean_env(RemoteConfig::from_env);
+        let after_scheme = cfg
+            .sync_endpoint
+            .split_once("://")
+            .expect("sync endpoint has a scheme")
+            .1;
+        assert!(
+            !after_scheme.contains('/'),
+            "sync endpoint must be a bare origin, got {}",
+            cfg.sync_endpoint
+        );
+    }
 }
