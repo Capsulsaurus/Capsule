@@ -227,6 +227,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
+| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | ready | |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1184,6 +1185,41 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   description omits cannot be rendered. Fold the audit into the Stage 6 port of each surface.
 - **Done when:** every taxonomy's `undocumented()` is empty, and the regenerated schema is
   committed. **Tier:** Unit.
+
+### S-C29 — The two storage ports, and the generic blob store they replace
+
+- **Contract:** `legacy-review/server-salvo/REVIEW.md` ("`AuthStateStore` and `UploadSessionStore`
+  remain separate Capsule-owned contracts with Postgres, Valkey, and deterministic in-memory
+  adapters"), [Module Map — Planned Server Modules](capsule-docs/src/content/docs/design/module-map.md)
+  ("no generic CAS, transfer, or TTL library is planned"), AGENTS.md's Rust Architecture Decisions.
+- **Why it is the next foundational piece:** every remaining lane-C surface reads or writes one of
+  these two stores, so nothing else in the Kynos rebuild can start until their shape is fixed.
+- **Gap** (found 2026-08-22 while scoping the rebuild): the Salvo `SessionStorage` trait is not a
+  port, it is a grab-bag. It mixes session records, the per-user session index, MFA attempt
+  counters and rate-limit counters — and then adds `save_temp_data<T>` / `get_temp_data<T>` /
+  `delete_temp_data`, **a generic serialize-anything key-value store with a caller-supplied TTL**.
+  That is the abstraction the architecture decisions explicitly refuse, and it is load-bearing
+  today: it carries four unrelated typed things, namespaced only by hand-formatted string keys —
+  the revoke-all `ChallengeRecord` (`revocation.rs`), device enrollment's `EnrollmentRecord`,
+  `ChannelState` and its relay queue (`enrollment.rs`), and WebAuthn ceremony state under
+  `passkey_reg:{id}` / `passkey_auth:{id}` (`routes/passkey.rs`). Type safety is lost at the
+  boundary, key collisions are prevented by convention, and each record's lifetime is an argument
+  rather than a property of what it is.
+- **A correctness bug the shape causes, to be fixed by construction rather than patched:**
+  `revoke_session` deletes the session record but leaves its id in the per-user index, so
+  `revoke_all_for_user` counts index entries and over-reports "signed out N devices" by one per
+  prior refresh. The record and the index are one fact and must be written and removed together;
+  a port whose operations cannot express the split cannot reproduce the bug.
+- **Deliverable:** `AuthStateStore` and `UploadSessionStore` as two separate typed traits, plus
+  **typed ceremony stores** replacing the blob store — one per ceremony, each owning its own record
+  type and its own TTL as a property, not a parameter. Three adapters each: Postgres, Valkey
+  (`redis-rs`), and a deterministic in-memory one. A single **conformance suite every adapter must
+  pass**, so "the in-memory adapter behaves like Valkey" is asserted rather than assumed — that
+  suite is what lets the rest of the rebuild be tested without a container, which is the
+  acceptance gap module-map.md sets for Kynos.
+- **Done when:** all three adapters pass one shared conformance suite; a revoke-all reports the
+  number of sessions actually removed; and no operation on either port takes an arbitrary
+  serializable payload. **Tier:** Unit (in-memory + conformance) + Smoke (Postgres/Valkey).
 
 ## Lane D — SDK / clients
 
