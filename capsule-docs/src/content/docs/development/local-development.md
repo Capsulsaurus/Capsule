@@ -51,21 +51,19 @@ mise run hooks-install # installs the git hooks (hk)
 
 ## Running a server locally
 
-The server's two external services come up from `capsule-api/compose.yaml`, under podman or docker:
+One command:
 
 ```bash
-podman compose -f capsule-api/compose.yaml up -d   # or: docker compose -f …
+mise run serve-api
 ```
 
-That brings up **PostgreSQL** and **Valkey**. (The file still defines a leftover `minio` service; nothing in the server reads it — the blob store is a filesystem directory. It is removed by slice `S-P7`.)
+It brings up the server's two external services from `capsule-api/compose.yaml` — **PostgreSQL** and **Valkey**, which are all it needs; there is no object store, because ciphertext blobs are files under `UPLOAD_DIR`. It then seeds `capsule-api/.env` if absent and tops up any required variable that is missing, minting a `JWT_ED25519_DER` via `mise run keygen` (no `openssl` required — the generator lives beside the parser that reads the key, so a minted key is provably one the server accepts). Finally it waits for both services to answer and runs the server on `http://127.0.0.1:3000`.
 
-Then copy `capsule-api/.env.example` to `capsule-api/.env` and fill in `JWT_ED25519_DER` (the file carries the `openssl genpkey` one-liner that generates it), and run:
+Point a client at it with `export CAPSULE_ENDPOINT=http://127.0.0.1:3000`.
 
-```bash
-cargo run -p capsule-api
-```
+Debug builds run the Sea-ORM migrations automatically at startup, so a fresh database needs no extra step locally. A release build does **not** — see [Self-Hosting](/guides/self-hosting/). That is also why `serve-api` never passes `--release`.
 
-Debug builds run the Sea-ORM migrations automatically at startup, so a fresh database needs no extra step locally. A release build does **not** — see [Self-Hosting](/guides/self-hosting/).
+To drive it by hand, note that `dotenvy` searches the *current* directory, so `cargo run -p capsule-api` from the repo root will not see `capsule-api/.env` — either `cd capsule-api` first, or export the file yourself as `serve-api` does.
 
 Tests that need a real database use testcontainers rather than the compose stack. Under podman that requires a Docker-compatible socket (`systemctl --user enable --now podman.socket`); see `capsule-api/README.md` for the platform notes.
 

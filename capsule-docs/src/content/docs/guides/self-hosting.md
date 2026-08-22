@@ -58,7 +58,7 @@ The server reads its configuration from the environment (a `.env` file beside th
 | --- | --- |
 | `DATABASE_URL` | PostgreSQL connection string |
 | `VALKEY_URL` | Valkey connection string (e.g. `redis://127.0.0.1:6379`) |
-| `JWT_ED25519_DER` | Base64 of a PKCS#8 v1 DER Ed25519 private key — the server's operational signing key. Generate with `openssl genpkey -algorithm ed25519 -outform DER \| base64 -w 0`. |
+| `JWT_ED25519_DER` | Base64 of a PKCS#8 DER Ed25519 private key — the server's operational signing key. Generate with `mise run keygen` (or `cargo run -p capsule-api --bin keygen`), which mints it through the same module that parses it at boot. |
 
 **Optional, with defaults** — everything else. The notable ones:
 
@@ -98,7 +98,6 @@ For the two backing services, `capsule-api/compose.yaml` brings up PostgreSQL an
 podman compose -f capsule-api/compose.yaml up -d   # or: docker compose -f …
 ```
 
-That file also still defines a `minio` service. Nothing in the server reads it; it is a leftover from before the filesystem blob store and is removed by slice `S-P7`.
 
 ### One-click installer
 
