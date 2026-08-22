@@ -395,7 +395,36 @@ run = "./gradlew :core:test -Pcapsule.wireFfi"
 
 [tasks.test-android]
 description = "Unit tests for the Compose app"
-run = "./gradlew testDebugUnitTest --project-dir . -x :core:test"
+run = "./gradlew testDebugUnitTest -x :core:test"
+
+# Screenshot goldens (Roborazzi, on the JVM through Robolectric — no emulator needed).
+[tasks.screenshot-android]
+description = "Verify the Compose screenshot goldens"
+run = "./gradlew verifyRoborazziDebug -x :core:test"
+
+[tasks.screenshot-update-android]
+description = "Re-record the Compose screenshot goldens"
+run = "./gradlew recordRoborazziDebug -x :core:test"
+
+# The whole Android gate in one command, in the order that fails cheapest-first.
+[tasks.android-verify]
+description = "Full Android gate: format, lint, unit tests, screenshots, APK"
+run = [
+  "./gradlew ktlintCheck detekt",
+  "./gradlew testDebugUnitTest -x :core:test",
+  "./gradlew verifyRoborazziDebug -x :core:test",
+  "./gradlew :capsule-android:app:assembleDebug",
+]
+
+# The emulator lives outside the SDK's default location on this class of machine, so
+# ANDROID_AVD_HOME is set explicitly — the emulator binary ignores ANDROID_USER_HOME.
+[tasks.avd-create]
+description = "Create the phone, foldable and tablet AVDs the UI is validated on"
+run = "./mise-tasks/avd-create"
+
+[tasks.android-smoke]
+description = "Install and drive the app on each AVD, capturing screenshots"
+run = "./mise-tasks/android-smoke"
 
 [tasks.build-kotlin]
 run = "./gradlew build -Pcapsule.wireFfi"

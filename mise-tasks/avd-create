@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Create the three AVDs the Compose UI is validated on: one per window size class.
+#
+# The emulator resolves AVDs through ANDROID_AVD_HOME (it ignores ANDROID_USER_HOME),
+# so it is exported here rather than left to whatever the shell happens to carry.
+set -euo pipefail
+
+: "${ANDROID_HOME:?ANDROID_HOME must point at the Android SDK}"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}"
+
+AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+# The non-Play image boots faster and allows `adb root`, both of which matter for
+# automation; nothing here needs Play services.
+IMAGE="system-images;android-36.1;google_apis;x86_64"
+
+mkdir -p "$ANDROID_AVD_HOME"
+
+# name:device — compact, medium (unfolded foldable) and expanded window size classes.
+for spec in capsule_phone:pixel_9 capsule_fold:pixel_9_pro_fold capsule_tablet:pixel_tablet; do
+  name="${spec%%:*}"
+  device="${spec##*:}"
+  echo no | "$AVDMANAGER" create avd -n "$name" -k "$IMAGE" -d "$device" --force >/dev/null
+  config="$ANDROID_AVD_HOME/$name.avd/config.ini"
+  # The defaults (2 GB RAM, 228 MB heap) are too tight for a photo grid.
+  sed -i.bak \
+    -e 's/^hw.ramSize=.*/hw.ramSize=4096M/' \
+    -e 's/^vm.heapSize=.*/vm.heapSize=512M/' \
+    -e 's/^hw.keyboard=.*/hw.keyboard=yes/' \
+    "$config"
+  rm -f "$config.bak"
+  echo "created $name ($device)"
+done

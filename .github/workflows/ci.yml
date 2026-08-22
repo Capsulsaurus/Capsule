@@ -334,24 +334,26 @@ jobs:
         run: mise run check-md
 
   kotlin:
-    name: Kotlin (ktlint + detekt)
+    name: Kotlin (lint + unit tests + screenshots)
     needs: changes
     if: ${{ needs.changes.outputs.kotlin == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Gradle 8.11.1 supports JDK 21 (not the JDK 26 used on some dev machines).
+      # Gradle 9 supports JDK 21; a dev machine's system JDK is often newer than Gradle
+      # accepts, which is why mise pins Java too.
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "21"
-      # The :android module applies the Android Gradle Plugin, so Gradle needs the SDK
-      # (compileSdk 36) just to configure — even for the ktlint/detekt tasks.
+      # Every Android module applies AGP, so Gradle needs the SDK just to configure —
+      # even for the ktlint/detekt tasks. compileSdk is 37 because material3 1.5
+      # requires it; the app still targets 36.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-37" "platforms;android-36"
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
       - name: Set up mise (task runner)
@@ -360,6 +362,22 @@ jobs:
           install: false
       - name: Check (ktlint + detekt)
         run: mise run check-kotlin
+      # The app's own tests need no Rust toolchain, so they run here rather than in the
+      # FFI-staging lane. :core is excluded — it is the uniffi harness and needs cargo.
+      - name: Unit tests
+        run: mise run test-android
+      # Screenshot goldens run on the JVM through Robolectric; no emulator involved.
+      - name: Screenshot goldens
+        run: mise run screenshot-android
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-diffs
+          path: |
+            capsule-android/**/build/outputs/roborazzi/**
+          if-no-files-found: ignore
+          retention-days: 7
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this

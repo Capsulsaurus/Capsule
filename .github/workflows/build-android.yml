@@ -55,7 +55,7 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android platform
-        run: sdkmanager "platforms;android-36"
+        run: sdkmanager "platforms;android-37" "platforms;android-36"
 
       # NDK r27c matches ci.yml's rust-cross android lane — the cargo-ndk .so build must
       # use the same NDK the cross-compile gate verifies against.

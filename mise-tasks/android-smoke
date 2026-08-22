@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Install the debug APK on each AVD in turn, drive a short flow, and capture a
+# screenshot per window size class. This is the manual-eyes gate: the automated
+# screenshot goldens run on the JVM under Robolectric and never boot a device, so
+# this is what proves the app actually starts on a real Android runtime.
+set -euo pipefail
+
+: "${ANDROID_HOME:?ANDROID_HOME must point at the Android SDK}"
+export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-${ANDROID_USER_HOME:-$HOME/.android}/avd}"
+export PATH="$ANDROID_HOME/platform-tools:$PATH"
+
+APK="capsule-android/app/build/outputs/apk/debug/app-debug.apk"
+OUT="${CAPSULE_SMOKE_OUT:-build/smoke}"
+PACKAGE="com.justin13888.capsule"
+ACTIVITY="$PACKAGE/.MainActivity"
+
+[ -f "$APK" ] || { echo "no APK at $APK — run 'mise run build-android-app' first" >&2; exit 1; }
+mkdir -p "$OUT"
+
+boot_and_capture() {
+  local avd="$1"
+  echo "── $avd ───────────────────────────────────────────"
+
+  "$ANDROID_HOME/emulator/emulator" -avd "$avd" -no-window -no-audio -no-boot-anim \
+    -gpu swiftshader_indirect -no-snapshot >"$OUT/$avd.emulator.log" 2>&1 &
+  local emulator_pid=$!
+
+  # `adb wait-for-device` returns as soon as adbd is up, which is well before the
+  # framework is usable, so poll the boot flag rather than trusting it.
+  adb wait-for-device
+  local waited=0
+  until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do
+    sleep 5
+    waited=$((waited + 5))
+    if [ "$waited" -ge 600 ]; then
+      echo "$avd did not finish booting within 10 minutes" >&2
+      kill "$emulator_pid" 2>/dev/null || true
+      return 1
+    fi
+  done
+  adb shell input keyevent 82 >/dev/null 2>&1 || true
+
+  adb install -r -g "$APK" >/dev/null
+  adb shell am start -W -n "$ACTIVITY" >/dev/null
+  # Give the first frame time to settle before capturing.
+  sleep 8
+  adb exec-out screencap -p > "$OUT/$avd.png"
+  echo "captured $OUT/$avd.png ($(adb shell wm size | tr -d '\r'))"
+
+  # Fail loudly if the process died on launch rather than reporting a green run.
+  if ! adb shell pidof "$PACKAGE" >/dev/null 2>&1; then
+    echo "$PACKAGE is not running on $avd after launch" >&2
+    adb logcat -d -b crash | tail -40 >&2
+    kill "$emulator_pid" 2>/dev/null || true
+    return 1
+  fi
+
+  adb emu kill >/dev/null 2>&1 || kill "$emulator_pid" 2>/dev/null || true
+  wait "$emulator_pid" 2>/dev/null || true
+  sleep 3
+}
+
+status=0
+for avd in capsule_phone capsule_fold capsule_tablet; do
+  boot_and_capture "$avd" || status=1
+done
+
+echo
+echo "screenshots in $OUT:"
+ls -1 "$OUT"/*.png 2>/dev/null || echo "  (none)"
+exit "$status"
