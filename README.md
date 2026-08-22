@@ -65,7 +65,7 @@ This is a personal choice but if you're happy with existing services like Google
 
 Components:
 
-- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)
+- [Capsule API](capsule-api/README.md): The server's two wire transports — REST with an OpenAPI 3.1 schema for request/response surfaces (including the TUS-style resumable upload) and gRPC, plus gRPC-web for the browser, for the sync feed and federation pull
 - [Capsule Web](capsule-web/README.md) (WIP): Web client in React
 - [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
 - [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client
@@ -138,7 +138,7 @@ A: While there are multiple great open-source solutions, they lack a lot of the 
 Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.
 **Q: For the API, were languages other than Rust considered?**
 
-A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into multiple APIs (GraphQL, REST, gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.
+A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into two wire transports (REST with an OpenAPI 3.1 schema, and gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.
 
 **Q: How do bugfixes happen?**
 

@@ -14,9 +14,9 @@
  * thumbhashes, locations, durations, and any renderable imagery (blobs are ciphertext with
  * no in-browser decrypt path yet — gateway.ts defers that wasm boundary). Those display
  * fields are filled with safe placeholders and documented in the S-D6 report; they light up
- * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (legacy GraphQL surface
- * retirement) required query PARITY on this real path — which the key-free shells provide for the
- * aggregate UI — not decrypted content; that surface is now removed.
+ * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (retirement of the
+ * legacy server-side query surface) required query PARITY on this real path — which the key-free
+ * shells provide for the aggregate UI — not decrypted content; that surface is now removed.
  */
 
 import type { Album, Asset } from '@/domain';

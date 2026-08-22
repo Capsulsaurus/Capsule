@@ -140,8 +140,8 @@
     "target": "コンポーネント:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Various API services (HTTP, gRPC, GraphQL, WebSockets, etc.)",
-    "target": "- [Capsule API](capsule-api/README.md): 各種APIサービス (HTTP、gRPC、GraphQL、WebSocketsなど)"
+    "source": "- [Capsule API](capsule-api/README.md): The server's two wire transports — REST with an OpenAPI 3.1 schema for request/response surfaces (including the TUS-style resumable upload) and gRPC, plus gRPC-web for the browser, for the sync feed and federation pull",
+    "target": "- [Capsule API](capsule-api/README.md): サーバーの2つのワイヤートランスポート — リクエスト/レスポンス面向けのOpenAPI 3.1スキーマを備えたREST (TUS方式のレジューム可能アップロードを含む) と、同期フィードおよびフェデレーションプル向けのgRPC (ブラウザ向けにはgRPC-web)"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -308,8 +308,8 @@
     "target": "補足: 原作者はオープンソースを愛しており、これまでさまざまなプロジェクトに貢献してきました。ゼロから作り始めた理由は、ユーザー体験とパフォーマンスに関する目標を達成するための技術的な決定の多くが、複数の重要な設計判断を必要とするためです。\n**Q: APIについて、Rust以外の言語も検討されましたか?**"
   },
   {
-    "source": "A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into multiple APIs (GraphQL, REST, gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.",
-    "target": "A: はい、多くの言語を検討しました。検討した他の言語には、Go、TypeScript、Kotlin/Javaなどが含まれます。実際、最初のPoCはTypeScriptで書かれた単一のREST APIでした。しかし、現在の開発は複数のAPI(GraphQL、REST、gRPC)へと発展し、処理ロジックはさまざまなプラットフォームのクライアントにオフロードされています。Rustは、メモリ安全性とパフォーマンスの要件を両立しつつ、他の言語も同様に得意とするクロスプラットフォームの柔軟性を提供します。APIに関しても、Rustのライブラリは比較的新しい傾向があり、高性能な非同期I/Oのために`io_uring`を使用するといったLinux固有の最適化が可能です。なお、他の強みを持つ複数の言語も採用されている点に留意してください。"
+    "source": "A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into two wire transports (REST with an OpenAPI 3.1 schema, and gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.",
+    "target": "A: はい、多くの言語を検討しました。検討した他の言語には、Go、TypeScript、Kotlin/Javaなどが含まれます。実際、最初のPoCはTypeScriptで書かれた単一のREST APIでした。しかし、現在の開発は2つのワイヤートランスポート(OpenAPI 3.1スキーマを備えたRESTとgRPC)へと発展し、処理ロジックはさまざまなプラットフォームのクライアントにオフロードされています。Rustは、メモリ安全性とパフォーマンスの要件を両立しつつ、他の言語も同様に得意とするクロスプラットフォームの柔軟性を提供します。APIに関しても、Rustのライブラリは比較的新しい傾向があり、高性能な非同期I/Oのために`io_uring`を使用するといったLinux固有の最適化が可能です。なお、他の強みを持つ複数の言語も採用されている点に留意してください。"
   },
   {
     "source": "**Q: How do bugfixes happen?**",
