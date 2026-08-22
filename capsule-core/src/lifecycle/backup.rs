@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
 use crate::backup::{self, BackupArtifact, BackupAsset, BackupInput, RestoreMode};
-use crate::crypto::encryption::stream;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
 use crate::crypto::primitives::CRYPTO_SUITE_ID;
@@ -38,23 +37,16 @@ impl Workspace {
         let mut amks: BTreeMap<(Uuid, u32), [u8; 32]> = BTreeMap::new();
 
         for asset in self.assets.values() {
+            // The per-asset re-encrypt (plaintext → the ciphertext the manifest's recorded
+            // nonce prefix pins) is the `upload_bundle` accessor's job — one copy of that
+            // crypto, shared with `capsule push` (S-D18). It also self-checks the re-derived
+            // ciphertext against the manifest's content address, which this loop never did.
+            let bundle = self.upload_bundle(&asset.asset_id)?;
             let album = self.album(&asset.album_id)?;
-            let head = &asset
-                .chain
-                .records()
-                .last()
-                .expect("provenance chain is never empty")
-                .manifest;
-            let plaintext =
-                fs::read(self.media_path(asset)).map_err(|e| LifecycleError::Io(e.to_string()))?;
-            let epoch = head.core.amk_version.0;
-            let file_key = self.file_key(album, epoch, &head.core.file_id, &head.core.nonce_prefix);
-            let (_, ciphertext) = stream::encrypt_asset_vec_with_prefix(
-                &file_key,
-                head.core.nonce_prefix,
-                &plaintext,
+            amks.insert(
+                (asset.album_id, bundle.amk_version),
+                album.amks[&bundle.amk_version],
             );
-            amks.insert((asset.album_id, epoch), album.amks[&epoch]);
             // The asset's custody-receipt log, if the client has persisted one beside the chain.
             let receipts = fs::read(crate::library::receipts_path(
                 &self.root,
@@ -67,8 +59,8 @@ impl Workspace {
                 asset_id: asset.asset_id,
                 // Export the exact sealed blob the manifest committed to (re-sealing would draw
                 // a fresh nonce and break the `metadata_blob_hash` content address).
-                metadata_blob: asset.metadata_blob.clone(),
-                ciphertext,
+                metadata_blob: bundle.metadata_blob,
+                ciphertext: bundle.ciphertext,
                 provenance: asset.chain.records().to_vec(),
                 receipts,
             });

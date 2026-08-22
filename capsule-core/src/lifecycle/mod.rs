@@ -36,6 +36,7 @@ mod open;
 mod organize;
 mod provenance;
 mod sharing;
+mod upload;
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -46,6 +47,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::upload::{DerivativeBlob, UploadBundle};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
 use crate::crypto::authority::Authority;
@@ -103,6 +105,12 @@ pub enum LifecycleError {
     /// into it needs its authority re-established first.
     #[error("album {0} is read-only: recovered without write-tier/admin key material")]
     AlbumReadOnly(Uuid),
+    /// The ciphertext re-derived from a manifest's recorded `nonce_prefix` does not
+    /// content-address to that manifest's `ciphertext_hash` — the library's bytes and its own
+    /// signed manifest disagree. Never papered over: it is the one signal that what would go
+    /// on the wire is not what the asset's provenance vouches for.
+    #[error("asset {0}: re-derived ciphertext does not match the manifest's ciphertext_hash")]
+    CiphertextMismatch(Uuid),
     /// [`create_album_with_id`](Workspace::create_album_with_id) was called for an album that
     /// already holds key material. Minting over it would discard the AMKs every existing asset in
     /// that album was encrypted under, so it is refused; use
