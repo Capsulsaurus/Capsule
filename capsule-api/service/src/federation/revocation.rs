@@ -8,15 +8,22 @@
 //! [Federation design doc](https://docs/design/federation/#token-lifecycle-and-chain-of-trust).
 
 use entity::federation_revoked_jti;
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use sea_orm::sea_query::OnConflict;
-use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QuerySelect, Set};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set,
+};
 use tracing::instrument;
 
 /// Read/write surface over the durable `federation_revoked_jti` list.
 pub struct Revocations;
 
 impl Revocations {
+    /// The publication bound, in hours, of `/.well-known/capsule/revoked-jti`: a capability's
+    /// `exp` is never more than 24 h after its `iat`, so a list holding only not-yet-expired
+    /// revocations is bounded by at most 24 hours of them.
+    pub const PUBLICATION_WINDOW_HOURS: i64 = 24;
+
     /// Revoke a capability by `jti`, recording the token's `exp` so the row can later be pruned.
     /// Idempotent — re-revoking the same `jti` is a no-op (the earliest revocation stands).
     #[instrument(skip(db), fields(jti = %jti))]
@@ -61,6 +68,43 @@ impl Revocations {
     ) -> Result<Vec<String>, DbErr> {
         federation_revoked_jti::Entity::find()
             .filter(federation_revoked_jti::Column::ExpiresAt.gt(entity::time::ts_to_entity(now)))
+            .select_only()
+            .column(federation_revoked_jti::Column::Jti)
+            .into_tuple()
+            .all(db)
+            .await
+    }
+
+    /// The body of the published `/.well-known/capsule/revoked-jti` document as of `now`
+    /// (slice `S-C18`): every revocation still active, bounded to the
+    /// [`PUBLICATION_WINDOW_HOURS`](Self::PUBLICATION_WINDOW_HOURS) window, ordered by `jti` so
+    /// the document is byte-stable between renders when nothing changed.
+    ///
+    /// The upper bound is a belt-and-braces backstop over the issuance ceiling — a row whose
+    /// `exp` is somehow further out than the 24 h a capability may live is not a capability
+    /// revocation this document is contracted to carry, and publishing it would let the list
+    /// grow past its stated bound.
+    #[instrument(skip(db))]
+    pub async fn published_jtis<C: ConnectionTrait>(
+        db: &C,
+        now: Timestamp,
+    ) -> Result<Vec<String>, DbErr> {
+        let mut query = federation_revoked_jti::Entity::find()
+            .filter(federation_revoked_jti::Column::ExpiresAt.gt(entity::time::ts_to_entity(now)));
+        // An overflowed horizon is unreachable for any real clock; publishing the unbounded
+        // active set is still correct (every row is a live revocation), so it degrades rather
+        // than fails.
+        if let Ok(horizon) =
+            now.checked_add(SignedDuration::from_hours(Self::PUBLICATION_WINDOW_HOURS))
+        {
+            query = query.filter(
+                federation_revoked_jti::Column::ExpiresAt.lte(entity::time::ts_to_entity(horizon)),
+            );
+        } else {
+            tracing::warn!("revocation publication horizon overflowed; window unbounded");
+        }
+        query
+            .order_by_asc(federation_revoked_jti::Column::Jti)
             .select_only()
             .column(federation_revoked_jti::Column::Jti)
             .into_tuple()

@@ -58,8 +58,8 @@ pub async fn get_receipts_router<C: Into<MediaServerConfig>>(
     Ok(routes::get_receipts_router(state))
 }
 
-/// Attestation-key publication router (`GET /.well-known/capsule/attestation-keys`). Slice
-/// `S-C15`.
+/// The `.well-known/capsule/*` registry router (`attestation-keys`, `server-info`,
+/// `revoked-jti`, `deprecation`). Slices `S-C15` / `S-C18`.
 pub async fn get_well_known_router<C: Into<MediaServerConfig>>(
     conn: DatabaseConnection,
     config: C,

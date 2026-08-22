@@ -72,6 +72,9 @@ impl ModCtx {
                 &[7u8; 64],
                 Vec::new(),
             )),
+            operational_public_key: None,
+            deprecations: Vec::new(),
+            deprecation_announcement_days: 90,
         };
         let state = crate::state::AppState::new(self.db.clone(), config);
         Service::new(crate::routes::get_blob_router(state))

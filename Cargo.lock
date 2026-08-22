@@ -967,6 +967,7 @@ dependencies = [
  "jiff",
  "jsonwebtoken",
  "nanoid",
+ "ring",
  "salvo",
  "sea-orm",
  "sea-orm-migration",

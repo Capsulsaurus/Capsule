@@ -202,8 +202,8 @@ their owed remainder now lives.
 | S-N1  | OIDC relying party (server)                            | auth        | —            | L    | ready   |
 | S-N2  | SDK/CLI OIDC login flows                               | auth        | S-N1         | M    | blocked |
 | S-N3  | `device_id` on session listing + ceremony cohorts      | auth        | —            | S    | ready   |
-| S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server      | —            | M    | ready   |
-| S-C18 | `.well-known/capsule` registry completion              | server      | —            | M    | ready   |
+| S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server      | —            | M    | done    |
+| S-C18 | `.well-known/capsule` registry completion              | server      | —            | M    | done    |
 | S-C19 | Authoritative album `protocol_version` pin             | server      | —            | M    | ready   |
 | S-C20 | Invariant-7 floor grounded in the device directory     | server      | —            | M    | ready   |
 | S-C21 | `feed_seq` visibility-order race fix                   | server      | —            | M    | ready   |

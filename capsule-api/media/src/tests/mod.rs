@@ -34,6 +34,7 @@ mod drops;
 mod moderation;
 mod shares;
 mod verify;
+mod well_known;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -65,7 +66,7 @@ use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 use tokio::sync::Notify;
 
-use crate::config::MediaServerConfig;
+use crate::config::{DEFAULT_DEPRECATION_ANNOUNCEMENT_DAYS, MediaServerConfig};
 use crate::drop_state::DropState;
 use crate::service::verify::{BlobHasher, Clock, VerificationService};
 
@@ -103,6 +104,10 @@ pub(crate) struct TestCtx {
 /// so a receipt issued there verifies under this media server's keyring (one deployment).
 pub(crate) const TEST_SERVER_ID: &str = "localhost";
 pub(crate) const TEST_ATTESTATION_SEED: [u8; 64] = [7u8; 64];
+/// The classical Ed25519 **operational** public key the test deployment publishes in
+/// `.well-known/capsule/server-info` (S-C18). A fixed pattern: the well-known tests assert the
+/// published bytes are exactly the configured ones, they never re-derive them.
+pub(crate) const TEST_OPERATIONAL_PUBLIC_KEY: [u8; 32] = [0x5a; 32];
 
 impl TestCtx {
     /// The production verification service over this context's blob tree.
@@ -135,6 +140,9 @@ impl TestCtx {
             drop_rate_limit_max: 60,
             drop_rate_limit_window_secs: 60,
             attestation: self.attestation(),
+            operational_public_key: Some(TEST_OPERATIONAL_PUBLIC_KEY),
+            deprecations: Vec::new(),
+            deprecation_announcement_days: DEFAULT_DEPRECATION_ANNOUNCEMENT_DAYS,
         }
     }
 
@@ -160,6 +168,16 @@ impl TestCtx {
         Service::new(router)
     }
 
+    /// A salvo service over the real `.well-known/capsule/*` registry router, mounted at the
+    /// server-root path the app uses (slices `S-C15` / `S-C18`). Takes the config explicitly so
+    /// a test can publish a deployment with, say, a deprecation announcement configured.
+    pub(crate) fn well_known_service(&self, config: MediaServerConfig) -> Service {
+        let state = crate::state::AppState::new(self.db.clone(), config);
+        Service::new(salvo::Router::with_path(".well-known").push(
+            salvo::Router::with_path("capsule").push(crate::routes::get_well_known_router(state)),
+        ))
+    }
+
     /// A salvo service over the real `/storage/verify` router (auth + AppState wired).
     pub(crate) fn http_service(&self) -> Service {
         let config = MediaServerConfig {
@@ -178,6 +196,9 @@ impl TestCtx {
             drop_rate_limit_max: 60,
             drop_rate_limit_window_secs: 60,
             attestation: self.attestation(),
+            operational_public_key: Some(TEST_OPERATIONAL_PUBLIC_KEY),
+            deprecations: Vec::new(),
+            deprecation_announcement_days: DEFAULT_DEPRECATION_ANNOUNCEMENT_DAYS,
         };
         let router =
             crate::routes::get_storage_router(crate::state::AppState::new(self.db.clone(), config));
@@ -708,6 +729,9 @@ pub(crate) async fn drop_setup() -> MediaTestCtx {
             &[7u8; 64],
             Vec::new(),
         )),
+        operational_public_key: Some(TEST_OPERATIONAL_PUBLIC_KEY),
+        deprecations: Vec::new(),
+        deprecation_announcement_days: DEFAULT_DEPRECATION_ANNOUNCEMENT_DAYS,
     };
 
     // Seed owner U, owner group id=U, member U∈U, album A owned by U.

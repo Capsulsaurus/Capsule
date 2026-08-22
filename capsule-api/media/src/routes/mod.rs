@@ -75,12 +75,17 @@ pub fn schema_router() -> Router {
         .push(Router::with_path("assets").push(receipts_tree()))
 }
 
-/// Attestation-key publication router (mounted at /.well-known/capsule; slice `S-C15`).
-/// Public — clients pin the keys (TOFU) to verify receipts.
+/// The `.well-known/capsule/*` registry router (mounted at /.well-known/capsule; slices
+/// `S-C15`, `S-C18`). Every record is public and unauthenticated — clients pin the attestation
+/// keys (TOFU) to verify receipts, and peers poll `revoked-jti` to keep their fail-closed
+/// revocation caches fresh. `moved/{user}` is post-v1 and deliberately absent.
 pub fn get_well_known_router(state: AppState) -> Router {
     Router::new()
         .hoop(affix_state::inject(state))
         .push(Router::with_path("attestation-keys").get(well_known::attestation_keys))
+        .push(Router::with_path("server-info").get(well_known::server_info))
+        .push(Router::with_path("revoked-jti").get(well_known::revoked_jti))
+        .push(Router::with_path("deprecation").get(well_known::deprecation))
 }
 
 /// Guest drop-session router (mounted at /u; link-capability auth). `POST` opens a session and

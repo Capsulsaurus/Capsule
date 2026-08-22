@@ -26,6 +26,10 @@ derive_more = { workspace = true, features = ["from"] }
 eyre = { workspace = true }
 jiff = { workspace = true }
 jsonwebtoken = { workspace = true }
+# The public half of the deployment's operational Ed25519 signing key, recovered from the
+# PKCS#8 DER for `.well-known/capsule/server-info` (S-C18) — the same parser the environment
+# loader uses.
+ring = { workspace = true }
 salvo = { workspace = true }
 sea-orm = { workspace = true, features = [
     "sqlx-postgres",
