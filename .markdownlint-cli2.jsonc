@@ -18,6 +18,9 @@
         "**/node_modules/**",
         "**/.venv/**",
         "**/target/**",
+        // Gradle output. detekt writes a markdown report into every module's
+        // build/reports, which is generated and not hand-formatted.
+        "**/build/**",
         "**/.build/**",
         "**/dist/**",
         "**/.astro/**",

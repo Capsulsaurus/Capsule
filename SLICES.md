@@ -2050,6 +2050,114 @@ so every simulator-backed verification in this lane rides the `build-ios` CI lan
 - **Done when:** `swift test` in the harness passes against `serve-api`; wired
   into the iOS CI lane. **Tier:** Smoke — rides CI while the exit-70 blocker stands.
 
+## Lane R — Android app path
+
+The Compose client, built against **mock repositories** while `capsule-core`,
+`capsule-sdk` and the Kynos server stabilise. The repository interfaces in
+`capsule-android/core/data` are shaped to the already-pinned `capsule-core-ffi`
+uniffi surface (`Catalog.query_timeline`, `query_album_assets`, `list_albums`,
+`list_stack_members`, …), so swapping the mock for real bindings is a binding
+change rather than a redesign.
+
+**Environment:** `compileSdk` is 37 because `androidx.compose.material3` 1.5.x
+requires it; the app targets 36. AGP 9 carries built-in Kotlin, so no Android module
+applies `org.jetbrains.kotlin.android`. Gradle runs on the JDK pinned in `mise.toml`.
+Emulator validation covers three window size classes — `capsule_phone`,
+`capsule_fold`, `capsule_tablet` (`mise run avd-create`, `mise run android-smoke`).
+
+### S-R1 — Gradle toolchain + multi-module layout
+
+- **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md).
+- **Deliverable:** Gradle 9 / AGP 9 / Kotlin 2.4, the `capsule-android` module graph
+  (app, seven core modules, seventeen feature modules) and the `build-logic` convention
+  plugins; the generated string catalog relocated to `core:i18n` so feature modules can
+  reach it. **Depends on:** nothing. **Done when:** `:capsule-android:app:assembleDebug`
+  produces an APK and `ktlintCheck`/`detekt` are clean. **Tier:** Unit.
+
+### S-R2 — Test harness
+
+- **Deliverable:** JUnit 5 for pure-JVM modules, JUnit 4 under Vintage for Robolectric,
+  Compose UI test and instrumentation; Roborazzi for host-side screenshots;
+  Macrobenchmark for timeline frame timing. Pinned in the Clients doc.
+  **Depends on:** S-R1. **Done when:** the harness probe runs Compose under Robolectric
+  on the JVM. **Tier:** Unit.
+
+### S-R3 — Design system (Material 3 Expressive)
+
+- **Deliverable:** `core:designsystem` — theme, generated OKLCH tonal ramps with verified
+  contrast, expressive type scale, shape morphs, motion honouring the platform animator
+  scale, and the wrapped expressive component set. **Depends on:** S-R1.
+  **Done when:** the component gallery renders at every window size class in both themes.
+  **Tier:** Unit + screenshot.
+
+### S-R4 — Justified gallery engine
+
+- **Contract:** [Local Gallery](capsule-docs/src/content/docs/design/local-gallery.md),
+  [Organization](capsule-docs/src/content/docs/design/organization.md).
+- **Deliverable:** the exact (never estimated) layout — dynamic-programming row
+  partition, day-bucket sections, scroll/scrubber/zoom-anchor arithmetic — and the
+  Compose surface over it: `LazyLayout` rendering, sticky headers, pinch zoom, date
+  scrubber, drag-select. **Depends on:** S-R1, S-R3.
+  **Done when:** a million-asset plan solves inside the budget a test enforces, and the
+  Compose layer composes only the visible window. **Tier:** Unit + Compose behaviour.
+
+### S-R5 — Domain model + repository contracts
+
+- **Contract:** [Metadata](capsule-docs/src/content/docs/design/metadata.md),
+  [Organization](capsule-docs/src/content/docs/design/organization.md).
+- **Deliverable:** `core:model` mirroring the uniffi record shapes with closed enums that
+  carry an unknown-value arm, the smart-album predicate grammar with its documented
+  bounds, and `core:data` repository interfaces keyed to the stable `error.*` codes.
+  **Depends on:** S-R1. **Blocks:** S-R6 and every feature slice. **Tier:** Unit.
+
+### S-R6 — Seeded mock backend
+
+- **Deliverable:** `core:mock` — a deterministic procedural library (assets, albums,
+  stacks, people, EXIF, GPS) and fake repositories with injectable latency and failure,
+  so every documented state is reachable without a server. **Depends on:** S-R5.
+  **Done when:** the same seed produces byte-identical output across runs, which is what
+  makes the screenshot goldens stable. **Tier:** Unit.
+
+### S-R7 — Adaptive shell + navigation
+
+- **Deliverable:** Navigation 3 destinations for the whole documented surface, the
+  window-size-class shell (bar / rail / drawer plus pane scaffolds), fold-posture
+  handling, the protocol-mismatch hard block, and the biometric gate for Trash and
+  Hidden. **Depends on:** S-R3. **Tier:** Compose behaviour.
+
+### S-R8 — Feature surfaces
+
+- **Deliverable:** the seventeen feature modules — onboarding, enrollment, timeline,
+  import, albums, viewer, search, people, sharing, drops, sync, storage, security,
+  recovery, moderation, settings, audit — each rendering against the mock repositories,
+  with every documented state (empty, degraded, quarantined, awaiting-original, quota
+  grace, forward-schema) reachable. **Depends on:** S-R4, S-R6, S-R7. **Tier:** Compose
+  behaviour + screenshot.
+
+### S-R9 — Catalog keys and translations
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md).
+- **Deliverable:** every user-facing string authored in `locales/en.json` and translated
+  into the twelve supported locales, exercising RTL and CJK layout.
+  **Depends on:** S-R8. **Tier:** Unit (`i18n-check`, `i18n-guard`).
+
+### S-R10 — Android CI
+
+- **Deliverable:** the first Android lanes that actually build and test — unit tests and
+  screenshot verification in `ci.yml`, APK assembly in `build-android.yml`. Clears part
+  of the owed-CI backlog ("first Android/iOS CI runs").
+  **Depends on:** S-R2. **Tier:** Unit.
+
+### S-R11 — `capsule-core-ffi` for Android (post-mock)
+
+- **Deliverable:** the Android counterpart of `capsule-swift/Scripts/build-rust-ffi.sh` —
+  a cargo-ndk build of `capsule-core-ffi` for the four Android ABIs plus uniffi Kotlin
+  bindings for the `capsule_core_ffi` and `capsule_sdk` namespaces, so the mock
+  repositories can be swapped for real ones. **Depends on:** S-D9, S-R5.
+  **Note:** `mise run build-android` and `gen-bindings` today build `capsule-core` only
+  and never touch `capsule-core-ffi`; iOS already has this path and Android does not.
+  **Tier:** Smoke.
+
 ## Lane Q — E2E case completion
 
 **Contract for every slice in this lane:**
