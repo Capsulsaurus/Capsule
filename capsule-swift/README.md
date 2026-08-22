@@ -63,28 +63,82 @@ The SQLite catalog and CBOR sidecar are owned by Rust (`../capsule-core`) and
 exposed to Swift via UniFFI, packaged as `CapsuleCoreFFI.xcframework`. Everything
 platform-specific — filesystem, PhotoKit, UI, hashing — is Swift.
 
-## Features
+## What the app covers
 
-A native, local-only photo experience over a hybrid asset model — the system
-Photos library and a Capsule-managed on-disk store merged into one timeline.
+Every screen is built against `CapsulePorts` and backed by `CapsuleMock`, so the
+whole surface is navigable, testable, and reviewable before the core, the SDK, or
+the server exist. Nothing here talks to a network.
 
-- **Timeline** — a `UICollectionView`-backed grid with day sections, pinned
-  headers, prefetching, and adjustable density.
-- **Viewer** — a paged, zoomable full-screen viewer for photos, Live Photos,
-  and video, with an EXIF/location info panel and share / favourite / delete.
-- **Import** — bring photos into the Capsule-managed library: SHA-256 hashing,
-  content dedup, CBOR sidecars, and a rebuildable SQLite catalog, behind an
-  atomic per-item commit.
-- **Albums** — system smart albums plus editable Capsule user albums.
-- **Search** — filter the unified library by media type and capture date.
+- **Timeline** — Years / Months / Days / All, with pinch and ⌘1–⌘4 zoom that
+  preserves your place in time across levels. See *The timeline engine* below.
+- **Viewer** — a paged, zoomable viewer entered and left by
+  `.navigationTransition(.zoom)`, with the full sidecar field set in a detented
+  sheet on iPhone and an `.inspector` on iPad and Mac, plus the provenance chain
+  and the verification verdict.
+- **Albums** — container albums and view (smart) albums kept visually distinct,
+  membership and roles, and a predicate builder over the closed query grammar
+  with a live match count.
+- **Search, people, places** — faceted results, the shared filter grammar, face
+  clusters, and a clustered map that flags a non-WGS-84 datum.
+- **Import** — source picker → scan → plan-and-confirm → execute → history. The
+  plan screen states its destination *and the resolution rule that fired*.
+- **Transfers, quota, quarantine** — the staged T0/T1/T2 upload ladder, custody
+  receipts, the five quota states, and quarantine triage grouped by surface.
+- **Identity** — welcome (including a first-class offline path), server
+  discovery, sign-in, second factors, the enrollment ceremony, recovery
+  passphrase with a type-back gate, restore, and the device/session ledger.
+- **Sharing** — share links, upload links, the drop inbox, LAN peering, and
+  federation with per-peer degrade states.
+- **Settings** — eighteen sections, as a grouped list on iOS and a tabbed
+  `Settings` scene on the Mac.
 
-### Known limitations (prototype scope)
+### The timeline engine
 
-- Import is photo-only; video import and Live Photo stacking are not yet wired.
-- The grid materialises the timeline; the fully-lazy large-library path,
-  GPS→timezone resolution, and the iOS 18 cell→viewer zoom transition are
-  future work.
-- Capsule's networked features (API, sync, E2E encryption) are out of scope.
+The grid is built for libraries in the hundreds of thousands of assets over a
+*paged* port, which rules out `LazyVGrid` + `ForEach`: it needs the full identity
+array up front and cannot know total content height without it.
+
+`TimelineLayout` takes a `(dayKey, count)` aggregate instead of assets — a decade
+is roughly 3 650 rows — and precomputes prefix sums from it. That gives an exact
+`totalContentHeight` **before a single asset loads**, so the scrubber is correct
+immediately, and an `indexRange(intersecting:)` that is a binary search rather
+than a layout pass. `AssetWindowStore` keeps a sliding LRU window of fixed pages
+and cancels fetches that scroll out of margin. A cell with no page loaded yet is
+not blank: it renders the asset's dominant colour, then its LQIP, then the
+thumbnail.
+
+The same engine backs every grid in the app — album detail, search results,
+person, place, the culling filmstrip. There is one grid implementation.
+
+### Mock scenarios
+
+Around thirty screens — grace-expired quota, a populated quarantine, a federated
+album whose origin is unreachable, documents written by a newer client — are not
+reachable from a healthy library. A launch argument selects the world:
+
+```sh
+xcrun simctl launch booted com.justin13888.capsule.Capsule -mock-scenario quarantine
+```
+
+`healthy` (default), `empty-library`, `never-signed-in`, `offline`,
+`huge-library` (250 000 assets, for the timeline), `quota-soft-warning`,
+`quota-grace-expired`, `quarantine`, `degraded-federation`, `awaiting-originals`,
+`newer-version-state`, `undecodable-assets`, `recovery-overdue`,
+`protocol-upgrade-required`.
+
+On the Mac, pass the same argument in the scheme's *Run* arguments, or pick the
+scenario in **Settings → Advanced**, which persists it. The UI-test bundle drives
+these same names, which is why `MockScenario`'s raw values are a contract rather
+than an implementation detail.
+
+### Not yet wired
+
+- `CapsuleSDKAdapter` — the real data path. Blocked on the SDK's FFI verbs; when
+  it lands it is a constructor change in `AppEnvironment.swift` and nothing else
+  moves. That "nothing else moved" diff is the evidence the seam held.
+- Import is photo-only; video import and Live Photo stacking are stubbed at the
+  port.
+- GPS→timezone resolution.
 
 ## Development
 

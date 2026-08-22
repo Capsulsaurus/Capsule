@@ -158,6 +158,13 @@ The teardown verdict is final; the **order** is not "retire, then rebuild". It i
   `gen_openapi` binary. Slices whose target is the SDK are marked `RETIRED` because their
   wire contract is re-sourced — not because the crate is being thrown away.
 
+- **The Apple client does not wait for the rebuild.** Lane U builds the whole anticipated
+  UI against in-memory ports, so the client is written, reviewed and tested while
+  `capsule-core`, `capsule-sdk` and Kynos are still settling. Its default Tuist graph
+  excludes the Rust xcframework entirely (`S-U2`), which is what lets it build from a clean
+  checkout with no cross-compile. The two lanes meet at one file — `AppEnvironment.swift` —
+  and `S-U19` is the only slice in lane U that depends on anything outside it.
+
 **Environment — lane P builds locally again (2026-08-22).** The recorded blocker
 (`CoreSimulator.framework` removed by `sudo rm -rf /Library/Developer/PrivateFrameworks`,
 `xcodebuild -create-xcframework` exit 70) is resolved, as is the separate gap that had
@@ -169,9 +176,10 @@ pure Rust and verifies with `cargo nextest`.
 
 ## Unified Slice Index
 
-All 122 slices — the 74 from the v1 campaign and the 48 from wave 2 (46 indexed plus
-`S-C27` and `S-Q6`, allocated in this pass). `Lane`, `Depends on`, and `Size` are the
-campaign's own metadata; `Owed →` names where a `done*` row's remainder now lives.
+All 141 slices — the 74 from the v1 campaign, the 48 from wave 2 (46 indexed plus
+`S-C27` and `S-Q6`), and the 19 of lane U, the Apple client's mocked UI. `Lane`,
+`Depends on`, and `Size` are the campaign's own metadata; `Owed →` names where a `done*`
+row's remainder now lives.
 
 | ID | Slice | Lane | Depends on | Size | Area | Status | Owed → |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -287,6 +295,25 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | ready | |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
 | S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | ready | |
+| S-U1 | Domain + ports + mock seam | apple-ui | — | L | ACTIVE | done | |
+| S-U2 | Rust-free build lane (`TUIST_FFI` gate) | apple-ui | — | M | ACTIVE | done | |
+| S-U3 | Three-platform graph + platform shim | apple-ui | — | M | ACTIVE | done | |
+| S-U4 | Adaptive shell + `Route`/router/deep links | apple-ui | S-U3 | L | ACTIVE | done | |
+| S-U5 | Virtualized timeline engine | apple-ui | S-U1 | L | ACTIVE | done | |
+| S-U6 | Capsule-state design system | apple-ui | S-U3 | M | ACTIVE | done | |
+| S-U7 | Library, timeline, selection, culling | apple-ui | S-U5, S-U6 | L | ACTIVE | ready | |
+| S-U8 | Viewer and asset detail | apple-ui | S-U5, S-U6 | L | ACTIVE | ready | |
+| S-U9 | Albums + smart-album builder | apple-ui | S-U6 | L | ACTIVE | ready | |
+| S-U10 | Search, people, places | apple-ui | S-U9 | L | ACTIVE | ready | |
+| S-U11 | Import pipeline | apple-ui | S-U6 | L | ACTIVE | ready | |
+| S-U12 | Transfer, quota, quarantine | apple-ui | S-U6 | L | ACTIVE | ready | |
+| S-U13 | Auth, enrollment, recovery | apple-ui | S-U6 | L | ACTIVE | ready | |
+| S-U14 | Sharing, drops, peering, federation | apple-ui | S-U6 | L | ACTIVE | ready | |
+| S-U15 | Settings tree (18 sections) | apple-ui | S-U6 | L | ACTIVE | done | |
+| S-U16 | Test + verification infrastructure | apple-ui | S-U4 | L | ACTIVE | done\* | remaining screen suites ride their own slices |
+| S-U17 | `check-swift` CI gate | apple-ui | S-U2 | S | ACTIVE | done | |
+| S-U18 | Catalog keys for the Apple client | apple-ui | S-I1 | M | ACTIVE | done\* | keys for slices still `ready` land with them |
+| S-U19 | SDK adapter swap (`CapsuleSDKAdapter`) | apple-ui | S-P1, S-U1 | M | MIXED | blocked | |
 | S-X1 | OpenMLS backend → `OpenMlsAuthority` | crypto/mls | — | L | ACTIVE | done | |
 | S-X2 | MLS membership + Welcome/history delivery | crypto/mls | S-X1 | L | ACTIVE | done | |
 | S-X3 | Album upgrade ceremony + MLS resilience | crypto/mls | S-X2 | L | ACTIVE | done\* | server halves → `S-C24` |
@@ -298,12 +325,13 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Z5 | Dead-code removal (exports stub, CLI import planner) | design/docs | — | S | MIXED | done | |
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
 
-**Row counts.** By area: **41 ACTIVE / 46 RETIRED / 35 MIXED**. By status:
-**34 done / 19 done\* / 57 ready / 8 blocked / 4 post-v1**.
+**Row counts.** By area: **59 ACTIVE / 46 RETIRED / 36 MIXED**. By status:
+**41 done / 22 done\* / 65 ready / 9 blocked / 4 post-v1**.
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Only three block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
-`S-N1`, and `S-P2`–`S-P6`/`S-P8` behind `S-P1`. Everything else that once read `blocked`
+ordering. Only four block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
+`S-N1`, `S-P2`–`S-P6`/`S-P8` behind `S-P1`, and `S-U19` behind `S-P1` as well. Lane U
+exists precisely so that the rest of the Apple client does **not** wait on that chain. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5`),
 spargen shipped and is on crates.io (freeing `S-D8`), and the X-Wing codepoint `0x004D`
 exists and OpenMLS ships it (freeing `S-X1`–`S-X3`, all three of which are now `done` in
@@ -321,6 +349,7 @@ graph LR
   P1 --> P5[S-P5 sync-apply]
   P1 --> P6[S-P6 SE wiring]
   P1 --> P8[S-P8 swift harness]
+  P1 --> U19[S-U19 sdk adapter swap]
   N2 -.OIDC half.-> P2
   C27[S-C27 wire types off salvo] --> KYNOS[Kynos rebuild: lanes C, E5, N1/N3, D1/D2/D7-D10/D17]
 ```
@@ -2019,6 +2048,255 @@ the current transport.
 - **Area:** `ACTIVE` — entirely inside `capsule-core::ml` and the `capsule-core::db`
   vector index, so it is **unaffected by the server rebuild** and can be written now.
   The module map says so explicitly in case 10's own wording.
+
+## Lane U — Apple client UI (mocked)
+
+The Apple client's whole anticipated surface, built against in-memory adapters so it can
+ship, be reviewed, and be tested before `capsule-core`, `capsule-sdk`, and the Kynos
+server settle. **Lane P is the wiring; Lane U is the app.** They meet at exactly one
+file — `App/Sources/AppEnvironment.swift`, the composition root — where swapping
+`CapsuleMock` for an SDK-backed adapter is a constructor change and nothing else moves.
+
+**Why a separate lane.** Lane P's slices all sit behind `S-P1`, and `S-P1` is behind the
+SDK rebuild. Waiting would leave the client unbuilt at the moment the SDK lands, which is
+the worst possible sequencing for the piece with the most design surface and the slowest
+review loop. Lane U removes the dependency instead: every screen is written against a
+port, and the ports are shaped to be structural matches for the uniffi records they will
+eventually be generated from.
+
+**Design decisions (2026-08-22, user-confirmed).** Native `.mac` destination, not
+Catalyst. Deployment floor iOS/iPadOS **26** and macOS **26**, which makes Liquid Glass,
+`.tabBarMinimizeBehavior`, `.navigationTransition(.zoom)` and `Tab(role: .search)`
+unconditional — there are no `#available` fences in this lane, and raising the floor is a
+reach decision recorded here rather than buried in a build file. Apple-native design
+language with a Capsule accent: stock controls, materials and SF Symbols, with bespoke
+components only for concepts Apple has no analogue for (seal state, verification,
+quarantine, the degrade ladder, the predicate builder, ceremony progress).
+
+**Environment: resolved 2026-08-22.** All three destinations build and test on the dev
+host — see the environment table above. This lane does not ride CI.
+
+### S-U1 — Domain + ports + mock seam
+
+- **Contract:** [Clients](capsule-docs/src/content/docs/design/clients.md);
+  [Module Map](capsule-docs/src/content/docs/design/module-map.md).
+- **Deliverable:** `CapsuleDomain` (pure value types, each doc-commented with the Rust
+  type it mirrors), `CapsulePorts` (one `Sendable` protocol of `async throws` methods per
+  capability), and `CapsuleMock` (in-memory adapters + deterministic fixtures +
+  `MockScenario`). The mock library is a **pure function of `(seed, index)`** over a
+  keyed splitmix64, so a 250 000-asset scenario costs a day-boundary array and nothing
+  else, and thumbnails are drawn procedurally at runtime — **no image bytes enter the
+  repo**.
+- **Parity discipline:** closed enums cross the FFI as snake_case `String`s and are
+  modelled `RawRepresentable` with a load-bearing `unknown(String)` case (a read renders
+  the newer-version indicator; a write is a structural rejection); `unknownFieldsCbor`
+  round-trips verbatim and is never inspected; the two timestamp conventions are
+  normalized at the boundary; `effectiveCaptureTimestamp = captureUTC ?? captureTimestamp`
+  matches the index's sort; and the three distinct "not visible" flags — trash, stack
+  collapse, and the sidecar's user-`hidden` — are never conflated.
+- **Done when:** every screen reads through a port and names no adapter; a parity suite
+  asserts the closed enum case sets against the sets the design docs declare, so contract
+  drift fails a test rather than surfacing at integration. **Tier:** Unit.
+
+### S-U2 — Rust-free build lane
+
+- **Deliverable:** `CapsuleCatalog` split into a Rust-free half and a `CapsuleCatalogFFI`
+  half, plus a `TUIST_FFI` environment gate in `Project.swift`. The default graph excludes
+  the xcframework entirely: `tuist generate && xcodebuild test` runs from a clean checkout
+  with no Rust toolchain and no cross-compile. `TUIST_FFI=1` restores the existing FFI
+  graph unchanged.
+- **Why:** the five-target Rust cross-compile was the dominant cost of every local
+  verification, and "the UI is fully mocked" is only honest if the mock lane can build
+  without the thing it is mocking.
+- **Done when:** both lanes build; the shared `CapsulePorts` conformance means a
+  signature change breaks both at compile time, so the FFI lane cannot rot silently.
+  **Tier:** Unit + CI.
+
+### S-U3 — Three-platform graph + platform shim
+
+- **Deliverable:** `destinations: [.iPhone, .iPad, .mac]` on a `.multiplatform` floor of
+  26, and `CapsuleFoundation/Platform` — `PlatformImage`/`PlatformColor` typealiases,
+  environment predicates (`isTouchFirst`, `hasMenuBar`, `supportsMultipleWindows`),
+  and lifecycle shims (memory-warning notifications are `nil` on macOS rather than faked).
+- **Enforced by:** a SwiftLint custom rule banning `import UIKit`/`import AppKit` outside
+  `Platform/` and `PlatformCollection/`, so the shim cannot be quietly bypassed.
+- **Done when:** one source set builds and tests on macOS, iPhone and iPad. **Tier:** Unit.
+
+### S-U4 — Adaptive shell + navigation
+
+- **Deliverable:** one `Route` enum as the only navigation vocabulary, bound three ways —
+  a `TabView` with per-tab `NavigationStack`s on iPhone, a three-column
+  `NavigationSplitView` on iPad and Mac, plus a real `Settings` scene, a `.commands` menu
+  bar, and detached viewer windows on Mac. Total deep-link parsing for `capsule://` and
+  share/upload URLs, with the link secret redacted in **both** `description` and
+  `debugDescription` and deliberately not `Codable`.
+- **Done when:** every sidebar item, menu command, and deep link resolves through the same
+  router; an unrouted `Route` case is a compile error, not a dead tap. **Tier:** Unit.
+
+### S-U5 — Virtualized timeline engine
+
+- **Contract:** [Local Gallery](capsule-docs/src/content/docs/design/local-gallery.md).
+- **Deliverable:** the one grid every screen reuses, in three strictly separated layers.
+  `TimelineLayout` is a pure value type whose input is **not assets** but a `(dayKey,
+  count)` aggregate — a decade is ~3 650 rows — from which it precomputes prefix sums and
+  answers `totalContentHeight` **exactly, before a single asset loads**, plus
+  `indexRange(intersecting:)` by binary search. `AssetWindowStore` holds a sliding LRU
+  window of fixed pages and cancels in-flight fetches that leave the margin. A
+  `UICollectionView`/`NSCollectionView` island — the only sanctioned UIKit/AppKit code —
+  answers `layoutAttributesForElements(in:)` straight from the layout, so there is no
+  per-item layout pass.
+- **Progressive loading** uses the docs' own representation ladder as a strategy: an
+  unloaded cell renders `Lqip.dominant_color`, then the chromahash LQIP, then the
+  thumbnail. The grid is never blank.
+- **Zoom** across All → Days → Months → Years preserves the anchor: the asset nearest the
+  viewport centre is re-found in the new layout and scrolled to without animation, so you
+  keep your place in time across every level.
+- **Done when:** against the 250 000-asset scenario, layout construction stays under
+  50 ms, `indexRange` under 100 µs, page count stays inside the LRU cap, and memory is
+  flat across a full-library scroll. **Tier:** Unit + Perf.
+
+### S-U6 — Capsule-state design system
+
+- **Deliverable:** semantic state roles rather than raw colours — `sealVerified`,
+  `sealPending`, `sealQuarantined`, `sealUnreadable`, the three sync tiers, `degraded`,
+  `cullPick`, `cullReject`, `aiStale` — so contrast is proven once per role; the ~12
+  bespoke glyphs for concepts Apple has no symbol for; and the shared banner, chip,
+  ceremony and predicate-builder components.
+- **Glass discipline:** on the control layer only, never over photo content, grouped in a
+  `GlassEffectContainer` (glass cannot sample glass), applied last in the modifier chain.
+  Reduce Transparency and Increase Contrast are honoured by the system and verified by the
+  audit in `S-U16`. **Tier:** Unit.
+
+### S-U7 — Library, timeline, selection, culling
+
+- **Deliverable:** the four zoom levels with pinch and ⌘1–⌘4 transitions, pinned headers,
+  the asset-cell badge system (video, Live Photo, RAW, stack count, cull flag, hidden) and
+  the sync-state badge across all eight states including **quarantined** and **unreadable
+  on this device**; multi-select with range and drag select; stack expansion; the filter
+  bar; and every empty state. Culling review is a full-screen keyboard/swipe sweep writing
+  `pick | neutral | reject`, with derived group state for stacks and a reject-sweep
+  summary on exit. **Tier:** Unit.
+
+### S-U8 — Viewer and asset detail
+
+- **Deliverable:** the paged zoomable viewer over a `ViewerContext`, entered and left by
+  `.navigationTransition(.zoom)`; the video, Live Photo, burst, RAW/JPEG, panorama and
+  depth surfaces; the info panel across the full sidecar v1 field set as a detented sheet
+  on iPhone and an `.inspector` on iPad and Mac; the metadata editor with the superseded-
+  caption restore affordance and the user-vs-AI tag namespaces; the append-only provenance
+  chain; the `verify_asset` verdict detail; and the export sheet's privacy-strip preview.
+  **Tier:** Unit.
+
+### S-U9 — Albums and the smart-album builder
+
+- **Deliverable:** container albums and view albums kept **visually** distinct, not merely
+  separated by section title; album detail with member avatars, role badge, epoch/policy
+  chips and the degraded-origin banner; membership, invitation with device-directory
+  verification, and the epoch-bump explainer; the protocol-upgrade ceremony; the
+  default-album scope-override table; and the closed predicate grammar rendered as
+  nestable rule groups with per-`(field, op)` operand editors, depth and term limits
+  enforced in the UI, and a live match count over a preview strip.
+- **The search filter sheet uses the same grammar**, which is what lets a result set be
+  saved as a smart album with the builder pre-filled. One grammar, two entry points.
+  **Tier:** Unit.
+
+### S-U10 — Search, people, places
+
+- **Deliverable:** scoped search with recents and suggestions, results grouped by facet,
+  the shared filter sheet, and AI-tag results carrying model id/version provenance with a
+  **stale-excluded** state and a regenerate action; the face-cluster grid with name, merge,
+  split and hide, unnamed clusters surfaced first; and the clustered map with a datum
+  badge when coordinates are `gcj02`. **Tier:** Unit.
+
+### S-U11 — Import pipeline
+
+- **Contract:** [Import](capsule-docs/src/content/docs/design/import/), `S-B12`.
+- **Deliverable:** source picker, scan progress, the plan-and-confirm screen, execution,
+  and history. The plan screen carries the free-space meter through normal,
+  `streaming_recommended` and the hard "cannot import X without freeing Y" case, and states
+  the destination **with the resolution rule that fired** — the docs require the fired rule
+  be recorded, so the UI explains itself rather than showing a bare destination.
+  **Tier:** Unit.
+
+### S-U12 — Transfer, quota, quarantine
+
+- **Deliverable:** the transfer centre with the staged T0/T1/T2 ladder, adaptive chunk
+  size, and failure rows whose button label is the documented recovery action; custody
+  receipts; the five-state quota screen with the trash segment highlighted because it
+  counts fully against quota; local storage as a **separate** screen, cross-linked but not
+  merged, previewing evictions in the documented `original → preview → thumbnail` order;
+  and quarantine triage grouped by the eight surfaces from the threat model, offering
+  exactly Inspect / Repair / Discard with no default. **Tier:** Unit.
+
+### S-U13 — Auth, enrollment, recovery
+
+- **Contract:** [Device Enrollment](capsule-docs/src/content/docs/design/device-enrollment.md),
+  [Backup & Recovery](capsule-docs/src/content/docs/design/backup-recovery.md).
+- **Deliverable:** welcome with a first-class **"Use without an account"** path, server
+  discovery and pinning, the OIDC-vs-local chooser, sign-in and sign-up, passkey and TOTP
+  enrolment; the enrollment ceremony as a named step rail with a hardware-key failure that
+  offers a *documented* software-key deviation; the recovery passphrase reveal with an
+  entropy meter proving the ≥128-bit rule and a **type-back gate with no skip path**; the
+  7d→90d→180d re-verification cadence with capped snoozes; the restore flow's
+  preview → dry-run → typed-phrase commit and Shamir 2-of-3; the session ledger grouped by
+  cohort with assert-don't-litigate copy; and cross-device add with a safety code both
+  sides acknowledge. **Tier:** Unit.
+
+### S-U14 — Sharing, drops, peering, federation
+
+- **Deliverable:** share-link composition with the mandatory privacy-strip notice, link
+  management and revocation, upload links with their caps, the drop inbox showing a guest's
+  self-asserted filename as **unverified** over a sandbox-decoded preview, LAN peering, and
+  the federation surface with per-peer compartment state and the "photos from other.tld
+  currently unavailable" degrade copy. **Tier:** Unit.
+
+### S-U15 — Settings tree
+
+- **Deliverable:** all eighteen sections, as a grouped `List` on iPhone and iPad and as a
+  **tabbed** `Settings` scene on Mac per platform convention. Every ceremonial or
+  destructive action confirms; the ones the docs single out use a typed-phrase gate. The
+  Advanced section carries the mock-scenario switcher, which is how the thirty-odd screens
+  unreachable from a healthy library are reached by hand. **Tier:** Unit.
+
+### S-U16 — Test and verification infrastructure
+
+- **Deliverable:** swift-testing suites for every module (XCTest stays banned outside the
+  XCUITest bundle), a `#Preview` per screen, an XCUITest flow suite driven by
+  `-mock-scenario`, a performance suite over `S-U5`, and
+  `try app.performAccessibilityAudit()` on every top-level screen.
+- **Why the audit matters:** it is the objective, automatable proxy for "Apple design
+  compliant" — contrast, hit region, element description and Dynamic Type clipping —
+  and it runs in CI rather than depending on someone remembering to look.
+- **No third-party test dependency is added**, so `design/dependencies.md` is unchanged and
+  no snapshot baselines are committed. **Tier:** Unit + Smoke.
+
+### S-U17 — `check-swift` CI gate
+
+- **Deliverable:** `mise run check-swift` (format + lint + build + test) mirroring every
+  other toolchain, a `swift` path filter, and a `macos-26` job added to `required.needs`.
+- **Why:** Swift lint and format previously ran only in local `hk` hooks, so an Apple-client
+  break could merge. **Tier:** CI.
+
+### S-U18 — Catalog keys for the Apple client
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md), `S-I1`.
+- **Deliverable:** every user-facing string in the lane as an ICU key under `locales/`,
+  regenerated into the `.xcstrings` catalog by `mise run i18n`, with the generated catalog
+  actually wired into the app target's resources — it was committed but referenced by
+  nothing, so every `Text("ios.tab.library")` rendered the raw key.
+- **Done when:** `mise run i18n-check` is clean and `xtask i18n-guard` finds no hardcoded
+  literal in the Swift sources. **Tier:** Unit.
+
+### S-U19 — SDK adapter swap
+
+- **Deliverable:** `CapsuleSDKAdapter` conforming to the same `CapsulePorts` protocols the
+  mock does, selected in `AppEnvironment`. This is the slice that turns Lane U from a
+  demo into the product, and it is deliberately the **only** slice in the lane that
+  depends on anything outside it.
+- **Depends on:** S-P1 (**blocked** — the SDK FFI verbs do not exist yet).
+- **Done when:** the app runs against `mise run serve-api` with no view, view-model, or
+  navigation code changed relative to the mock lane. That "nothing else moved" diff is the
+  evidence the seam held. **Tier:** Smoke.
 
 ## Lane X — MLS
 
