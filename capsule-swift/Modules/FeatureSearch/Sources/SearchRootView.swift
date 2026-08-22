@@ -35,16 +35,12 @@ public struct SearchRootView: View {
         NavigationStack {
             content
                 .navigationTitle("ios.tab.search")
-                .navigationBarTitleDisplayMode(.inline)
-                .searchable(
-                    text: $model.query,
-                    placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "ios.search.prompt"
-                )
+                .capsuleNavigationBarInline()
+                .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "ios.search.prompt")
                 .searchSuggestions { suggestionList }
         }
         .task { await model.load() }
-        .fullScreenCover(item: $viewerSelection) { selection in
+        .capsuleFullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(
                 assets: selection.assets,
                 startIndex: selection.startIndex,

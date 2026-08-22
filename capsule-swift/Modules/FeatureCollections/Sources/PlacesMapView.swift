@@ -43,7 +43,7 @@ public struct PlacesMapView: View {
             }
         }
         .navigationTitle("ios.places.title")
-        .navigationBarTitleDisplayMode(.inline)
+        .capsuleNavigationBarInline()
         .overlay { overlay }
         .task { await model.load() }
         .navigationDestination(item: $selectedCluster) { cluster in
@@ -159,8 +159,8 @@ struct PlacesClusterGrid: View {
         )
         .ignoresSafeArea(edges: .bottom)
         .navigationTitle("ios.common.location")
-        .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(item: $viewerSelection) { selection in
+        .capsuleNavigationBarInline()
+        .capsuleFullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(
                 assets: selection.assets,
                 startIndex: selection.startIndex,

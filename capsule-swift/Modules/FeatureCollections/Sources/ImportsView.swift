@@ -49,9 +49,9 @@ struct ImportsView: View {
             }
         }
         .navigationTitle("ios.imports.title")
-        .navigationBarTitleDisplayMode(.inline)
+        .capsuleNavigationBarInline()
         .task { await reload() }
-        .fullScreenCover(item: $viewerSelection) { selection in
+        .capsuleFullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(
                 assets: selection.assets,
                 startIndex: selection.startIndex,

@@ -1,3 +1,4 @@
+import FeatureViewer
 import SwiftUI
 
 /// A labelled "coming soon" destination for Collections sections that later
@@ -22,6 +23,6 @@ public struct CollectionPlaceholderView: View {
             description: Text(message)
         )
         .navigationTitle(title)
-        .navigationBarTitleDisplayMode(.inline)
+        .capsuleNavigationBarInline()
     }
 }

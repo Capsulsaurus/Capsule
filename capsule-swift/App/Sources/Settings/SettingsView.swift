@@ -32,11 +32,8 @@ struct SettingsView: View {
                     Toggle("ios.settings.upload.toggle", isOn: uploadBinding)
                     if consent.remoteUploadEnabled {
                         TextField("https://your-server/v1/telemetry", text: $endpointText)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
+                            .capsuleURLFieldStyle()
                             .onSubmit(saveEndpoint)
-                            .submitLabel(.done)
                     }
                 } header: {
                     Text("ios.settings.upload.header")

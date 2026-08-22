@@ -1,8 +1,8 @@
 import AssetKit
+import CapsuleFoundation
 import CapsuleUI
 import ImagePipeline
 import SwiftUI
-import UIKit
 
 /// One album tile in the Collections cover grid: a square cover thumbnail with
 /// the title and count beneath.
@@ -15,7 +15,7 @@ struct AlbumCoverCard: View {
     let albumProvider: any AlbumProvider
     let assetProvider: any AssetProvider
     let thumbnails: any ThumbnailProvider
-    @State private var cover: UIImage?
+    @State private var cover: PlatformImage?
 
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
@@ -33,9 +33,12 @@ struct AlbumCoverCard: View {
 
     private var coverImage: some View {
         ZStack {
-            Color(.secondarySystemBackground)
+            // `.fill.secondary` rather than `Color(.secondarySystemBackground)`:
+            // that colour is a `UIColor`, and the semantic SwiftUI fill styles
+            // resolve to the right grouped-background tone on both platforms.
+            Rectangle().fill(.fill.secondary)
             if let cover {
-                Image(uiImage: cover)
+                Image(platformImage: cover)
                     .resizable()
                     .scaledToFill()
             } else {

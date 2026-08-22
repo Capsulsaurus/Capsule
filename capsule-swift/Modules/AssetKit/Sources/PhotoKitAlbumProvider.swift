@@ -4,11 +4,19 @@ import Photos
 
 /// The ``AlbumProvider`` over the system Photos library's smart albums.
 ///
-/// Smart albums (Favorites, Recents, Videos, Selfies, …) are curated by iOS
-/// and read-only — `createUserAlbum` and `addAsset` therefore throw
+/// Smart albums (Favorites, Recents, Videos, Selfies, …) are curated by the
+/// system and read-only — `createUserAlbum` and `addAsset` therefore throw
 /// ``AlbumError/readOnly``.
+///
+/// Not every subtype exists on every platform: macOS has no Selfies or
+/// Screenshots smart album, for instance. That needs no branch, because a
+/// fetch for an absent subtype simply returns no collections and the
+/// zero-count filter in ``loadAlbums()`` drops it — the Mac's albums screen
+/// just shows a shorter list.
 public struct PhotoKitAlbumProvider: AlbumProvider {
-    /// The smart-album subtypes surfaced in the albums screen.
+    /// The smart-album subtypes surfaced in the albums screen, in display
+    /// order. Subtypes the running platform does not curate fetch empty and
+    /// fall out of the list; see the type's note.
     private static let subtypes: [PHAssetCollectionSubtype] = [
         .smartAlbumUserLibrary,
         .smartAlbumFavorites,

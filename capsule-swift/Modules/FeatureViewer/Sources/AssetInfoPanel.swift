@@ -23,14 +23,14 @@ struct AssetInfoPanel: View {
                 }
             }
             .navigationTitle("ios.viewer.info.title")
-            .navigationBarTitleDisplayMode(.inline)
+            .capsuleNavigationBarInline()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("ios.common.done") { dismiss() }
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        .capsuleSheetDetents()
         .task(id: asset.id) {
             metadata = await mediaLoader.metadata(for: asset)
         }

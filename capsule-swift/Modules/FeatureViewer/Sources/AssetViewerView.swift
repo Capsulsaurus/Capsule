@@ -2,19 +2,20 @@ import AssetKit
 import CapsuleUI
 import ImagePipeline
 import SwiftUI
-import UIKit
 
 /// The full-screen, horizontally-paged asset viewer.
 ///
-/// Pages the supplied assets in a `TabView`; each page is a zoomable photo, a
-/// Live Photo, or a video. A bottom bar offers share, info, add-to-album,
-/// favourite, and delete, all routed through ``AssetViewerModel``.
+/// Pages the supplied assets through ``AssetPager`` — a swipe-driven pager on
+/// iOS, arrow keys and chevrons on macOS; each page is a zoomable photo, a Live
+/// Photo, or a video. A bottom bar offers share, info, add-to-album, favourite,
+/// and delete, all routed through ``AssetViewerModel``.
+///
+/// Presented via ``SwiftUI/View/capsuleFullScreenCover(item:content:)``, so it
+/// covers the screen on iOS and arrives as a large sheet on macOS.
 public struct AssetViewerView: View {
     @State private var model: AssetViewerModel
     private let mediaLoader: ViewerMediaLoader
     @Environment(\.dismiss) private var dismiss
-    @State private var shareImage: UIImage?
-    @State private var isSharePresented = false
     @State private var isAddToAlbumPresented = false
 
     public init(
@@ -40,16 +41,11 @@ public struct AssetViewerView: View {
         }
         .overlay(alignment: .topLeading) { closeButton }
         .overlay(alignment: .bottom) { bottomBar }
-        .statusBarHidden()
+        .capsuleStatusBarHidden()
         .onDisappear { model.stopSlideshow() }
         .sheet(isPresented: $model.isInfoPanelPresented) {
             if let asset = model.currentAsset {
                 AssetInfoPanel(asset: asset, mediaLoader: mediaLoader)
-            }
-        }
-        .sheet(isPresented: $isSharePresented) {
-            if let shareImage {
-                ActivityView(items: [shareImage])
             }
         }
         .confirmationDialog(
@@ -74,15 +70,11 @@ public struct AssetViewerView: View {
         if model.assets.isEmpty {
             Color.clear.onAppear { dismiss() }
         } else {
-            TabView(selection: $model.currentIndex) {
-                ForEach(Array(model.assets.enumerated()), id: \.element.id) { index, asset in
-                    AssetPageView(asset: asset, mediaLoader: mediaLoader)
-                        .tag(index)
-                }
-            }
-            .tabViewStyle(.page(indexDisplayMode: .never))
-            .ignoresSafeArea()
-            .animation(.easeInOut(duration: 0.4), value: model.currentIndex)
+            AssetPager(
+                assets: model.assets,
+                currentIndex: $model.currentIndex,
+                mediaLoader: mediaLoader
+            )
         }
     }
 
@@ -102,7 +94,7 @@ public struct AssetViewerView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            barButton("square.and.arrow.up", action: share)
+            shareButton
             barButton(model.isPlayingSlideshow ? "pause.fill" : "play.fill") {
                 model.toggleSlideshow()
             }
@@ -134,17 +126,37 @@ public struct AssetViewerView: View {
         .padding(.bottom, CapsuleTheme.Spacing.small)
     }
 
+    /// The share affordance.
+    ///
+    /// A `ShareLink` rather than a button that loads the image and then presents
+    /// a sheet: the export happens inside ``ShareableAsset`` once the user picks
+    /// a destination, so there is no intermediate state to hold and the same
+    /// code works on both platforms.
+    @ViewBuilder
+    private var shareButton: some View {
+        if let asset = model.currentAsset {
+            let shareable = ShareableAsset(asset: asset, mediaLoader: mediaLoader)
+            ShareLink(item: shareable, preview: SharePreview(shareable.previewTitle)) {
+                barLabel("square.and.arrow.up")
+            }
+        }
+    }
+
     private func barButton(
         _ symbol: String,
         tint: Color = .white,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .foregroundStyle(tint)
-                .frame(maxWidth: .infinity)
+            barLabel(symbol, tint: tint)
         }
+    }
+
+    private func barLabel(_ symbol: String, tint: Color = .white) -> some View {
+        Image(systemName: symbol)
+            .font(.title3)
+            .foregroundStyle(tint)
+            .frame(maxWidth: .infinity)
     }
 
     private var favoriteSymbol: String {
@@ -158,26 +170,4 @@ public struct AssetViewerView: View {
     private var isCurrentFavorite: Bool {
         model.currentAsset?.isFavorite ?? false
     }
-
-    private func share() {
-        guard let asset = model.currentAsset else { return }
-        Task {
-            let pixels = CGSize(width: 3072, height: 3072)
-            if let image = await mediaLoader.fullImage(for: asset, targetSize: pixels) {
-                shareImage = image
-                isSharePresented = true
-            }
-        }
-    }
-}
-
-/// A `UIActivityViewController` bridged into SwiftUI for the share sheet.
-private struct ActivityView: UIViewControllerRepresentable {
-    let items: [UIImage]
-
-    func makeUIViewController(context _: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }

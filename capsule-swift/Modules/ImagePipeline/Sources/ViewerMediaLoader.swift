@@ -1,8 +1,9 @@
 import AssetKit
 import AVFoundation
+import CapsuleFoundation
+import CoreGraphics
 import ImageIO
 import Photos
-import UIKit
 
 /// Camera/exposure metadata shown in the viewer's info panel, read from an
 /// asset's embedded EXIF and its PhotoKit location.
@@ -38,7 +39,11 @@ public final class ViewerMediaLoader {
     public init() {}
 
     /// A display-resolution image for `asset`, decoded to `targetSize` pixels.
-    public func fullImage(for asset: Asset, targetSize: CGSize) async -> UIImage? {
+    ///
+    /// PhotoKit declares `requestImage` once per platform — the handler receives
+    /// a `UIImage` on iOS and an `NSImage` on macOS — so the result is already a
+    /// ``PlatformImage`` on both and needs no conversion here.
+    public func fullImage(for asset: Asset, targetSize: CGSize) async -> PlatformImage? {
         guard let phAsset = phAsset(for: asset) else { return nil }
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat

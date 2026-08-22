@@ -1,9 +1,9 @@
+import CapsuleFoundation
 import AssetKit
 import AVKit
 import CapsuleUI
 import ImagePipeline
 import Photos
-import PhotosUI
 import SwiftUI
 
 /// One page of the viewer, dispatched by media type.
@@ -29,7 +29,7 @@ private struct PhotoPage: View {
     let asset: Asset
     let mediaLoader: ViewerMediaLoader
     @Environment(\.displayScale) private var displayScale
-    @State private var image: UIImage?
+    @State private var image: PlatformImage?
 
     var body: some View {
         GeometryReader { geometry in
@@ -79,23 +79,6 @@ private struct LivePhotoPage: View {
                 livePhoto = await mediaLoader.livePhoto(for: asset, targetSize: pixels)
             }
         }
-    }
-}
-
-/// A `PHLivePhotoView` bridged into SwiftUI; plays the motion hint on appear.
-private struct LivePhotoView: UIViewRepresentable {
-    let livePhoto: PHLivePhoto
-
-    func makeUIView(context _: Context) -> PHLivePhotoView {
-        let view = PHLivePhotoView()
-        view.contentMode = .scaleAspectFit
-        return view
-    }
-
-    func updateUIView(_ view: PHLivePhotoView, context _: Context) {
-        guard view.livePhoto !== livePhoto else { return }
-        view.livePhoto = livePhoto
-        view.startPlayback(with: .hint)
     }
 }
 

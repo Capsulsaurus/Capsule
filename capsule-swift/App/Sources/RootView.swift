@@ -5,7 +5,6 @@ import FeatureCollections
 import FeatureSearch
 import FeatureTimeline
 import SwiftUI
-import UIKit
 
 /// The app's root tab shell: Library, Collections, Search, and Settings.
 ///
@@ -59,9 +58,7 @@ struct RootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .capsuleTabBarMinimizeOnScroll()
-        .onReceive(
-            NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)
-        ) { _ in
+        .onReceive(MemoryPressure.publisher) { _ in
             Diagnostics.shared.record(.memoryWarning)
             Task { await environment.thumbnails.flushCaches() }
         }

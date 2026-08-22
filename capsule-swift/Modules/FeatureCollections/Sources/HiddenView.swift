@@ -1,5 +1,6 @@
 import AssetKit
 import CapsuleUI
+import FeatureViewer
 import ImagePipeline
 import LocalAuthentication
 import SwiftUI
@@ -45,7 +46,7 @@ struct HiddenView: View {
             }
         }
         .navigationTitle("ios.hidden.title")
-        .navigationBarTitleDisplayMode(.inline)
+        .capsuleNavigationBarInline()
         .task { await authenticate() }
         .confirmationDialog(
             "ios.hidden.confirm.title",

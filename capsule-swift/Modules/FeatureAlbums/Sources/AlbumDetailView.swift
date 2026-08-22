@@ -33,9 +33,9 @@ public struct AlbumDetailView: View {
     public var body: some View {
         content
             .navigationTitle(album.title)
-            .navigationBarTitleDisplayMode(.inline)
+            .capsuleNavigationBarInline()
             .task { await model.load() }
-            .fullScreenCover(item: $viewerSelection) { selection in
+            .capsuleFullScreenCover(item: $viewerSelection) { selection in
                 AssetViewerView(
                     assets: selection.assets,
                     startIndex: selection.startIndex,

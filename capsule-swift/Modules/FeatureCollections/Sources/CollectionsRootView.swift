@@ -68,7 +68,10 @@ public struct CollectionsRootView: View {
             }
             .navigationTitle("ios.tab.collections")
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                // `.primaryAction` rather than `.topBarTrailing`: it resolves to
+                // the navigation bar's trailing slot on iOS and to the window
+                // toolbar on macOS, where the topBar placements do not exist.
+                ToolbarItem(placement: .primaryAction) {
                     Button { isCreatingAlbum = true } label: {
                         Image(systemName: "plus")
                     }
@@ -176,7 +179,7 @@ private extension CollectionsRootView {
                 }
             }
             .background(
-                Color(.secondarySystemBackground),
+                .fill.secondary,
                 in: RoundedRectangle(cornerRadius: CapsuleTheme.Radius.medium)
             )
         }

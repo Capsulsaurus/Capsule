@@ -1,4 +1,5 @@
 import AssetKit
+import FeatureViewer
 import SwiftUI
 
 /// Recently Deleted — Capsule-managed soft-deleted assets, with swipe-to-recover
@@ -28,7 +29,7 @@ struct RecentlyDeletedView: View {
             }
         }
         .navigationTitle("ios.recently_deleted.title")
-        .navigationBarTitleDisplayMode(.inline)
+        .capsuleNavigationBarInline()
         .task { await reload() }
     }
 

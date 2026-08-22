@@ -29,8 +29,12 @@ public struct AlbumsRootView: View {
         NavigationStack {
             content
                 .navigationTitle("ios.albums.title")
+                // `.primaryAction` rather than `.topBarTrailing`: the topBar
+                // placements exist only where there is a navigation bar, while
+                // this one resolves to the same trailing slot on iOS and to the
+                // window toolbar on macOS.
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
+                    ToolbarItem(placement: .primaryAction) {
                         Button { isCreatingAlbum = true } label: {
                             Image(systemName: "plus")
                         }

@@ -5,7 +5,6 @@ import FeatureViewer
 import ImagePipeline
 import ManagedStore
 import SwiftUI
-import UIKit
 
 /// The photo timeline grid — the app's primary screen.
 ///
@@ -21,8 +20,7 @@ public struct TimelineRootView: View {
     @State private var userAlbums: [AlbumSummary] = []
     @State private var isAddToAlbumPresented = false
     @State private var isDeleteConfirmPresented = false
-    @State private var shareItems: [UIImage] = []
-    @State private var isSharePresented = false
+    @Environment(\.openURL) private var openURL
     private let assetProvider: any AssetProvider
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
@@ -50,29 +48,33 @@ public struct TimelineRootView: View {
         NavigationStack {
             content
                 .navigationTitle("ios.tab.library")
-                .navigationBarTitleDisplayMode(.inline)
+                .capsuleNavigationBarInline()
+                // `.navigation` / `.primaryAction` rather than `.topBarLeading`
+                // / `.topBarTrailing`: the topBar placements exist only where
+                // there is a navigation bar, while these two resolve to the same
+                // leading/trailing slots on iOS and to the window toolbar on macOS.
                 .toolbar {
                     if isSelecting {
-                        ToolbarItem(placement: .topBarLeading) {
+                        ToolbarItem(placement: .navigation) {
                             Button("ios.common.cancel") { exitSelection() }
                         }
                         ToolbarItem(placement: .principal) {
                             Text(selectionTitle).font(.headline)
                         }
                     } else {
-                        ToolbarItem(placement: .topBarLeading) { importButton }
+                        ToolbarItem(placement: .navigation) { importButton }
                         if model.state == .ready, !model.sections.isEmpty {
                             ToolbarItem(placement: .principal) { levelPicker }
                             if model.level == .all {
-                                ToolbarItem(placement: .topBarTrailing) { densityMenu }
-                                ToolbarItem(placement: .topBarTrailing) { selectButton }
+                                ToolbarItem(placement: .primaryAction) { densityMenu }
+                                ToolbarItem(placement: .primaryAction) { selectButton }
                             }
                         }
                     }
                 }
         }
         .task { await model.load() }
-        .fullScreenCover(item: $viewerSelection) { selection in
+        .capsuleFullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(
                 assets: selection.assets,
                 startIndex: selection.startIndex,
@@ -81,11 +83,8 @@ public struct TimelineRootView: View {
                 albumProvider: albumProvider
             )
         }
-        .sheet(isPresented: $importer.isPickerPresented) {
-            PhotoPickerView { sources in
-                Task { await importer.importPicked(sources) }
-            }
-            .ignoresSafeArea()
+        .photoImportPicker(isPresented: $importer.isPickerPresented) { sources in
+            Task { await importer.importPicked(sources) }
         }
         .overlay {
             if importer.isImporting { importProgressOverlay }
@@ -123,9 +122,6 @@ public struct TimelineRootView: View {
             Text(userAlbums.isEmpty
                 ? LocalizedStringKey("ios.add_to_album.empty_collections")
                 : LocalizedStringKey("ios.add_to_album.choose"))
-        }
-        .sheet(isPresented: $isSharePresented) {
-            if !shareItems.isEmpty { TimelineActivityView(items: shareItems) }
         }
     }
 
@@ -209,10 +205,8 @@ public struct TimelineRootView: View {
         } description: {
             Text("ios.timeline.permission.description")
         } actions: {
-            Button("ios.timeline.permission.open_settings") {
-                if let url = URL(string: UIApplication.openSettingsURLString) {
-                    UIApplication.shared.open(url)
-                }
+            if let settingsURL = PhotoLibrarySettings.url {
+                Button("ios.timeline.permission.open_settings") { openURL(settingsURL) }
             }
         }
     }
@@ -270,7 +264,7 @@ private extension TimelineRootView {
 
     var selectionActionBar: some View {
         HStack(spacing: 0) {
-            selectionAction("square.and.arrow.up") { Task { await shareSelected() } }
+            shareSelectionAction
             selectionAction("heart") { Task { await favoriteSelected() } }
             selectionAction("rectangle.stack.badge.plus") { Task { await presentAddToAlbum() } }
             selectionAction("eye.slash") { Task { await hideSelected() } }
@@ -284,16 +278,34 @@ private extension TimelineRootView {
         .disabled(selectedIDs.isEmpty)
     }
 
+    /// Share every selected asset.
+    ///
+    /// A `ShareLink` rather than a button that pre-loads images into state:
+    /// ``ShareableAsset`` decodes each original only once the user has chosen a
+    /// destination, so selecting two hundred photos costs nothing until then —
+    /// and `ShareLink` is the one share affordance both platforms have.
+    var shareSelectionAction: some View {
+        ShareLink(
+            items: selectedAssets.map { ShareableAsset(asset: $0, mediaLoader: mediaLoader) },
+            preview: { SharePreview($0.previewTitle) },
+            label: { selectionActionLabel("square.and.arrow.up") }
+        )
+    }
+
     func selectionAction(
         _ symbol: String,
         role: ButtonRole? = nil,
         action: @escaping () -> Void
     ) -> some View {
         Button(role: role, action: action) {
-            Image(systemName: symbol)
-                .font(.title3)
-                .frame(maxWidth: .infinity)
+            selectionActionLabel(symbol)
         }
+    }
+
+    func selectionActionLabel(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.title3)
+            .frame(maxWidth: .infinity)
     }
 
     var selectedAssets: [Asset] {
@@ -339,20 +351,6 @@ private extension TimelineRootView {
         }
         exitSelection()
     }
-
-    func shareSelected() async {
-        var images: [UIImage] = []
-        for asset in selectedAssets {
-            if let image = await mediaLoader.fullImage(
-                for: asset, targetSize: CGSize(width: 2048, height: 2048)
-            ) {
-                images.append(image)
-            }
-        }
-        guard !images.isEmpty else { return }
-        shareItems = images
-        isSharePresented = true
-    }
 }
 
 /// The asset list and entry index handed to a presented viewer.
@@ -360,15 +358,4 @@ private struct ViewerSelection: Identifiable {
     let id = UUID()
     let assets: [Asset]
     let startIndex: Int
-}
-
-/// A `UIActivityViewController` bridged into SwiftUI for the bulk share sheet.
-private struct TimelineActivityView: UIViewControllerRepresentable {
-    let items: [UIImage]
-
-    func makeUIViewController(context _: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
-    }
-
-    func updateUIViewController(_: UIActivityViewController, context _: Context) {}
 }
