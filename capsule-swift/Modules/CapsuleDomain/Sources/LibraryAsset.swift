@@ -194,7 +194,7 @@ public extension LibraryAsset {
 /// assets; an "includeDeleted" flag would make the Trash view show the whole
 /// library with the trash mixed in. Modelling it as one closed choice makes
 /// that mistake unrepresentable.
-public enum VisibilitySlice: Sendable, Equatable, Hashable, CaseIterable {
+public enum VisibilitySlice: Sendable, Equatable, Hashable, CaseIterable, Codable {
     /// The default timeline: not trashed, not user-hidden.
     case live
     /// Only soft-deleted assets, inside their retention window.
@@ -209,7 +209,7 @@ public enum VisibilitySlice: Sendable, Equatable, Hashable, CaseIterable {
 /// slice and no facets is the full default timeline. Modelled as one struct
 /// rather than a dozen port methods, because the alternative is a combinatorial
 /// explosion of `assetsInAlbumRatedAtLeastCapturedBetween(…)`.
-public struct TimelineQuery: Sendable, Equatable, Hashable {
+public struct TimelineQuery: Sendable, Equatable, Hashable, Codable {
     /// Which lifecycle slice to select.
     public var slice: VisibilitySlice
     /// Restrict to one container album or view.

@@ -129,6 +129,18 @@ private let moduleTargets: [Target] =
         testDependencies: []
     )
 
+    // Navigation — one `Route` vocabulary, a router with a stack per section,
+    // deep links, and the menu-command table. No SwiftUI views: the three shells
+    // bind this differently, so keeping it view-free is what lets them share it.
+    + module(
+        "CapsuleNavigation",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+        ],
+        testDependencies: []
+    )
+
     // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
     // redacted bug-report bundles, and an opt-in self-hosted uploader.
     + module(
@@ -342,6 +354,7 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "CapsuleCatalogTests",
     "CapsuleDomainTests",
     "CapsulePortsTests",
+    "CapsuleNavigationTests",
     "CapsuleUITests",
     "ManagedStoreTests",
     "AssetKitTests",

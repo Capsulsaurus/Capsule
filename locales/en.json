@@ -1914,5 +1914,241 @@
     "ios.menu.culling_review": {
         "message": "Culling Review",
         "context": "macOS View menu item that enters the keyboard-driven cull review mode. Shortcut ⇧⌘R."
+    },
+    "ios.sidebar.library": {
+        "message": "Library",
+        "context": "Sidebar and tab title for the main photo timeline."
+    },
+    "ios.sidebar.albums": {
+        "message": "Albums",
+        "context": "Sidebar and tab title for the albums index."
+    },
+    "ios.sidebar.memories": {
+        "message": "Memories",
+        "context": "Sidebar title for auto-curated memories."
+    },
+    "ios.sidebar.people": {
+        "message": "People",
+        "context": "Sidebar title for the face-cluster browser."
+    },
+    "ios.sidebar.places": {
+        "message": "Places",
+        "context": "Sidebar title for the map of where photos were taken."
+    },
+    "ios.sidebar.search": {
+        "message": "Search",
+        "context": "Sidebar and tab title for search."
+    },
+    "ios.sidebar.transfers": {
+        "message": "Transfers",
+        "context": "Sidebar title for the upload and download activity hub."
+    },
+    "ios.sidebar.imports": {
+        "message": "Imports",
+        "context": "Sidebar title for the history of imports into the library."
+    },
+    "ios.sidebar.shares": {
+        "message": "Shared Links",
+        "context": "Sidebar title for the list of share links the user has issued."
+    },
+    "ios.sidebar.drops": {
+        "message": "Inbox",
+        "context": "Sidebar title for guest uploads awaiting the user's review."
+    },
+    "ios.sidebar.quarantine": {
+        "message": "Needs Review",
+        "context": "Sidebar title for items that failed verification and need a human decision."
+    },
+    "ios.sidebar.duplicates": {
+        "message": "Duplicates",
+        "context": "Sidebar title for the duplicate-resolution screen."
+    },
+    "ios.sidebar.trash": {
+        "message": "Recently Deleted",
+        "context": "Sidebar title for the trash. Opening it requires fresh local authentication."
+    },
+    "ios.sidebar.hidden": {
+        "message": "Hidden",
+        "context": "Sidebar title for hidden photos. Opening it requires fresh local authentication."
+    },
+    "ios.sidebar.devices": {
+        "message": "Devices",
+        "context": "Sidebar title for the signed-in devices and session list."
+    },
+    "ios.sidebar.peers": {
+        "message": "Nearby Devices",
+        "context": "Sidebar title for local-network device-to-device sync."
+    },
+    "ios.sidebar.federation": {
+        "message": "Servers",
+        "context": "Sidebar title for federated peer servers."
+    },
+    "ios.sidebar.storage": {
+        "message": "Storage",
+        "context": "Sidebar title for local storage and server quota."
+    },
+    "ios.sidebar.settings": {
+        "message": "Settings",
+        "context": "Sidebar and tab title for settings."
+    },
+    "ios.sidebar.group.library": {
+        "message": "Library",
+        "context": "Sidebar group heading over the timeline and album destinations."
+    },
+    "ios.sidebar.group.collections": {
+        "message": "Collections",
+        "context": "Sidebar group heading over people, places, and memories."
+    },
+    "ios.sidebar.group.activity": {
+        "message": "Activity",
+        "context": "Sidebar group heading over transfers, imports, and review queues."
+    },
+    "ios.sidebar.group.system": {
+        "message": "System",
+        "context": "Sidebar group heading over devices, servers, storage, and settings."
+    },
+    "ios.settings.section.account": {
+        "message": "Account",
+        "context": "Settings screen for the signed-in identity."
+    },
+    "ios.settings.section.server": {
+        "message": "Server",
+        "context": "Settings screen for the home server and account portability."
+    },
+    "ios.settings.section.security": {
+        "message": "Security & Privacy",
+        "context": "Settings screen for the local-auth gate and at-rest posture."
+    },
+    "ios.settings.section.keys_and_devices": {
+        "message": "Keys & Devices",
+        "context": "Settings screen for the device directory and key rotation."
+    },
+    "ios.settings.section.backup_and_recovery": {
+        "message": "Backup & Recovery",
+        "context": "Settings screen for backups, escrow, and the recovery passphrase."
+    },
+    "ios.settings.section.sync": {
+        "message": "Sync",
+        "context": "Settings screen for what syncs and under which network conditions."
+    },
+    "ios.settings.section.storage": {
+        "message": "Storage",
+        "context": "Settings screen for the local cache budget and reclamation."
+    },
+    "ios.settings.section.import_and_scopes": {
+        "message": "Import",
+        "context": "Settings screen for the default album and per-source destination mappings."
+    },
+    "ios.settings.section.ai_and_models": {
+        "message": "AI & Models",
+        "context": "Settings screen for on-device model slots and re-indexing."
+    },
+    "ios.settings.section.appearance": {
+        "message": "Appearance",
+        "context": "Settings screen for grid density, grouping, and playback."
+    },
+    "ios.settings.section.language": {
+        "message": "Language & Region",
+        "context": "Settings screen for the display language."
+    },
+    "ios.settings.section.notifications": {
+        "message": "Notifications",
+        "context": "Settings screen for which alerts the app raises."
+    },
+    "ios.settings.section.diagnostics": {
+        "message": "Diagnostics",
+        "context": "Settings screen for crash and performance reporting consent."
+    },
+    "ios.settings.section.maintenance": {
+        "message": "Maintenance",
+        "context": "Settings screen for scrub, repair, deduplicate, and index rebuild."
+    },
+    "ios.settings.section.moderation": {
+        "message": "Blocking & Reports",
+        "context": "Settings screen for blocklists, reports, and appeals."
+    },
+    "ios.settings.section.federation": {
+        "message": "Servers",
+        "context": "Settings screen for federated peers and their trust state."
+    },
+    "ios.settings.section.advanced": {
+        "message": "Advanced",
+        "context": "Settings screen for protocol and crypto details and developer options."
+    },
+    "ios.settings.section.about": {
+        "message": "About",
+        "context": "Settings screen showing version, build identifier, and licences."
+    },
+    "ios.onboarding.step.welcome": {
+        "message": "Welcome",
+        "context": "First-run step: choose between using Capsule locally or connecting a server."
+    },
+    "ios.onboarding.step.server": {
+        "message": "Connect a Server",
+        "context": "First-run step: enter a server domain and verify its identity."
+    },
+    "ios.onboarding.step.sign_in": {
+        "message": "Sign In",
+        "context": "First-run step: authenticate with the server."
+    },
+    "ios.onboarding.step.recovery": {
+        "message": "Recovery Passphrase",
+        "context": "First-run step: record the passphrase and type part of it back."
+    },
+    "ios.onboarding.step.enrollment": {
+        "message": "Setting Up This Device",
+        "context": "First-run step: generate and publish this device's keys."
+    },
+    "ios.onboarding.step.photo_access": {
+        "message": "Photo Access",
+        "context": "First-run step: grant access to the system photo library."
+    },
+    "ios.onboarding.step.backup_scope": {
+        "message": "What to Back Up",
+        "context": "First-run step: choose which representations sync."
+    },
+    "ios.onboarding.step.finish": {
+        "message": "All Set",
+        "context": "First-run step: setup is complete."
+    },
+    "ios.menu.export": {
+        "message": "Export…",
+        "context": "Menu item that exports the selected photos, applying the privacy strip."
+    },
+    "ios.menu.select_all": {
+        "message": "Select All",
+        "context": "Menu item that selects every item in the current view."
+    },
+    "ios.menu.toggle_sidebar": {
+        "message": "Toggle Sidebar",
+        "context": "Menu item that shows or hides the sidebar."
+    },
+    "ios.menu.next_asset": {
+        "message": "Next",
+        "context": "Menu item that advances the viewer to the next photo."
+    },
+    "ios.menu.previous_asset": {
+        "message": "Previous",
+        "context": "Menu item that moves the viewer to the previous photo."
+    },
+    "ios.menu.close_window": {
+        "message": "Close Window",
+        "context": "Menu item that closes the frontmost window."
+    },
+    "ios.menu.zoom.years": {
+        "message": "Years",
+        "context": "Menu item that switches the timeline to one entry per year."
+    },
+    "ios.menu.zoom.months": {
+        "message": "Months",
+        "context": "Menu item that switches the timeline to one entry per month."
+    },
+    "ios.menu.zoom.days": {
+        "message": "Days",
+        "context": "Menu item that groups the timeline by day."
+    },
+    "ios.menu.zoom.all": {
+        "message": "All Photos",
+        "context": "Menu item that shows every photo in one dense grid."
     }
 }

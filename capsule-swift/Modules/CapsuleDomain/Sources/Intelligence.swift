@@ -87,7 +87,7 @@ public struct PlaceCluster: Sendable, Equatable, Identifiable, Hashable {
 /// A plain value rather than an `MKCoordinateRegion` so the domain layer stays
 /// free of MapKit — the platform-boundary rule this module is on the clean side
 /// of.
-public struct MapRegion: Sendable, Equatable, Hashable {
+public struct MapRegion: Sendable, Equatable, Hashable, Codable {
     public var minimumLatitude: Double
     public var maximumLatitude: Double
     public var minimumLongitude: Double
@@ -109,7 +109,7 @@ public struct MapRegion: Sendable, Equatable, Hashable {
 // MARK: - SearchScope
 
 /// Which facets a search covers.
-public struct SearchScope: Sendable, Equatable, Hashable, OptionSet {
+public struct SearchScope: Sendable, Equatable, Hashable, OptionSet, Codable {
     public let rawValue: Int
 
     public init(rawValue: Int) {
