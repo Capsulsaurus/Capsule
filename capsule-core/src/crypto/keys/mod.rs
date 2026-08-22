@@ -8,6 +8,11 @@
 //! [Cryptography — Keys]: https://docs/design/cryptography/keys/
 
 pub mod album;
+// The sealed, durable album-key store (slice `S-A10`) is filesystem-backed — it writes through
+// `utils::paths::tmp_path` for atomic replace — so it is gated with the rest of the native
+// surface. Leaving it ungated broke the `wasm32-unknown-unknown` sealing build (`S-A6`), which
+// no gate builds: `check-rust` compiles the host triple only.
+#[cfg(feature = "native")]
 pub mod albumstore;
 pub mod directory;
 pub mod hardware;
@@ -28,6 +33,7 @@ pub mod tbs;
 pub mod tpm;
 
 pub use album::{Amk, AmkVersion};
+#[cfg(feature = "native")]
 pub use albumstore::{AlbumStore, AlbumStoreError, AmkRow, PersistedAlbum, PersistedAuthority};
 pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
 pub use hardware::{

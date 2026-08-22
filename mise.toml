@@ -86,6 +86,7 @@ run = [
   "mise run openapi-check",
   "mise run translate-readme-check",
   "mise run build-rust",
+  "mise run build-check-wasm",
   "mise run build-ffi",
   "mise run lint-check-ffi",
   "mise run gen-bindings",
@@ -142,6 +143,19 @@ run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 
 [tasks.build-rust]
 run = "cargo build --workspace"
+
+# The wasm32 sealing build, type-checked. `build-rust` compiles the host triple only, so nothing
+# in any gate ever built `capsule-core --no-default-features` for wasm32 — which is how an ungated
+# `pub mod albumstore` (a filesystem-backed store, added by S-A10) silently broke the browser
+# sealing surface and, through `capsule-wasm`, `build-wasm` -> `build-web` -> `check-web`. `cargo
+# check` rather than `build-wasm` because this belongs in the Rust gate and must not need
+# wasm-bindgen-cli; `build-wasm` still produces the actual artifact.
+[tasks.build-check-wasm]
+description = "Type-check the wasm32 sealing surface (capsule-core no-default-features + capsule-wasm)"
+run = [
+  "cargo check -p capsule-core --target wasm32-unknown-unknown --no-default-features",
+  "cargo check -p capsule-wasm --target wasm32-unknown-unknown",
+]
 
 # Boundary gate for the retired architecture (Salvo, GraphQL/gRPC, Progenitor, the legacy
 # media stack). It rejects implicit workspace packages, retired dependencies, buildable
