@@ -7,7 +7,6 @@ use crate::state::AppState;
 mod assets;
 mod blob;
 mod drops;
-mod exports;
 mod receipts;
 mod share;
 mod verify;

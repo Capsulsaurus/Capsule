@@ -215,7 +215,7 @@ their owed remainder now lives.
 | S-Q5  | Live-browser smokes (gRPC-web, share, drop)            | e2e         | S-P7         | M    | blocked |
 | S-Z3  | Design-doc scope-out + amendment notes                 | docs        | —            | M    | done    |
 | S-Z4  | README GraphQL scrub (13 READMEs + web) + regen        | docs        | —            | S    | ready   |
-| S-Z5  | Dead-code removal (exports stub, CLI import planner)    | docs        | —            | S    | ready   |
+| S-Z5  | Dead-code removal (exports stub, CLI import planner)    | docs        | —            | S    | done    |
 | S-Z6  | Developer-docs parity pass                             | docs        | —            | M    | ready   |
 
 Lanes are independent by construction; within a lane, "Depends on" is the only

@@ -34,7 +34,6 @@ pub mod config;
 pub mod db;
 pub mod demo;
 pub mod i18n;
-pub mod import;
 pub mod remote;
 pub mod session;
 pub mod status;
