@@ -597,6 +597,26 @@ impl BackupArtifact {
         })
     }
 
+    /// The escrowed AMK rows this artifact carries: `(album_id, epoch, amk)`.
+    ///
+    /// The same row shape the durable album keystore holds
+    /// ([`AmkRow`](crate::crypto::keys::AmkRow)), so folding a restore's recovered keys into a
+    /// library's keystore is a `map`, not a translation table. This is the path by which a
+    /// library that lost its album keys becomes able to read its photos again — the backup path
+    /// is deliberately independent of the MLS ratchet (SSoT: [Keys]).
+    ///
+    /// Note what is *not* here: the write-tier and admin signing keys, and the admin-signed epoch
+    /// ledger. Those are MLS-distributed capabilities, not escrowed secrets, so an album restored
+    /// into a library that never held it is readable but not writable.
+    ///
+    /// [Keys]: https://docs/design/cryptography/keys/#album-master-keys-amks
+    pub fn amk_rows(&self) -> Vec<(Uuid, u32, [u8; 32])> {
+        self.ledger
+            .iter()
+            .map(|((album, epoch), amk)| (*album, *epoch, *amk))
+            .collect()
+    }
+
     /// The exporter device id recorded in the manifest (provenance: who exported).
     pub fn exporter_device(&self) -> Uuid {
         self.core.exporter_device

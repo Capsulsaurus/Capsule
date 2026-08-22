@@ -25,7 +25,7 @@
 //!
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization
 
-mod reference;
+pub mod reference;
 
 #[cfg(feature = "mls")]
 mod openmls_authority;
@@ -89,6 +89,16 @@ pub enum Authority {
 // avoids a large size difference between variants.
 
 impl Authority {
+    /// The reference backend, if this is the offline/reference authority; `None` for the live
+    /// MLS backend. Used to capture the admin-signed epoch ledger for persistence.
+    pub fn as_reference(&self) -> Option<&ReferenceAuthority> {
+        match self {
+            Authority::Reference(a) => Some(a.as_ref()),
+            #[cfg(feature = "mls")]
+            Authority::OpenMls(_) => None,
+        }
+    }
+
     /// The reference backend, mutably, if this is the offline/reference authority. Returns
     /// `None` for the live MLS backend — whose epoch advances are self-update commits, not
     /// ledger attestations, and so ride the MLS ceremonies (S-X2) rather than this path.

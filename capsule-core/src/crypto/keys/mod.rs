@@ -8,6 +8,7 @@
 //! [Cryptography — Keys]: https://docs/design/cryptography/keys/
 
 pub mod album;
+pub mod albumstore;
 pub mod directory;
 pub mod hardware;
 pub mod hybrid_sig;
@@ -27,6 +28,7 @@ pub mod tbs;
 pub mod tpm;
 
 pub use album::{Amk, AmkVersion};
+pub use albumstore::{AlbumStore, AlbumStoreError, AmkRow, PersistedAlbum, PersistedAuthority};
 pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
 pub use hardware::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,
