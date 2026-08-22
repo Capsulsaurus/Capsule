@@ -25,7 +25,7 @@ struct MockMutationTests {
     /// Registration hops onto the broadcaster's actor, so a write issued in the
     /// same turn as `changes()` could outrun it. Waiting for the subscription to
     /// land makes the test deterministic without weakening what it asserts.
-    private func awaitSubscriber<Element: Sendable>(_ broadcaster: ChangeBroadcaster<Element>) async {
+    private func awaitSubscriber(_ broadcaster: ChangeBroadcaster<some Sendable>) async {
         for _ in 0 ..< 200 {
             if await broadcaster.subscriberCount > 0 { return }
             await Task.yield()
@@ -105,7 +105,8 @@ struct MockMutationTests {
         try await environment.organize.purge(trashed.map(\.id))
         for subject in trashed {
             #expect(try await environment.library.asset(for: subject.id) == nil)
-            #expect(!(try await environment.library.provenanceChain(for: subject.id)).isEmpty)
+            let chain = try await environment.library.provenanceChain(for: subject.id)
+            #expect(!chain.isEmpty)
         }
         #expect(try await environment.library.assetCount(matching: .trash) == 0)
     }

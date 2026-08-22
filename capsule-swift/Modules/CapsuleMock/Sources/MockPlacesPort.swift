@@ -78,8 +78,8 @@ extension MockIntelligenceStore: PlacesPort {
             identifiers.append(contentsOf: tripIdentifiers(library: library, ordinal: ordinal))
         }
         let window = MockQueryEngine.window(identifiers, request: request)
-        return Page(
-            items: try await libraryStore.assets(for: window),
+        return try await Page(
+            items: libraryStore.assets(for: window),
             request: request,
             totalCount: identifiers.count
         )

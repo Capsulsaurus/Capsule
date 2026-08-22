@@ -33,7 +33,7 @@ public extension MockQueryEngine {
     }
 
     /// The unfiltered live window, read straight off the day boundary array.
-    private func fastPage(query: TimelineQuery, request: PageRequest) -> Page<LibraryAsset> {
+    private func fastPage(query _: TimelineQuery, request: PageRequest) -> Page<LibraryAsset> {
         let upper = min(library.assetCount, request.offset + request.limit)
         guard request.offset < upper else {
             return Page(items: [], request: request, totalCount: library.assetCount)

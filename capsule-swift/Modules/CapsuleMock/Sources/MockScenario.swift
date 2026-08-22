@@ -90,7 +90,7 @@ public struct MockClock: Sendable, Equatable, Hashable {
     }
 
     /// 2026-08-22T12:00:00Z — the instant every scenario is anchored on.
-    public static let referenceEpochSeconds: Int64 = 1_787_400_000
+    public static let referenceEpochSeconds: Int64 = 1787400000
 
     /// The default clock.
     public static let reference = MockClock(

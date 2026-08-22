@@ -2158,5 +2158,9 @@
     "ios.scaffold.body": {
         "message": "This screen is wired into navigation but has no interface yet.",
         "context": "Body text on a placeholder screen, explaining that the destination exists and routes correctly but is unimplemented."
+    },
+    "ios.albums.default.name": {
+        "message": "Library",
+        "context": "Display name for the default container album, which is genuinely nameless in the data model. Every import that is not filed elsewhere lands here."
     }
 }

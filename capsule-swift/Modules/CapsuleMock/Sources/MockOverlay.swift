@@ -97,7 +97,7 @@ public struct MockOverlay: Sendable, Equatable {
     ///
     /// Monotonic and never reset: reusing a counter would alias two distinct
     /// adds, so removing one would silently delete the other.
-    public private(set) var nextAddCounter: UInt64 = 1_000_000
+    public private(set) var nextAddCounter: UInt64 = 1000000
 
     public init() {}
 

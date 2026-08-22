@@ -132,7 +132,7 @@ public extension MockLibrary {
     }
 
     private func liveCaptureInstant(index: Int) -> MockCaptureInstant {
-        let dayIndex = self.dayIndex(forAsset: index)
+        let dayIndex = dayIndex(forAsset: index)
         let dayTotal = max(1, count(forDay: dayIndex))
         let offsetInDay = index - startIndex(forDay: dayIndex)
         // At least nine seconds between consecutive assets, so a collapsed

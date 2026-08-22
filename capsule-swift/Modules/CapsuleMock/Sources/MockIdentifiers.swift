@@ -136,6 +136,6 @@ public enum MockIdentifiers {
     /// The advisory device-cohort hash. Advisory by design: no authorization
     /// decision may read it, so the mock's value is as good as a real one.
     public static func cohortHash(seed: UInt64, ordinal: Int) -> String {
-        MockHash.hex(MockHash.mix(seed &+ 0xC0_1234 &+ UInt64(bitPattern: Int64(ordinal))), digits: 16)
+        MockHash.hex(MockHash.mix(seed &+ 0xC01234 &+ UInt64(bitPattern: Int64(ordinal))), digits: 16)
     }
 }

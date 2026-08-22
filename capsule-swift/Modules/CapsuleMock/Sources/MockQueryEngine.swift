@@ -153,9 +153,13 @@ public enum MockTagIdentity {
 
     public static func addID(forTag tag: String, identifier: AssetID, seed: UInt64, isAI: Bool) -> AddID {
         var accumulator: UInt64 = isAI ? 0x9E37 : 0x1F3B
-        for byte in tag.utf8 { accumulator = MockHash.mix(accumulator &+ UInt64(byte)) }
-        for byte in identifier.sortKey.utf8 { accumulator = MockHash.mix(accumulator &+ UInt64(byte)) }
-        return AddID(deviceID: authoringDevice(seed: seed), counter: accumulator % 900_000)
+        for byte in tag.utf8 {
+            accumulator = MockHash.mix(accumulator &+ UInt64(byte))
+        }
+        for byte in identifier.sortKey.utf8 {
+            accumulator = MockHash.mix(accumulator &+ UInt64(byte))
+        }
+        return AddID(deviceID: authoringDevice(seed: seed), counter: accumulator % 900000)
     }
 
     static func userTag(

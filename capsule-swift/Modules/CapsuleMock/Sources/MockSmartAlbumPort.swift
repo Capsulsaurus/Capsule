@@ -97,7 +97,7 @@ extension MockLibraryStore {
     /// A rating sort cannot be answered by walking the timeline, so it collects
     /// and then orders — which is bounded rather than unbounded, because a
     /// 250 000-row materialization is exactly what this module exists to avoid.
-    static var reorderingCeiling: Int { 50_000 }
+    static var reorderingCeiling: Int { 50000 }
 
     /// Walk the live timeline applying the predicate, stopping once the window
     /// is full.
@@ -109,7 +109,7 @@ extension MockLibraryStore {
     /// have one — it collects, then orders.
     func evaluate(_ definition: SmartAlbumDefinition, offset: Int, limit: Int) -> Page<LibraryAsset> {
         let request = PageRequest(offset: offset, limit: limit)
-        let engine = self.engine
+        let engine = engine
         let sort = definition.effectiveSort
         let isNaturalOrder = sort == .default
         var matched: [LibraryAsset] = []

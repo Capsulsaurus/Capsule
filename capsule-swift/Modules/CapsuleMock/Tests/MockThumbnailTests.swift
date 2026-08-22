@@ -106,7 +106,7 @@ struct MockThumbnailTests {
     func unknownIdentifierRendersNothing() async throws {
         let renderer = MockThumbnailRenderer(library: makeLibrary())
         #expect(await renderer.thumbnail(for: .photoKit(localIdentifier: "X"), edge: 32) == nil)
-        let outOfRange = MockAssetRef(kind: .live, index: 100_000).identifier(seed: 0x0C0F_FEE0_1234_5678)
+        let outOfRange = MockAssetRef(kind: .live, index: 100000).identifier(seed: 0x0C0F_FEE0_1234_5678)
         #expect(await renderer.thumbnail(for: outOfRange, edge: 32) == nil)
     }
 }

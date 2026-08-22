@@ -20,7 +20,7 @@ extension MockLibraryStore: AlbumPort {
     /// boundary — which is why it can never be an import destination, and why
     /// its count is optional: membership is a query, not a stored number.
     public func viewAlbums() async throws -> [ViewAlbum] {
-        let engine = self.engine
+        let engine = engine
         var views: [ViewAlbum] = [
             ViewAlbum(
                 id: .smart(localIdentifier: "view.all"),
@@ -82,7 +82,7 @@ extension MockLibraryStore: AlbumPort {
     /// name is the strip-and-resign hazard the closed enums exist to stop.
     public func createAlbum(name: String, policy: AlbumPolicy) async throws -> ContainerAlbum {
         try policy.historyPolicy.requireWritable()
-        let ordinal = 500_000 + albumList.count
+        let ordinal = 500000 + albumList.count
         let album = ContainerAlbum(
             id: MockIdentifiers.albumID(seed: configuration.seed, ordinal: ordinal),
             name: name,
@@ -153,5 +153,5 @@ extension MockLibraryStore: AlbumPort {
     }
 
     /// Above this many assets, smart-album counts are reported as unknown.
-    static var smartAlbumCountingCeiling: Int { 20_000 }
+    static var smartAlbumCountingCeiling: Int { 20000 }
 }

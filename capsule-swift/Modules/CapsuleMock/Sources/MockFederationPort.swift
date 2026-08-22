@@ -27,7 +27,7 @@ extension MockFederationStore: FederationPort {
         // A blocked origin drops out of *this viewer's* aggregate, without
         // affecting any other participant's view — blocking is per-origin and
         // local, not a group-level removal.
-        let visible = album.constituents.filter { $0.availability.rendersFromLocalIndex }
+        let visible = album.constituents.filter(\.availability.rendersFromLocalIndex)
         var merged: [LibraryAsset] = []
         for constituent in visible {
             let page = try await store.assets(
@@ -85,11 +85,11 @@ extension MockFederationStore: FederationPort {
             )
         }
         guard !album.constituents.contains(where: { $0.albumID == constituent }) else { return }
-        album.constituents.append(AggregatedConstituent(
+        await album.constituents.append(AggregatedConstituent(
             albumID: constituent,
             homeServer: "capsule.example",
             availability: .available,
-            assetCount: await store.albumCount(constituent)
+            assetCount: store.albumCount(constituent)
         ))
         setGroup(album)
         await federationChanges.send(())

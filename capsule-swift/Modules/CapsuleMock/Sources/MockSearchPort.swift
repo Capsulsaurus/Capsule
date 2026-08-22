@@ -13,7 +13,7 @@ extension MockIntelligenceStore: SearchPort {
     /// behaviour a search field must not have. The cap is the honest shape of
     /// that limitation: results are the best matches in the most recent window,
     /// and a real local index replaces it rather than raising it.
-    public static var searchExaminationLimit: Int { 20_000 }
+    public static var searchExaminationLimit: Int { 20000 }
 
     /// Run a search.
     ///

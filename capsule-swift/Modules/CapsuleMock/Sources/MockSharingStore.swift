@@ -121,7 +121,7 @@ enum MockSharingSeed {
                 viaLink: MockIdentifiers.shareID(seed: seed, ordinal: 3),
                 descriptor: DropDescriptor(
                     contentType: ordinal == 2 ? .png : .heic,
-                    plaintextSize: UInt64(2_400_000 + ordinal * 1_100_000),
+                    plaintextSize: UInt64(2400000 + ordinal * 1100000),
                     chunkSize: 1 << 20,
                     ciphertextHash: MockIdentifiers.blobHash(seed: seed, ordinal: 9000 + ordinal),
                     suggestedFilename: name

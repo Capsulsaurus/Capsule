@@ -36,7 +36,7 @@ public actor MockSystemStore {
             syncScope: configuration.syncScope,
             uploadPolicy: configuration.uploadPolicy,
             autoSyncEnabled: configuration.connectionClass != .offline,
-            cacheBudgetBytes: 24 * 1_073_741_824,
+            cacheBudgetBytes: 24 * 1073741824,
             aiProcessingEnabled: true,
             aiRequiresPower: true,
             stalenessNotificationEnabled: true
@@ -82,7 +82,7 @@ enum MockQuarantineSeed {
                 assetID: assetIdentifier(configuration: configuration, surface: surface, ordinal: ordinal),
                 detectedAt: configuration.clock.offset(days: -ordinal - 1),
                 preservedBytes: surface.storage.preservesOriginalBytes
-                    ? UInt64(1_800_000 + ordinal * 640_000)
+                    ? UInt64(1800000 + ordinal * 640000)
                     : nil,
                 resolutions: resolutions(for: surface)
             )

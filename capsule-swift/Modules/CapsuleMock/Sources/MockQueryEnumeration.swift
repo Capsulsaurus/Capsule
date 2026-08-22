@@ -66,7 +66,9 @@ extension MockQueryEngine {
         case .live:
             forEachLiveMatch(query, body)
         case .trash, .userHidden:
-            for entry in asideEntries(query) where !body(entry.dayIndex, entry.ref) { return }
+            for entry in asideEntries(query) where !body(entry.dayIndex, entry.ref) {
+                return
+            }
         }
     }
 
@@ -155,9 +157,13 @@ extension MockQueryEngine {
         return entries
             .filter { matchesFacets(query, facets: library.facets(for: $0.ref), patch: overlay.patch(for: $0.ref.identifier(seed: library.profile.seed))) }
             .sorted { lhs, rhs in
-                lhs.seconds == rhs.seconds
-                    ? lhs.ref.uuidString(seed: library.profile.seed) < rhs.ref.uuidString(seed: library.profile.seed)
-                    : lhs.seconds > rhs.seconds
+                // Newest first, with the asset id as a stable tiebreak so two
+                // assets captured in the same second never swap between reads.
+                guard lhs.seconds == rhs.seconds else {
+                    return lhs.seconds > rhs.seconds
+                }
+                let seed = library.profile.seed
+                return lhs.ref.uuidString(seed: seed) < rhs.ref.uuidString(seed: seed)
             }
     }
 

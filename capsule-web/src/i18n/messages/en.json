@@ -224,6 +224,7 @@
   "ios.add_to_album.empty_albums": "Create an album in the Albums tab first.",
   "ios.add_to_album.empty_collections": "Create an album in Collections first.",
   "ios.add_to_album.title": "Add to Album",
+  "ios.albums.default.name": "Library",
   "ios.albums.detail.empty.description": "Add photos using a viewer's Add to Album action.",
   "ios.albums.detail.empty.title": "Empty Album",
   "ios.albums.empty.description": "Create a Capsule album with the + button.",

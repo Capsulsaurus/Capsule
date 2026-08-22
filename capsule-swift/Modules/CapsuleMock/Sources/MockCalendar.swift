@@ -49,10 +49,10 @@ public enum MockCalendar {
 
     /// The `(year, month, day)` of a UTC day number.
     public static func civil(dayNumber: Int64) -> CivilDate {
-        let shifted = dayNumber + 719_468
-        let era = (shifted >= 0 ? shifted : shifted - 146_096) / 146_097
-        let dayOfEra = shifted - era * 146_097
-        let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146_096) / 365
+        let shifted = dayNumber + 719468
+        let era = (shifted >= 0 ? shifted : shifted - 146096) / 146097
+        let dayOfEra = shifted - era * 146097
+        let yearOfEra = (dayOfEra - dayOfEra / 1460 + dayOfEra / 36524 - dayOfEra / 146096) / 365
         let year = yearOfEra + era * 400
         let dayOfYear = dayOfEra - (365 * yearOfEra + yearOfEra / 4 - yearOfEra / 100)
         let monthProxy = (5 * dayOfYear + 2) / 153

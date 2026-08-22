@@ -172,7 +172,7 @@ public actor MockLibraryStore {
     func albumCount(_ identifier: AlbumID) -> Int {
         if let cached = derivedAlbumCounts { return cached[identifier] ?? 0 }
         var counts: [AlbumID: Int] = [:]
-        let engine = self.engine
+        let engine = engine
         for index in 0 ..< library.assetCount where !engine.isSuppressed(liveIndex: index) {
             let ordinal = library.albumOrdinal(derivationIndex: index)
             let derived = MockIdentifiers.albumID(seed: configuration.seed, ordinal: ordinal)

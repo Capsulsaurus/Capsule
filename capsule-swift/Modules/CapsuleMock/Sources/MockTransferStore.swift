@@ -101,7 +101,10 @@ public actor MockTransferStore {
     func setStatus(_ value: SyncStatus) { status = value }
     func setQuota(_ value: QuotaStatus) { quotaStatus = value }
     func updatePinned(_ value: Set<AssetID>) { pinnedAssets = value }
-    func addReclaimed(_ value: UInt64) { evictedBytes += value; cachedBreakdown = nil }
+    func addReclaimed(_ value: UInt64) { evictedBytes += value
+        cachedBreakdown = nil
+    }
+
     func markImportCancelled(_ identifier: ImportID) { cancelledImports.insert(identifier) }
     func isImportCancelled(_ identifier: ImportID) -> Bool { cancelledImports.contains(identifier) }
 

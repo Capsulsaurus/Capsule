@@ -19,7 +19,7 @@ extension MockFederationStore: PeeringPort {
 
     public func setEnabled(_ enabled: Bool) async throws {
         setPeeringEnabled(enabled)
-        await peeringChanges.send(try await discoveredPeers())
+        try await peeringChanges.send(discoveredPeers())
     }
 
     /// Devices discovered on the local network, with their trust state.

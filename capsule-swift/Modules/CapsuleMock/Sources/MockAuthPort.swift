@@ -16,7 +16,7 @@ extension MockIdentityStore: AuthPort {
     /// SDK's, so there is nothing here for a view model to drive beyond the
     /// handle — which is exactly why this returns an ``AccountSummary`` and not
     /// a token.
-    public func signInLocally(handle: String) async throws -> AccountSummary {
+    public func signInLocally(handle _: String) async throws -> AccountSummary {
         try await behaviourGate.admit()
         return await completeSignIn()
     }
@@ -26,7 +26,7 @@ extension MockIdentityStore: AuthPort {
     /// The IdP authenticates the **session**. The master key never derives from,
     /// and is never visible to, the credential verifier — so an IdP compromise
     /// costs the user their session, not their photographs.
-    public func signInWithIdentityProvider(issuer: URL) async throws -> AccountSummary {
+    public func signInWithIdentityProvider(issuer _: URL) async throws -> AccountSummary {
         try await behaviourGate.admit()
         return await completeSignIn()
     }

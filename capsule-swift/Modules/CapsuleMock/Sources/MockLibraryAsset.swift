@@ -79,7 +79,7 @@ public extension MockLibrary {
     /// a phone syncs quickly, a memory card comes home at the weekend.
     private func importSeconds(instant: MockCaptureInstant, ref: MockAssetRef) -> Int64 {
         let hash = MockHash.value(seed: profile.seed, index: ref.derivationIndex, salt: .duration, sub: 11)
-        return instant.utcSeconds + Int64(MockHash.integer(hash, in: 120 ... 320_000))
+        return instant.utcSeconds + Int64(MockHash.integer(hash, in: 120 ... 320000))
     }
 
     private func deletedSeconds(ref: MockAssetRef) -> Int64 {
@@ -113,7 +113,7 @@ public extension MockLibrary {
         if ref.kind == .live, stackType(at: ref.index) == .livePhoto {
             return Int64(MockHash.integer(hash, in: 1500 ... 3000))
         }
-        return Int64(MockHash.integer(hash, in: 3000 ... 184_000))
+        return Int64(MockHash.integer(hash, in: 3000 ... 184000))
     }
 
     /// The embedded placeholder — the bottom of the degrade ladder, and the
@@ -144,12 +144,11 @@ public extension MockLibrary {
     /// teaches the user nothing.
     func byteSize(for ref: MockAssetRef, contentType: ContentType) -> UInt64 {
         let hash = MockHash.value(seed: profile.seed, index: ref.derivationIndex, salt: .byteSize)
-        let range: ClosedRange<Int>
-        switch contentType {
-        case .dng, .tiff: range = 22_000_000 ... 58_000_000
-        case .mp4, .quicktime, .matroska, .webm: range = 18_000_000 ... 620_000_000
-        case .png: range = 900_000 ... 9_000_000
-        default: range = 1_400_000 ... 6_800_000
+        let range: ClosedRange<Int> = switch contentType {
+        case .dng, .tiff: 22000000 ... 58000000
+        case .mp4, .quicktime, .matroska, .webm: 18000000 ... 620000000
+        case .png: 900000 ... 9000000
+        default: 1400000 ... 6800000
         }
         return UInt64(MockHash.integer(hash, in: range))
     }

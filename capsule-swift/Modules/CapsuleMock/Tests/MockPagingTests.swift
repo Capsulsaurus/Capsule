@@ -31,7 +31,9 @@ struct MockPagingTests {
         var offset = 0
         while true {
             let page = try await store.assets(matching: query, offset: offset, limit: pageSize)
-            for asset in page.items { tally[asset.dayKey, default: 0] += 1 }
+            for asset in page.items {
+                tally[asset.dayKey, default: 0] += 1
+            }
             offset += page.items.count
             if page.items.count < pageSize { break }
         }
@@ -44,7 +46,9 @@ struct MockPagingTests {
         let counts = try await store.dayCounts(matching: .default)
         let tally = try await tallyByDay(store, query: .default)
         #expect(tally.count == counts.count)
-        for count in counts { #expect(tally[count.dayKey] == count.count) }
+        for count in counts {
+            #expect(tally[count.dayKey] == count.count)
+        }
         #expect(try await store.assetCount(matching: .default) == counts.totalCount)
     }
 
@@ -65,7 +69,9 @@ struct MockPagingTests {
         let counts = try await store.dayCounts(matching: query)
         let tally = try await tallyByDay(store, query: query)
         #expect(tally.count == counts.count)
-        for count in counts { #expect(tally[count.dayKey] == count.count) }
+        for count in counts {
+            #expect(tally[count.dayKey] == count.count)
+        }
         #expect(try await store.assetCount(matching: query) == counts.totalCount)
     }
 
@@ -134,8 +140,10 @@ struct MockPagingTests {
         let query = TimelineQuery(includeStackHidden: true)
         let counts = try await store.dayCounts(matching: query)
         let tally = try await tallyByDay(store, query: query)
-        for count in counts { #expect(tally[count.dayKey] == count.count) }
-        #expect(counts.totalCount > (try await store.assetCount(matching: .default)))
+        for count in counts {
+            #expect(tally[count.dayKey] == count.count)
+        }
+        #expect(try await counts.totalCount > (store.assetCount(matching: .default)))
         let page = try await store.assets(matching: query, offset: 0, limit: 200)
         for (earlier, later) in zip(page.items, page.items.dropFirst()) {
             #expect(LibraryAsset.isOrderedNewestFirst(earlier, later))

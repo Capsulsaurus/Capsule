@@ -31,7 +31,7 @@ extension MockTransferStore: UploadPort {
 
     /// Force a transfer regardless of the metered and Wi-Fi criteria, on the
     /// user's explicit consent.
-    public func forceUpload(assetIDs: [AssetID]) async throws {
+    public func forceUpload(assetIDs _: [AssetID]) async throws {
         try await behaviourGate.admit()
         let updated = currentSessions.map { session -> UploadSession in
             var session = session
@@ -95,7 +95,7 @@ extension MockTransferStore: UploadPort {
             serverKeyID: Data(MockHash.hex(MockHash.mix(seed), digits: 16).utf8),
             // Strictly monotonic per server: holding sequence N proves the log
             // has at least N entries, which is what bounds silent truncation.
-            receiptSequence: UInt64(100_000 + ordinal),
+            receiptSequence: UInt64(100000 + ordinal),
             priorReceiptHash: ordinal == 0 ? nil : MockSidecarFactory.chainHash(seed: seed, ref: ref, step: position),
             uploadID: MockIdentifiers.uploadID(seed: seed, ordinal: ordinal),
             assetID: ref.uuidString(seed: seed),

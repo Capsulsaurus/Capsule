@@ -108,7 +108,7 @@ extension MockTransferStore: StoragePort {
         var byTier: [RepresentationTier: UInt64] = [:]
         var trashBytes: UInt64 = 0
         var unreleased: UInt64 = 0
-        let ceiling = min(library.assetCount, 60_000)
+        let ceiling = min(library.assetCount, 60000)
         for index in 0 ..< ceiling {
             let ref = MockAssetRef(kind: .live, index: index)
             let asset = engine.resolve(ref)
@@ -128,7 +128,7 @@ extension MockTransferStore: StoragePort {
             bytesByTier: byTier,
             trashBytes: trashBytes,
             unreleasedOriginalBytes: unreleased,
-            availableDiskBytes: 92 * 1_073_741_824
+            availableDiskBytes: 92 * 1073741824
         )
     }
 

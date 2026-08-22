@@ -78,7 +78,7 @@ public enum MockHash {
     /// A fraction in `[0, 1)`, from the high 53 bits so the low-bit structure of
     /// the multiplier never shows through.
     public static func fraction(_ hash: UInt64) -> Double {
-        Double(hash >> 11) * (1.0 / 9_007_199_254_740_992.0)
+        Double(hash >> 11) * (1.0 / 9007199254740992.0)
     }
 
     /// An integer in a closed range. Modulo bias is irrelevant at these range

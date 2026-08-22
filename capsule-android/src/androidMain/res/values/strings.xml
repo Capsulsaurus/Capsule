@@ -225,6 +225,7 @@
     <string name="ios_add_to_album_empty_albums">Create an album in the Albums tab first.</string>
     <string name="ios_add_to_album_empty_collections">Create an album in Collections first.</string>
     <string name="ios_add_to_album_title">Add to Album</string>
+    <string name="ios_albums_default_name">Library</string>
     <string name="ios_albums_detail_empty_description">Add photos using a viewer\'s Add to Album action.</string>
     <string name="ios_albums_detail_empty_title">Empty Album</string>
     <string name="ios_albums_empty_description">Create a Capsule album with the + button.</string>

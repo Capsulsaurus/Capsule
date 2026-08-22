@@ -156,7 +156,7 @@ extension MockTransferStore: ImportPort {
             id: "\(scope.scopeID)-\(ordinal)",
             locator: "\(scope.locator)/IMG_\(MockHash.hex(UInt64(4000 + ordinal), digits: 4)).\(Self.suffix(type))",
             contentType: type,
-            byteSize: UInt64(MockHash.integer(MockHash.mix(hash &+ 3), in: 900_000 ... 48_000_000)),
+            byteSize: UInt64(MockHash.integer(MockHash.mix(hash &+ 3), in: 900000 ... 48000000)),
             companionLocators: hasCompanion ? ["\(scope.locator)/IMG_\(ordinal).JPG"] : []
         )
     }

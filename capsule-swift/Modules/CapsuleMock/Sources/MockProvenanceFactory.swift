@@ -120,7 +120,7 @@ public extension MockSidecarFactory {
                 seed: seed,
                 index: ref.derivationIndex,
                 salt: .identity,
-                sub: salt &* 100_000 &+ step &* 64 &+ word
+                sub: salt &* 100000 &+ step &* 64 &+ word
             )
             withUnsafeBytes(of: hash.bigEndian) { bytes.append(contentsOf: $0) }
         }

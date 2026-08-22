@@ -27,7 +27,7 @@ struct MockPortCoverageTests {
             return kind
         }
         #expect(Set(systemKinds) == Set(ViewAlbum.SystemView.allCases))
-        let gated = views.filter { $0.requiresFreshLocalAuth }
+        let gated = views.filter(\.requiresFreshLocalAuth)
         #expect(gated.count == 2)
     }
 
@@ -44,7 +44,8 @@ struct MockPortCoverageTests {
         #expect(members.count == stack.memberAssetIDs.count)
         #expect(members.first?.isStackCover == true)
         #expect(members.dropFirst().allSatisfy { $0.isStackHidden })
-        #expect(try await environment.stacks.stack(stack.id) == stack)
+        let resolved = try await environment.stacks.stack(stack.id)
+        #expect(resolved == stack)
 
         // Flagging a collapsed stack flags every member: a group has no stored
         // flag of its own.
@@ -89,7 +90,8 @@ struct MockPortCoverageTests {
         let results = try await environment.search.search("beach", scope: .all, offset: 0, limit: 20)
         #expect(results.items.allSatisfy { !$0.matchedScope.isEmpty })
         #expect(try await environment.search.recentSearches() == ["beach"])
-        #expect(!(try await environment.search.suggestions(for: "tra", limit: 10)).isEmpty)
+        let suggestions = try await environment.search.suggestions(for: "tra", limit: 10)
+        #expect(!suggestions.isEmpty)
         try await environment.search.clearRecentSearches()
         #expect(try await environment.search.recentSearches().isEmpty)
     }
@@ -99,7 +101,7 @@ struct MockPortCoverageTests {
         let statuses = try await environment.intelligence.modelStatuses()
         #expect(statuses.count == 4)
         #expect(statuses.contains { $0.availability == .notDownloaded })
-        #expect(statuses.contains { if case .supersededBy = $0.availability { return true } else { return false } })
+        #expect(statuses.contains { if case .supersededBy = $0.availability { true } else { false } })
         var last: AIModelStatus?
         for await status in environment.intelligence.downloadModel(slot: MockTables.imageEmbeddingSlot) {
             last = status
@@ -206,7 +208,9 @@ struct MockPortCoverageTests {
         let tasks = try await environment.maintenance.tasks()
         #expect(tasks.count == MaintenanceTaskKind.knownCases.count)
         var last: MaintenanceTask?
-        for await task in environment.maintenance.run(.structuralValidation) { last = task }
+        for await task in environment.maintenance.run(.structuralValidation) {
+            last = task
+        }
         guard case .completed = last?.state else {
             Issue.record("the run did not complete")
             return
@@ -284,6 +288,7 @@ struct MockPortCoverageTests {
         await #expect(throws: CapsuleError.self) {
             try await environment.peering.requestOriginals(for: [], from: unpaired.id)
         }
-        #expect(!(try await environment.peering.activeTransfers()).isEmpty)
+        let transfers = try await environment.peering.activeTransfers()
+        #expect(!transfers.isEmpty)
     }
 }

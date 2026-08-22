@@ -158,7 +158,8 @@ struct MockScenarioTests {
         // A badge, never a failure: none of them needs the user's attention.
         #expect(awaiting.allSatisfy { !$0.syncState.needsUserAttention })
         #expect(awaiting.allSatisfy { !$0.representations.isFullResolutionAvailable })
-        #expect(!(try await environment.uploads.activeSessions()).isEmpty)
+        let activeSessions = try await environment.uploads.activeSessions()
+        #expect(!activeSessions.isEmpty)
     }
 
     /// Unknown closed-enum values, a `SchemaAhead` marker, and a definition this
@@ -172,9 +173,15 @@ struct MockScenarioTests {
             return false
         }
         #expect(!ahead.isEmpty)
-        #expect(ahead.allSatisfy { !$0.contentType.isKnown })
-        #expect(ahead.allSatisfy { !$0.cull.isKnown })
-        #expect(ahead.allSatisfy { $0.syncState.needsUserAttention })
+        // Bound first: `allSatisfy` is `rethrows`, and inside an `#expect`
+        // expansion the compiler cannot always infer that this particular
+        // closure does not throw.
+        let contentTypesUnknown = ahead.allSatisfy { !$0.contentType.isKnown }
+        let cullFlagsUnknown = ahead.allSatisfy { !$0.cull.isKnown }
+        let allNeedAttention = ahead.allSatisfy { $0.syncState.needsUserAttention }
+        #expect(contentTypesUnknown)
+        #expect(cullFlagsUnknown)
+        #expect(allNeedAttention)
         // Writing an unknown value back is a structural rejection.
         if let subject = ahead.first {
             #expect(throws: ClosedEnumWriteRejection.self) {

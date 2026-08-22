@@ -76,11 +76,11 @@ extension MockFederationStore: ModerationPort {
     public func compartment(for peerID: PeerID) async throws -> PeerCompartment? {
         guard try await peers().contains(where: { $0.id == peerID }) else { return nil }
         let hash = MockHash.value(seed: configuration.seed, index: peerID.rawValue.utf8.count, salt: .byteSize)
-        let budget = UInt64(128 * 1_073_741_824)
+        let budget = UInt64(128 * 1073741824)
         return PeerCompartment(
             peerID: peerID,
             eventsRemainingThisHour: UInt64(MockHash.integer(hash, in: 0 ... 4000)),
-            bytesRemainingThisHour: UInt64(MockHash.integer(MockHash.mix(hash), in: 0 ... 8_000_000_000)),
+            bytesRemainingThisHour: UInt64(MockHash.integer(MockHash.mix(hash), in: 0 ... 8000000000)),
             cachedBytes: UInt64(MockHash.integer(MockHash.mix(hash &+ 3), in: 0 ... Int(budget))),
             cacheBudgetBytes: budget,
             errorBudgetRemaining: UInt32(MockHash.integer(MockHash.mix(hash &+ 5), in: 0 ... 64))

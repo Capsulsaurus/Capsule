@@ -209,6 +209,10 @@ private let moduleTargets: [Target] =
         dependencies: [
             .target(name: "CapsuleFoundation"),
             .target(name: "ManagedStore"),
+            // The MockBridge adapters present the port-based world through the
+            // older provider protocols the existing screens consume.
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
         ],
         testDependencies: [supportDependency]
     )
@@ -339,6 +343,10 @@ private let appTarget: Target = .target(
         .target(name: "CapsuleDiagnostics"),
         .target(name: "CapsuleFoundation"),
         .target(name: "CapsuleCatalog"),
+        .target(name: "CapsuleDomain"),
+        .target(name: "CapsulePorts"),
+        .target(name: "CapsuleMock"),
+        .target(name: "CapsuleNavigation"),
     ] + (ffiEnabled ? [.target(name: "CapsuleCatalogFFI")] : []),
     settings: appSettings
 )

@@ -86,9 +86,9 @@ public struct MockConfiguration: Sendable {
     /// 118 GB of 512, comfortably inside every threshold.
     private static func healthyQuota() -> QuotaStatus {
         QuotaStatus(
-            used: 118 * 1_073_741_824,
-            softLimit: 409 * 1_073_741_824,
-            hardLimit: 512 * 1_073_741_824,
+            used: 118 * 1073741824,
+            softLimit: 409 * 1073741824,
+            hardLimit: 512 * 1073741824,
             state: .withinQuota
         )
     }
@@ -108,7 +108,7 @@ public struct MockConfiguration: Sendable {
         case .offline:
             applyOffline()
         case .hugeLibrary:
-            profile.assetCount = 250_000
+            profile.assetCount = 250000
             profile.spanDays = 3650
         case .quotaSoftWarning:
             quota = MockConfiguration.softWarningQuota()
@@ -148,9 +148,9 @@ public struct MockConfiguration: Sendable {
     private mutating func applyGraceExpired(clock: MockClock) {
         let crossed = clock.offset(days: -(QuotaStatus.defaultGraceWindowDays + 9))
         quota = QuotaStatus(
-            used: 528 * 1_073_741_824,
-            softLimit: 409 * 1_073_741_824,
-            hardLimit: 512 * 1_073_741_824,
+            used: 528 * 1073741824,
+            softLimit: 409 * 1073741824,
+            hardLimit: 512 * 1073741824,
             state: .graceExpired,
             hardExceededSince: crossed
         )
@@ -182,17 +182,17 @@ public struct MockConfiguration: Sendable {
     private static func emptyQuota() -> QuotaStatus {
         QuotaStatus(
             used: 0,
-            softLimit: 409 * 1_073_741_824,
-            hardLimit: 512 * 1_073_741_824,
+            softLimit: 409 * 1073741824,
+            hardLimit: 512 * 1073741824,
             state: .withinQuota
         )
     }
 
     private static func softWarningQuota() -> QuotaStatus {
         QuotaStatus(
-            used: 447 * 1_073_741_824,
-            softLimit: 409 * 1_073_741_824,
-            hardLimit: 512 * 1_073_741_824,
+            used: 447 * 1073741824,
+            softLimit: 409 * 1073741824,
+            hardLimit: 512 * 1073741824,
             state: .softWarning
         )
     }

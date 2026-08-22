@@ -75,7 +75,7 @@ extension MockLibraryStore: StackPort {
         guard let index = library.stackIndex(of: identifier),
               let type = library.stackType(at: index)
         else { return nil }
-        let engine = self.engine
+        let engine = engine
         let refs = library.stackRefs(at: index)
         let members = refs.map { (ref: $0, asset: engine.resolve($0)) }
         let primary = members.first { $0.asset.isStackCover } ?? members[0]
@@ -84,13 +84,13 @@ extension MockLibraryStore: StackPort {
             stackType: type,
             primaryAssetID: primary.ref.uuidString(seed: configuration.seed),
             memberAssetIDs: members.map { $0.ref.uuidString(seed: configuration.seed) },
-            cullState: GroupCullState(members: members.map { $0.asset.cull })
+            cullState: GroupCullState(members: members.map(\.asset.cull))
         )
     }
 
     public func members(of identifier: StackID) async throws -> [LibraryAsset] {
         guard let index = library.stackIndex(of: identifier) else { return [] }
-        let engine = self.engine
+        let engine = engine
         return library.stackRefs(at: index).map { engine.resolve($0) }
     }
 
@@ -106,7 +106,7 @@ extension MockLibraryStore: StackPort {
         primary: AssetID
     ) async throws -> StackID {
         try type.requireWritable()
-        let ordinal = 900_000 + currentOverlay.patches.count
+        let ordinal = 900000 + currentOverlay.patches.count
         let identifier = MockIdentifiers.stackID(seed: configuration.seed, ordinal: ordinal)
         for (position, assetID) in assetIDs.enumerated() {
             let isPrimary = assetID == primary
@@ -149,7 +149,7 @@ extension MockLibraryStore: StackPort {
         guard let index = library.stackIndex(of: stackID), let type = library.stackType(at: index) else {
             throw CapsuleError(code: .albumInvalidID, detail: "CapsuleMock: unknown stack")
         }
-        let engine = self.engine
+        let engine = engine
         for ref in library.stackRefs(at: index) {
             let identifier = ref.identifier(seed: configuration.seed)
             let existing = engine.resolve(ref).stackMembership

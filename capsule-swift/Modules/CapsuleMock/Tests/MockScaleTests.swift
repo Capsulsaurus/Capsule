@@ -29,12 +29,12 @@ struct MockScaleTests {
         var library: MockLibrary?
         let elapsed = clock.measure {
             library = MockLibrary(profile: MockLibraryProfile(
-                assetCount: 250_000,
+                assetCount: 250000,
                 spanDays: 3650,
                 newestDayNumber: MockClock.reference.todayDayNumber
             ))
         }
-        #expect(library?.assetCount == 250_000)
+        #expect(library?.assetCount == 250000)
         #expect(elapsed < Self.constructionBudget)
     }
 
@@ -47,7 +47,7 @@ struct MockScaleTests {
         }
         #expect(elapsed < Self.constructionBudget)
         let count = try await environment?.library.assetCount(matching: .default)
-        #expect(count == 250_000)
+        #expect(count == 250000)
     }
 
     /// The aggregate is O(days), so it stays cheap at ten years of photographs —
@@ -61,7 +61,7 @@ struct MockScaleTests {
             counts = environment.libraryStore.library.unfilteredDayCounts()
         }
         #expect(elapsed < Self.queryBudget)
-        #expect(counts.totalCount == 250_000)
+        #expect(counts.totalCount == 250000)
         #expect(counts.count > 3000)
         #expect(counts.allSatisfy { $0.count >= 1 })
     }
@@ -80,10 +80,10 @@ struct MockScaleTests {
                 library: environment.libraryStore.library,
                 overlay: MockOverlay(),
                 now: environment.configuration.clock.now
-            ).page(matching: .default, offset: 180_000, limit: 200)
+            ).page(matching: .default, offset: 180000, limit: 200)
         }
         #expect(page?.items.count == 200)
-        #expect(page?.totalCount == 250_000)
+        #expect(page?.totalCount == 250000)
         #expect(elapsed < Self.queryBudget)
     }
 
@@ -99,7 +99,7 @@ struct MockScaleTests {
         )
         let clock = ContinuousClock()
         let shallow = clock.measure { _ = engine.page(matching: .default, offset: 0, limit: 200) }
-        let deep = clock.measure { _ = engine.page(matching: .default, offset: 249_000, limit: 200) }
+        let deep = clock.measure { _ = engine.page(matching: .default, offset: 249000, limit: 200) }
         // Ten times the shallow cost, plus a floor so a sub-millisecond
         // measurement cannot make the ratio meaningless.
         #expect(deep < shallow * 10 + .milliseconds(50))
@@ -108,7 +108,7 @@ struct MockScaleTests {
     @Test("Assets at the far end of a huge library resolve by identifier")
     func farAssetsResolveByIdentifier() async throws {
         let environment = MockEnvironment(scenario: .hugeLibrary)
-        let identifier = environment.libraryStore.library.identifier(at: 249_999)
+        let identifier = environment.libraryStore.library.identifier(at: 249999)
         let asset = try await environment.library.asset(for: identifier)
         #expect(asset?.id == identifier)
     }

@@ -26,7 +26,7 @@ public enum MockSidecarFactory {
         library: MockLibrary,
         ref: MockAssetRef,
         patch: MockAssetPatch?,
-        clock: MockClock
+        clock _: MockClock
     ) -> SidecarV1 {
         let seed = library.profile.seed
         let identifier = ref.identifier(seed: seed)
@@ -127,7 +127,9 @@ public enum MockSidecarFactory {
         for tag in derived.tagsUser {
             adds[MockTagIdentity.addID(forTag: tag, identifier: identifier, seed: seed, isAI: false)] = tag
         }
-        for (addID, tag) in patch?.addedUserTags ?? [:] { adds[addID] = tag }
+        for (addID, tag) in patch?.addedUserTags ?? [:] {
+            adds[addID] = tag
+        }
         return OrSet(adds: adds, removes: patch?.removedUserTagIDs ?? [])
     }
 
