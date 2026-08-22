@@ -197,7 +197,7 @@ their owed remainder now lives.
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics)     | import      | —            | M    | done    |
 | S-D16 | Standalone `capsule cull` command                      | sdk/clients | S-A10        | S    | blocked |
 | S-D17 | Typed REST client reactive 401-retry-once              | sdk/clients | —            | S    | ready   |
-| S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI   | sdk/clients | S-A10        | M    | blocked |
+| S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI   | sdk/clients | S-A10        | M    | done    |
 | S-D19 | Hidden-view DB projection + gate wiring                | sdk/clients | —            | S    | ready   |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags)| sdk/clients | —            | M    | done    |
 | S-N1  | OIDC relying party (server)                            | auth        | —            | L    | ready   |
@@ -211,7 +211,7 @@ their owed remainder now lives.
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI     | server      | —            | S    | ready   |
 | S-C23 | `revoke_all_sessions` with master-key proof            | server      | —            | M    | done    |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server      | —            | M-L  | ready   |
-| S-C25 | Album provisioning + UUID album ids (unblocks push)     | server      | —            | M    | ready   |
+| S-C25 | Album provisioning + UUID album ids (unblocks push)     | server      | —            | M    | done    |
 | S-E5  | Federation capability gate on the live gRPC method     | federation  | —            | M-L  | ready   |
 | S-X4  | Per-user block MLS Remove + epoch bump                 | crypto/mls  | —            | M    | ready   |
 | S-F8  | Hardware DEK → workspace keystore wiring               | platform    | —            | M    | ready   |

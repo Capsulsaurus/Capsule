@@ -1,54 +1,55 @@
-//! Slice `S-D18` end-to-end: the real `capsule-cli` push path — `remote::auth_register` →
-//! a signed offline import → `remote::held_blobs` → `remote::push` — driving the real auth,
-//! upload, and sync services on **one origin**, exactly as
-//! `capsule auth register && capsule import && capsule push` does.
+//! Slices `S-D18` + `S-C25` end to end: the real `capsule-cli` push path — `remote::auth_register`
+//! → a signed offline import → `remote::held_blobs` → `remote::push` (which now provisions the
+//! album first) — driving the real auth, album, upload, and sync services on **one origin**,
+//! exactly as `capsule auth register && capsule import && capsule push` does.
 //!
 //! It hosts here (in the server crate, with the CLI as a dev-dep) so the leaf CLI keeps the
 //! server stack out of its own dev-deps — the S-D1/S-D2/S-D5 test-placement precedent.
 //!
-//! # A blocked half, asserted rather than papered over
+//! # The wall S-D18 documented, and what removed it
 //!
 //! The client's album id is **derived from the account master key** and is a UUID
-//! ([Organization — The Default Album]). The server's album id column is
-//! `character(21)` — a nanoid — across the whole schema (`albums.id`, `assets.album_id`,
-//! `sync_entries.album_id`, …), and **no endpoint provisions an album at all**. So today a
-//! client physically cannot name its own album to the server: inserting the client's album id
-//! is a `value too long for type character(21)` error, and `POST /upload` therefore refuses
-//! every real push at invariant 6 with `error.upload.album_access_denied`.
+//! ([Organization — The Default Album]). Until `S-C25` the server's album id column was
+//! `character(21)` — a nanoid — across the whole schema, and **no endpoint provisioned an
+//! album at all**, so a client physically could not name its own album: inserting a UUID was
+//! `value too long for type character(21)`, and `POST /upload` refused every real push at
+//! invariant 6 with `error.upload.album_access_denied`. S-C25 widened the six album-id columns
+//! to `varchar(64)` and added `POST /v1/albums`, so the push path is now whole. Nothing was
+//! relaxed to get here: invariant 6 still demands a real album the caller can really write to
+//! — provisioning is what makes that true, rather than what dodges it.
 //!
-//! That is a server-side gap, not something to route around client-side (weakening the album
-//! binding would make invariant 6 unenforceable), so this test asserts **both** halves
-//! honestly:
+//! What this suite pins:
 //!
-//! - [`cli_push_is_refused_by_the_album_gate`] pins the wall: a well-formed, envelope-consistent
-//!   bundle authored by the real CLI path reaches the server's invariant-6 gate and is refused
-//!   there — nothing earlier in the stack is at fault.
-//! - [`cli_push_round_trip_over_a_server_representable_album`] proves everything the gap is
-//!   hiding: the same bundle, the same `capsule_sdk::push` request mapping, and the same
-//!   upload client, against an album the server *can* represent — blob durable, feed entry
-//!   minted, `capsule sync` + `capsule list` showing it, and a re-run that moves nothing.
+//! - [`cli_push_round_trip_puts_bytes_on_the_server`] — the whole flow through the *real*
+//!   `remote::push` on the client's own derived UUID album: blobs durable, assets finalized,
+//!   receipts issued, feed minted, `capsule sync` + `capsule list` showing the asset, and a
+//!   re-run that moves nothing.
+//! - [`provisioning_stores_no_client_supplied_text`] — the privacy constraint, read back out
+//!   of Postgres: the plaintext `albums.name`/`albums.description` columns are empty.
+//! - [`provisioning_is_idempotent`] — registering the same derived id again succeeds.
+//! - [`provisioning_refuses_an_id_owned_by_another_account`] — and does so without saying
+//!   whether that id exists.
+//! - [`another_accounts_album_grants_no_write_capability`] — invariant 6 is intact: an album
+//!   somebody else provisioned still confers nothing on the caller.
 //!
 //! [Organization — The Default Album]: https://docs/design/organization/#the-default-album
-
-use std::collections::HashSet;
 
 use base64::Engine as _;
 use capsule_cli::remote::{self, PushOptions, RemoteConfig};
 use capsule_cli::session::SessionStore;
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::lifecycle::Workspace;
-use capsule_sdk::push;
-use capsule_sdk::staged::StagedScheduler;
-use capsule_sdk::upload::{StaticToken, UploadClient, UploadOutcome, UploadTransport};
+use capsule_sdk::albums::{AlbumClient, AlbumTransport, StaticToken};
 use nanoid::nanoid;
 use salvo::Service;
 use salvo::conn::tcp::TcpAcceptor;
 use salvo::prelude::{Router, Server};
 use sea_orm::{ActiveModelTrait, ColumnTrait, Database, EntityTrait, QueryFilter, Set};
 use sea_orm_migration::MigratorTrait;
+use uuid::Uuid;
 
-use super::{PROTOCOL, TestCtx, setup};
-use crate::state::AppState;
+use super::{TestCtx, setup};
+use crate::state::{AppState, OpsState};
 
 /// The private half of the harness's Ed25519 keypair — the auth service signs access tokens
 /// with it, the upload and sync services verify with the public half `setup()` installed.
@@ -67,9 +68,9 @@ const FAST: Argon2Params = Argon2Params {
     p_cost: 1,
 };
 
-/// The whole server on ONE origin — `/v1/auth`, `/v1/upload`, and the gRPC sync feed at the
-/// root — mirroring `capsule_api::create_router`'s mounting, because that single-origin shape
-/// is what `RemoteConfig` now derives every surface from.
+/// The whole server on ONE origin — `/v1/auth`, `/v1/upload`, `/v1/albums`, and the gRPC sync
+/// feed at the root — mirroring `capsule_api::create_router`'s mounting, because that
+/// single-origin shape is what `RemoteConfig` derives every surface from.
 async fn serve_one_origin(ctx: &TestCtx) -> String {
     let engine = base64::engine::general_purpose::STANDARD;
     let enc_key = jsonwebtoken::EncodingKey::from_ed_der(&engine.decode(PRIV_B64).unwrap());
@@ -104,6 +105,18 @@ async fn serve_one_origin(ctx: &TestCtx) -> String {
         ctx.config.protocol_max.clone(),
     );
 
+    // The `/albums` tree: provisioning (S-C25) plus the lifecycle-write surface (S-C16).
+    let ops_state = OpsState::new(
+        ctx.db.clone(),
+        ctx.config.clone(),
+        crate::service::ops::OpService::new(ctx.config.clone(), ctx.db.clone()),
+    );
+    let albums_router = crate::routes::get_ops_router(
+        ops_state,
+        ctx.config.protocol_min.clone(),
+        ctx.config.protocol_max.clone(),
+    );
+
     let sync_router = sync::get_router(
         ctx.db.clone(),
         sync::config::SyncServerConfig {
@@ -124,7 +137,8 @@ async fn serve_one_origin(ctx: &TestCtx) -> String {
         .push(
             Router::with_path("v1")
                 .push(Router::with_path("auth").push(auth_router))
-                .push(Router::with_path("upload").push(upload_router)),
+                .push(Router::with_path("upload").push(upload_router))
+                .push(Router::with_path("albums").push(albums_router)),
         )
         .push(sync_router);
 
@@ -149,7 +163,8 @@ fn remote_config(base: &str) -> RemoteConfig {
 }
 
 /// One CLI-shaped library: `capsule library init` + `capsule import` of a single file, on the
-/// signed lifecycle path with the CLI's own client identity.
+/// signed lifecycle path with the CLI's own client identity. The album is the account's
+/// **derived** default album — a UUID the server has never heard of.
 fn imported_library(dir: &std::path::Path) -> Workspace {
     let lib = dir.join("library");
     std::fs::create_dir_all(&lib).unwrap();
@@ -188,40 +203,25 @@ async fn register(ctx: &TestCtx, remote: &RemoteConfig, store: &SessionStore) ->
     (email, user.id)
 }
 
-/// Give `user_id` an owner group and one album the **server** can represent (a nanoid), and
-/// return the album id.
-async fn seed_server_album(ctx: &TestCtx, user_id: &str) -> String {
-    let created = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24);
-    entity::owner::ActiveModel {
-        id: Set(user_id.to_string()),
-        created_at: Set(entity::time::ts_to_entity(created)),
-    }
-    .insert(&ctx.db)
-    .await
-    .unwrap();
-    entity::owner_member::ActiveModel {
-        owner_id: Set(user_id.to_string()),
-        user_id: Set(user_id.to_string()),
-        created_at: Set(entity::time::ts_to_entity(created)),
-        ..Default::default()
-    }
-    .insert(&ctx.db)
-    .await
-    .unwrap();
-    let album_id = nanoid!();
-    entity::album::ActiveModel {
-        id: Set(album_id.clone()),
-        owner_id: Set(user_id.to_string()),
-        name: Set("Imports".to_string()),
-        description: Set(String::new()),
-        created_at: Set(entity::time::ts_to_entity(created)),
-        modified_at: Set(entity::time::ts_to_entity(created)),
-        deleted_at: Set(None),
-    }
-    .insert(&ctx.db)
-    .await
-    .unwrap();
-    album_id
+/// An album client for the account currently persisted in `store`.
+async fn album_client(remote: &RemoteConfig, store: &SessionStore) -> AlbumClient {
+    let session = capsule_sdk::auth::AuthClient::new(&remote.auth_endpoint)
+        .unwrap()
+        .resume(store.load().unwrap().expect("session persisted"))
+        .unwrap();
+    use secrecy::ExposeSecret as _;
+    let token = session
+        .export()
+        .await
+        .expect("session tokens")
+        .access_token
+        .expose_secret()
+        .to_string();
+    AlbumClient::new(AlbumTransport::with_static_token(
+        reqwest::Client::new(),
+        &remote.albums_endpoint,
+        StaticToken(token),
+    ))
 }
 
 /// A scratch directory that cleans itself up.
@@ -229,22 +229,32 @@ fn scratch() -> tempfile::TempDir {
     tempfile::TempDir::new().unwrap()
 }
 
-/// **The wall.** The real CLI push path — register, import, read server truth off the feed,
-/// then push — reaches the server with a well-formed bundle and is refused at invariant 6,
-/// because the client's master-key-derived (UUID) album id has no server representation and no
-/// endpoint provisions one. Asserted, not worked around: weakening the album binding
-/// client-side is exactly what would make invariant 6 unenforceable.
+/// **The slice's acceptance test.** The real CLI push path — register, import, read server
+/// truth off the feed, push — puts bytes on the server for an album the *client* named, and
+/// re-running it moves nothing.
+///
+/// Every request here is the production one: `remote::push` provisions the derived album
+/// through the SDK's album client and then drives the tier ladder through the SDK's upload
+/// client. Nothing is re-pointed at a server-minted id, and invariant 6 is enforced in full —
+/// the album exists because provisioning created it, and the caller can write to it because
+/// provisioning bound it to their owner group.
 #[tokio::test]
-async fn cli_push_is_refused_by_the_album_gate() {
+async fn cli_push_round_trip_puts_bytes_on_the_server() {
     let ctx = setup().await;
     let base = serve_one_origin(&ctx).await;
     let remote = remote_config(&base);
     let work = scratch();
     let store = SessionStore::new(work.path().join("session.json"));
 
-    register(&ctx, &remote, &store).await;
+    let (_email, user_id) = register(&ctx, &remote, &store).await;
     let ws = imported_library(work.path());
+    let album_id = ws.default_album_id();
     assert_eq!(ws.asset_ids().len(), 1, "one asset imported offline");
+    assert_eq!(
+        album_id.hyphenated().to_string().len(),
+        36,
+        "the client's album id is a hyphenated UUID — the id space the schema now holds"
+    );
 
     // Server truth: a fresh account holds nothing, so the whole ladder is outstanding.
     let session_client = capsule_sdk::auth::AuthClient::new(&remote.auth_endpoint).unwrap();
@@ -256,7 +266,7 @@ async fn cli_push_is_refused_by_the_album_gate() {
         .expect("the feed pull is reachable on the single origin");
     assert!(held.is_empty(), "a fresh account holds no blobs");
 
-    // A dry run plans the full ladder and opens nothing.
+    // A dry run plans the full ladder, opens nothing, and provisions nothing.
     let planned = remote::push(
         &remote,
         &store,
@@ -270,108 +280,46 @@ async fn cli_push_is_refused_by_the_album_gate() {
     .expect("a dry run never touches the upload surface");
     assert_eq!(planned.uploaded_blobs, 2, "metadata index + original");
     assert!(planned.dry_run);
+    assert_eq!(
+        planned.provisioned_albums, 0,
+        "a dry run reaches nothing, the album surface included"
+    );
+    assert!(
+        entity::album::Entity::find_by_id(album_id.hyphenated().to_string())
+            .one(&ctx.db)
+            .await
+            .unwrap()
+            .is_none(),
+        "and it wrote no album row"
+    );
 
-    // The real push reaches the server and is refused at the album gate.
-    let error = remote::push(&remote, &store, &ws, PushOptions::default())
+    // The real push: provision, then the ladder.
+    let summary = remote::push(&remote, &store, &ws, PushOptions::default())
         .await
-        .expect_err("no server album can represent the client's album id today");
-    assert_eq!(
-        error.error_code(),
-        Some(capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
-        "the refusal is invariant 6, not a malformed request: {error}"
-    );
-}
+        .expect("the real push lands on the client's own derived album");
+    assert_eq!(summary.provisioned_albums, 1, "one album, registered once");
+    assert_eq!(summary.created_albums, 1, "and it was created by this run");
+    assert_eq!(summary.uploaded_blobs, 2, "metadata index + original");
+    assert_eq!(summary.pushed_assets, 1);
+    assert!(!summary.is_no_op());
 
-/// **Everything the wall is hiding.** The same imported library, the same
-/// `capsule_sdk::push` request mapping, and the same upload client — against an album the
-/// server *can* represent — round-trips completely: both blobs land durably in the
-/// content-addressed store, the assets are marked uploaded with custody receipts, the sync feed
-/// reports `original_held`, `capsule sync` + `capsule list` show the asset, and a re-run of the
-/// push moves nothing (`duplicate_blob` resolves as a merge).
-#[tokio::test]
-async fn cli_push_round_trip_over_a_server_representable_album() {
-    let ctx = setup().await;
-    let base = serve_one_origin(&ctx).await;
-    let remote = remote_config(&base);
-    let work = scratch();
-    let store = SessionStore::new(work.path().join("session.json"));
-
-    let (_email, user_id) = register(&ctx, &remote, &store).await;
-    let server_album = seed_server_album(&ctx, &user_id).await;
-    let ws = imported_library(work.path());
-    let asset_id = ws.asset_ids()[0];
-    let bundle = ws.upload_bundle(&asset_id).expect("upload bundle");
-    assert_eq!(
-        bundle.content_type, "image/jpeg",
-        "the original declares a content type inside the server's closed enum"
-    );
-
-    let session = capsule_sdk::auth::AuthClient::new(&remote.auth_endpoint)
+    // The album row exists, is owned by the pusher's owner group, and carries the client's id
+    // verbatim — the widened column stores the UUID with no truncation or blank padding.
+    let album = entity::album::Entity::find_by_id(album_id.hyphenated().to_string())
+        .one(&ctx.db)
+        .await
         .unwrap()
-        .resume(store.load().unwrap().expect("session"))
-        .unwrap();
-    let token = {
-        use secrecy::ExposeSecret as _;
-        let persisted = session.export().await.expect("session tokens");
-        persisted.access_token.expose_secret().to_string()
-    };
-    let client = UploadClient::new(UploadTransport::with_static_token(
-        reqwest::Client::new(),
-        &remote.upload_endpoint,
-        PROTOCOL,
-        StaticToken(token),
-    ));
-
-    // Drive the real ladder: `push::plan` chooses and orders the blobs, `push::create_request`
-    // builds each `POST /upload` body. Only `album_id` is re-pointed at the server-representable
-    // album — the one thing the id-space gap makes impossible for a real client.
-    let scheduler = StagedScheduler::new(
-        capsule_core::import::upload::UploadPolicy::Full,
-        capsule_sdk::net::ConnectionClass::Unmetered,
-    );
-    let plan = push::plan(&scheduler, &bundle, &HashSet::<String>::new(), false);
+        .expect("provisioning created the album row");
     assert_eq!(
-        plan.blobs.iter().map(|b| b.tier).collect::<Vec<_>>(),
-        vec![
-            capsule_core::import::upload::UploadTier::Index,
-            capsule_core::import::upload::UploadTier::Original,
-        ],
-        "the ladder runs index-first"
+        album.id,
+        album_id.hyphenated().to_string(),
+        "the stored id is byte-identical to the derived one"
     );
-
-    let blobs = push::bundle_blobs(&bundle);
-    let mut sent = Vec::new();
-    for tier_blob in &plan.blobs {
-        let (blob, hash) = blobs
-            .iter()
-            .find(|(_, hash)| *hash == tier_blob.hash)
-            .expect("planned blob is part of the bundle");
-        let mut request = push::create_request(&bundle, blob, hash);
-        request.album_id = Some(server_album.clone());
-        request.manifest_envelope.album_id = Some(server_album.clone());
-        // The protocol pin the bundle carries must survive to the wire unchanged.
-        assert_eq!(request.protocol_version, PROTOCOL);
-        match client.upload(&request, blob.bytes).await.expect("upload") {
-            UploadOutcome::Completed { .. } => sent.push(hash.clone()),
-            other => panic!("expected a completed transfer, got {other:?}"),
-        }
-    }
-    assert_eq!(sent.len(), 2, "both blobs transferred");
+    assert_eq!(album.owner_id, user_id, "bound to the caller's owner group");
+    assert!(album.deleted_at.is_none());
 
     // Durable: each blob is committed into the content-addressed store, its asset row is
     // marked uploaded, and a custody receipt was issued in the same transaction.
-    for hash in &sent {
-        let bytes = ctx
-            .storage
-            .read_committed_blob(hash)
-            .await
-            .unwrap_or_else(|e| panic!("blob {hash} must be durable: {e}"));
-        assert_eq!(
-            capsule_core::utils::hash::hash_bytes(&bytes),
-            *hash,
-            "the stored blob content-addresses to what was declared"
-        );
-    }
     let assets = entity::asset::Entity::find()
         .filter(entity::asset::Column::OwnerId.eq(&user_id))
         .all(&ctx.db)
@@ -379,7 +327,26 @@ async fn cli_push_round_trip_over_a_server_representable_album() {
         .unwrap();
     assert_eq!(assets.len(), 2, "one asset row per blob session");
     assert!(assets.iter().all(|a| a.uploaded), "every row is finalized");
+    assert!(
+        assets
+            .iter()
+            .all(|a| a.album_id.as_deref() == Some(album.id.as_str())),
+        "every row is filed in the client's own album"
+    );
+    for asset in &assets {
+        let bytes = ctx
+            .storage
+            .read_committed_blob(&asset.file_hash)
+            .await
+            .unwrap_or_else(|e| panic!("blob {} must be durable: {e}", asset.file_hash));
+        assert_eq!(
+            capsule_core::utils::hash::hash_bytes(&bytes),
+            asset.file_hash,
+            "the stored blob content-addresses to what was declared"
+        );
+    }
     let receipts = entity::custody_receipt::Entity::find()
+        .filter(entity::custody_receipt::Column::UploadedByUser.eq(&user_id))
         .all(&ctx.db)
         .await
         .unwrap();
@@ -393,10 +360,10 @@ async fn cli_push_round_trip_over_a_server_representable_album() {
     .await
     .unwrap();
     cli_migration::Migrator::up(&cli_db, None).await.unwrap();
-    let summary = remote::sync(&remote, &store, &cli_db, 256, false, false)
+    let synced = remote::sync(&remote, &store, &cli_db, 256, false, false)
         .await
         .expect("sync");
-    assert_eq!(summary.applied, 2, "both finalizations reached the feed");
+    assert_eq!(synced.applied, 2, "both finalizations reached the feed");
     let rows = remote::list(&cli_db, false).await.expect("list");
     assert_eq!(rows.len(), 2, "capsule list shows what push put there");
     assert!(
@@ -404,47 +371,227 @@ async fn cli_push_round_trip_over_a_server_representable_album() {
         "the original blob's finalization flips original_held"
     );
 
-    // Server truth now covers the whole bundle, so a re-run plans nothing at all.
-    let session = capsule_sdk::auth::AuthClient::new(&remote.auth_endpoint)
-        .unwrap()
-        .resume(store.load().unwrap().expect("session"))
-        .unwrap();
-    let held = remote::held_blobs(&remote, session, 256)
+    // **Re-running the push is a no-op.** The album is re-registered (idempotently, writing
+    // nothing) and server truth says every blob is already held, so no session opens.
+    let rerun = remote::push(&remote, &store, &ws, PushOptions::default())
         .await
-        .expect("feed");
-    for hash in &sent {
-        assert!(held.contains(hash), "the feed reports blob {hash} as held");
-    }
-    let rerun = push::plan(&scheduler, &bundle, &held, false);
-    assert!(
-        rerun.blobs.is_empty(),
-        "re-running push against an unchanged library is a no-op"
+        .expect("a second push against an unchanged library succeeds");
+    assert!(rerun.is_no_op(), "nothing moved: {rerun:?}");
+    assert_eq!(rerun.already_held_blobs, 2);
+    assert_eq!(
+        rerun.provisioned_albums, 1,
+        "the album was re-registered — idempotently"
     );
-    assert_eq!(rerun.already_held, 2);
+    assert_eq!(
+        rerun.created_albums, 0,
+        "…and that registration created nothing the second time"
+    );
 
-    // …and forcing it re-drives the ladder into `duplicate_blob`, which is a merge, not a
-    // failure: nothing is re-transferred and nothing errors.
-    for tier_blob in &push::plan(&scheduler, &bundle, &held, true).blobs {
-        let (blob, hash) = blobs
-            .iter()
-            .find(|(_, hash)| *hash == tier_blob.hash)
-            .expect("planned blob");
-        let mut request = push::create_request(&bundle, blob, hash);
-        request.album_id = Some(server_album.clone());
-        request.manifest_envelope.album_id = Some(server_album.clone());
-        match client.upload(&request, blob.bytes).await.expect("re-push") {
-            UploadOutcome::AlreadyStored { asset_ref } => {
-                assert!(!asset_ref.is_empty(), "the merge names the existing asset");
-            }
-            other => panic!("expected AlreadyStored (merge), got {other:?}"),
-        }
+    // The feed fold is stable across the re-run, and no second album row appeared. Counts are
+    // scoped to this account: `setup()` seeds an unrelated user/album pair of its own.
+    assert_eq!(
+        entity::sync_entry::Entity::find()
+            .filter(entity::sync_entry::Column::AlbumId.eq(&album.id))
+            .all(&ctx.db)
+            .await
+            .unwrap()
+            .len(),
+        2,
+        "a no-op re-push mints no new feed entries"
+    );
+    assert_eq!(
+        entity::album::Entity::find()
+            .filter(entity::album::Column::OwnerId.eq(&user_id))
+            .all(&ctx.db)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "one derived id is one album row, however many times it is registered"
+    );
+}
+
+/// **The privacy constraint, read back out of Postgres.** Provisioning accepts no album name,
+/// so the plaintext `albums.name` / `albums.description` columns — a residue of the
+/// pre-key-free schema (slice `S-C26` retires them) — hold the empty string. The client's real
+/// album title ("Imports" in the local library) never leaves the device.
+#[tokio::test]
+async fn provisioning_stores_no_client_supplied_text() {
+    let ctx = setup().await;
+    let base = serve_one_origin(&ctx).await;
+    let remote = remote_config(&base);
+    let work = scratch();
+    let store = SessionStore::new(work.path().join("session.json"));
+
+    register(&ctx, &remote, &store).await;
+    let ws = imported_library(work.path());
+    // The library names this album locally; the name lives in the encrypted sidecar.
+    assert!(
+        ws.albums().iter().any(|(_, name)| name == "Imports"),
+        "the client does hold a name for this album"
+    );
+
+    remote::push(&remote, &store, &ws, PushOptions::default())
+        .await
+        .expect("push");
+
+    let album = entity::album::Entity::find_by_id(ws.default_album_id().hyphenated().to_string())
+        .one(&ctx.db)
+        .await
+        .unwrap()
+        .expect("the album row");
+    assert_eq!(album.name, "", "no client-supplied name reaches the server");
+    assert_eq!(album.description, "", "nor any client-supplied description");
+}
+
+/// **Idempotency is the contract.** The same derived id arrives from every device the user
+/// owns and again after a recovery, so registering it repeatedly must succeed. Only the first
+/// call reports `created`.
+#[tokio::test]
+async fn provisioning_is_idempotent() {
+    let ctx = setup().await;
+    let base = serve_one_origin(&ctx).await;
+    let remote = remote_config(&base);
+    let work = scratch();
+    let store = SessionStore::new(work.path().join("session.json"));
+
+    let (_email, user_id) = register(&ctx, &remote, &store).await;
+    let client = album_client(&remote, &store).await;
+    let album_id = Uuid::now_v7();
+
+    let first = client
+        .provision(album_id)
+        .await
+        .expect("first registration");
+    assert!(first.created, "the first call creates the row");
+    for attempt in 0..3 {
+        let again = client
+            .provision(album_id)
+            .await
+            .unwrap_or_else(|e| panic!("re-registration {attempt} must succeed, got {e}"));
+        assert_eq!(again.album_id, album_id);
+        assert!(!again.created, "and writes nothing");
     }
 
-    // The feed fold is stable across the re-run: still exactly the two blobs.
-    let entry_count = entity::sync_entry::Entity::find()
+    assert_eq!(
+        entity::album::Entity::find()
+            .filter(entity::album::Column::OwnerId.eq(&user_id))
+            .all(&ctx.db)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "four registrations of one id are one row"
+    );
+}
+
+/// An id already bound to a **different** account is refused with its own stable code — and
+/// the refusal says nothing about whether that id exists, so the endpoint is not an existence
+/// oracle over other accounts' derived album ids.
+#[tokio::test]
+async fn provisioning_refuses_an_id_owned_by_another_account() {
+    let ctx = setup().await;
+    let base = serve_one_origin(&ctx).await;
+    let remote = remote_config(&base);
+    let work = scratch();
+
+    // Account A registers an album.
+    let store_a = SessionStore::new(work.path().join("session-a.json"));
+    register(&ctx, &remote, &store_a).await;
+    let client_a = album_client(&remote, &store_a).await;
+    let owned_by_a = Uuid::now_v7();
+    client_a.provision(owned_by_a).await.expect("A registers");
+
+    // Account B tries the same id, and separately an id nobody has ever registered that it
+    // could not own either.
+    let store_b = SessionStore::new(work.path().join("session-b.json"));
+    let (_email_b, user_b) = register(&ctx, &remote, &store_b).await;
+    let client_b = album_client(&remote, &store_b).await;
+
+    let refused = client_b
+        .provision(owned_by_a)
+        .await
+        .expect_err("B cannot take over A's album");
+    assert_eq!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::ALBUM_NOT_AVAILABLE),
+        "the refusal is its own code, distinct from a malformed id: {refused}"
+    );
+    assert_ne!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
+        "and distinct from the upload-time invariant-6 refusal"
+    );
+
+    // A's album is untouched, and B did not silently acquire one.
+    let album = entity::album::Entity::find_by_id(owned_by_a.hyphenated().to_string())
+        .one(&ctx.db)
+        .await
+        .unwrap()
+        .expect("A's album survives");
+    let a_owner = entity::owner_member::Entity::find()
+        .filter(entity::owner_member::Column::OwnerId.eq(&album.owner_id))
         .all(&ctx.db)
         .await
-        .unwrap()
-        .len();
-    assert_eq!(entry_count, 2, "a merged re-push mints no new feed entries");
+        .unwrap();
+    assert_eq!(a_owner.len(), 1, "still a solo owner group");
+    assert_ne!(album.owner_id, user_b, "the album is still A's");
+    assert!(
+        entity::album::Entity::find()
+            .filter(entity::album::Column::OwnerId.eq(&user_b))
+            .all(&ctx.db)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the refusal created nothing for B"
+    );
+}
+
+/// A push into an album the caller does **not** own is still refused at invariant 6 — S-C25
+/// gave clients a way to register an album, not a way around the album gate.
+#[tokio::test]
+async fn another_accounts_album_grants_no_write_capability() {
+    let ctx = setup().await;
+    let base = serve_one_origin(&ctx).await;
+    let remote = remote_config(&base);
+    let work = scratch();
+
+    // A pushes a real library, so A owns a real, populated album.
+    let store_a = SessionStore::new(work.path().join("session-a.json"));
+    let (_email_a, user_a) = register(&ctx, &remote, &store_a).await;
+    let ws = imported_library(&work.path().join("a"));
+    let a_album = ws.default_album_id().hyphenated().to_string();
+    remote::push(&remote, &store_a, &ws, PushOptions::default())
+        .await
+        .expect("A pushes");
+
+    // B registers, and cannot take the album over.
+    let store_b = SessionStore::new(work.path().join("session-b.json"));
+    let (_email_b, user_b) = register(&ctx, &remote, &store_b).await;
+    let refused = album_client(&remote, &store_b)
+        .await
+        .provision(ws.default_album_id())
+        .await
+        .expect_err("B cannot register A's album");
+    assert_eq!(
+        refused.error_code(),
+        Some(capsule_i18n::error_codes::ALBUM_NOT_AVAILABLE)
+    );
+
+    // The album gate invariant 6 consults agrees: A can write, B holds nothing. Provisioning
+    // did not weaken the check — it is the only thing that makes it passable for a real client.
+    let a_access = service::album::Query::get_album_access(&ctx.db, &user_a, &a_album)
+        .await
+        .unwrap();
+    assert!(
+        a_access.is_some_and(|access| access.is_write()),
+        "A can write to the album provisioning bound to A"
+    );
+    let b_access = service::album::Query::get_album_access(&ctx.db, &user_b, &a_album)
+        .await
+        .unwrap();
+    assert!(
+        b_access.is_none(),
+        "B holds no capability on A's album, so invariant 6 refuses B's uploads"
+    );
 }
