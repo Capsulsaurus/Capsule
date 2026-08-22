@@ -116,3 +116,7 @@ codegen-units = 1
 [profile.dev]
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+# Incremental caches cost far more than they save here: measured 8.5 GB in one worktree and
+# 6.8 GB in another, against a ~90s cold workspace build. With several worktrees in flight
+# that is the difference between building and running out of disk. Full builds it is.
+incremental = false
