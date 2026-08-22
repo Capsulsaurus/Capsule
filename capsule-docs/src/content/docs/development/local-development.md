@@ -51,6 +51,8 @@ mise run hooks-install # installs the git hooks (hk)
 
 ## Running a server locally
 
+The current `capsule-api` server is being rebuilt on [Kynos](/development/architecture/) as a single REST/OpenAPI surface; until that rebuild reaches parity the existing server is what runs locally, and `serve-api` keeps working unchanged.
+
 One command:
 
 ```bash
