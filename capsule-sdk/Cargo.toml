@@ -104,3 +104,6 @@ spargen = { version = "0.1.0", default-features = false }
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.23.3", features = ["v7"] }
 serde_json = { workspace = true }
+# The S-D18 envelope mapping is asserted against a manifest a real `capsule_core::Workspace`
+# produced, so the push tests build a throwaway library on disk.
+tempfile = "3"
