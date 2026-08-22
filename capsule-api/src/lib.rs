@@ -77,10 +77,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     {
         v1_router = v1_router
             .push(
-                Router::with_path("media")
-                    .push(media::get_router(conn.clone(), &env.server).await?),
-            )
-            .push(
                 Router::with_path("s")
                     .push(media::get_share_router(conn.clone(), &env.server).await?),
             )
@@ -190,8 +186,8 @@ pub fn openapi_router() -> Router {
     }
     #[cfg(feature = "media")]
     {
-        // The media crate's `#[endpoint]`-bearing trees, pre-nested under `media` / `blob`
-        // / `storage` / `assets` exactly as `create_router` mounts them.
+        // The media crate's `#[endpoint]`-bearing trees, pre-nested under `blob` /
+        // `storage` / `assets` exactly as `create_router` mounts them.
         v1_router = v1_router.push(media::routes::schema_router());
     }
 

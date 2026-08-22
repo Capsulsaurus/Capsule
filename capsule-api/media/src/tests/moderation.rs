@@ -7,8 +7,9 @@
 //! - `blocklist_refuses_federated_requests` — Blocklist enforcement (smoke): a blocklisted
 //!   peer's federated requests (pull + report) are refused.
 //! - `takedown_serves_410_and_records_provenance` — Takedown serving (smoke): a taken-down
-//!   asset fetches `410`, its blob is preserved, and a moderation provenance record is visible
-//!   in the user's audit log.
+//!   asset fetches `410` **on the content-addressed `GET /blob/{hash}` path** (slice `S-C17` —
+//!   the real client/federation fetch path), its blob is preserved, and a moderation
+//!   provenance record is visible in the user's audit log.
 //! - `federated_report_authentication` — Federated-report authentication (unit): a valid-peer
 //!   signature reaches the queue; unsigned / invalid-signature / unknown-peer reports are
 //!   dropped; the per-`(reporting_server, reported_user)` rate limit applies backpressure
@@ -38,7 +39,7 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::postgres::Postgres;
 
-use super::TEST_SERVER_ID;
+use super::{PROTOCOL, TEST_SERVER_ID};
 
 struct ModCtx {
     _postgres: ContainerAsync<Postgres>,
@@ -50,9 +51,9 @@ struct ModCtx {
 }
 
 impl ModCtx {
-    /// A salvo service over the real media asset-serve router (the `/{asset_id}` GET path the
-    /// takedown gate protects).
-    fn asset_service(&self) -> Service {
+    /// A salvo service over the real key-free blob router (`GET /blob/{hash}`) — the
+    /// content-addressed path the takedown gate protects since slice `S-C17`.
+    fn blob_service(&self) -> Service {
         let config = crate::config::MediaServerConfig {
             server_id: TEST_SERVER_ID.to_string(),
             upload_dir: self.upload_dir.clone(),
@@ -73,7 +74,42 @@ impl ModCtx {
             )),
         };
         let state = crate::state::AppState::new(self.db.clone(), config);
-        Service::new(crate::routes::get_router(state))
+        Service::new(crate::routes::get_blob_router(state))
+    }
+
+    /// A bearer access token for the seeded local user (blob serving is session-authenticated).
+    fn token(&self) -> String {
+        auth::claims::Claims::new_access_token(self.user_id.clone(), None)
+            .encode(&super::decode_keys().0)
+            .expect("encode token")
+    }
+
+    /// Record the committed feed reference that makes `hash` a *served* content address for
+    /// `asset_id` — the `indexed` fact, minted exactly as upload finalization does.
+    async fn index_original(&self, asset_id: &str, hash: &str, size: u64) {
+        service::sync::Mutation::record_finalization(
+            &self.db,
+            service::sync::FeedEntryInput {
+                album_id: self.album_id.clone(),
+                protocol_version: PROTOCOL.to_string(),
+                kind: service::sync::ChangeKind::Created,
+                asset_id: asset_id.to_string(),
+                manifest_cbor: vec![0xa0],
+                metadata_blob: None,
+                blobs: service::sync::FeedBlobManifest {
+                    original: Some(service::sync::FeedBlobRef {
+                        ciphertext_hash: hash.to_string(),
+                        role: "original".to_string(),
+                        format: "image/jpeg".to_string(),
+                        size,
+                    }),
+                    derivatives: Vec::new(),
+                },
+                original_held: true,
+            },
+        )
+        .await
+        .expect("record finalization");
     }
 
     /// Seed an `assets` row owned by the local user (`id` is a nanoid, matching the `char(21)`
@@ -334,26 +370,30 @@ async fn blocklist_refuses_federated_requests() {
 #[tokio::test]
 async fn takedown_serves_410_and_records_provenance() {
     let ctx = mod_setup().await;
-    let svc = ctx.asset_service();
+    let svc = ctx.blob_service();
+    let token = ctx.token();
 
     let asset_id = nanoid!();
-    let hash = "e".repeat(64);
+    let ciphertext = b"ciphertext-bytes";
+    let hash = capsule_core::crypto::hash::hash_bytes(ciphertext).to_hex();
     ctx.seed_asset(&asset_id, &hash, true).await;
+    ctx.index_original(&asset_id, &hash, ciphertext.len() as u64)
+        .await;
 
     // Plant the content-addressed blob so we can prove takedown preserves it.
     let blob_path = service::blob_store::blob_path(&ctx.upload_dir, &hash);
     std::fs::create_dir_all(service::blob_store::blobs_dir(&ctx.upload_dir)).unwrap();
-    std::fs::write(&blob_path, b"ciphertext-bytes").unwrap();
+    std::fs::write(&blob_path, ciphertext).unwrap();
 
-    // Before takedown the asset is servable, so the serve path is *not* 410 (the legacy per-id
-    // serve path yields some non-410 status — the point is that 410 appears only post-takedown).
-    let before = TestClient::get(format!("http://localhost/{asset_id}"))
+    // Before takedown the asset serves its ciphertext on the content-addressed path.
+    let before = TestClient::get(format!("http://localhost/{hash}"))
+        .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&svc)
         .await;
-    assert_ne!(
+    assert_eq!(
         before.status_code,
-        Some(StatusCode::GONE),
-        "a servable asset must not return 410"
+        Some(StatusCode::OK),
+        "a servable asset serves its blob"
     );
 
     // Take it down.
@@ -361,8 +401,9 @@ async fn takedown_serves_410_and_records_provenance() {
         .await
         .expect("takedown");
 
-    // Subsequent fetches return 410 Gone.
-    let after = TestClient::get(format!("http://localhost/{asset_id}"))
+    // Subsequent fetches return 410 Gone — on the path clients and federated peers use.
+    let after = TestClient::get(format!("http://localhost/{hash}"))
+        .add_header("Authorization", format!("Bearer {token}"), true)
         .send(&svc)
         .await;
     assert_eq!(
@@ -388,6 +429,20 @@ async fn takedown_serves_410_and_records_provenance() {
     assert_eq!(log[0].kind, "takedown");
     assert_eq!(log[0].asset_id.as_deref(), Some(asset_id.as_str()));
     assert_eq!(log[0].reason.as_deref(), Some("legal request"));
+
+    // Lifting the takedown restores serving — the gate reads live state, it is not a tombstone.
+    Takedown::lift(&ctx.db, &asset_id, Some("appeal granted"))
+        .await
+        .expect("lift");
+    let lifted = TestClient::get(format!("http://localhost/{hash}"))
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(&svc)
+        .await;
+    assert_eq!(
+        lifted.status_code,
+        Some(StatusCode::OK),
+        "a lifted takedown serves again"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

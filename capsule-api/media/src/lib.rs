@@ -18,16 +18,6 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-pub async fn get_router<C: Into<MediaServerConfig>>(
-    conn: DatabaseConnection,
-    config: C,
-) -> Result<Router> {
-    let config = config.into();
-    let state = AppState::new(conn, config);
-
-    Ok(Router::new().push(routes::get_router(state)))
-}
-
 /// Public share-link serve router (`/s/{opaque-id}` metadata + blob + wrapped-secret). Slice
 /// `S-C4`.
 pub async fn get_share_router<C: Into<MediaServerConfig>>(
