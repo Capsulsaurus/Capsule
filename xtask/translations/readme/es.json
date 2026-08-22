@@ -140,8 +140,8 @@
     "target": "Componentes:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): The server's two wire transports — REST with an OpenAPI 3.1 schema for request/response surfaces (including the TUS-style resumable upload) and gRPC, plus gRPC-web for the browser, for the sync feed and federation pull",
-    "target": "- [Capsule API](capsule-api/README.md): Los dos transportes de red del servidor: REST con un esquema OpenAPI 3.1 para las superficies de petición/respuesta (incluida la subida reanudable al estilo TUS) y gRPC, además de gRPC-web para el navegador, para el feed de sincronización y la extracción federada"
+    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
+    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -152,10 +152,6 @@
     "target": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Biblioteca multiplataforma Kotlin compartida para la lógica específica de cada cliente"
   },
   {
-    "source": "- [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client",
-    "target": "- [Capsule Desktop](capsule-desktop/README.md) (planeado): Cliente de escritorio para Windows/Linux"
-  },
-  {
     "source": "- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App",
     "target": "- [Capsule Android](capsule-android/README.md) (en curso): Aplicación en Jetpack Compose"
   },
@@ -164,40 +160,24 @@
     "target": "- [Capsule Swift](capsule-swift/README.md): Cliente en SwiftUI para iOS/macOS"
   },
   {
-    "source": "- Capsule Media: media decode/encode utilities, folded into `capsule-core` as the `media` module (behind the `media` feature)",
-    "target": "- Capsule Media: utilidades de decodificación/codificación multimedia, integradas en `capsule-core` como el módulo `media` (detrás de la funcionalidad `media`)"
-  },
-  {
     "source": "- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)",
     "target": "- [Capsule Docs](capsule-docs/README.md): Sitio web de documentación en Starlight (Astro)"
   },
   {
-    "source": "External dependencies:",
-    "target": "Dependencias externas:"
+    "source": "Planned server dependencies:",
+    "target": "Planned server dependencies:"
   },
   {
     "source": "- [PostgreSQL](https://www.postgresql.org/)",
     "target": "- [PostgreSQL](https://www.postgresql.org/)"
   },
   {
-    "source": "- [MinIO](https://min.io/)",
-    "target": "- [MinIO](https://min.io/)"
+    "source": "- [Valkey](https://valkey.io/) (optional session-state adapter)",
+    "target": "- [Valkey](https://valkey.io/) (optional session-state adapter)"
   },
   {
-    "source": "- [RabbitMQ](https://www.rabbitmq.com/)",
-    "target": "- [RabbitMQ](https://www.rabbitmq.com/)"
-  },
-  {
-    "source": "- [Memcached](https://memcached.org/)",
-    "target": "- [Memcached](https://memcached.org/)"
-  },
-  {
-    "source": "- [Envoy](https://github.com/envoyproxy/envoy)",
-    "target": "- [Envoy](https://github.com/envoyproxy/envoy)"
-  },
-  {
-    "source": "- [Istio](https://github.com/istio/istio)",
-    "target": "- [Istio](https://github.com/istio/istio)"
+    "source": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service.",
+    "target": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service."
   },
   {
     "source": "Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:",
@@ -216,16 +196,8 @@
     "target": "- `capsule-core-kotlin`: Android Studio o IntelliJ IDEA con complementos"
   },
   {
-    "source": "- `capsule-desktop`: VS Code or similar",
-    "target": "- `capsule-desktop`: VS Code o similar"
-  },
-  {
     "source": "- `capsule-docs`: VS Code or similar",
     "target": "- `capsule-docs`: VS Code o similar"
-  },
-  {
-    "source": "- `capsule-core` (media module): VS Code or similar",
-    "target": "- `capsule-core` (módulo media): VS Code o similar"
   },
   {
     "source": "- `capsule-swift`: Xcode",
@@ -240,8 +212,8 @@
     "target": "### Configuración"
   },
   {
-    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) pins the shared dev tooling (`just`, `lefthook`, `convco`) and [just](https://just.systems) is the task runner that ties the per-language tasks together (`just check`, `just build`, etc.). Various tools will need to be setup based on services you need to work on.",
-    "target": "Este es un monorepo políglota (5 o más lenguajes de programación: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), por lo que cada lenguaje usa su propia cadena de herramientas en lugar de un único sistema de compilación unificado. [mise](https://mise.jdx.dev) fija las herramientas de desarrollo compartidas (`just`, `lefthook`, `convco`) y [just](https://just.systems) es el ejecutor de tareas que une las tareas específicas de cada lenguaje (`just check`, `just build`, etc.). Deberás configurar varias herramientas según los servicios en los que necesites trabajar."
+    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on.",
+    "target": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on."
   },
   {
     "source": "Setup in the following order:",
@@ -252,8 +224,8 @@
     "target": "- Instala [mise](https://mise.jdx.dev) y ejecuta `mise install` desde la raíz del repositorio para obtener las herramientas compartidas fijadas."
   },
   {
-    "source": "- Install the git hooks with `just hooks-install`.",
-    "target": "- Instala los hooks de git con `just hooks-install`."
+    "source": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev)).",
+    "target": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev))."
   },
   {
     "source": "- Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>",
@@ -308,8 +280,8 @@
     "target": "Nota adicional: Al autor original le encanta el código abierto y ha contribuido a varios proyectos. El motivo para empezar desde cero es que muchas de las decisiones técnicas necesarias para lograr los objetivos de experiencia de usuario y rendimiento requieren múltiples decisiones de diseño críticas.\n**P: Para la API, ¿se consideraron otros lenguajes además de Rust?**"
   },
   {
-    "source": "A: Yes, we considered many languages. Some other languages considered included Go, TypeScript, Kotlin/Java. In fact, the first PoC was as a single REST API written in TypeScript. However, the current development has developed into two wire transports (REST with an OpenAPI 3.1 schema, and gRPC) and processing logic offloaded to clients of various platforms. Rust offers both the memory-safety and performance requirements, as well as the cross-platform flexiblity that some other languages may equally excel at. On the APIs, Rust libraries also tend to be newer and allowed for Linux-specific optimizations such as using `io_uring` for high-performance async I/O. Additonally, note that several other languages with other strengths are embraced.",
-    "target": "R: Sí, consideramos muchos lenguajes. Algunos otros lenguajes considerados fueron Go, TypeScript y Kotlin/Java. De hecho, el primer PoC fue una única API REST escrita en TypeScript. Sin embargo, el desarrollo actual ha evolucionado hacia dos transportes de red (REST con un esquema OpenAPI 3.1 y gRPC) con la lógica de procesamiento delegada a los clientes de varias plataformas. Rust ofrece tanto los requisitos de seguridad de memoria y rendimiento como la flexibilidad multiplataforma en la que otros lenguajes también pueden destacar. En cuanto a las API, las bibliotecas de Rust también suelen ser más recientes y permitieron optimizaciones específicas de Linux, como el uso de `io_uring` para E/S asíncrona de alto rendimiento. Además, cabe señalar que se adoptan otros lenguajes con otras fortalezas."
+    "source": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger.",
+    "target": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger."
   },
   {
     "source": "**Q: How do bugfixes happen?**",
