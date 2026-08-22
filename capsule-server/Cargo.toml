@@ -1,0 +1,31 @@
+[package]
+name = "capsule-server"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The Kynos REST/OpenAPI server that replaces the Salvo stack (`SLICES.md`, lane C).
+#
+# It is `capsule-server` and not `capsule-api` only because the Salvo `capsule-api` is still a
+# live workspace member while the rebuild reaches parity — retiring it first would leave the tree
+# with no server, no CLI network commands and no end-to-end test for the duration. The rename is
+# a `git mv` in the same change that moves the old tree into `legacy-review/`.
+#
+# One application, cohesive internal modules — not separate transports or services
+# (design/module-map.md, "Planned Server Modules").
+
+[dependencies]
+# The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
+# and not a version, and for the repin-on-publish exit.
+kynos = { workspace = true }
+# The framework-free wire contracts (slice `S-C27`). The response taxonomy lives here so it
+# outlives whichever framework renders it.
+capsule-wire = { path = "../capsule-wire" }
+serde = { workspace = true }
+
+[dev-dependencies]
+# `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
+# no socket, no port, no runtime flavour — and the two conformance assertions the suite is
+# built around. Dev-only: the assertions belong to the tests, not the served binary.
+kynos = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
