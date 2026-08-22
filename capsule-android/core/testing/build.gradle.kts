@@ -1,6 +1,7 @@
 plugins {
     id("capsule.android.library")
     id("capsule.android.compose")
+    id("capsule.android.test")
 }
 
 android {

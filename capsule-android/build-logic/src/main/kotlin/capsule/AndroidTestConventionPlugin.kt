@@ -1,6 +1,7 @@
 package capsule
 
 import com.android.build.api.dsl.CommonExtension
+import com.android.build.api.dsl.LibraryExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
 import org.gradle.kotlin.dsl.dependencies
@@ -17,6 +18,15 @@ import org.gradle.kotlin.dsl.getByType
 class AndroidTestConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
         val extension = extensions.getByType<CommonExtension>()
+        // Robolectric ships an android-all jar per API level and refuses to run against a
+        // targetSdk above the newest it knows (36 in 4.16.x). A library module otherwise
+        // inherits compileSdk, which is 37 because material3 1.5 demands it, so its test
+        // manifest is pinned down to the level the app actually targets. The application
+        // module already declares targetSdk in defaultConfig, and AGP rejects the
+        // testOptions form there.
+        if (extension is LibraryExtension) {
+            extension.testOptions.targetSdk = libs.int("targetSdk")
+        }
         extension.testOptions.unitTests.apply {
             // Robolectric and Roborazzi need the merged resources to inflate anything.
             isIncludeAndroidResources = true
