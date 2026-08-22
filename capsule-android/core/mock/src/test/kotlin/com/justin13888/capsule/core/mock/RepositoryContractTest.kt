@@ -71,7 +71,11 @@ class RepositoryContractTest {
     fun `saving a definition validates it, and a saved one is observable`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val existing = mock.search.smartAlbums().first().first()
+            val existing =
+                mock.search
+                    .smartAlbums()
+                    .first()
+                    .first()
             val valid =
                 existing.copy(
                     predicate =
@@ -84,11 +88,22 @@ class RepositoryContractTest {
                         ),
                 )
             mock.search.saveSmartAlbum(valid)
-            assertEquals(valid, mock.search.smartAlbums().first().first { it.id == valid.id })
+            assertEquals(
+                valid,
+                mock.search
+                    .smartAlbums()
+                    .first()
+                    .first { it.id == valid.id },
+            )
             val picks = mock.search.evaluate(valid.id, 0, Int.MAX_VALUE)
             assertTrue(picks.isNotEmpty())
             mock.search.deleteSmartAlbum(valid.id)
-            assertTrue(mock.search.smartAlbums().first().none { it.id == valid.id })
+            assertTrue(
+                mock.search
+                    .smartAlbums()
+                    .first()
+                    .none { it.id == valid.id },
+            )
         }
 
     @Test
@@ -98,7 +113,12 @@ class RepositoryContractTest {
             val subject = mock.timeline.timelineWindow(0, 1).single()
             mock.metadata.addUserTag(subject.id, "reykjavik")
             assertTrue(mock.search.search("reykjavik", 0, 10).any { it.id == subject.id })
-            assertTrue(mock.search.suggestions("rey").first().contains("reykjavik"))
+            assertTrue(
+                mock.search
+                    .suggestions("rey")
+                    .first()
+                    .contains("reykjavik"),
+            )
             assertTrue(mock.search.search("", 0, 10).isEmpty())
         }
 
@@ -109,8 +129,14 @@ class RepositoryContractTest {
             val resolved = mock.albums.resolveDefaultAlbum()
             assertEquals(MockFixtures.LIBRARY.landmarks.defaultAlbumId, resolved.albumId)
             assertEquals(DefaultAlbumRule.OwnerPointer, resolved.rule)
-            val scope = mock.imports.scopes().first().first()
-            val trip = MockFixtures.LIBRARY.landmarks.tripAlbumIds.first()
+            val scope =
+                mock.imports
+                    .scopes()
+                    .first()
+                    .first()
+            val trip =
+                MockFixtures.LIBRARY.landmarks.tripAlbumIds
+                    .first()
             mock.imports.setScopeDestination(scope, trip)
             val overridden = mock.albums.resolveDefaultAlbum(scope)
             assertEquals(trip, overridden.albumId)
@@ -136,19 +162,31 @@ class RepositoryContractTest {
     fun `repointing the default album moves the pointer rather than the assets`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val trip = MockFixtures.LIBRARY.landmarks.tripAlbumIds.first()
+            val trip =
+                MockFixtures.LIBRARY.landmarks.tripAlbumIds
+                    .first()
             val before = mock.albums.albumAssets(trip, 0, Int.MAX_VALUE).size
             mock.albums.setDefaultAlbum(trip)
             assertEquals(trip, mock.albums.resolveDefaultAlbum().albumId)
             assertEquals(before, mock.albums.albumAssets(trip, 0, Int.MAX_VALUE).size)
-            assertTrue(mock.albums.albums().first().first { it.id == trip }.isDefault)
+            assertTrue(
+                mock.albums
+                    .albums()
+                    .first()
+                    .first { it.id == trip }
+                    .isDefault,
+            )
         }
 
     @Test
     fun `an album carries the viewer's capability and its shared membership`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val shared = mock.albums.albums().first().first { it.members.isNotEmpty() }
+            val shared =
+                mock.albums
+                    .albums()
+                    .first()
+                    .first { it.members.isNotEmpty() }
             assertEquals(AlbumCapability.Admin, shared.viewerCapability?.let { cap -> cap.raw }?.let(::capabilityOf))
             assertTrue(shared.members.size > 1)
         }
@@ -160,18 +198,36 @@ class RepositoryContractTest {
             assertThrows<AuthError.RevokeProofRequired> { mock.sessions.revokeAllSessions(ByteArray(0)) }
             assertThrows<AuthError.RevokeProofInvalid> { mock.sessions.revokeAllSessions("wrong".toByteArray()) }
             // Nothing was revoked: there is no partial success to reconcile.
-            assertTrue(mock.sessions.sessions().first().all { it.revokedAt == null })
+            assertTrue(
+                mock.sessions
+                    .sessions()
+                    .first()
+                    .all { it.revokedAt == null },
+            )
             mock.sessions.revokeAllSessions("capsule-master-key-proof".toByteArray())
-            assertTrue(mock.sessions.sessions().first().all { it.revokedAt != null })
+            assertTrue(
+                mock.sessions
+                    .sessions()
+                    .first()
+                    .all { it.revokedAt != null },
+            )
         }
 
     @Test
     fun `a revoked device stays in the directory`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val victim = mock.sessions.devices().first().first { it.isActive && !it.isThisDevice }
+            val victim =
+                mock.sessions
+                    .devices()
+                    .first()
+                    .first { it.isActive && !it.isThisDevice }
             mock.sessions.revokeDevice(victim.id)
-            val after = mock.sessions.devices().first().first { it.id == victim.id }
+            val after =
+                mock.sessions
+                    .devices()
+                    .first()
+                    .first { it.id == victim.id }
             assertFalse(after.isActive)
         }
 
@@ -268,7 +324,11 @@ class RepositoryContractTest {
     fun `a dry-run restore reports without applying and a commit applies only what is absent`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val artifact = mock.recovery.backups().first().single()
+            val artifact =
+                mock.recovery
+                    .backups()
+                    .first()
+                    .single()
             val dryRun = mock.recovery.restore(artifact.id, RestoreMode.DryRun)
             assertTrue(dryRun.applied.isEmpty())
             assertTrue(dryRun.wouldAdd.isNotEmpty())
@@ -285,34 +345,65 @@ class RepositoryContractTest {
             val subject = mock.timeline.timelineWindow(0, 1).single()
             val link = mock.sharing.createShareLink(ShareScope.SingleAsset(subject.id))
             assertNotNull(link.fragmentSecret)
-            assertTrue(mock.sharing.shareLinks().first().any { it.id == link.id })
+            assertTrue(
+                mock.sharing
+                    .shareLinks()
+                    .first()
+                    .any { it.id == link.id },
+            )
             mock.sharing.revokeShareLink(link.id)
             // Revoked, expired and never-existed are indistinguishable, so there is no
             // "revoked" row left to render.
-            assertTrue(mock.sharing.shareLinks().first().none { it.id == link.id })
+            assertTrue(
+                mock.sharing
+                    .shareLinks()
+                    .first()
+                    .none { it.id == link.id },
+            )
         }
 
     @Test
     fun `an upload link is provisioned under its caps and revoking it leaves the inbox alone`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val depositsBefore = mock.drops.inbox().first().size
-            val caps = com.justin13888.capsule.core.model.LinkCaps(maxFileCount = 5, singleUse = true)
+            val depositsBefore =
+                mock.drops
+                    .inbox()
+                    .first()
+                    .size
+            val caps =
+                com.justin13888.capsule.core.model
+                    .LinkCaps(maxFileCount = 5, singleUse = true)
             val link = mock.sharing.createUploadLink(caps, passphrase = "gate")
             assertTrue(link.requiresPassphrase)
             assertTrue(link.acceptsDepositsAt(MockFixtures.SPEC.now))
             mock.sharing.revokeUploadLink(link.id)
-            assertEquals(depositsBefore, mock.drops.inbox().first().size)
+            assertEquals(
+                depositsBefore,
+                mock.drops
+                    .inbox()
+                    .first()
+                    .size,
+            )
         }
 
     @Test
     fun `discarding a drop empties the inbox row without minting an asset`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val drop = mock.drops.inbox().first().first()
+            val drop =
+                mock.drops
+                    .inbox()
+                    .first()
+                    .first()
             val before = mock.timeline.timelineWindow(0, Int.MAX_VALUE).size
             mock.drops.discard(drop.id)
-            assertTrue(mock.drops.inbox().first().none { it.id == drop.id })
+            assertTrue(
+                mock.drops
+                    .inbox()
+                    .first()
+                    .none { it.id == drop.id },
+            )
             assertEquals(before, mock.timeline.timelineWindow(0, Int.MAX_VALUE).size)
         }
 
@@ -327,7 +418,12 @@ class RepositoryContractTest {
             assertEquals(sources.size, first.added.size + first.skipped.size + first.conflicts.size)
             assertEquals(first.added.sumOf { it.sizeBytes }, first.totalSize)
             val runId = mock.imports.confirm(first.copy(conflicts = emptyList()))
-            assertTrue(mock.imports.progress(runId).first().isFinished)
+            assertTrue(
+                mock.imports
+                    .progress(runId)
+                    .first()
+                    .isFinished,
+            )
         }
 
     @Test
@@ -337,19 +433,45 @@ class RepositoryContractTest {
             val stranger = UserId("01234567-89ab-7cde-8f01-23456789abcd")
             mock.moderation.blockUser(stranger)
             mock.moderation.blockUser(stranger)
-            assertEquals(1, mock.moderation.blocks().first().size)
+            assertEquals(
+                1,
+                mock.moderation
+                    .blocks()
+                    .first()
+                    .size,
+            )
             mock.moderation.unblockUser(stranger)
-            assertTrue(mock.moderation.blocks().first().isEmpty())
-            assertTrue(mock.moderation.events().first().isNotEmpty())
+            assertTrue(
+                mock.moderation
+                    .blocks()
+                    .first()
+                    .isEmpty(),
+            )
+            assertTrue(
+                mock.moderation
+                    .events()
+                    .first()
+                    .isNotEmpty(),
+            )
         }
 
     @Test
     fun `enrollment succeeds when the safety codes match and adds the device`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val before = mock.sessions.devices().first().size
+            val before =
+                mock.sessions
+                    .devices()
+                    .first()
+                    .size
             val device = mock.enrollment.enroll("Studio iMac", PlatformTag.Macos, mock.enrollment.safetyCode())
-            assertEquals(before + 1, mock.sessions.devices().first().size)
+            assertEquals(
+                before + 1,
+                mock.sessions
+                    .devices()
+                    .first()
+                    .size,
+            )
             // A UUIDv4, never a v7: a device id must not leak when the device was enrolled.
             assertEquals('4', device.id.value[UUID_VERSION_INDEX])
         }
@@ -359,7 +481,12 @@ class RepositoryContractTest {
         runTest {
             val mock = MockFixtures.freshRepositories()
             val plain = mock.timeline.timelineWindow(0, 1).single()
-            assertTrue(mock.assets.provenance(plain.id).first().isNotEmpty())
+            assertTrue(
+                mock.assets
+                    .provenance(plain.id)
+                    .first()
+                    .isNotEmpty(),
+            )
             val trashed = requireNotNull(MockFixtures.LIBRARY.landmarks.trashedExpiredAssetId)
             val chain = mock.assets.provenance(trashed).first()
             // Append-only in both directions: the create record survives the delete.
@@ -395,25 +522,60 @@ class RepositoryContractTest {
             val first = people.first()
             val second = people[1]
             mock.people.renamePerson(first.id, "Renamed")
-            assertEquals("Renamed", mock.people.person(first.id).first()?.displayName)
+            assertEquals(
+                "Renamed",
+                mock.people
+                    .person(first.id)
+                    .first()
+                    ?.displayName,
+            )
             val cover = mock.people.personAssets(first.id, 0, 1).first()
             mock.people.setPersonCover(first.id, cover.id)
-            assertEquals(cover.id, mock.people.person(first.id).first()?.coverAssetId)
+            assertEquals(
+                cover.id,
+                mock.people
+                    .person(first.id)
+                    .first()
+                    ?.coverAssetId,
+            )
             mock.people.mergePeople(second.id, first.id)
-            assertTrue(mock.people.people().first().none { it.id == second.id })
+            assertTrue(
+                mock.people
+                    .people()
+                    .first()
+                    .none { it.id == second.id },
+            )
             mock.people.hidePerson(first.id, hidden = true)
-            assertTrue(mock.people.people().first().none { it.id == first.id })
+            assertTrue(
+                mock.people
+                    .people()
+                    .first()
+                    .none { it.id == first.id },
+            )
             // Hiding removes them from the view, never the clusters behind them.
-            assertTrue(mock.people.clusters().first().isNotEmpty())
+            assertTrue(
+                mock.people
+                    .clusters()
+                    .first()
+                    .isNotEmpty(),
+            )
         }
 
     @Test
     fun `detaching a cluster leaves it queryable but attached to nobody`() =
         runTest {
             val mock = MockFixtures.freshRepositories()
-            val attached = mock.people.clusters().first().first { it.personId != null }
+            val attached =
+                mock.people
+                    .clusters()
+                    .first()
+                    .first { it.personId != null }
             mock.people.detachCluster(attached.id)
-            val after = mock.people.clusters().first().first { it.id == attached.id }
+            val after =
+                mock.people
+                    .clusters()
+                    .first()
+                    .first { it.id == attached.id }
             assertNull(after.personId)
         }
 
