@@ -13,12 +13,14 @@ use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::domain::ImportMode;
 use capsule_core::import::scanner::scan as scan_files;
+use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
     CancellationToken, ImportConfig, ImportOutcome, ImportProgressEvent, execute, plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
+use capsule_sdk::net::ConnectionClass;
 use cli::{AuthCommands, Cli, Commands, LibraryCommands};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
@@ -165,6 +167,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
             r#move,
             force,
             passphrase_stdin,
+            push,
+            staged,
         } => {
             println!(
                 "{}",
@@ -176,21 +180,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 .green()
             );
 
-            // Open the library as a signed workspace: imports land on the signed lifecycle path
-            // (signed sidecar + manifest + provenance + derivatives), never the legacy unsigned
-            // sidecar (S-B2). A first import initializes the account under the given passphrase.
-            let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
-            let mut ws = as_capsule_cli(
-                Workspace::open(&library, passphrase.as_bytes(), DeviceTier::Normal.params())
-                    .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
-            );
-            // Resolve-or-create the default album (`S-A10`). Album keys are durable now, so a
-            // second run MUST resolve the album the first run minted rather than replacing it —
-            // minting a fresh one per run is exactly what left a reopened library unable to
-            // decrypt or extend its own prior imports.
-            let default_album = ws.default_album_id();
-            ws.ensure_album(default_album, "Imports")
-                .map_err(|e| eyre!("Failed to resolve the default album: {e}"))?;
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
 
             // Phase 1: Scan
             println!("{}", "Scanning source files...".cyan());
@@ -234,6 +224,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
             if plan_result.counts.to_import == 0 {
                 println!("{}", "Nothing to import.".yellow());
+                // `--push` is still honored: an unchanged library is exactly the
+                // re-runnable case push exists to make cheap.
+                if push {
+                    return push_workspace(&ws, push_options(false, false, staged)).await;
+                }
                 return Ok(());
             }
 
@@ -283,6 +278,25 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 )
                 .green()
             );
+
+            // `--push` is sugar only: import itself never touches the network (its
+            // determinism suite depends on that), and the push is a separate pass over
+            // the committed library — byte-for-byte the same one `capsule push` runs.
+            if push {
+                push_workspace(&ws, push_options(false, false, staged)).await?;
+            }
+        }
+
+        // ── Push ──────────────────────────────────────────────────────────
+        Commands::Push {
+            library,
+            passphrase_stdin,
+            dry_run,
+            force,
+            staged,
+        } => {
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            push_workspace(&ws, push_options(dry_run, force, staged)).await?;
         }
 
         // ── Demo ──────────────────────────────────────────────────────────
@@ -629,6 +643,133 @@ async fn sync(dry_run: bool, from_start: bool) -> Result<()> {
             Err(eyre!(
                 "{}",
                 bundle.format(keys::SYNC_FAILED, &[("reason", Value::Str(&reason))])
+            ))
+        }
+    }
+}
+
+/// Open a Capsule library as a signed workspace.
+///
+/// Imports land on the signed lifecycle path (signed sidecar + manifest + provenance +
+/// derivatives), never the legacy unsigned sidecar (S-B2); a first open initializes the account
+/// under the given passphrase. The default album is resolved-or-created (`S-A10`): album keys
+/// are durable now, so a second run MUST resolve the album the first run minted rather than
+/// replacing it — minting a fresh one per run is exactly what left a reopened library unable to
+/// decrypt or extend its own prior imports (and would make a push unrepeatable).
+fn open_workspace(library: &Path, passphrase_stdin: bool) -> Result<Workspace> {
+    let passphrase = read_password(passphrase_stdin, "Library passphrase".to_string())?;
+    let mut ws = as_capsule_cli(
+        Workspace::open(library, passphrase.as_bytes(), DeviceTier::Normal.params())
+            .map_err(|e| eyre!("Failed to open signed workspace: {e}"))?,
+    );
+    let default_album = ws.default_album_id();
+    ws.ensure_album(default_album, "Imports")
+        .map_err(|e| eyre!("Failed to resolve the default album: {e}"))?;
+    Ok(ws)
+}
+
+/// The push configuration behind the CLI's three push flags. A `--staged` run opens the tier
+/// sessions in ladder order gated by the connection class; the default `Full` policy opens them
+/// all eagerly. The CLI has no link-quality probe, so it reports the honest default —
+/// `Unmetered`, the class a desktop/server run is on.
+fn push_options(dry_run: bool, force: bool, staged: bool) -> remote::PushOptions {
+    remote::PushOptions {
+        dry_run,
+        force,
+        policy: if staged {
+            UploadPolicy::Staged
+        } else {
+            UploadPolicy::Full
+        },
+        connection: ConnectionClass::Unmetered,
+    }
+}
+
+/// `capsule push`: upload every managed asset of `workspace` over the SDK.
+///
+/// Re-runnable by construction: the outstanding work is derived from server truth (a sync-feed
+/// pull), so a second run against an unchanged library uploads nothing.
+async fn push_workspace(workspace: &Workspace, options: remote::PushOptions) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+    let assets = workspace.asset_ids().len();
+
+    if assets == 0 {
+        println!(
+            "{}",
+            bundle.format(keys::PUSH_NOTHING_TO_PUSH, &[]).yellow()
+        );
+        return Ok(());
+    }
+
+    println!(
+        "{}",
+        bundle
+            .format(
+                keys::PUSH_IN_PROGRESS,
+                &[
+                    ("assets", Value::Int(assets as i64)),
+                    ("endpoint", Value::Str(&remote.upload_endpoint)),
+                ],
+            )
+            .green()
+    );
+    if options.dry_run {
+        println!("{}", bundle.format(keys::PUSH_DRY_RUN_NOTICE, &[]).yellow());
+    }
+    if options.force {
+        println!("{}", bundle.format(keys::PUSH_FORCE_NOTICE, &[]).yellow());
+    }
+
+    match remote::push(&remote, &store, workspace, options).await {
+        Ok(summary) if summary.dry_run => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::PUSH_DRY_RUN_COMPLETE,
+                        &[
+                            ("planned", Value::Int(summary.uploaded_blobs as i64)),
+                            ("assets", Value::Int(summary.pushed_assets as i64)),
+                            ("bytes", Value::Int(summary.bytes as i64)),
+                        ],
+                    )
+                    .cyan()
+            );
+            Ok(())
+        }
+        Ok(summary) if summary.is_no_op() => {
+            println!("{}", bundle.format(keys::PUSH_UP_TO_DATE, &[]).cyan());
+            Ok(())
+        }
+        Ok(summary) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::PUSH_COMPLETE,
+                        &[
+                            ("uploaded", Value::Int(summary.uploaded_blobs as i64)),
+                            ("merged", Value::Int(summary.merged_blobs as i64)),
+                            ("held", Value::Int(summary.already_held_blobs as i64)),
+                            ("deferred", Value::Int(summary.deferred_blobs as i64)),
+                            ("bytes", Value::Int(summary.bytes as i64)),
+                        ],
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(remote::RemoteError::NotAuthenticated) => Err(eyre!(
+            "{}",
+            bundle.format(keys::AUTH_NOT_AUTHENTICATED, &[])
+        )),
+        Err(error) => {
+            let reason = describe_remote_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(keys::PUSH_FAILED, &[("reason", Value::Str(&reason))])
             ))
         }
     }

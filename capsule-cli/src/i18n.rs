@@ -51,4 +51,12 @@ pub mod keys {
     pub const LIST_STATE_ACTIVE: &str = "cli.list.state.active";
     pub const LIST_STATE_AWAITING_ORIGINAL: &str = "cli.list.state.awaiting_original";
     pub const LIST_FAILED: &str = "cli.list.failed";
+    pub const PUSH_IN_PROGRESS: &str = "cli.push.in_progress";
+    pub const PUSH_DRY_RUN_NOTICE: &str = "cli.push.dry_run_notice";
+    pub const PUSH_FORCE_NOTICE: &str = "cli.push.force_notice";
+    pub const PUSH_NOTHING_TO_PUSH: &str = "cli.push.nothing_to_push";
+    pub const PUSH_UP_TO_DATE: &str = "cli.push.up_to_date";
+    pub const PUSH_COMPLETE: &str = "cli.push.complete";
+    pub const PUSH_DRY_RUN_COMPLETE: &str = "cli.push.dry_run_complete";
+    pub const PUSH_FAILED: &str = "cli.push.failed";
 }

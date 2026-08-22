@@ -483,6 +483,7 @@ mod tests {
         let remote = RemoteConfig {
             auth_endpoint: "http://127.0.0.1:1/v1/auth".to_string(),
             sync_endpoint: "http://127.0.0.1:1".to_string(),
+            upload_endpoint: "http://127.0.0.1:1/v1/upload".to_string(),
             protocol_version: crate::remote::DEFAULT_PROTOCOL_VERSION.to_string(),
         };
         let status = ServerStatus::check(&remote).await.expect("check");

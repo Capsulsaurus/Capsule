@@ -4797,6 +4797,86 @@
         }
       }
     },
+    "cli.push.complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push complete: {uploaded} blob(s) uploaded, {merged} already stored, {held} already held, {deferred} deferred ({bytes} bytes sent)."
+          }
+        }
+      }
+    },
+    "cli.push.dry_run_complete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dry run: would upload {planned} blob(s) across {assets} asset(s) ({bytes} bytes)."
+          }
+        }
+      }
+    },
+    "cli.push.dry_run_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dry run: nothing will be uploaded."
+          }
+        }
+      }
+    },
+    "cli.push.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push failed: {reason}"
+          }
+        }
+      }
+    },
+    "cli.push.force_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Force: re-driving every blob, ignoring what the server already holds."
+          }
+        }
+      }
+    },
+    "cli.push.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pushing {assets} asset(s) to {endpoint}…"
+          }
+        }
+      }
+    },
+    "cli.push.nothing_to_push": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The library holds no assets to push."
+          }
+        }
+      }
+    },
+    "cli.push.up_to_date": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Everything in this library is already on the server."
+          }
+        }
+      }
+    },
     "cli.sync.complete": {
       "localizations": {
         "ar": {

@@ -62,6 +62,14 @@
     <string name="cli_list_row">{asset_id}  album={album_id}  seq={seq}  {state}</string>
     <string name="cli_list_state_active">active</string>
     <string name="cli_list_state_awaiting_original">awaiting-original</string>
+    <string name="cli_push_complete">Push complete: {uploaded} blob(s) uploaded, {merged} already stored, {held} already held, {deferred} deferred ({bytes} bytes sent).</string>
+    <string name="cli_push_dry_run_complete">Dry run: would upload {planned} blob(s) across {assets} asset(s) ({bytes} bytes).</string>
+    <string name="cli_push_dry_run_notice">Dry run: nothing will be uploaded.</string>
+    <string name="cli_push_failed">Push failed: {reason}</string>
+    <string name="cli_push_force_notice">Force: re-driving every blob, ignoring what the server already holds.</string>
+    <string name="cli_push_in_progress">Pushing {assets} asset(s) to {endpoint}…</string>
+    <string name="cli_push_nothing_to_push">The library holds no assets to push.</string>
+    <string name="cli_push_up_to_date">Everything in this library is already on the server.</string>
     <string name="cli_sync_complete">Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).</string>
     <string name="cli_sync_dry_run_notice">Dry run: no changes will be persisted.</string>
     <string name="cli_sync_failed">Sync failed: {reason}</string>

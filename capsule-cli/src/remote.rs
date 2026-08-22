@@ -8,8 +8,16 @@
 //! the SDK's, not re-implemented here. These functions are the testable core the
 //! binary's command arms call and the E2E round-trip drives directly.
 
-use capsule_sdk::auth::{AuthClient, AuthError};
+use std::collections::HashSet;
+
+use capsule_core::import::upload::UploadPolicy;
+use capsule_core::lifecycle::{LifecycleError, Workspace};
+use capsule_sdk::auth::{AuthClient, AuthError, Session};
+use capsule_sdk::net::ConnectionClass;
+use capsule_sdk::push::{self, PushError};
+use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
+use capsule_sdk::upload::{UploadClient, UploadTransport};
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use thiserror::Error;
 use tracing::instrument;
@@ -31,6 +39,9 @@ pub struct RemoteConfig {
     pub auth_endpoint: String,
     /// Base URL of the gRPC sync feed (`capsule.sync.v1.SyncService`).
     pub sync_endpoint: String,
+    /// Base URL of the upload surface — `POST` creates a session there, and
+    /// `PATCH`/`HEAD`/`DELETE` hang under `{upload_endpoint}/{id}`.
+    pub upload_endpoint: String,
     /// The client's max-known protocol version (`YYYY-MM-DD`), sent on the
     /// handshake and used as the forward-version ceiling.
     pub protocol_version: String,
@@ -59,6 +70,8 @@ impl RemoteConfig {
             // The gRPC service mounts at the server root: tonic discards any path on the
             // endpoint URI (`AddOrigin` keeps scheme + authority only), so a prefixed sync
             // URL is silently unreachable. Pass the bare origin.
+            upload_endpoint: std::env::var("CAPSULE_UPLOAD_ENDPOINT")
+                .unwrap_or_else(|_| Self::upload_endpoint_for(&base)),
             sync_endpoint: std::env::var("CAPSULE_SYNC_ENDPOINT").unwrap_or(base),
             protocol_version: std::env::var("CAPSULE_PROTOCOL")
                 .unwrap_or_else(|_| DEFAULT_PROTOCOL_VERSION.to_string()),
@@ -68,6 +81,11 @@ impl RemoteConfig {
     /// The auth surface hangs off `/v1/auth` on the shared origin.
     fn auth_endpoint_for(base: &str) -> String {
         format!("{base}/v1/auth")
+    }
+
+    /// The upload surface hangs off `/v1/upload` on the shared origin.
+    fn upload_endpoint_for(base: &str) -> String {
+        format!("{base}/v1/upload")
     }
 }
 
@@ -88,6 +106,12 @@ pub enum RemoteError {
     /// The local sync store failed.
     #[error(transparent)]
     SyncStore(#[from] SyncStoreError),
+    /// Reading an asset's upload bundle out of the local library failed.
+    #[error(transparent)]
+    Lifecycle(#[from] LifecycleError),
+    /// An asset's upload failed.
+    #[error(transparent)]
+    Push(#[from] PushError),
     /// A command needing an authenticated session found none stored.
     #[error("not authenticated")]
     NotAuthenticated,
@@ -102,6 +126,10 @@ impl RemoteError {
         match self {
             Self::Auth(error) => error.error_code(),
             Self::Sync(error) => error.error_code(),
+            Self::Push(PushError::Upload(capsule_sdk::upload::UploadError::Rejected {
+                code,
+                ..
+            })) => code.as_deref(),
             _ => None,
         }
     }
@@ -259,6 +287,195 @@ pub async fn sync<C: ConnectionTrait + TransactionTrait>(
     Ok(summary)
 }
 
+// ─── Push (S-D18) ────────────────────────────────────────────────────────────
+
+/// How a `capsule push` run is configured.
+#[derive(Debug, Clone, Copy)]
+pub struct PushOptions {
+    /// Plan the run and report it without opening a single upload session.
+    pub dry_run: bool,
+    /// Ignore server truth and re-drive every blob. The server still answers
+    /// `duplicate_blob` for what it holds, which resolves as a merge — so this costs
+    /// requests, never correctness.
+    pub force: bool,
+    /// `Full` opens every tier eagerly; `Staged` gates the above-index tiers on the
+    /// connection class.
+    pub policy: UploadPolicy,
+    /// The detected connection class the staged tier gate consults.
+    pub connection: ConnectionClass,
+}
+
+impl Default for PushOptions {
+    fn default() -> Self {
+        Self {
+            dry_run: false,
+            force: false,
+            policy: UploadPolicy::Full,
+            connection: ConnectionClass::Unmetered,
+        }
+    }
+}
+
+/// The outcome of a `capsule push` run.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PushSummary {
+    /// Managed assets considered.
+    pub assets: usize,
+    /// Assets for which at least one blob session was opened.
+    pub pushed_assets: usize,
+    /// Blobs transferred to completion.
+    pub uploaded_blobs: usize,
+    /// Blobs the server already held and merged onto (`duplicate_blob`).
+    pub merged_blobs: usize,
+    /// Blobs skipped before any request because the feed says the server holds them.
+    pub already_held_blobs: usize,
+    /// Blobs a staged policy deferred to a later window.
+    pub deferred_blobs: usize,
+    /// Bytes handed to the upload client this run.
+    pub bytes: u64,
+    /// Whether this was a dry run (nothing left the device).
+    pub dry_run: bool,
+}
+
+impl PushSummary {
+    /// Whether the run moved nothing — the re-run-against-an-unchanged-library case.
+    #[must_use]
+    pub fn is_no_op(&self) -> bool {
+        self.uploaded_blobs == 0 && self.merged_blobs == 0
+    }
+}
+
+/// The set of blob content addresses the server durably holds, folded off a **fresh** feed
+/// pull — the server truth a push resumes from (there is no push-side state file).
+///
+/// Deliberately drained through a scratch [`SyncState`] rather than the persisted one: reading
+/// what the server holds must not advance (or depend on) the cursor `capsule sync` owns.
+#[instrument(skip(session))]
+pub async fn held_blobs(
+    remote: &RemoteConfig,
+    session: Session,
+    page_size: u32,
+) -> Result<HashSet<String>, RemoteError> {
+    let channel = SyncConsumer::connect(remote.sync_endpoint.clone()).await?;
+    let mut consumer =
+        SyncConsumer::with_session(channel, session, remote.protocol_version.clone());
+    // A scratch state: start cursor, no high-water marks. Nothing is persisted from it.
+    let mut state = SyncState::restore(&remote.protocol_version, SyncCursor::start(), Vec::new());
+
+    let mut held = HashSet::new();
+    let mut entries = 0usize;
+    loop {
+        let page = consumer.pull_into(&mut state, page_size).await?;
+        if page.entries.is_empty() {
+            break;
+        }
+        for entry in &page.entries {
+            entries += 1;
+            held.extend(held_from_feed(entry));
+        }
+    }
+    tracing::info!(
+        entries,
+        blobs = held.len(),
+        "push: server truth read off the sync feed"
+    );
+    Ok(held)
+}
+
+/// Push every managed asset of `workspace` to the server.
+///
+/// The CLI never hand-rolls a network flow: the bytes ride `capsule_sdk::upload`'s resumable
+/// client, the ordering rides `capsule_sdk::staged`'s scheduler, and the bundle comes from
+/// `capsule_core`'s `Workspace::upload_bundle` — this function only stitches them together.
+///
+/// Re-runnable by construction. Nothing is written locally, so a second run against an
+/// unchanged library plans nothing (the feed says every blob is held) and makes no request.
+#[instrument(skip(store, workspace), fields(endpoint = %remote.upload_endpoint))]
+pub async fn push(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    workspace: &Workspace,
+    options: PushOptions,
+) -> Result<PushSummary, RemoteError> {
+    let persisted = store.load()?.ok_or(RemoteError::NotAuthenticated)?;
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    let session = client.resume(persisted)?;
+
+    let asset_ids = workspace.asset_ids();
+    let mut summary = PushSummary {
+        assets: asset_ids.len(),
+        dry_run: options.dry_run,
+        ..Default::default()
+    };
+    if asset_ids.is_empty() {
+        tracing::info!("push: the library holds no assets");
+        return Ok(summary);
+    }
+
+    // Server truth first — the whole resume story. `--force` deliberately reads nothing.
+    let held = if options.force {
+        tracing::info!("push: --force, re-driving every blob regardless of server truth");
+        HashSet::new()
+    } else {
+        held_blobs(remote, session.clone(), DEFAULT_SYNC_PAGE_SIZE).await?
+    };
+
+    let upload = UploadClient::new(UploadTransport::with_session(
+        session,
+        &remote.upload_endpoint,
+        &remote.protocol_version,
+    ))
+    .with_connection_class(options.connection);
+    let scheduler = StagedScheduler::new(options.policy, options.connection);
+
+    for asset_id in asset_ids {
+        let bundle = workspace.upload_bundle(&asset_id)?;
+        if options.dry_run {
+            let planned = push::plan(&scheduler, &bundle, &held, options.force);
+            summary.already_held_blobs += planned.already_held;
+            summary.deferred_blobs += planned.deferred;
+            summary.uploaded_blobs += planned.blobs.len();
+            summary.bytes += planned.bytes;
+            if !planned.blobs.is_empty() {
+                summary.pushed_assets += 1;
+            }
+            tracing::info!(
+                %asset_id,
+                planned = planned.blobs.len(),
+                "push: dry run — would open these tier sessions"
+            );
+            continue;
+        }
+
+        let report = push::push_bundle(&upload, &scheduler, &bundle, &held, options.force).await?;
+        summary.already_held_blobs += report.already_held;
+        summary.deferred_blobs += report.deferred;
+        summary.bytes += report.bytes;
+        if !report.pushed.is_empty() {
+            summary.pushed_assets += 1;
+        }
+        for blob in &report.pushed {
+            match blob.outcome {
+                TierSessionOutcome::Uploaded { .. } => summary.uploaded_blobs += 1,
+                TierSessionOutcome::AlreadyStored { .. } => summary.merged_blobs += 1,
+            }
+        }
+    }
+
+    tracing::info!(
+        assets = summary.assets,
+        pushed_assets = summary.pushed_assets,
+        uploaded = summary.uploaded_blobs,
+        merged = summary.merged_blobs,
+        already_held = summary.already_held_blobs,
+        deferred = summary.deferred_blobs,
+        bytes = summary.bytes,
+        dry_run = summary.dry_run,
+        "push complete"
+    );
+    Ok(summary)
+}
+
 /// Query the sync-fed local store — the client-side library `capsule list` renders.
 #[instrument(skip(db))]
 pub async fn list<C: ConnectionTrait>(
@@ -278,10 +495,11 @@ mod tests {
 
     /// Clear every endpoint variable, run `f`, and restore the prior values.
     fn with_clean_env<T>(f: impl FnOnce() -> T) -> T {
-        const VARS: [&str; 4] = [
+        const VARS: [&str; 5] = [
             "CAPSULE_ENDPOINT",
             "CAPSULE_AUTH_ENDPOINT",
             "CAPSULE_SYNC_ENDPOINT",
+            "CAPSULE_UPLOAD_ENDPOINT",
             "CAPSULE_PROTOCOL",
         ];
         let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -307,6 +525,7 @@ mod tests {
         // integration harness. A real server serves everything from one.
         assert_eq!(cfg.auth_endpoint, "http://127.0.0.1:3000/v1/auth");
         assert_eq!(cfg.sync_endpoint, "http://127.0.0.1:3000");
+        assert_eq!(cfg.upload_endpoint, "http://127.0.0.1:3000/v1/upload");
         assert_eq!(cfg.protocol_version, DEFAULT_PROTOCOL_VERSION);
     }
 
@@ -318,6 +537,7 @@ mod tests {
         });
         assert_eq!(cfg.auth_endpoint, "https://capsule.example.com/v1/auth");
         assert_eq!(cfg.sync_endpoint, "https://capsule.example.com");
+        assert_eq!(cfg.upload_endpoint, "https://capsule.example.com/v1/upload");
     }
 
     #[test]
@@ -328,6 +548,7 @@ mod tests {
         });
         assert_eq!(cfg.auth_endpoint, "http://host:3000/v1/auth");
         assert_eq!(cfg.sync_endpoint, "http://host:3000");
+        assert_eq!(cfg.upload_endpoint, "http://host:3000/v1/upload");
     }
 
     /// Split deployments (auth behind one ingress, sync behind another) stay expressible.
@@ -338,11 +559,16 @@ mod tests {
                 std::env::set_var("CAPSULE_ENDPOINT", "http://ignored:1");
                 std::env::set_var("CAPSULE_AUTH_ENDPOINT", "https://auth.example.com/v1/auth");
                 std::env::set_var("CAPSULE_SYNC_ENDPOINT", "https://sync.example.com");
+                std::env::set_var(
+                    "CAPSULE_UPLOAD_ENDPOINT",
+                    "https://upload.example.com/v1/upload",
+                );
             }
             RemoteConfig::from_env()
         });
         assert_eq!(cfg.auth_endpoint, "https://auth.example.com/v1/auth");
         assert_eq!(cfg.sync_endpoint, "https://sync.example.com");
+        assert_eq!(cfg.upload_endpoint, "https://upload.example.com/v1/upload");
     }
 
     /// The sync endpoint must stay a bare origin. tonic's `AddOrigin` keeps only the scheme

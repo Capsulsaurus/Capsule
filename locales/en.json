@@ -419,6 +419,38 @@
         "message": "Failed to list the library: {reason}",
         "context": "CLI failure line for `capsule list`. {reason} is an error detail."
     },
+    "cli.push.in_progress": {
+        "message": "Pushing {assets} asset(s) to {endpoint}\u2026",
+        "context": "CLI status line printed while `capsule push` uploads. {assets} is a count; {endpoint} is the upload server URL."
+    },
+    "cli.push.dry_run_notice": {
+        "message": "Dry run: nothing will be uploaded.",
+        "context": "CLI notice when `capsule push --dry-run` runs."
+    },
+    "cli.push.force_notice": {
+        "message": "Force: re-driving every blob, ignoring what the server already holds.",
+        "context": "CLI notice when `capsule push --force` runs."
+    },
+    "cli.push.nothing_to_push": {
+        "message": "The library holds no assets to push.",
+        "context": "CLI line when `capsule push` runs against a library with no imported assets."
+    },
+    "cli.push.up_to_date": {
+        "message": "Everything in this library is already on the server.",
+        "context": "CLI line when `capsule push` finds every blob already held server-side."
+    },
+    "cli.push.complete": {
+        "message": "Push complete: {uploaded} blob(s) uploaded, {merged} already stored, {held} already held, {deferred} deferred ({bytes} bytes sent).",
+        "context": "CLI summary after `capsule push`. All placeholders are counts; {bytes} is a byte count."
+    },
+    "cli.push.dry_run_complete": {
+        "message": "Dry run: would upload {planned} blob(s) across {assets} asset(s) ({bytes} bytes).",
+        "context": "CLI summary after `capsule push --dry-run`. All placeholders are counts; {bytes} is a byte count."
+    },
+    "cli.push.failed": {
+        "message": "Push failed: {reason}",
+        "context": "CLI failure line for `capsule push`. {reason} is a localized or English error detail."
+    },
     "device.cohort.label.previously_used": {
         "message": "A device you've used before (last seen {last_seen})",
         "context": "Devices screen: label for a device grouping (cohort) the account has enrolled before — e.g. after reinstalling the app. Assert-don't-litigate copy: it states recognition, it never asks the user to confirm or deny. {last_seen} is a formatted date the app supplies."

@@ -26,6 +26,34 @@ pub(crate) enum Commands {
         /// work in scripts and CI where there is no terminal.
         #[arg(long)]
         passphrase_stdin: bool,
+        /// Push the library to the server after importing — sugar for a `capsule push`
+        /// run over the same library. The import itself stays offline.
+        #[arg(long)]
+        push: bool,
+        /// Stage the follow-on push (`--push`) in tier order, gating the preview and
+        /// original tiers on the connection class.
+        #[arg(long)]
+        staged: bool,
+    },
+    /// Upload a local Capsule library to the server
+    Push {
+        /// Path to the Capsule library to push
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so pushes
+        /// work in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Report what would be uploaded without opening a single upload session
+        #[arg(long)]
+        dry_run: bool,
+        /// Re-drive every blob regardless of what the server already holds
+        #[arg(long)]
+        force: bool,
+        /// Open the tier sessions in ladder order (index → preview → original), gating
+        /// the above-index tiers on the connection class, instead of opening all eagerly
+        #[arg(long)]
+        staged: bool,
     },
     /// Manage the local library
     Library {
