@@ -132,6 +132,10 @@ jobs:
         run: |
           rustup toolchain install
           rustup component add rustfmt clippy
+          # `check-rust` includes `build-check-wasm`, which type-checks the
+          # wasm32 sealing build. Without the target, cargo cannot find `core`
+          # and the whole gate fails on the first dependency it compiles.
+          rustup target add wasm32-unknown-unknown
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
       # check-rust runs the verify-examples smoke via nextest.

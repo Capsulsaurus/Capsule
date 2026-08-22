@@ -313,13 +313,51 @@ fn android_path(source: &str, locale: &str) -> PathBuf {
     }
 }
 
-/// Map a BCP-47 tag to an Android resource qualifier: `language[-rREGION]`.
+/// Map a BCP-47 tag to an Android resource qualifier.
+///
+/// Android accepts two spellings and they are not interchangeable:
+///
+/// - `language[-rREGION]`, where REGION is a two-letter ISO 3166-1 code. This is
+///   the only form the legacy qualifier supports.
+/// - `b+language+Script[+REGION]`, the BCP-47 form, which is the *only* way to
+///   name a script.
+///
+/// The distinction is load-bearing: a script subtag is four letters
+/// (`Hans`, `Hant`, `Latn`), and squeezing it into `-rREGION` yields
+/// `values-zh-rHANS`, which `aapt2` rejects outright with "Invalid resource
+/// directory name" — the whole Android build fails, not just that locale.
 fn android_qualifier(locale: &str) -> String {
     let mut parts = locale.split('-');
     let lang = parts.next().unwrap_or(locale).to_ascii_lowercase();
-    match parts.next() {
-        Some(region) => format!("{lang}-r{}", region.to_ascii_uppercase()),
-        None => lang,
+    let Some(subtag) = parts.next() else {
+        return lang;
+    };
+    if is_script_subtag(subtag) {
+        // BCP-47 form, preserving the script's canonical title case.
+        let script = title_case(subtag);
+        return match parts.next() {
+            Some(region) => format!("b+{lang}+{script}+{}", region.to_ascii_uppercase()),
+            None => format!("b+{lang}+{script}"),
+        };
+    }
+    format!("{lang}-r{}", subtag.to_ascii_uppercase())
+}
+
+/// Whether a BCP-47 subtag is a script: exactly four ASCII letters.
+///
+/// Regions are two letters or three digits, so the length alone separates them.
+fn is_script_subtag(subtag: &str) -> bool {
+    subtag.len() == 4 && subtag.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// `hans` / `HANS` / `Hans` all become `Hans` — the canonical script casing.
+fn title_case(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => {
+            first.to_ascii_uppercase().to_string() + &chars.as_str().to_ascii_lowercase()
+        }
+        None => String::new(),
     }
 }
 
@@ -399,7 +437,36 @@ fn check_outputs(root: &Path, outputs: &[(PathBuf, String)]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::str_slice_const;
+    #[test]
+    fn android_qualifier_uses_bcp47_for_script_subtags() {
+        // A script subtag has no legacy spelling: `values-zh-rHANS` is what the
+        // old mapping produced and `aapt2` rejects it as an invalid resource
+        // directory name, failing the entire Android build.
+        assert_eq!(android_qualifier("zh-Hans"), "b+zh+Hans");
+        assert_eq!(android_qualifier("zh-Hant"), "b+zh+Hant");
+    }
+
+    #[test]
+    fn android_qualifier_uses_the_legacy_form_for_regions() {
+        assert_eq!(android_qualifier("pt-BR"), "pt-rBR");
+        assert_eq!(android_qualifier("en-us"), "en-rUS");
+    }
+
+    #[test]
+    fn android_qualifier_passes_bare_languages_through() {
+        assert_eq!(android_qualifier("fr"), "fr");
+        assert_eq!(android_qualifier("ar"), "ar");
+    }
+
+    #[test]
+    fn script_subtags_are_four_letters_regions_are_not() {
+        assert!(is_script_subtag("Hans"));
+        assert!(is_script_subtag("Latn"));
+        assert!(!is_script_subtag("BR"));
+        assert!(!is_script_subtag("419"));
+    }
+
+    use super::{android_qualifier, is_script_subtag, str_slice_const};
 
     const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
 
