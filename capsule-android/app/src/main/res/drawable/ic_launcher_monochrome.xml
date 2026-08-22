@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon layer (Android 13+). The launcher tints this with the user's wallpaper
+     palette, so it carries shape only — no colour, no highlight. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M32,42
+                          A22,22 0 0 1 76,42
+                          L76,66
+                          A22,22 0 0 1 32,66
+                          Z
+                          M54,43
+                          A11,11 0 1 0 54,65
+                          A11,11 0 1 0 54,43
+                          Z" />
+</vector>

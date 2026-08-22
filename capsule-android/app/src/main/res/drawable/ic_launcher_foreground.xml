@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon foreground: a capsule with an aperture cut out of it.
+     The capsule is the product's name and its promise — sealed storage — and the
+     aperture says the contents are photographs. The hole is a genuine cut-out
+     (evenOdd) rather than a filled circle, so the background gradient shows through
+     and the mark still reads when a launcher tints or masks it.
+     Everything stays inside the 66dp centre circle every adaptive mask preserves. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFF6F3FF"
+        android:fillType="evenOdd"
+        android:pathData="M32,42
+                          A22,22 0 0 1 76,42
+                          L76,66
+                          A22,22 0 0 1 32,66
+                          Z
+                          M54,43
+                          A11,11 0 1 0 54,65
+                          A11,11 0 1 0 54,43
+                          Z" />
+
+    <!-- A highlight along the capsule's upper-left edge, so the form reads as a solid
+         object rather than a sticker at large sizes. -->
+    <path
+        android:strokeColor="#59FFFFFF"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M35.5,58 A18.5,18.5 0 0 1 41,34.5" />
+</vector>
