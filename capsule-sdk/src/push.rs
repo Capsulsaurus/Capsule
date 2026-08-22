@@ -167,6 +167,49 @@ pub fn create_request(
 
 // ─── Driving a push ───────────────────────────────────────────────────────────
 
+/// What a push **would** do for one bundle: the blobs it plans to open sessions for, in ladder
+/// order, plus what it skipped and why. Computed without touching the network — the dry-run
+/// primitive, and the first half of [`push_bundle`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushPlan {
+    /// The blobs whose sessions would open now, in ladder order.
+    pub blobs: Vec<TierBlob>,
+    /// Blobs the server already holds (skipped from server truth, before any request).
+    pub already_held: usize,
+    /// Blobs a staged policy defers to a later window.
+    pub deferred: usize,
+    /// Bytes the planned blobs carry.
+    pub bytes: u64,
+}
+
+/// Plan a push for one bundle: prune to what server truth says is outstanding, then let the
+/// scheduler decide which of those tiers open now.
+///
+/// `force` ignores `held` and plans the whole ladder — the server still answers
+/// `duplicate_blob` for anything it holds, which resolves as a merge.
+#[must_use]
+pub fn plan<H: std::hash::BuildHasher>(
+    scheduler: &StagedScheduler,
+    bundle: &UploadBundle,
+    held: &HashSet<String, H>,
+    force: bool,
+) -> PushPlan {
+    let asset = staged_asset(bundle);
+    let total = asset.blobs.len();
+    let outstanding = if force {
+        asset
+    } else {
+        remaining_tiers(&asset, held)
+    };
+    let blobs = scheduler.plan_sessions(&outstanding);
+    PushPlan {
+        already_held: total - outstanding.blobs.len(),
+        deferred: outstanding.blobs.len() - blobs.len(),
+        bytes: blobs.iter().map(|b| b.size).sum(),
+        blobs,
+    }
+}
+
 /// Errors a push can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum PushError {
@@ -238,34 +281,28 @@ pub async fn push_bundle<H: std::hash::BuildHasher + Sync>(
     held: &HashSet<String, H>,
     force: bool,
 ) -> Result<AssetPushReport, PushError> {
-    let asset = staged_asset(bundle);
-    let total = asset.blobs.len();
-    let outstanding = if force {
-        asset.clone()
-    } else {
-        remaining_tiers(&asset, held)
-    };
-    let planned = scheduler.plan_sessions(&outstanding);
+    let asset_id = bundle.asset_id.to_string();
+    let planned = plan(scheduler, bundle, held, force);
 
     let mut report = AssetPushReport {
-        asset_id: asset.asset_id.clone(),
-        already_held: total - outstanding.blobs.len(),
-        deferred: outstanding.blobs.len() - planned.len(),
+        asset_id: asset_id.clone(),
+        already_held: planned.already_held,
+        deferred: planned.deferred,
         ..Default::default()
     };
     tracing::info!(
-        blobs = total,
-        already_held = report.already_held,
-        planned = planned.len(),
-        deferred = report.deferred,
+        planned = planned.blobs.len(),
+        already_held = planned.already_held,
+        deferred = planned.deferred,
+        bytes = planned.bytes,
         "push: bundle planned"
     );
 
     let blobs = bundle_blobs(bundle);
-    for tier_blob in planned {
+    for tier_blob in planned.blobs {
         let Some((blob, hash)) = blobs.iter().find(|(_, hash)| *hash == tier_blob.hash) else {
             return Err(PushError::UnknownBlob {
-                asset_id: asset.asset_id.clone(),
+                asset_id,
                 hash: tier_blob.hash,
             });
         };
