@@ -24,7 +24,9 @@
 //!   canonical model over an asset, land semantic + face vectors in the right `vec0` partition
 //!   ([platform-partition fallback](orchestrator::resolve_partition)), and write zero-shot
 //!   [AI tags](orchestrator::auto_tag) into `tags_ai` as a signed metadata update through the
-//!   [`Workspace`](crate::lifecycle::Workspace); plus the device-bound batching/thermal policy.
+//!   [`AiTagSink`](orchestrator::AiTagSink) seam — implemented by
+//!   [`Workspace`](crate::lifecycle::Workspace), named as a trait so `ml` does not import
+//!   `lifecycle` (which imports `ml`); plus the device-bound batching/thermal policy.
 //!
 //! Real per-platform inference is deferred behind the [`Embedder`](regen::Embedder) /
 //! [`ModelRunner`](runner::ModelRunner) seams (the real runner is a later slice), exactly as live
@@ -42,8 +44,9 @@ pub mod registry;
 pub mod runner;
 
 pub use orchestrator::{
-    BatchMode, CANONICAL_PARTITION, KnownAnswer, OrchestratorError, auto_tag, choose_batch_mode,
-    embed_and_store, micro_batch_size, resolve_partition, semantic_search, should_pause_for_heat,
+    AiTagSink, AssetSource, BatchMode, CANONICAL_PARTITION, KnownAnswer, OrchestratorError,
+    StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size, resolve_partition,
+    semantic_search, should_pause_for_heat,
 };
 pub use regen::{DeterministicEmbedder, Embedder, RegenError, RegenReport, regenerate_stale};
 pub use registry::{

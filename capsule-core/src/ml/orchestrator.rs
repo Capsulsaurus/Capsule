@@ -1,16 +1,23 @@
 //! Inference orchestration — the deterministic execution path for the v1-committed slots (SSoT:
 //! [AI/ML Integrations]).
 //!
-//! Ties a [`ModelRunner`] to the [`Workspace`]: run the canonical model over an asset's decoded
+//! Ties a [`ModelRunner`] to an asset store: run the canonical model over an asset's decoded
 //! pixels, then land the results —
 //!
 //! - **embeddings** (semantic-search + face-recognition vectors) into the right `vec0` partition of
 //!   the [vector index](crate::db::vector), tagged with the runner's resolved partition
 //!   discriminator ([`resolve_partition`]);
 //! - **zero-shot AI tags** into the asset's `tags_ai` OR-set as a **signed metadata update** through
-//!   the lifecycle ([`Workspace::add_ai_tags`]) — structurally separate from user tags, mirroring
-//!   [`Workspace::set_cull`]'s write-through. The semantic embeddings are reused for classification,
+//!   the lifecycle ([`AiTagSink::add_ai_tags`]) — structurally separate from user tags, mirroring
+//!   `Workspace::set_cull`'s write-through. The semantic embeddings are reused for classification,
 //!   so there is no separate classifier ([AI/ML — Image Categorization & Tagging]).
+//!
+//! The store reaches this module through the [`AssetSource`] / [`AiTagSink`] seams rather than as a
+//! concrete type. The one production implementor is
+//! [`Workspace`](crate::lifecycle::Workspace) — but naming it here would make `ml` depend on
+//! `lifecycle`, which already depends on `ml` (`lifecycle::metadata` reads the registry to filter
+//! stale AI tags). Inverting the edge leaves the dependency running one way, and lets the
+//! orchestration be driven by any store that can hand over plaintext bytes and accept AI tags.
 //!
 //! Two invariants are enforced at this boundary:
 //!
@@ -33,18 +40,58 @@
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::db::{EmbeddingInsert, KnnHit, VectorIndexError};
-use crate::lifecycle::{LifecycleError, Workspace};
+use crate::db::{DatabaseDriver, EmbeddingInsert, KnnHit, VectorIndexError};
 use crate::ml::runner::{Embedding, Frame, ModelRunner, RunnerError};
 use crate::ml::{ModelId, Registry, TaskKind};
 use crate::sidecar::sidecar_v1::AiTag;
 
+/// The store the orchestrator reads asset pixels from and indexes vectors into.
+///
+/// Implemented by [`Workspace`](crate::lifecycle::Workspace); a test double only has to produce
+/// bytes for an id and hand back a catalog. Keeping it a trait is what removes the
+/// `ml -> lifecycle` import (see the module docs).
+pub trait AssetSource {
+    /// How this store reports a failed read. Type-erased into [`StoreError`] on the way out, so
+    /// `ml` never names a concrete store error.
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// The decoded-asset plaintext bytes inference runs over.
+    fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>, Self::Error>;
+
+    /// The catalog holding this store's vector index.
+    fn vector_index(&self) -> &DatabaseDriver;
+}
+
+/// The write side: an asset store that accepts AI tags for an asset.
+///
+/// Separate from [`AssetSource`] because only [`auto_tag`] writes — embedding and search need a
+/// shared reference, and the split keeps them from demanding `&mut`.
+pub trait AiTagSink: AssetSource {
+    /// Add `tags` to the asset's `tags_ai` namespace (never `tags_user`), as one signed
+    /// metadata update. An empty `tags` is a no-op.
+    fn add_ai_tags(&mut self, asset_id: &Uuid, tags: Vec<AiTag>) -> Result<(), Self::Error>;
+}
+
+/// A failure from the asset store behind the [`AssetSource`] / [`AiTagSink`] seam, type-erased.
+///
+/// For the [`Workspace`](crate::lifecycle::Workspace) implementation this wraps a
+/// `LifecycleError`; `ml` cannot name that type without re-creating the cycle this seam broke, so
+/// the concrete error is boxed and its message preserved.
+#[derive(Debug, Error)]
+#[error("asset store: {0}")]
+pub struct StoreError(pub Box<dyn std::error::Error + Send + Sync>);
+
+/// Box a store error into an [`OrchestratorError`].
+fn store_err<E: std::error::Error + Send + Sync + 'static>(e: E) -> OrchestratorError {
+    OrchestratorError::Store(StoreError(Box::new(e)))
+}
+
 /// Failures from orchestrating inference.
 #[derive(Debug, Error)]
 pub enum OrchestratorError {
-    /// A lifecycle write failed.
+    /// A read or a tag write against the asset store failed.
     #[error(transparent)]
-    Lifecycle(#[from] LifecycleError),
+    Store(#[from] StoreError),
     /// The runner failed.
     #[error(transparent)]
     Runner(#[from] RunnerError),
@@ -162,8 +209,8 @@ pub fn resolve_partition<R: ModelRunner>(
 /// [`FaceRecognition`](TaskKind::FaceRecognition). Refuses a non-canonical runner before touching
 /// the index. The index is derived state, so no signed manifest is minted (recovery-first: it is
 /// rebuilt by re-running inference).
-pub fn embed_and_store<R: ModelRunner>(
-    ws: &Workspace,
+pub fn embed_and_store<R: ModelRunner, S: AssetSource>(
+    ws: &S,
     runner: &R,
     registry: &Registry,
     asset_id: &Uuid,
@@ -172,9 +219,9 @@ pub fn embed_and_store<R: ModelRunner>(
 ) -> Result<(), OrchestratorError> {
     require_canonical_runner(runner, registry, task)?;
     let (model_id, model_version) = runner.model(task).ok_or(RunnerError::Unsupported(task))?;
-    let bytes = ws.read_plaintext(asset_id)?;
+    let bytes = ws.read_plaintext(asset_id).map_err(store_err)?;
     let embedding = first_embedding(runner.embed_image(task, &[Frame::new(&bytes)])?)?;
-    ws.db().insert_embedding(
+    ws.vector_index().insert_embedding(
         registry,
         EmbeddingInsert {
             asset_id: &asset_id.to_string(),
@@ -193,8 +240,8 @@ pub fn embed_and_store<R: ModelRunner>(
 /// `threshold`. The tags land in the asset's `tags_ai` OR-set as one **signed metadata update**
 /// (never in `tags_user`), each carrying the canonical `(model_id, model_version)`. Returns the
 /// labels assigned. No separate classifier — the semantic embeddings are reused.
-pub fn auto_tag<R: ModelRunner>(
-    ws: &mut Workspace,
+pub fn auto_tag<R: ModelRunner, S: AiTagSink>(
+    ws: &mut S,
     runner: &R,
     registry: &Registry,
     asset_id: &Uuid,
@@ -207,7 +254,7 @@ pub fn auto_tag<R: ModelRunner>(
         .canonical_for(task)
         .ok_or(OrchestratorError::NoCanonical { task })?;
 
-    let bytes = ws.read_plaintext(asset_id)?;
+    let bytes = ws.read_plaintext(asset_id).map_err(store_err)?;
     let image = first_embedding(runner.embed_image(task, &[Frame::new(&bytes)])?)?;
     let label_vecs = runner.embed_text(vocabulary)?;
 
@@ -223,15 +270,15 @@ pub fn auto_tag<R: ModelRunner>(
             });
         }
     }
-    ws.add_ai_tags(asset_id, ai_tags)?;
+    ws.add_ai_tags(asset_id, ai_tags).map_err(store_err)?;
     Ok(assigned)
 }
 
 /// Natural-language search: embed `query` with the semantic-search embedder and return the `k`
 /// nearest assets in `partition`'s **current canonical** version (stale/other-partition vectors are
 /// excluded structurally).
-pub fn semantic_search<R: ModelRunner>(
-    ws: &Workspace,
+pub fn semantic_search<R: ModelRunner, S: AssetSource>(
+    ws: &S,
     runner: &R,
     registry: &Registry,
     query: &str,
@@ -241,7 +288,7 @@ pub fn semantic_search<R: ModelRunner>(
     require_canonical_runner(runner, registry, TaskKind::SemanticSearch)?;
     let qv = first_embedding(runner.embed_text(&[query])?)?;
     Ok(ws
-        .db()
+        .vector_index()
         .knn(registry, TaskKind::SemanticSearch, &qv, k, partition)?)
 }
 
@@ -303,38 +350,78 @@ pub fn should_pause_for_heat(temp_c: f32, threshold_c: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use tempfile::TempDir;
+    use std::collections::BTreeMap;
 
     use super::*;
-    use crate::crypto::primitives::Argon2Params;
     use crate::ml::{FixtureRunner, ModelVersion};
 
     const PLATFORM: &str = "cpu-reference";
 
-    fn workspace_with(lib: &TempDir, src: &TempDir, bytes: &[u8]) -> (Workspace, Uuid) {
-        let img = src.path().join("p.jpg");
-        std::fs::write(&img, bytes).unwrap();
-        let mut ws = Workspace::create_with_params(
-            lib.path(),
-            b"pass",
-            Argon2Params {
-                mem_kib: 64,
-                t_cost: 1,
-                p_cost: 1,
-            },
-        )
-        .unwrap();
-        let album = ws.create_album("A");
-        let id = ws.import_asset(album, &img).unwrap();
-        (ws, id)
+    /// An in-memory asset store — the [`AiTagSink`] double these tests drive.
+    ///
+    /// `ml` must not import `lifecycle` (that was the cycle), so the orchestration is exercised
+    /// here against the smallest store that satisfies the seam. The production implementor is
+    /// `Workspace`, and `lifecycle::metadata` covers it end-to-end: that the sink lands tags in
+    /// the *signed sidecar* is a lifecycle guarantee, not an orchestration one.
+    struct MemStore {
+        db: DatabaseDriver,
+        bytes: BTreeMap<Uuid, Vec<u8>>,
+        tags: BTreeMap<Uuid, Vec<AiTag>>,
+    }
+
+    /// The store's read failure — the concrete error the seam type-erases.
+    #[derive(Debug, Error)]
+    #[error("no such asset: {0}")]
+    struct MissingAsset(Uuid);
+
+    impl MemStore {
+        /// A store holding one asset with `bytes` as its plaintext; returns its id.
+        fn with_asset(bytes: &[u8]) -> (Self, Uuid) {
+            let id = Uuid::now_v7();
+            let store = Self {
+                db: DatabaseDriver::open_in_memory().unwrap(),
+                bytes: [(id, bytes.to_vec())].into_iter().collect(),
+                tags: BTreeMap::new(),
+            };
+            (store, id)
+        }
+
+        /// The AI tags recorded for `asset_id`.
+        fn ai_tags(&self, asset_id: &Uuid) -> &[AiTag] {
+            self.tags.get(asset_id).map_or(&[], Vec::as_slice)
+        }
+    }
+
+    impl AssetSource for MemStore {
+        type Error = MissingAsset;
+
+        fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>, MissingAsset> {
+            self.bytes
+                .get(asset_id)
+                .cloned()
+                .ok_or(MissingAsset(*asset_id))
+        }
+
+        fn vector_index(&self) -> &DatabaseDriver {
+            &self.db
+        }
+    }
+
+    impl AiTagSink for MemStore {
+        fn add_ai_tags(&mut self, asset_id: &Uuid, tags: Vec<AiTag>) -> Result<(), MissingAsset> {
+            if !self.bytes.contains_key(asset_id) {
+                return Err(MissingAsset(*asset_id));
+            }
+            self.tags.entry(*asset_id).or_default().extend(tags);
+            Ok(())
+        }
     }
 
     // ── Deterministic execution: same pixels + model version → same embedding/tags ───────────
 
     #[test]
     fn embed_then_semantic_search_matches_the_indexed_asset() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (ws, id) = workspace_with(&lib, &src, b"a beach at sunset");
+        let (ws, id) = MemStore::with_asset(b"a beach at sunset");
         let runner = FixtureRunner::new(PLATFORM);
         let reg = Registry::canonical();
 
@@ -368,8 +455,7 @@ mod tests {
 
     #[test]
     fn embed_and_store_refuses_a_non_canonical_runner() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (ws, id) = workspace_with(&lib, &src, b"x");
+        let (ws, id) = MemStore::with_asset(b"x");
         // The runner declares model version 2, but the live registry's canonical is version 1.
         let mut bumped = Registry::canonical();
         bumped.set_canonical_version(TaskKind::SemanticSearch, ModelVersion::from("2"));
@@ -388,7 +474,9 @@ mod tests {
         assert!(matches!(err, OrchestratorError::NonCanonicalRunner { .. }));
         // Nothing was stored.
         assert_eq!(
-            ws.db().embedding_count(TaskKind::SemanticSearch).unwrap(),
+            ws.vector_index()
+                .embedding_count(TaskKind::SemanticSearch)
+                .unwrap(),
             0
         );
     }
@@ -397,8 +485,7 @@ mod tests {
 
     #[test]
     fn semantic_and_face_vectors_land_in_separate_partitions() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (ws, id) = workspace_with(&lib, &src, b"a person on a beach");
+        let (ws, id) = MemStore::with_asset(b"a person on a beach");
         let runner = FixtureRunner::new(PLATFORM);
         let reg = Registry::canonical();
 
@@ -424,14 +511,18 @@ mod tests {
 
         // Each landed in its own task's vec0 table with the canonical provenance tuple.
         assert_eq!(
-            ws.db().embedding_count(TaskKind::SemanticSearch).unwrap(),
+            ws.vector_index()
+                .embedding_count(TaskKind::SemanticSearch)
+                .unwrap(),
             1
         );
         assert_eq!(
-            ws.db().embedding_count(TaskKind::FaceRecognition).unwrap(),
+            ws.vector_index()
+                .embedding_count(TaskKind::FaceRecognition)
+                .unwrap(),
             1
         );
-        let recs = ws.db().embeddings_for(&id.to_string()).unwrap();
+        let recs = ws.vector_index().embeddings_for(&id.to_string()).unwrap();
         assert_eq!(recs.len(), 2);
         let sem = recs
             .iter()
@@ -452,7 +543,7 @@ mod tests {
             .unwrap()
             .remove(0);
         let hits = ws
-            .db()
+            .vector_index()
             .knn(
                 &reg,
                 TaskKind::FaceRecognition,
@@ -467,8 +558,7 @@ mod tests {
 
     #[test]
     fn embed_and_store_serves_face_recognition() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (ws, id) = workspace_with(&lib, &src, b"a face crop");
+        let (ws, id) = MemStore::with_asset(b"a face crop");
         let runner = FixtureRunner::new(PLATFORM);
         let reg = Registry::canonical();
         embed_and_store(
@@ -481,7 +571,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            ws.db().embedding_count(TaskKind::FaceRecognition).unwrap(),
+            ws.vector_index()
+                .embedding_count(TaskKind::FaceRecognition)
+                .unwrap(),
             1
         );
     }
@@ -524,8 +616,7 @@ mod tests {
 
     #[test]
     fn fallback_partition_vectors_are_not_merged_into_the_canonical_partition() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (ws, id) = workspace_with(&lib, &src, b"a beach at sunset");
+        let (ws, id) = MemStore::with_asset(b"a beach at sunset");
         let runner = FixtureRunner::new("wonky-npu");
         let reg = Registry::canonical();
 
@@ -564,8 +655,7 @@ mod tests {
 
     #[test]
     fn auto_tag_lands_matching_labels_in_the_ai_namespace_only() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (mut ws, id) = workspace_with(&lib, &src, b"beach");
+        let (mut ws, id) = MemStore::with_asset(b"beach");
         let runner = FixtureRunner::new(PLATFORM);
         let reg = Registry::canonical();
 
@@ -574,23 +664,25 @@ mod tests {
             auto_tag(&mut ws, &runner, &reg, &id, &["beach", "city", "dog"], 0.99).unwrap();
         assert_eq!(assigned, vec!["beach".to_string()]);
 
-        // It landed in the AI namespace with the canonical provenance tuple — not in user tags.
-        let ai = ws.ai_tags(&id).unwrap();
+        // It reached the sink with the canonical provenance tuple attached.
+        let ai = ws.ai_tags(&id);
         assert_eq!(ai.len(), 1);
-        assert_eq!(ai[0].1.tag, "beach");
-        assert_eq!(ai[0].1.model_id, "mobileclip-b");
-        assert_eq!(ai[0].1.model_version, "1");
+        assert_eq!(ai[0].tag, "beach");
+        assert_eq!(ai[0].model_id, "mobileclip-b");
+        assert_eq!(ai[0].model_version, "1");
     }
 
     #[test]
     fn auto_tag_with_no_matches_writes_nothing() {
-        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
-        let (mut ws, id) = workspace_with(&lib, &src, b"a mountain range");
+        let (mut ws, id) = MemStore::with_asset(b"a mountain range");
         let runner = FixtureRunner::new(PLATFORM);
         let reg = Registry::canonical();
         let assigned = auto_tag(&mut ws, &runner, &reg, &id, &["beach", "city"], 0.99).unwrap();
         assert!(assigned.is_empty());
-        assert!(ws.ai_tags(&id).unwrap().is_empty());
+        assert!(
+            ws.ai_tags(&id).is_empty(),
+            "an empty tag batch must not reach the sink at all"
+        );
     }
 
     // ── Device-bound execution policy ────────────────────────────────────────────────────────

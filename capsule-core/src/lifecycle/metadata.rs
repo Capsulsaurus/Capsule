@@ -1,11 +1,17 @@
 //! User + AI metadata edits — the CRDT writes that ride a signed `metadata-update` record.
-//! The only `lifecycle` file that reaches [`crate::ml`].
+//! The only `lifecycle` file that reaches [`crate::ml`], in both directions: it reads the model
+//! registry to filter stale suggestions, and it is where [`Workspace`] implements the
+//! [`AiTagSink`] seam the inference orchestrator writes through. The orchestrator used to import
+//! `Workspace` directly, which — with this file importing `ml` — made the two modules mutually
+//! recursive; the trait inverts that edge without moving any behaviour.
 
 use uuid::Uuid;
 
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
 use crate::crypto::provenance::action::Action;
+use crate::db::DatabaseDriver;
 use crate::metadata::crdt::AddId;
+use crate::ml::orchestrator::{AiTagSink, AssetSource};
 use crate::ml::{ModelId, Registry};
 use crate::sidecar::sidecar_v1::AiTag;
 
@@ -140,13 +146,47 @@ impl Workspace {
     }
 }
 
+/// The read half of the inference seam: the orchestrator decodes an asset's plaintext and indexes
+/// vectors through the workspace's own catalog. A thin forward to the inherent methods — the
+/// indirection exists to reverse a module edge, not to change behaviour.
+impl AssetSource for Workspace {
+    type Error = LifecycleError;
+
+    fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>> {
+        Workspace::read_plaintext(self, asset_id)
+    }
+
+    fn vector_index(&self) -> &DatabaseDriver {
+        self.db()
+    }
+}
+
+/// The write half: AI tags produced by inference land in `tags_ai` as a signed `metadata-update`,
+/// exactly as a direct [`Workspace::add_ai_tags`] call would.
+impl AiTagSink for Workspace {
+    fn add_ai_tags(&mut self, asset_id: &Uuid, tags: Vec<AiTag>) -> Result<()> {
+        Workspace::add_ai_tags(self, asset_id, tags)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
 
     use super::super::fast_workspace;
     use super::*;
+    use crate::ml::{CANONICAL_PARTITION, FixtureRunner, TaskKind};
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
+
+    /// A workspace holding one imported asset with `bytes` as its plaintext.
+    fn workspace_with(lib: &TempDir, src: &TempDir, bytes: &[u8]) -> (Workspace, Uuid) {
+        let img = src.path().join("p.jpg");
+        std::fs::write(&img, bytes).unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("A");
+        let id = ws.import_asset(album, &img).unwrap();
+        (ws, id)
+    }
 
     /// S-H3: AI tags land in the **signed sidecar** as a structurally-separate namespace and
     /// survive the seal → canonical-CBOR round-trip; promotion/dismissal are explicit and
@@ -258,5 +298,115 @@ mod tests {
         );
         // The sidecar retains both (it is the source of truth).
         assert_eq!(ws.ai_tags(&id).unwrap().len(), 2);
+    }
+
+    // ── The inference seam (`ml::AiTagSink` / `ml::AssetSource`) ─────────────────────────────
+
+    /// The trait forwards must land in exactly the same place the inherent methods do. This is
+    /// where a silent behaviour change would hide: the orchestrator now writes through a trait,
+    /// so a forward that dropped tags, wrote the wrong namespace, or skipped the signed
+    /// `metadata-update` would not show up anywhere in `ml`.
+    #[test]
+    fn the_ai_tag_sink_impl_round_trips_tags_into_the_signed_sidecar() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF sink round-trip");
+
+        let tag = |t: &str| AiTag {
+            tag: t.to_string(),
+            model_id: "mobileclip-b".to_string(),
+            model_version: "1".to_string(),
+        };
+        // Written through the seam, not the inherent method.
+        AiTagSink::add_ai_tags(&mut ws, &id, vec![tag("beach"), tag("sunset")]).unwrap();
+
+        // …and read back through the inherent surface: same OR-set, still signed, still separate.
+        let read_back: std::collections::BTreeSet<String> = ws
+            .ai_tags(&id)
+            .unwrap()
+            .into_iter()
+            .map(|(_, t)| t.tag)
+            .collect();
+        assert_eq!(
+            read_back,
+            ["beach".to_string(), "sunset".to_string()]
+                .into_iter()
+                .collect()
+        );
+        let sidecar = &ws.asset(&id).unwrap().sidecar;
+        assert!(
+            sidecar.signature.is_some(),
+            "the sink emits a signed update"
+        );
+        assert!(sidecar.tags_user.value().is_empty());
+
+        // An empty batch through the seam is a no-op, exactly as the inherent method is.
+        let before = ws.asset(&id).unwrap().chain.records().len();
+        AiTagSink::add_ai_tags(&mut ws, &id, Vec::new()).unwrap();
+        assert_eq!(ws.asset(&id).unwrap().chain.records().len(), before);
+
+        // An unknown asset is refused rather than silently dropped.
+        assert!(AiTagSink::add_ai_tags(&mut ws, &Uuid::now_v7(), vec![tag("ghost")]).is_err());
+    }
+
+    /// The read half: the orchestrator reaches an asset's pixels and the workspace's own catalog
+    /// through [`AssetSource`], so both must resolve to the inherent surfaces.
+    #[test]
+    fn the_asset_source_impl_exposes_the_same_plaintext_and_catalog() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF source bytes");
+
+        assert_eq!(
+            AssetSource::read_plaintext(&ws, &id).unwrap(),
+            ws.read_plaintext(&id).unwrap()
+        );
+        assert!(AssetSource::read_plaintext(&ws, &Uuid::now_v7()).is_err());
+        assert_eq!(
+            std::ptr::from_ref(AssetSource::vector_index(&ws)),
+            std::ptr::from_ref(ws.db()),
+            "the seam must hand out the workspace's own catalog, not a second one"
+        );
+    }
+
+    /// End-to-end across the inverted edge: `ml::auto_tag` drives a real `Workspace` purely
+    /// through the seams, and its output lands in the signed sidecar's AI namespace.
+    #[test]
+    fn orchestrated_auto_tag_writes_through_the_seam_into_the_signed_sidecar() {
+        let (lib, src) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+        let (mut ws, id) = workspace_with(&lib, &src, b"beach");
+        let runner = FixtureRunner::new("cpu-reference");
+        let reg = Registry::canonical();
+
+        let assigned =
+            crate::ml::auto_tag(&mut ws, &runner, &reg, &id, &["beach", "city"], 0.99).unwrap();
+        assert_eq!(assigned, vec!["beach".to_string()]);
+
+        // The suggestion is in the signed sidecar, tagged with the canonical pair, and it is
+        // *current* under that registry (so the stale filter admits it).
+        let ai = ws.ai_tags(&id).unwrap();
+        assert_eq!(ai.len(), 1);
+        assert_eq!(ai[0].1.tag, "beach");
+        assert!(ws.asset(&id).unwrap().sidecar.signature.is_some());
+        assert_eq!(
+            ws.current_ai_tags(&reg, &id)
+                .unwrap()
+                .into_iter()
+                .map(|t| t.tag)
+                .collect::<Vec<_>>(),
+            vec!["beach".to_string()]
+        );
+
+        // The same workspace also serves the embedding half of the seam.
+        crate::ml::embed_and_store(
+            &ws,
+            &runner,
+            &reg,
+            &id,
+            TaskKind::SemanticSearch,
+            CANONICAL_PARTITION,
+        )
+        .unwrap();
+        let hits = crate::ml::semantic_search(&ws, &runner, &reg, "beach", 5, CANONICAL_PARTITION)
+            .unwrap();
+        assert_eq!(hits[0].asset_id, id.to_string());
     }
 }
