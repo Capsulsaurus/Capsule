@@ -1,54 +1,156 @@
+# Gradle version catalog for the JVM/Android side of the repo.
+#
+# Pins are exact — never ranges — so a build is reproducible from a clean checkout.
+# The canonical cross-platform dependency table lives in the Dependencies design doc
+# (capsule-docs/src/content/docs/design/dependencies.md); add a row there before
+# introducing a dependency for a new domain.
+
 [versions]
-agp = "8.9.2"
-androidx-activityCompose = "1.10.1"
-androidx-navigationCompose = "2.8.9"
-androidx-ui-tooling = "1.8.0"
-androidx-viewmodelCompose = "2.8.7"
-clikt = "5.0.3"
-coil = "3.1.0"
-compose-multiplatform = "1.7.3"
-kmpObservableViewmodel = "1.0.0-BETA-10-kotlin-2.2.0-Beta1"
-kmpNativeCoroutines = "1.0.0-ALPHA-42-kotlin-2.2.0-Beta1"
-koin = "4.0.4"
-kotlin = "2.1.20"
-kotlinx-coroutines = "1.10.2"
-kotlinx-datetime = "0.6.2"
-kotlinx-serialization = "1.8.1"
-ksp = "2.1.20-2.0.0"
-ktor = "3.1.2"
-ktlint = "12.1.2"
+# ── Build toolchain ──────────────────────────────────────────────────────────
+# AGP 9 carries built-in Kotlin support: modules apply com.android.{application,library}
+# and NOT org.jetbrains.kotlin.android, which AGP 9 rejects outright.
+agp = "9.3.1"
+kotlin = "2.4.10"
+# Kept at the last release published to Maven Central. Bump with the Kotlin pin only
+# after confirming detekt parses the newer language level.
 detekt = "1.23.8"
+ktlint = "12.1.2"
+
+# ── Android platform ─────────────────────────────────────────────────────────
+# compileSdk is 37 because androidx.compose.material3 1.5.x requires it. targetSdk
+# stays 36 (runtime behaviour is opted into separately) and minSdk 26 keeps java.time
+# and the hardware-backed keystore available without desugaring.
+compileSdk = "37"
+targetSdk = "36"
+minSdk = "26"
+
+# ── Compose ──────────────────────────────────────────────────────────────────
+# The BOM governs ui/foundation/runtime. material3 is pinned ABOVE the BOM on purpose:
+# the BOM resolves material3 1.4.0, where the Material 3 Expressive surface is still
+# `internal` and LoadingIndicator, FloatingToolbar, FloatingActionButtonMenu,
+# SplitButton, ButtonGroup, MaterialShapes and the wavy progress indicators do not
+# exist at all. 1.5.0-alpha26 is the first build that exposes them.
+composeBom = "2026.08.00"
+composeMaterial3 = "1.5.0-alpha26"
+composeAdaptive = "1.3.0"
+
+# ── AndroidX ─────────────────────────────────────────────────────────────────
+activityCompose = "1.13.0"
+lifecycle = "2.11.0"
+navigation3 = "1.1.6"
+window = "1.5.1"
+collection = "1.6.0"
+graphicsShapes = "1.1.0"
+coreKtx = "1.19.0"
+datastore = "1.2.1"
+biometric = "1.1.0"
+camera = "1.6.1"
+
+# ── Libraries ────────────────────────────────────────────────────────────────
+coil = "3.5.0"
+koin = "4.2.2"
+coroutines = "1.11.0"
+serialization = "1.11.0"
+collectionsImmutable = "0.5.1"
+
+# ── Test ─────────────────────────────────────────────────────────────────────
+# JUnit 5 is the harness for pure-JVM modules. JUnit 4 appears only where Robolectric,
+# Compose UI test and instrumentation require it — the same one-framework-per-platform
+# carve-out the Clients design doc records for XCTest on Apple.
+junit5 = "6.1.3"
+junit4 = "4.13.2"
+robolectric = "4.16.1"
+roborazzi = "1.72.0"
+turbine = "1.2.1"
+mockk = "1.14.11"
+androidxTestJunit = "1.3.0"
+androidxTestRunner = "1.6.2"
+benchmark = "1.4.1"
+uiautomator = "2.4.0"
+
+# ── capsule-core-kotlin (FFI harness) ────────────────────────────────────────
+jna = "5.14.0"
+bouncycastle = "1.78.1"
 
 [libraries]
-androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidx-activityCompose" }
-androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling", version.ref = "androidx-ui-tooling" }
-androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview", version.ref = "androidx-ui-tooling" }
-androidx-navigation-compose = { module = "androidx.navigation:navigation-compose", version.ref = "androidx-navigationCompose" }
-androidx-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidx-viewmodelCompose" }
-clikt = { module = "com.github.ajalt.clikt:clikt", version.ref = "clikt" }
-coil-compose = { group = "io.coil-kt.coil3", name = "coil-compose", version.ref = "coil" }
-coil-network-ktor = { group = "io.coil-kt.coil3", name = "coil-network-ktor3", version.ref = "coil" }
-kmp-observable-viewmodel = { module = "com.rickclephas.kmp:kmp-observableviewmodel-core", version.ref = "kmpObservableViewmodel" }
-koin-androidx-compose = { module = "io.insert-koin:koin-androidx-compose", version.ref = "koin" }
-koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }
-kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core" }
-kotlinx-datetime = { module = "org.jetbrains.kotlinx:kotlinx-datetime", version.ref = "kotlinx-datetime" }
-kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinx-serialization" }
-kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
-ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
-ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
-ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
-ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+# Compose — the BOM is applied as a platform() and these carry no version.
+compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+compose-runtime = { module = "androidx.compose.runtime:runtime" }
+compose-ui = { module = "androidx.compose.ui:ui" }
+compose-ui-graphics = { module = "androidx.compose.ui:ui-graphics" }
+compose-ui-text = { module = "androidx.compose.ui:ui-text" }
+compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+
+# Material 3 — pinned above the BOM, see the composeMaterial3 note.
+compose-material3 = { module = "androidx.compose.material3:material3", version.ref = "composeMaterial3" }
+compose-material3-navigation-suite = { module = "androidx.compose.material3:material3-adaptive-navigation-suite", version.ref = "composeMaterial3" }
+compose-material3-window-size = { module = "androidx.compose.material3:material3-window-size-class", version.ref = "composeMaterial3" }
+compose-adaptive = { module = "androidx.compose.material3.adaptive:adaptive", version.ref = "composeAdaptive" }
+compose-adaptive-layout = { module = "androidx.compose.material3.adaptive:adaptive-layout", version.ref = "composeAdaptive" }
+compose-adaptive-navigation = { module = "androidx.compose.material3.adaptive:adaptive-navigation", version.ref = "composeAdaptive" }
+
+# AndroidX
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
+androidx-collection = { module = "androidx.collection:collection", version.ref = "collection" }
+androidx-graphics-shapes = { module = "androidx.graphics:graphics-shapes", version.ref = "graphicsShapes" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "navigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "navigation3" }
+androidx-window = { module = "androidx.window:window", version.ref = "window" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "datastore" }
+androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
+androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "camera" }
+androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "camera" }
+androidx-camera-compose = { module = "androidx.camera:camera-compose", version.ref = "camera" }
+
+# Libraries
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+koin-bom = { module = "io.insert-koin:koin-bom", version.ref = "koin" }
+koin-core = { module = "io.insert-koin:koin-core" }
+koin-android = { module = "io.insert-koin:koin-android" }
+koin-androidx-compose = { module = "io.insert-koin:koin-androidx-compose" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serialization" }
+kotlinx-collections-immutable = { module = "org.jetbrains.kotlinx:kotlinx-collections-immutable", version.ref = "collectionsImmutable" }
+
+# Test
+junit5-bom = { module = "org.junit:junit-bom", version.ref = "junit5" }
+junit5-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit5-platform-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+junit4 = { module = "junit:junit", version.ref = "junit4" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+roborazzi-junit-rule = { module = "io.github.takahirom.roborazzi:roborazzi-junit-rule", version.ref = "roborazzi" }
+roborazzi-accessibility-check = { module = "io.github.takahirom.roborazzi:roborazzi-accessibility-check", version.ref = "roborazzi" }
+turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+mockk-android = { module = "io.mockk:mockk-android", version.ref = "mockk" }
+androidx-test-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestJunit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro-junit4", version.ref = "benchmark" }
+androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "uiautomator" }
+
+# capsule-core-kotlin
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
+bouncycastle = { module = "org.bouncycastle:bcprov-jdk18on", version.ref = "bouncycastle" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 androidLibrary = { id = "com.android.library", version.ref = "agp" }
+androidTest = { id = "com.android.test", version.ref = "agp" }
 composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "compose-multiplatform" }
-kmpNativeCoroutines = { id = "com.rickclephas.kmp.nativecoroutines", version.ref = "kmpNativeCoroutines" }
-kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinxSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+baselineprofile = { id = "androidx.baselineprofile", version.ref = "benchmark" }
