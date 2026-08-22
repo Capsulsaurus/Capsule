@@ -182,8 +182,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-A4 | P-256 hybrid DSK variant | core-crypto | — | L | ACTIVE | done | |
 | S-A5 | Share-link crypto (`capsule_core::sharing`) | core-crypto | — | M | ACTIVE | done | |
 | S-A6 | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto | S-A1 | L | ACTIVE | done\* | multi-device OGK re-wrap → post-v1 (OGK cluster) |
-| S-A7 | `gps.datum` sidecar field + BD-09 input fold | core-crypto | — | S | ACTIVE | done\* | fold flip → `S-A8` |
-| S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | ready | |
+| S-A7 | `gps.datum` sidecar field + BD-09 input fold | core-crypto | — | S | ACTIVE | done | |
+| S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | done | |
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
 | S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
@@ -197,7 +197,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B9 | Tethered camera import (PTP/IP) | media/import | S-B2 | L | MIXED | post-v1 | `ptpip-rs` gate |
 | S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | ready | |
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | blocked | |
-| S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | ready | |
+| S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
@@ -240,12 +240,15 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
 | S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
 | S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done\* | `capsule cull` → `S-D16` |
-| S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done\* | Hidden projection → `S-D19` |
+| S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
 | S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | ready | |
 | S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
-| S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | ready | |
+| S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
+| S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | ready | |
+| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | ready | |
+| S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | ready | |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -455,8 +458,8 @@ not touch them.
 - **Done when:** the metadata doc's datum-verbatim-storage Validation bullet passes
   (GCJ-02 round-trips unconverted; BD-09 folds within bound; WGS-84 stays wire-absent and
   byte-identical); `mise run check-rust` green.
-- **Tier:** Unit. **Landed:** field + enum + wire behaviour shipped; the fold itself is
-  still `DatumFoldError::FoldGated`. **Owed:** fold flip → `S-A8`.
+- **Tier:** Unit. **Landed:** field, enum, wire behaviour, and the fold itself (the
+  bounded inverse landed with `S-A8`; `DatumFoldError::FoldGated` is gone). **Owed:** —.
 
 ### S-A8 — BD-09 bounded input fold
 
@@ -1505,6 +1508,67 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Landed:** the CLI half is `ACTIVE`. The **endpoint path grammar** (`/v1/auth`,
   `/v1/sync`, port 3000) is Salvo's and must be re-derived from the Kynos surface — keep
   `CAPSULE_ENDPOINT` as the single base so that is a one-line change.
+
+### S-D21 — Index rebuild loses gated state
+
+- **Contract:** [Local Gallery — SR1](capsule-docs/src/content/docs/design/local-gallery.md),
+  [Organization — Hidden Assets](capsule-docs/src/content/docs/design/organization.md),
+  [Maintenance](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Gap** (found 2026-08-22 while landing `S-D19`): **an index rebuild un-hides every hidden
+  asset.** `library::rebuild` reconstructs rows from `crate::sidecar::AssetSidecar`, a different
+  on-disk shape from the `SidecarV1` that actually carries the `hidden` LWW register and that
+  `lifecycle::write_asset_files` writes. Rebuilt rows come back `is_hidden = false`, so the
+  recovery-first path silently drops a security-relevant projection. The divergence between the
+  two sidecar types predates `S-D19` — the hidden view is only what made it observable.
+- **Severity:** this is a gate bypass, not a cosmetic loss. Rebuild is the recovery path, so the
+  state it cannot carry is exactly the state a user cannot re-assert after losing an index.
+- **Deliverable:** rebuild from the signed `SidecarV1` where one exists (it is the write path's
+  own output), keeping the unsigned `AssetSidecar` read purely as the pre-signed-path
+  compatibility case `S-B2`/`S-G4` left behind; project `hidden` — and audit whether `cull`,
+  `stack_membership` and the trash state survive a rebuild, since they ride the same register.
+- **Done when:** a library with a hidden asset survives `rebuild_index` with the asset still
+  hidden and still absent from default projections; the same for whatever else the audit finds.
+  **Tier:** Unit.
+
+### S-D22 — FFI `Catalog` bypasses the SR1 view gates
+
+- **Contract:** [Local Gallery — SR1](capsule-docs/src/content/docs/design/local-gallery.md):
+  "Opening the **Recently Deleted** (trash) view or the **Hidden** view requires fresh local
+  authentication… One grant covers a short grace window (default 5 minutes, per-view)."
+- **Gap** (found 2026-08-22 while landing `S-D19`): `capsule-core-ffi`'s
+  `Catalog::query_trash` calls `self.driver().query_trash(..)` directly, with no `GateKeeper`.
+  The gate is implemented and tested in `capsule-core` (`GateKeeper::query_recently_deleted`),
+  but the FFI surface — the one the native apps actually call — goes straight past it. `S-D19`
+  deliberately did **not** add a matching ungated `query_hidden`, so the Hidden view is
+  reachable only through the gate; trash is the outlier.
+- **Why it matters now:** the iOS lane is unblocked, so this stops being theoretical the moment
+  an app consumes the catalog. Note SR1 scopes itself honestly — it is "view-time UX protection
+  against a borrowed-unlocked-phone snoop", **not** a cryptographic boundary — so this is a
+  broken stated contract rather than a data-confidentiality break.
+- **Deliverable:** route the FFI trash listing through `GateKeeper`, taking a grant the same way
+  the Rust surface does, and audit the rest of the `Catalog` surface for other direct-driver
+  reads that a design doc gates.
+- **Done when:** the FFI trash listing refuses without a grant and serves with one, mirroring
+  `gated_hidden_query_refuses_without_grant_and_serves_with_one`. **Tier:** Unit.
+
+### S-D23 — Client SQLite schema has no upgrade path
+
+- **Contract:** [Client Filesystem](capsule-docs/src/content/docs/design/filesystem/client.md),
+  [Maintenance](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Gap** (found 2026-08-22 while landing `S-D19`): `db::schema::init_schema` is
+  `CREATE TABLE IF NOT EXISTS` plus a `PRAGMA user_version` stamp. It creates the current schema
+  on a fresh database and **does nothing at all to an existing one**, so a column added in a new
+  version never appears in a library created under an older one. `S-D19`'s v4 `assets.is_hidden`
+  is the newest instance; v2 and v3 added and renamed columns the same way, so the gap is the
+  pattern rather than any one version.
+- **Why it has not bitten:** every library in existence is recreated by developers, and
+  `rebuild_index` reconstructs from sidecars. Neither is an upgrade path, and both stop being
+  available the moment a real user has a library worth keeping.
+- **Deliverable:** a forward-only stepwise migrator keyed on `user_version` — the client-side
+  analogue of the server's sea-orm migrations — with a test that a library created at each
+  historical version opens, migrates, and answers every projection.
+- **Done when:** a v1-created fixture library opens at the current version with every column
+  present and the gated/default projections correct. **Tier:** Unit.
 
 ## Lane E — federation / sharing
 
