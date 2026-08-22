@@ -138,6 +138,23 @@ pub trait ConvertImage: ImageWithMetadata {
 /// Blanket implementation of ConvertImage for all types implementing Image.
 impl<T: ImageWithMetadata> ConvertImage for T {}
 
+/// Which half of the codec contract a caller asked for when it hit an unimplemented format.
+///
+/// Carried by [`ImageError::UnsupportedFormat`] so the message distinguishes "we cannot read
+/// this file" from "we cannot write this file", which are independent capabilities: a format
+/// can gain a decoder long before it gains an encoder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FormatOp {
+    /// Reading encoded bytes into pixels — [`ImageDecode::decode_from_bytes`] and everything
+    /// layered on it ([`ImageReader::decode`], [`ImageReader::from_path`]).
+    Decode,
+    /// Writing pixels back out as encoded bytes — [`ImageEncode::encode`] / [`ImageEncode::save`].
+    Encode,
+    /// Materializing this format from an already-decoded buffer + metadata —
+    /// [`Image::from_raw_parts`], which every [`ConvertImage`] helper funnels through.
+    Convert,
+}
+
 #[derive(Error, Debug)]
 pub enum ImageError {
     #[error("IO error: {0}")]
@@ -148,6 +165,15 @@ pub enum ImageError {
     Encode(String),
     #[error("Image buffer error: {0}")]
     ImageBuffer(#[from] buffer::ImageBufferError),
+    /// The requested format has no codec linked into this build (slice `S-B13`).
+    ///
+    /// Every format module outside [`SUPPORTED_IMAGE_FORMATS`](types::SUPPORTED_IMAGE_FORMATS)
+    /// is an *uninhabited* type whose constructors return this variant, so an undecodable file
+    /// propagates a typed error through `?` instead of aborting the process. Check
+    /// [`ImageFormat::is_decodable`] before dispatching if you want to avoid the attempt
+    /// entirely.
+    #[error("{format:?} {op:?} is not implemented in this build")]
+    UnsupportedFormat { format: ImageFormat, op: FormatOp },
 }
 
 pub trait ImageDecode: Sized + Image + 'static {

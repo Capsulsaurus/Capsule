@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Image Format
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ImageFormat {
     Jpeg,
     Jxl,
@@ -16,7 +16,7 @@ pub enum ImageFormat {
 }
 
 /// RAW Image Format
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawImageFormat {
     /// Adobe Digital Negative
     Dng,
@@ -30,6 +30,57 @@ pub enum RawImageFormat {
     Nef,
     /// Fujifilm RAF
     Raf,
+}
+
+/// Every [`ImageFormat`] this build has a real decoder for.
+///
+/// **Single source of truth** for codec coverage (slice `S-B13`). Every other format module
+/// under [`formats`](crate::media::image::formats) is an *uninhabited* type whose constructors
+/// return [`ImageError::UnsupportedFormat`](crate::media::image::ImageError::UnsupportedFormat),
+/// so an unlisted format is a typed error, never a panic.
+///
+/// Adding a codec means adding its variant here **and** replacing the stub `enum` with a real
+/// `struct`; the regression gate in `media::fs` fails until both move together.
+pub const SUPPORTED_IMAGE_FORMATS: &[ImageFormat] = &[ImageFormat::Jpeg, ImageFormat::Png];
+
+/// Every [`ImageFormat`] variant that exists, decodable or not.
+///
+/// The table the `media::fs` regression gate iterates so that *no* format can quietly escape
+/// the "unsupported formats return a typed error" assertion. A `_exhaustive` guard in that
+/// test module stops compiling when a variant is added to [`ImageFormat`] without being added
+/// here.
+pub const ALL_IMAGE_FORMATS: &[ImageFormat] = &[
+    ImageFormat::Jpeg,
+    ImageFormat::Jxl,
+    ImageFormat::Heic,
+    ImageFormat::Png,
+    ImageFormat::Tiff,
+    ImageFormat::Avif,
+    ImageFormat::WebP,
+    ImageFormat::Gif,
+    ImageFormat::Bmp,
+    ImageFormat::Raw(RawImageFormat::Dng),
+    ImageFormat::Raw(RawImageFormat::Arw),
+    ImageFormat::Raw(RawImageFormat::Cr2),
+    ImageFormat::Raw(RawImageFormat::Cr3),
+    ImageFormat::Raw(RawImageFormat::Nef),
+    ImageFormat::Raw(RawImageFormat::Raf),
+];
+
+impl ImageFormat {
+    /// Whether this build can turn bytes of this format into pixels.
+    ///
+    /// `false` means the format's module is an uninhabited stub: dispatching to it returns
+    /// [`ImageError::UnsupportedFormat`](crate::media::image::ImageError::UnsupportedFormat)
+    /// rather than producing an image. Callers that would rather not attempt the decode at all
+    /// (the import planner, for one) branch on this **before** dispatch.
+    ///
+    /// Kept as a `matches!` over the literal supported set rather than a scan of
+    /// [`SUPPORTED_IMAGE_FORMATS`] so it stays `const`; the two are asserted equivalent by the
+    /// regression gate.
+    pub const fn is_decodable(self) -> bool {
+        matches!(self, Self::Jpeg | Self::Png)
+    }
 }
 
 // ============================================================================
