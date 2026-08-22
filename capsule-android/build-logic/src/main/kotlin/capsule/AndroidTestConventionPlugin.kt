@@ -17,6 +17,10 @@ import org.gradle.kotlin.dsl.getByType
  */
 class AndroidTestConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
+        // Roborazzi records and verifies screenshots from Robolectric, so screenshot
+        // coverage rides the ordinary unit-test task instead of needing a device.
+        pluginManager.apply("io.github.takahirom.roborazzi")
+
         val extension = extensions.getByType<CommonExtension>()
         // Robolectric ships an android-all jar per API level and refuses to run against a
         // targetSdk above the newest it knows (36 in 4.16.x). A library module otherwise
@@ -42,6 +46,7 @@ class AndroidTestConventionPlugin : Plugin<Project> {
                 "roborazzi",
                 "roborazzi-compose",
                 "roborazzi-junit-rule",
+                "roborazzi-accessibility-check",
                 "turbine",
                 "mockk",
                 "kotlinx-coroutines-test",

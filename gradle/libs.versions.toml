@@ -150,6 +150,7 @@ androidx-uiautomator = { module = "androidx.test.uiautomator:uiautomator", versi
 agp-gradle-plugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
 kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
 compose-compiler-gradle-plugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+roborazzi-gradle-plugin = { module = "io.github.takahirom.roborazzi:roborazzi-gradle-plugin", version.ref = "roborazzi" }
 
 # capsule-core-kotlin
 jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }

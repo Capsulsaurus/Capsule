@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.kotlinxSerialization) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
+    alias(libs.plugins.roborazzi) apply false
 }
 
 // AGP 9 carries built-in Kotlin support, so an Android module never applies
