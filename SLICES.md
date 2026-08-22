@@ -264,7 +264,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-G3 | Plaintext server entity quarantine | legacy-retire | — | M | RETIRED | done | legacy route deletion → `S-C17` |
 | S-G4 | Legacy import-executor quarantine | legacy-retire | — | S | RETIRED | done | |
 | S-H1 | Embeddings + sqlite-vec index | ML | — | L | ACTIVE | done | |
-| S-H2 | Model registry + version regen | ML | S-H1 | M | ACTIVE | done | |
+| S-H2 | Model registry + version regen | ML | S-H1 | M | ACTIVE | done\* | E2E case 10 → `S-Q6` |
 | S-H3 | Semantic/face features | ML | S-H1 | L | MIXED | done\* | real runner → post-v1 (ai.md note) |
 | S-H4 | Group-scoped evaluations (best shot/framing/exposure) | ML | S-H3 | M | MIXED | post-v1 | |
 | S-I1 | Hardcoded-string migration to catalog keys | i18n | — | M | ACTIVE | done\* | Swift plural/InfoPlist gaps → `S-I4`; review → gates |
@@ -423,6 +423,14 @@ not touch them.
   escrow wrap; decapsulate → `asset-keywrap/v1` rewrap → signed `create` with
   `key_mode = wrapped`), and the WASM build of the sealing path for `capsule-web`.
 - **Depends on:** S-A1. **Blocks:** S-C5, S-D3.
+- **Verification note (2026-08-22):** the WASM half of this slice was **broken at HEAD** and
+  is now fixed (`5b1bb2c`). `crypto::keys` declared `pub mod albumstore` ungated while
+  `albumstore.rs` (filesystem-backed, added by `S-A10`) imports `native`-gated
+  `utils::paths`, so `cargo build -p capsule-core --target wasm32-unknown-unknown
+  --no-default-features` — this slice's own "Done when" command — failed. `capsule-wasm`,
+  `build-wasm`, `build-web`, and `check-web` were all unbuildable behind it. No gate ever
+  built wasm32 (`build-rust` compiles the host triple only), so `check-rust` structurally
+  could not see it; `build-check-wasm` now runs in `check-rust`.
 - **Done when:** the module's three seal/adopt tests pass; the web-upload doc's unit
   Validation bullets pass; the sealing path compiles to `wasm32-unknown-unknown`.
 - **Tier:** Unit (seal round-trip + adoption rewrap).
@@ -485,6 +493,14 @@ not touch them.
 - **Gap:** AMKs were session-scoped — every CLI run minted a fresh "Imports" album, and a
   reopened library could not decrypt or write prior assets. This was the single biggest
   blocker for every persistent-library flow (importers, `capsule cull`, the iOS app).
+- **Verification note (2026-08-22):** the core claim holds — a reopened `Workspace`
+  resolves the album the first run minted rather than replacing it, and the album id is
+  derived deterministically from the master key, so this is right by construction. But the
+  "Done when" says *in a new process* at Tier Unit + Smoke, and every proof is an
+  in-process second `Workspace::open` against the same temp dir. There is no
+  process-boundary test: `capsule-cli` has one unit test, no `tests/` directory, and
+  `assert_cmd` appears nowhere in the repo. The CLI wiring is correct by inspection and
+  uncovered by test. Closing that gap is owed when the CLI network commands return.
 - **Deliverable:** persist album authorities/AMK ledgers through the keystore
   (encrypted at rest under the master key; MLS group state via the existing
   `export_state`/`import_state` CBOR), plus `Workspace::open` plumbing (passphrase /
@@ -1566,6 +1582,15 @@ Area: `ACTIVE` throughout — `capsule-core-ffi`, `capsule-core-swift`,
   Xcode and Gradle apps, with on-device CI lanes. **Depends on:** S-F2.
 - **Done when:** both apps build in CI consuming the produced bindings. **Tier:** Smoke.
 - **Landed.** **Owed:** first CI runs + device lanes → owed-CI.
+- **Verification note (2026-08-22):** this asterisk is not a remainder — it is the whole
+  "Done when". `build-ios.yml` last ran 2026-08-02, before this branch's work, and every
+  `build-android.yml` run is `skipped`, so no part of the stated criterion has ever been
+  observed. What *does* verify locally is the deliverable up to the broken packaging step:
+  all three Apple staticlibs build, library-mode uniffi emits both namespaces
+  (`capsule_core_ffi.swift`, `capsule_sdk.swift`), `lipo` produces the fat simulator slice,
+  and the merged `module.modulemap` is present — only `xcodebuild -create-xcframework`
+  aborts (see the Xcode row in the gates table). Read the row as "deliverable built,
+  criterion unobserved".
 
 ### S-F4 — Windows TPM (TBS) backend
 
