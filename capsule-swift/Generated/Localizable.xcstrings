@@ -4265,6 +4265,46 @@
         }
       }
     },
+    "cli.auth.register.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Could not create the account: {reason}"
+          }
+        }
+      }
+    },
+    "cli.auth.register.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creating your Capsule account…"
+          }
+        }
+      }
+    },
+    "cli.auth.register.success": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account created. Signed in as {email}."
+          }
+        }
+      }
+    },
+    "cli.auth.register.username_prompt": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Username"
+          }
+        }
+      }
+    },
     "cli.list.empty": {
       "localizations": {
         "ar": {

@@ -94,7 +94,16 @@ async fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         // ── Auth ──────────────────────────────────────────────────────────
         Commands::Auth { command } => match command {
-            AuthCommands::Login => auth_login().await?,
+            AuthCommands::Register {
+                email,
+                username,
+                name,
+                password_stdin,
+            } => auth_register(email, username, name, password_stdin).await?,
+            AuthCommands::Login {
+                email,
+                password_stdin,
+            } => auth_login(email, password_stdin).await?,
             AuthCommands::Logout => auth_logout().await?,
             AuthCommands::Status => {
                 println!("{}", "Checking authentication status...".blue());
@@ -415,21 +424,104 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
 // ─── Networked commands (S-D5) ───────────────────────────────────────────────
 
-/// `capsule auth login`: prompt for credentials, authenticate over the SDK, and
-/// persist the session.
-async fn auth_login() -> Result<()> {
+/// Read a value from a flag, else prompt for it. Prompting needs a terminal, so the flag is
+/// what makes these commands usable from a script, a CI job, or a heredoc.
+fn flag_or_prompt(value: Option<String>, prompt: String) -> Result<String> {
+    match value {
+        Some(v) => Ok(v),
+        None => Input::new()
+            .with_prompt(prompt)
+            .interact_text()
+            .map_err(|e| eyre!("Failed to read input: {e}")),
+    }
+}
+
+/// Read the password from stdin (`--password-stdin`) or prompt for it.
+///
+/// The stdin form takes the first line and trims the trailing newline only, so a password
+/// containing spaces survives; it is the same convention `docker login --password-stdin` uses.
+fn read_password(from_stdin: bool, prompt: String) -> Result<String> {
+    if from_stdin {
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut std::io::stdin().lock(), &mut line)
+            .map_err(|e| eyre!("Failed to read password from stdin: {e}"))?;
+        let password = line.trim_end_matches(['\n', '\r']).to_string();
+        if password.is_empty() {
+            return Err(eyre!("--password-stdin was given but stdin was empty"));
+        }
+        return Ok(password);
+    }
+    Password::new()
+        .with_prompt(prompt)
+        .interact()
+        .map_err(|e| eyre!("Failed to read password: {e}"))
+}
+
+/// `capsule auth register`: create an account over the SDK and persist the session.
+async fn auth_register(
+    email: Option<String>,
+    username: Option<String>,
+    name: Option<String>,
+    password_stdin: bool,
+) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
-    let email: String = Input::new()
-        .with_prompt(bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))
-        .interact_text()
-        .map_err(|e| eyre!("Failed to read email: {e}"))?;
-    let password = Password::new()
-        .with_prompt(bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]))
-        .interact()
-        .map_err(|e| eyre!("Failed to read password: {e}"))?;
+    let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
+    let username = flag_or_prompt(
+        username,
+        bundle.format(keys::AUTH_REGISTER_USERNAME_PROMPT, &[]),
+    )?;
+    // The display name is cosmetic; defaulting it keeps the non-interactive form to two flags.
+    let name = name.unwrap_or_else(|| username.clone());
+    let password = read_password(
+        password_stdin,
+        bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
+    )?;
+
+    println!(
+        "{}",
+        bundle.format(keys::AUTH_REGISTER_IN_PROGRESS, &[]).green()
+    );
+    match remote::auth_register(&remote, &store, &username, &name, &email, &password).await {
+        Ok(()) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::AUTH_REGISTER_SUCCESS,
+                        &[("email", Value::Str(&email))]
+                    )
+                    .green()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let reason = describe_remote_error(&bundle, &error);
+            Err(eyre!(
+                "{}",
+                bundle.format(
+                    keys::AUTH_REGISTER_FAILED,
+                    &[("reason", Value::Str(&reason))]
+                )
+            ))
+        }
+    }
+}
+
+/// `capsule auth login`: read credentials from flags or prompts, authenticate over the SDK,
+/// and persist the session.
+async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
+    let bundle = i18n::cli_bundle();
+    let remote = remote::RemoteConfig::from_env();
+    let store = session_store()?;
+
+    let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
+    let password = read_password(
+        password_stdin,
+        bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
+    )?;
 
     println!(
         "{}",

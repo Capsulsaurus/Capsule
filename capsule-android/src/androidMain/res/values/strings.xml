@@ -52,6 +52,10 @@
     <string name="cli_auth_logout_not_logged_in">You are not logged in.</string>
     <string name="cli_auth_logout_success">Logged out.</string>
     <string name="cli_auth_not_authenticated">Not authenticated. Run \'capsule auth login\' first.</string>
+    <string name="cli_auth_register_failed">Could not create the account: {reason}</string>
+    <string name="cli_auth_register_in_progress">Creating your Capsule account…</string>
+    <string name="cli_auth_register_success">Account created. Signed in as {email}.</string>
+    <string name="cli_auth_register_username_prompt">Username</string>
     <string name="cli_list_empty">No assets have synced yet.</string>
     <string name="cli_list_failed">Failed to list the library: {reason}</string>
     <string name="cli_list_header">Synced library ({count} asset(s)):</string>

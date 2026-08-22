@@ -343,6 +343,22 @@
         "message": "Login failed: {reason}",
         "context": "CLI failure line for `capsule auth login`. {reason} is a localized or English error detail."
     },
+    "cli.auth.register.username_prompt": {
+        "message": "Username",
+        "context": "CLI `capsule auth register` interactive prompt for the login handle."
+    },
+    "cli.auth.register.in_progress": {
+        "message": "Creating your Capsule account\u2026",
+        "context": "CLI status line printed while `capsule auth register` creates the account."
+    },
+    "cli.auth.register.success": {
+        "message": "Account created. Signed in as {email}.",
+        "context": "CLI success line after `capsule auth register`. {email} is the account email."
+    },
+    "cli.auth.register.failed": {
+        "message": "Could not create the account: {reason}",
+        "context": "CLI failure line for `capsule auth register`. {reason} is a localized or English error detail."
+    },
     "cli.auth.logout.in_progress": {
         "message": "Logging out from Capsule…",
         "context": "CLI status line printed while `capsule auth logout` revokes the session."

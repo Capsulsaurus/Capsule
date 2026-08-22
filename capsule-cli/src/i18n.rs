@@ -32,6 +32,10 @@ pub mod keys {
     pub const AUTH_LOGIN_IN_PROGRESS: &str = "cli.auth.login.in_progress";
     pub const AUTH_LOGIN_SUCCESS: &str = "cli.auth.login.success";
     pub const AUTH_LOGIN_FAILED: &str = "cli.auth.login.failed";
+    pub const AUTH_REGISTER_USERNAME_PROMPT: &str = "cli.auth.register.username_prompt";
+    pub const AUTH_REGISTER_IN_PROGRESS: &str = "cli.auth.register.in_progress";
+    pub const AUTH_REGISTER_SUCCESS: &str = "cli.auth.register.success";
+    pub const AUTH_REGISTER_FAILED: &str = "cli.auth.register.failed";
     pub const AUTH_LOGOUT_IN_PROGRESS: &str = "cli.auth.logout.in_progress";
     pub const AUTH_LOGOUT_SUCCESS: &str = "cli.auth.logout.success";
     pub const AUTH_LOGOUT_NOT_LOGGED_IN: &str = "cli.auth.logout.not_logged_in";
