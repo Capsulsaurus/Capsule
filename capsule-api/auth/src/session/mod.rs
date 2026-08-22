@@ -201,8 +201,15 @@ impl SessionManager {
         Ok(sessions)
     }
 
-    pub async fn revoke_all_for_user(&self, user_id: &str) -> Result<(), InternalServerError> {
+    /// Invalidate **every** session for `user_id` and return how many were deleted.
+    ///
+    /// Global by construction: the caller's own session is in the user's session set, so a
+    /// revoke-all logs the caller out too (slice `S-C23`) — that is the point of the
+    /// ceremony, not an oversight. The count is surfaced so the client can say how many
+    /// devices were signed out.
+    pub async fn revoke_all_for_user(&self, user_id: &str) -> Result<usize, InternalServerError> {
         let sessions = self.storage.get_user_sessions(user_id).await?;
+        let revoked = sessions.len();
 
         for sid in sessions {
             self.storage.delete_session(&sid).await?;
@@ -210,7 +217,8 @@ impl SessionManager {
 
         self.storage.delete_user_sessions_key(user_id).await?;
 
-        Ok(())
+        tracing::info!(user_id, revoked, "revoked every session for user");
+        Ok(revoked)
     }
 
     // MFA attempt tracking methods

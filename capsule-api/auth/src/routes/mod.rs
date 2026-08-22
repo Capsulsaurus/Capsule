@@ -5,6 +5,7 @@ mod escrow;
 mod passkey;
 mod password;
 mod profile;
+mod revoke;
 mod totp;
 
 use salvo::affix_state;
@@ -80,7 +81,17 @@ pub(super) fn route_tree() -> Router {
                     .get(escrow::fetch_backup_escrow),
             ),
         )
-        .push(Router::with_path("logout").post(auth::logout))
+        // Single-session logout (any active session token), and beside it the *global*
+        // revoke (slice S-C23), which is authenticated by an identity-key signature over a
+        // server-issued challenge rather than by a session token — so a stolen token can
+        // revoke only its own session, never every device.
+        .push(
+            Router::with_path("logout").post(auth::logout).push(
+                Router::with_path("all")
+                    .post(revoke::revoke_all_sessions)
+                    .push(Router::with_path("challenge").post(revoke::revoke_all_challenge)),
+            ),
+        )
         // Password routes
         .push(Router::with_path("password-reset-request").post(password::reset_password_request))
         .push(Router::with_path("password-reset").post(password::reset_password))

@@ -141,6 +141,8 @@
   "drop.upload_only_badge": "Upload only",
   "error.auth.invalid_credentials": "Invalid email or password.",
   "error.auth.rate_limited": "Too many attempts. Please wait and try again.",
+  "error.auth.revoke_proof_invalid": "That didn't confirm as you. Nothing was logged out.",
+  "error.auth.revoke_proof_required": "Confirm with your account key to log out of all devices.",
   "error.auth.user_already_exists": "An account with these details already exists.",
   "error.blob.pending_upload": "The original photo hasn't been uploaded from its device yet.",
   "error.directory.malformed": "The device list could not be read.",

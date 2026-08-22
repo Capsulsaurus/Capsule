@@ -10781,6 +10781,26 @@
         }
       }
     },
+    "error.auth.revoke_proof_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That didn't confirm as you. Nothing was logged out."
+          }
+        }
+      }
+    },
+    "error.auth.revoke_proof_required": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Confirm with your account key to log out of all devices."
+          }
+        }
+      }
+    },
     "error.auth.user_already_exists": {
       "localizations": {
         "ar": {

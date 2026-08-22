@@ -209,7 +209,7 @@ their owed remainder now lives.
 | S-C20 | Invariant-7 floor grounded in the device directory     | server      | —            | M    | ready   |
 | S-C21 | `feed_seq` visibility-order race fix                   | server      | —            | M    | ready   |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI     | server      | —            | S    | ready   |
-| S-C23 | `revoke_all_sessions` with master-key proof            | server      | —            | M    | ready   |
+| S-C23 | `revoke_all_sessions` with master-key proof            | server      | —            | M    | done    |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server      | —            | M-L  | ready   |
 | S-C25 | Album provisioning + UUID album ids (unblocks push)     | server      | —            | M    | ready   |
 | S-E5  | Federation capability gate on the live gRPC method     | federation  | —            | M-L  | ready   |

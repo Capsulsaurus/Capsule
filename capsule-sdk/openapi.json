@@ -845,6 +845,61 @@
         ]
       }
     },
+    "/v1/auth/logout/all": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revoke every session for the account named by a signed challenge.",
+        "description": "The body is the canonical-CBOR [`RevokeAllProof`]. Deliberately **not** session-authed: the\n\nidentity-key signature is the whole credential, so a stolen session token cannot log the\n\nlegitimate user out of their other devices.",
+        "operationId": "revoke_all_sessions",
+        "responses": {
+          "200": {
+            "description": "Every session revoked, the calling session included",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.revoke.RevokeAllResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing proof (error.auth.revoke_proof_required) or a proof that did not verify (error.auth.revoke_proof_invalid); nothing is revoked either way"
+          }
+        }
+      }
+    },
+    "/v1/auth/logout/all/challenge": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Issue a single-use challenge for the caller's account to sign with its identity key.",
+        "description": "Session-authed: this only names the account. It authorizes no revocation on its own — the\n\nsignature over it does.",
+        "operationId": "revoke_all_challenge",
+        "responses": {
+          "200": {
+            "description": "Single-use revoke-all challenge issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/auth.routes.revoke.RevokeAllChallengeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/auth/password-reset": {
       "post": {
         "tags": [
@@ -2097,6 +2152,44 @@
             "type": "integer",
             "format": "int64",
             "description": "The `directory_version` now stored for the user (equals the submitted version)."
+          }
+        }
+      },
+      "auth.routes.revoke.RevokeAllChallengeResponse": {
+        "type": "object",
+        "description": "A freshly issued revoke-all challenge for the client to sign with its identity key.",
+        "required": [
+          "challenge",
+          "user_id",
+          "expires_at"
+        ],
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "The opaque challenge. The client signs the domain-separated canonical-CBOR encoding of\n`(domain, user_id, challenge)` over this exact string and echoes it back in the proof."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "RFC 3339 expiry. Single-use: it is spent by the first proof presented against it."
+          },
+          "user_id": {
+            "type": "string",
+            "description": "The account the challenge is bound to, echoed because it is folded into the signed\nbytes. It is the caller's own id (the access token's `sub`) — returned so a client\nnever has to crack open a JWT to build the signing input, and so a mismatch is caught\nbefore signing rather than as an opaque refusal."
+          }
+        }
+      },
+      "auth.routes.revoke.RevokeAllResponse": {
+        "type": "object",
+        "description": "The acknowledgement for a completed global revoke.",
+        "required": [
+          "revoked_sessions"
+        ],
+        "properties": {
+          "revoked_sessions": {
+            "type": "integer",
+            "format": "uint32",
+            "description": "How many sessions were invalidated, the calling session included.",
+            "minimum": 0.0
           }
         }
       },

@@ -38,6 +38,12 @@ pub mod error_codes {
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";
 
+    /// `error.auth.revoke_proof_invalid`
+    pub const AUTH_REVOKE_PROOF_INVALID: &str = "error.auth.revoke_proof_invalid";
+
+    /// `error.auth.revoke_proof_required`
+    pub const AUTH_REVOKE_PROOF_REQUIRED: &str = "error.auth.revoke_proof_required";
+
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
 

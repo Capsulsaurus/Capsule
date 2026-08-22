@@ -7,4 +7,5 @@ mod enrollment;
 mod escrow;
 mod password_reset_sessions;
 mod rate_limiting;
+mod revoke_all;
 mod totp;

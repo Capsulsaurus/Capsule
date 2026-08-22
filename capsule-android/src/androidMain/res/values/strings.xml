@@ -142,6 +142,8 @@
     <string name="drop_upload_only_badge">Upload only</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
+    <string name="error_auth_revoke_proof_invalid">That didn\'t confirm as you. Nothing was logged out.</string>
+    <string name="error_auth_revoke_proof_required">Confirm with your account key to log out of all devices.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
     <string name="error_directory_malformed">The device list could not be read.</string>

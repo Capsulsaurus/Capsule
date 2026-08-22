@@ -10,6 +10,7 @@ path = "src/lib.rs"
 
 [dependencies]
 capsule-api-environment = { path = "../environment", features = ["auth"] }
+capsule-core = { path = "../../capsule-core" }
 capsule-api-model = { path = "../model" }
 capsule-api-service = { path = "../service", features = ["auth"] }
 capsule-i18n = { path = "../../capsule-i18n" }
@@ -53,7 +54,6 @@ default = ["server"]
 server = []
 
 [dev-dependencies]
-capsule-core = { path = "../../capsule-core" }
 environment = { path = "../environment", package = "capsule-api-environment" }
 migration = { path = "../migration", package = "capsule-api-migration" }
 service = { path = "../service", package = "capsule-api-service" }
