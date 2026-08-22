@@ -1,10 +1,7 @@
 package com.justin13888.capsule.di
 
 import androidx.compose.ui.test.junit4.v2.createComposeRule
-import androidx.compose.ui.test.onNodeWithTag
 import com.justin13888.capsule.CapsuleApp
-import com.justin13888.capsule.navigation.CapsuleDestination
-import com.justin13888.capsule.placeholder.placeholderTagFor
 import com.justin13888.capsule.security.LocalAuthGate
 import com.justin13888.capsule.shell.CapsuleShellState
 import org.junit.After
@@ -57,6 +54,9 @@ class CapsuleGraphTest {
         compose.setContent { CapsuleApp(onUpdateApp = {}) }
         compose.waitForIdle()
 
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertExists()
+        // The root renders the timeline, which resolves its view model — and therefore
+        // every repository beneath it — from the graph the application just started. That
+        // it composed at all is the assertion; what it drew belongs to the feature's tests.
+        assertNotNull(GlobalContext.getOrNull())
     }
 }

@@ -5,12 +5,20 @@ import androidx.compose.ui.test.WindowSize
 import androidx.compose.ui.test.junit4.ComposeContentTestRule
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import com.justin13888.capsule.core.designsystem.theme.CapsuleTheme
 import com.justin13888.capsule.core.model.GatedView
+import com.justin13888.capsule.di.capsuleModules
 import com.justin13888.capsule.navigation.CapsuleNavigator
 import com.justin13888.capsule.navigation.rememberCapsuleNavigator
 import com.justin13888.capsule.security.LocalAuthGate
 import com.justin13888.capsule.security.LocalAuthPrompt
+import org.junit.rules.TestRule
+import org.junit.runner.Description
+import org.junit.runners.model.Statement
+import org.koin.android.ext.koin.androidContext
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
 
 /** A phone. Below the 600dp breakpoint, so the suite renders a short navigation bar. */
 val COMPACT_WINDOW: DpSize = DpSize(411.dp, 891.dp)
@@ -91,4 +99,36 @@ fun ComposeContentTestRule.launchShell(
 fun ComposeContentTestRule.act(block: () -> Unit) {
     runOnIdle(block)
     waitForIdle()
+}
+
+/**
+ * Starts and stops the real application graph around each test.
+ *
+ * The shell renders destinations, and a destination resolves its own view model from Koin,
+ * so composing it needs a graph. These tests deliberately run on a plain `Application`
+ * rather than `CapsuleApplication` — Koin's context is static and Robolectric builds a
+ * fresh application per test in the same JVM, so the class's own application would start
+ * the graph a second time and throw. Owning the lifecycle here instead keeps that
+ * explicit, and using the *real* module list means a feature whose bindings are missing
+ * fails these tests rather than only failing on a device.
+ */
+class CapsuleGraphRule : TestRule {
+    override fun apply(
+        base: Statement,
+        description: Description,
+    ): Statement =
+        object : Statement() {
+            override fun evaluate() {
+                stopKoin()
+                startKoin {
+                    androidContext(ApplicationProvider.getApplicationContext())
+                    modules(capsuleModules)
+                }
+                try {
+                    base.evaluate()
+                } finally {
+                    stopKoin()
+                }
+            }
+        }
 }

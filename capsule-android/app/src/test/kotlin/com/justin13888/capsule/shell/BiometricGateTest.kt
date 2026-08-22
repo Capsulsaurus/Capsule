@@ -36,7 +36,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class BiometricGateTest {
-    @get:Rule
+    @get:Rule(order = 0)
+    val graph = CapsuleGraphRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private val shellState = CapsuleShellState()

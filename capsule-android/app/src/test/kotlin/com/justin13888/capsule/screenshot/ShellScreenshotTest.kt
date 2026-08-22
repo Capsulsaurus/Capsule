@@ -8,6 +8,7 @@ import androidx.compose.ui.unit.DpSize
 import com.github.takahirom.roborazzi.captureRoboImage
 import com.justin13888.capsule.security.LocalAuthGate
 import com.justin13888.capsule.shell.COMPACT_WINDOW
+import com.justin13888.capsule.shell.CapsuleGraphRule
 import com.justin13888.capsule.shell.CapsuleShellState
 import com.justin13888.capsule.shell.EXPANDED_WINDOW
 import com.justin13888.capsule.shell.FakeLocalAuthPrompt
@@ -38,7 +39,10 @@ import org.robolectric.annotation.GraphicsMode
 // application per test case, so the second case would fail on an already-started graph.
 @Config(application = Application::class, qualifiers = "w1280dp-h1024dp-xhdpi")
 class ShellScreenshotTest {
-    @get:Rule
+    @get:Rule(order = 0)
+    val graph = CapsuleGraphRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private fun capture(

@@ -1,139 +1,104 @@
 package com.justin13888.capsule.di
 
+import com.justin13888.capsule.feature.albums.albumsFeatureModule
+import com.justin13888.capsule.feature.audit.auditFeatureModule
+import com.justin13888.capsule.feature.drops.dropsFeatureModule
+import com.justin13888.capsule.feature.enrollment.enrollmentFeatureModule
+import com.justin13888.capsule.feature.importer.importerFeatureModule
+import com.justin13888.capsule.feature.moderation.moderationFeatureModule
+import com.justin13888.capsule.feature.onboarding.onboardingFeatureModule
+import com.justin13888.capsule.feature.people.peopleFeatureModule
+import com.justin13888.capsule.feature.recovery.recoveryFeatureModule
+import com.justin13888.capsule.feature.search.searchFeatureModule
+import com.justin13888.capsule.feature.security.securityFeatureModule
+import com.justin13888.capsule.feature.settings.settingsFeatureModule
+import com.justin13888.capsule.feature.sharing.sharingFeatureModule
+import com.justin13888.capsule.feature.storage.storageFeatureModule
+import com.justin13888.capsule.feature.sync.syncFeatureModule
+import com.justin13888.capsule.feature.timeline.timelineFeatureModule
+import com.justin13888.capsule.feature.viewer.di.viewerFeatureModule
 import org.koin.core.module.Module
-import org.koin.dsl.module
 
-/** The library listing, the trash beneath it, and the hidden view beside it. */
-val timelineModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:timeline` when that slice lands.
-    }
+// ── One alias per product area ───────────────────────────────────────────────
+// Named for the area rather than re-exported directly, so this file reads as the
+// app's inventory of what it is made of and a feature's own module name stays an
+// implementation detail of that feature.
 
-/** Albums, smart albums and stacks. */
-val albumsModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:albums` when that slice lands.
-    }
+/** The library listing, the culling pass, and the trash beneath them. */
+val timelineModule: Module = timelineFeatureModule
+
+/** Albums, smart albums, stacks, places and the gated views. */
+val albumsModule: Module = albumsFeatureModule
 
 /** The single-asset viewer and everything it can say about one file. */
-val viewerModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:viewer` when that slice lands.
-    }
+val viewerModule: Module = viewerFeatureModule
 
-/** Search and the saved searches it produces. */
-val searchModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:search` when that slice lands.
-    }
+/** Search and the facets it offers. */
+val searchModule: Module = searchFeatureModule
 
-/** People and pets. */
-val peopleModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:people` when that slice lands.
-    }
+/** People, face groupings and the AI-derived albums. */
+val peopleModule: Module = peopleFeatureModule
 
-/** Reading files in from a source the user chose. */
-val importerModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:importer` when that slice lands.
-    }
+/** Bringing assets in, from a folder, an archive or a camera. */
+val importerModule: Module = importerFeatureModule
 
-/** Share links out and upload links in. */
-val sharingModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:sharing` when that slice lands.
-    }
+/** Share links out. */
+val sharingModule: Module = sharingFeatureModule
 
-/** The inbox of files that arrived through an upload link. */
-val dropsModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:drops` when that slice lands.
-    }
+/** Upload links in, and the inbox they deposit into. */
+val dropsModule: Module = dropsFeatureModule
 
-/** Reconciliation with the server, and the upload queue behind it. */
-val syncModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:sync` when that slice lands.
-    }
+/** Sync state, transfer queues and the quarantine surface. */
+val syncModule: Module = syncFeatureModule
 
-/** What the library occupies, locally and remotely. */
-val storageModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:storage` when that slice lands.
-    }
+/** Quota, local footprint and what is kept offline. */
+val storageModule: Module = storageFeatureModule
 
-/** Sessions, devices, passkeys and the local-auth gate. */
-val securityModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:security` when that slice lands.
-    }
+/** Sessions, devices and credentials. */
+val securityModule: Module = securityFeatureModule
 
-/** Account key recovery, escrow and backups. */
-val recoveryModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:recovery` when that slice lands.
-    }
+/** Recovery secrets, Shamir shares, backup and restore. */
+val recoveryModule: Module = recoveryFeatureModule
 
-/** Reports, blocks and appeals. */
-val moderationModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:moderation` when that slice lands.
-    }
+/** Reports, blocks, suspension and appeals. */
+val moderationModule: Module = moderationFeatureModule
 
-/** The account's security-relevant event log. */
-val auditModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:audit` when that slice lands.
-    }
+/** Preferences, across the library and this device. */
+val settingsModule: Module = settingsFeatureModule
 
-/** App and account preferences. */
-val settingsModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:settings` when that slice lands.
-    }
+/** The library's audit log. */
+val auditModule: Module = auditFeatureModule
 
-/** First run, from nothing to a library. */
-val onboardingModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:onboarding` when that slice lands.
-    }
+/** First run: choosing a mode, connecting a server, signing in. */
+val onboardingModule: Module = onboardingFeatureModule
 
-/** Adding a device to an account that already exists. */
-val enrollmentModule: Module =
-    module {
-        // Registered by `:capsule-android:feature:enrollment` when that slice lands.
-    }
+/** Bringing this device, or another one, into the account. */
+val enrollmentModule: Module = enrollmentFeatureModule
 
 /**
- * Every module the application starts with, shell first.
+ * Every module the application graph is assembled from.
  *
- * One module per product area, declared up front and empty. Empty on purpose, and worth the
- * declaration anyway: seventeen feature slices are coming and each needs somewhere to register
- * its repositories and view models. Without a module already named and already listed here,
- * the first slice to need one either invents a naming scheme the next sixteen have to guess
- * at, or dumps its bindings into a shared module that then belongs to nobody. The declaration
- * is the contract — a feature slice adds `singleOf(::Thing)` inside its own module and touches
- * nothing else.
+ * A feature owns its own bindings and publishes them as one `Module`; the app module does
+ * nothing but collect them. That keeps the seam one-directional — a feature never reaches
+ * into the app, and adding a feature is an import and a list entry rather than an edit to
+ * anything a feature can see.
  *
- * The modules live in the app module rather than in each feature because Koin modules are
- * graph assembly, and assembly is what the app module is for; a feature that started its own
- * graph would be a feature that could be started twice.
- *
- * Order is not significant to Koin — it resolves lazily — but keeping the shell at the head
- * documents the dependency direction: features may reach for shell singletons, never the
- * reverse.
+ * The graph is started eagerly in `CapsuleApplication`, because Koin resolves lazily by
+ * default and a missing binding would otherwise surface at whichever screen first needed
+ * it — which, for most of this app, would be long after the mistake was made.
  */
 val capsuleModules: List<Module> =
     listOf(
         shellModule,
         dataModule,
+        onboardingModule,
+        enrollmentModule,
         timelineModule,
+        importerModule,
         albumsModule,
         viewerModule,
         searchModule,
         peopleModule,
-        importerModule,
         sharingModule,
         dropsModule,
         syncModule,
@@ -141,8 +106,6 @@ val capsuleModules: List<Module> =
         securityModule,
         recoveryModule,
         moderationModule,
-        auditModule,
         settingsModule,
-        onboardingModule,
-        enrollmentModule,
+        auditModule,
     )

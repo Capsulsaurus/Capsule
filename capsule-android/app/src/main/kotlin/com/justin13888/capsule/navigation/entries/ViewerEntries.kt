@@ -1,31 +1,21 @@
 package com.justin13888.capsule.navigation.entries
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.navigation3.runtime.EntryProviderScope
 import androidx.navigation3.runtime.NavKey
-import com.justin13888.capsule.core.designsystem.component.CapsuleButton
-import com.justin13888.capsule.core.designsystem.component.CapsuleButtonEmphasis
+import com.justin13888.capsule.feature.viewer.AssetInfoRoute
+import com.justin13888.capsule.feature.viewer.MetadataEditorRoute
+import com.justin13888.capsule.feature.viewer.ProvenanceRoute
+import com.justin13888.capsule.feature.viewer.ViewerArgs
+import com.justin13888.capsule.feature.viewer.ViewerControls
+import com.justin13888.capsule.feature.viewer.ViewerNavigation
+import com.justin13888.capsule.feature.viewer.ViewerStage
+import com.justin13888.capsule.feature.viewer.rememberViewerState
 import com.justin13888.capsule.navigation.CapsuleDestination
 import com.justin13888.capsule.navigation.CapsuleEntryScope
-import com.justin13888.capsule.navigation.Placeholder
 import com.justin13888.capsule.navigation.destination
-import com.justin13888.capsule.placeholder.PlaceholderScreen
 import com.justin13888.capsule.shell.panes.CapsuleSupportingPane
 import com.justin13888.capsule.shell.panes.CapsuleTabletopSplit
-
-/** Test handle for the viewer's control strip, which moves below the hinge in tabletop. */
-const val VIEWER_CONTROLS_TAG: String = "shell.viewer-controls"
 
 /**
  * One asset, and everything the app can say about it.
@@ -42,63 +32,59 @@ const val VIEWER_CONTROLS_TAG: String = "shell.viewer-controls"
  */
 fun EntryProviderScope<NavKey>.viewerEntries(scope: CapsuleEntryScope) {
     destination<CapsuleDestination.AssetViewer>(scope) { key -> ViewerPane(scope, key) }
-    destination<CapsuleDestination.AssetInfo>(scope) { scope.Placeholder(it) }
-    destination<CapsuleDestination.Provenance>(scope) { scope.Placeholder(it) }
-    destination<CapsuleDestination.MetadataEdit>(scope) { scope.Placeholder(it) }
+    destination<CapsuleDestination.AssetInfo>(scope) { key -> AssetInfoRoute(assetId = key.assetId) }
+    destination<CapsuleDestination.Provenance>(scope) { key -> ProvenanceRoute(assetId = key.assetId) }
+    destination<CapsuleDestination.MetadataEdit>(scope) { key -> MetadataEditorRoute(assetId = key.assetId) }
 }
 
-/** The viewer's adaptive frame: photo, controls, and the info panel beside or behind them. */
+/**
+ * The viewer's adaptive frame: photo, controls, and the info panel beside or behind them.
+ *
+ * The view model is resolved once, here, and its state handed to both halves. That is the
+ * whole reason the feature returns a presentation rather than two independent screens: the
+ * photo and the strip can end up on opposite sides of a physical hinge, and two separately
+ * resolved states would eventually disagree about which asset is open.
+ */
 @Composable
 private fun ViewerPane(
     scope: CapsuleEntryScope,
     key: CapsuleDestination.AssetViewer,
 ) {
+    val viewer =
+        rememberViewerState(
+            args = ViewerArgs(assetId = key.assetId, contextId = key.contextId),
+            onReviewQuarantine = { scope.navigator.goTo(CapsuleDestination.Quarantine) },
+            // The feature module cannot start a store listing, and the shell's own update
+            // prompt only exists behind a protocol refusal. About is where this build's
+            // version and protocol range are, which is what the user needs to see next.
+            onUpdateApp = { scope.navigator.goTo(CapsuleDestination.SettingsAbout) },
+        )
     CapsuleSupportingPane(
         mainPane = { showInfo ->
             CapsuleTabletopSplit(
-                content = { PlaceholderScreen(destination = key, navigator = scope.navigator) },
-                controls = { ViewerControls(scope, key, showInfo) },
+                content = { ViewerStage(state = viewer.state, actions = viewer.actions, stage = viewer.stage) },
+                controls = {
+                    ViewerControls(
+                        state = viewer.state,
+                        actions = viewer.actions,
+                        navigation = viewerNavigation(scope, key, showInfo),
+                        stage = viewer.stage,
+                    )
+                },
             )
         },
-        supportingPane = {
-            PlaceholderScreen(
-                destination = CapsuleDestination.AssetInfo(key.assetId),
-                navigator = scope.navigator,
-            )
-        },
+        supportingPane = { AssetInfoRoute(assetId = key.assetId) },
     )
 }
 
-/**
- * The strip the user operates the viewer with.
- *
- * Separated from the photo rather than overlaid on it because that is what makes the tabletop
- * arrangement possible at all: an overlay has nowhere to go when the window splits in half.
- */
-@Composable
-private fun ViewerControls(
+/** Where the viewer's chrome sends the user, in the shell's own destination vocabulary. */
+private fun viewerNavigation(
     scope: CapsuleEntryScope,
     key: CapsuleDestination.AssetViewer,
-    onShowInfo: () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(ControlPadding).testTag(VIEWER_CONTROLS_TAG),
-        horizontalArrangement = Arrangement.spacedBy(ControlSpacing),
-    ) {
-        CapsuleButton(
-            onClick = onShowInfo,
-            label = stringResource(CapsuleDestination.AssetInfo(key.assetId).titleRes),
-            emphasis = CapsuleButtonEmphasis.Secondary,
-            icon = Icons.Filled.Info,
-        )
-        CapsuleButton(
-            onClick = { scope.navigator.goTo(CapsuleDestination.Provenance(key.assetId)) },
-            label = stringResource(CapsuleDestination.Provenance(key.assetId).titleRes),
-            emphasis = CapsuleButtonEmphasis.Tertiary,
-            icon = Icons.Filled.VerifiedUser,
-        )
-    }
-}
-
-private val ControlPadding = 16.dp
-private val ControlSpacing = 8.dp
+    showInfo: () -> Unit,
+): ViewerNavigation =
+    ViewerNavigation(
+        onOpenInfo = showInfo,
+        onOpenProvenance = { scope.navigator.goTo(CapsuleDestination.Provenance(key.assetId)) },
+        onOpenEditor = { scope.navigator.goTo(CapsuleDestination.MetadataEdit(key.assetId)) },
+    )

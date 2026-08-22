@@ -19,6 +19,11 @@ import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 class JvmLibraryConventionPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
         pluginManager.apply("org.jetbrains.kotlin.jvm")
+        // `java-library` is what publishes a usable runtime variant for other projects to
+        // consume. Without it an Android module gets these classes on its compile
+        // classpath but not on its unit-test runtime classpath, which fails at class-load
+        // time inside a test rather than at build time — a long way from the cause.
+        pluginManager.apply("java-library")
 
         extensions.configure<JavaPluginExtension> {
             sourceCompatibility = JavaVersion.VERSION_17

@@ -11,10 +11,11 @@ import com.justin13888.capsule.core.data.ProtocolError
 import com.justin13888.capsule.core.i18n.R
 import com.justin13888.capsule.core.model.ConnectionClass
 import com.justin13888.capsule.navigation.CapsuleDestination
-import com.justin13888.capsule.placeholder.PLACEHOLDER_BACK_TAG
-import com.justin13888.capsule.placeholder.placeholderTagFor
 import com.justin13888.capsule.security.LocalAuthGate
 import com.justin13888.capsule.shell.chrome.PROTOCOL_MISMATCH_TAG
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -39,7 +40,10 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class)
 class CapsuleAppShellTest {
-    @get:Rule
+    @get:Rule(order = 0)
+    val graph = CapsuleGraphRule()
+
+    @get:Rule(order = 1)
     val compose = createComposeRule()
 
     private val shellState = CapsuleShellState()
@@ -69,19 +73,19 @@ class CapsuleAppShellTest {
 
     @Test
     fun the_shell_opens_on_the_timeline() {
-        compose.launchShell(shellState, gate, prompt)
+        val shell = compose.launchShell(shellState, gate, prompt)
 
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertExists()
+        assertEquals(CapsuleDestination.Timeline, shell.navigator.current)
     }
 
     @Test
     fun switching_section_moves_the_whole_shell() {
-        compose.launchShell(shellState, gate, prompt)
+        val shell = compose.launchShell(shellState, gate, prompt)
 
         compose.onNodeWithTag(navigationItemTag(CapsuleDestination.Settings)).performClick()
         compose.waitForIdle()
 
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Settings)).assertExists()
+        assertEquals(CapsuleDestination.Settings, shell.navigator.current)
     }
 
     @Test
@@ -89,13 +93,13 @@ class CapsuleAppShellTest {
         val shell = compose.launchShell(shellState, gate, prompt)
 
         compose.act { shell.navigator.goTo(CapsuleDestination.AlbumDetail("album-1")) }
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.AlbumDetail(""))).assertExists()
+        assertEquals(CapsuleDestination.AlbumDetail("album-1"), shell.navigator.current)
+        assertTrue(shell.navigator.canGoBack)
 
-        compose.onNodeWithTag(PLACEHOLDER_BACK_TAG).performClick()
-        compose.waitForIdle()
+        compose.act { shell.navigator.goBack() }
 
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertExists()
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.AlbumDetail(""))).assertDoesNotExist()
+        assertEquals(CapsuleDestination.Timeline, shell.navigator.current)
+        assertFalse(shell.navigator.canGoBack)
     }
 
     @Test
@@ -109,13 +113,14 @@ class CapsuleAppShellTest {
 
     @Test
     fun going_offline_raises_the_banner_without_hiding_the_library() {
-        compose.launchShell(shellState, gate, prompt)
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertExists()
+        val shell = compose.launchShell(shellState, gate, prompt)
+        assertEquals(CapsuleDestination.Timeline, shell.navigator.current)
 
         compose.act { shellState.onConnectionChanged(ConnectionClass.Offline) }
 
         // The point of the banner rather than a blocking screen: the library is still there.
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertExists()
+        assertEquals(CapsuleDestination.Timeline, shell.navigator.current)
+        compose.onNodeWithTag(navigationItemTag(CapsuleDestination.Timeline)).assertExists()
     }
 
     @Test
@@ -135,7 +140,6 @@ class CapsuleAppShellTest {
         compose.act { shellState.onProtocolRefused(ProtocolError.VersionUnsupported) }
 
         compose.onNodeWithTag(PROTOCOL_MISMATCH_TAG).assertExists()
-        compose.onNodeWithTag(placeholderTagFor(CapsuleDestination.Timeline)).assertDoesNotExist()
         compose.onNodeWithTag(navigationItemTag(CapsuleDestination.Timeline)).assertDoesNotExist()
     }
 
