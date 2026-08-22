@@ -25,113 +25,13 @@
 //! [AI/ML — Models and Algorithms]: https://docs/design/ai/#models-and-algorithms
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
 
-use std::fmt;
-
-use serde::{Deserialize, Serialize};
-use thiserror::Error;
-
-/// A canonical ML task — the v1-committed launch pipeline ([AI/ML — v1-Committed Slots]).
-///
-/// Closed enum per protocol version: an unknown value is a **structural error**, never a
-/// "future value to ignore". Post-v1 candidate tasks each commit to a full inventory row (and a
-/// new variant here) when they ship.
-///
-/// [AI/ML — v1-Committed Slots]: https://docs/design/ai/#v1-committed-slots
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TaskKind {
-    /// Global image embedding for natural-language + similarity search (MobileCLIP-B).
-    SemanticSearch,
-    /// Object/background detection feeding dense tagging (YOLOv10).
-    ObjectDetection,
-    /// Face bounding-box + landmark detection (SCRFD).
-    FaceDetection,
-    /// Face embedding for matching/clustering (InsightFace AdaFace).
-    FaceRecognition,
-}
-
-impl TaskKind {
-    /// Every committed task, in inventory order.
-    pub const ALL: [TaskKind; 4] = [
-        TaskKind::SemanticSearch,
-        TaskKind::ObjectDetection,
-        TaskKind::FaceDetection,
-        TaskKind::FaceRecognition,
-    ];
-}
-
-/// A model identifier (stable across versions; e.g. `mobileclip-b`). Declared in exactly one
-/// [`ModelRow`]. Serializes transparently as its string so it interoperates with the
-/// `model_id` fields on [`AiTag`](crate::sidecar::sidecar_v1::AiTag) and
-/// [`DerivativeCore`](crate::crypto::provenance::manifest::DerivativeCore).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ModelId(pub String);
-
-/// A model version. Bumped on every model swap for a task; old embeddings at a prior version are
-/// flagged stale. Serializes transparently as its string (see [`ModelId`]).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ModelVersion(pub String);
-
-macro_rules! str_newtype {
-    ($t:ty) => {
-        impl $t {
-            /// The underlying string.
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-        }
-        impl From<&str> for $t {
-            fn from(s: &str) -> Self {
-                Self(s.to_string())
-            }
-        }
-        impl From<String> for $t {
-            fn from(s: String) -> Self {
-                Self(s)
-            }
-        }
-        impl fmt::Display for $t {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
-    };
-}
-str_newtype!(ModelId);
-str_newtype!(ModelVersion);
-
-/// The dimensionality of an embedding vector for an embedding-producing task.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct EmbeddingDim(pub u32);
-
-impl EmbeddingDim {
-    /// The dimension as a `usize` (for buffer sizing).
-    pub fn get(self) -> usize {
-        self.0 as usize
-    }
-}
-
-impl fmt::Display for EmbeddingDim {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-/// The distance metric a vector index ranks an embedding task by.
-///
-/// Embeddings are L2-normalized, so **cosine distance ranks identically to the inner product**
-/// — this is the design's inner-product ranking intent, expressed with the metric the SQLite
-/// `vec0` engine implements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DistanceMetric {
-    /// Cosine distance over normalized vectors (== inner-product ranking).
-    Cosine,
-    /// Squared Euclidean (L2) distance.
-    L2,
-}
+use crate::db::vector::{EmbeddingProvenance, VectorTableSpec};
+// The identity vocabulary these rows are written in lives in the `domain` leaf — `db` names its
+// `vec0` columns with the same types, and importing them from `ml` closed a `db -> ml -> db`
+// cycle. Re-exported so `crate::ml::registry::TaskKind` (and every other spelling) still resolves.
+pub use crate::domain::model_identity::{
+    DistanceMetric, EmbeddingDim, ModelId, ModelVersion, RegistryError, TaskKind,
+};
 
 /// What a task produces: a stored embedding vector, or detections that feed downstream stages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -185,26 +85,6 @@ impl ModelRow {
     pub fn embedding_format(&self) -> String {
         format!("embedding/{}", self.model_id)
     }
-}
-
-/// Refusals from the embedding-provenance invariant.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum RegistryError {
-    /// The `model_id` is not a known inventory model for the task (an unknown model). A stale but
-    /// *known* version is **not** this error — it is admitted as a stale row.
-    #[error("model `{model_id}` is not known for task {task:?}")]
-    NonCanonical {
-        /// The task.
-        task: TaskKind,
-        /// The offending model id.
-        model_id: ModelId,
-    },
-    /// The task does not produce stored embeddings (e.g. a detection task).
-    #[error("task {task:?} does not produce stored embeddings")]
-    NotAnEmbeddingTask {
-        /// The task.
-        task: TaskKind,
-    },
 }
 
 /// The model inventory seam and the embedding-provenance gate.
@@ -381,6 +261,49 @@ impl Registry {
         }
         row.embedding_spec()
             .ok_or(RegistryError::NotAnEmbeddingTask { task })
+    }
+}
+
+/// The partition tables this inventory's embedding slots need — the `db`-side description of the
+/// `vec0` schema, with no `ml` type in sight. Hand it to
+/// [`DatabaseDriver::create_vector_tables`](crate::db::DatabaseDriver::create_vector_tables) to
+/// materialize the whole schema up front instead of on first use.
+impl Registry {
+    /// One [`VectorTableSpec`] per embedding-producing slot (detection slots store no vectors).
+    pub fn vector_tables(&self) -> Vec<VectorTableSpec> {
+        self.rows
+            .iter()
+            .filter_map(|r| {
+                r.embedding_spec().map(|(dim, metric)| VectorTableSpec {
+                    task: r.task,
+                    dim,
+                    metric,
+                })
+            })
+            .collect()
+    }
+}
+
+/// The inventory seen through the vector index's eyes: the three questions `db` asks, answered by
+/// delegating to the inherent inventory methods. This impl **is** the inverted `db -> ml` edge —
+/// `db` names the trait, `ml` supplies the implementation, so the dependency now runs one way.
+impl EmbeddingProvenance for Registry {
+    fn check_insert(
+        &self,
+        task: TaskKind,
+        model_id: &ModelId,
+        version: &ModelVersion,
+    ) -> Result<(EmbeddingDim, DistanceMetric), RegistryError> {
+        Registry::check_insert(self, task, model_id, version)
+    }
+
+    fn embedding_spec(&self, task: TaskKind) -> Option<(EmbeddingDim, DistanceMetric)> {
+        self.canonical_for(task)?.embedding_spec()
+    }
+
+    fn canonical_version(&self, task: TaskKind) -> Option<ModelVersion> {
+        self.canonical_for(task)
+            .map(|r| r.canonical_version.clone())
     }
 }
 
@@ -615,6 +538,65 @@ mod tests {
                 .canonical_version,
             ModelVersion::from("1"),
             "a bump on one slot must not touch another"
+        );
+    }
+
+    #[test]
+    fn vector_tables_describe_exactly_the_embedding_slots() {
+        // The db-side schema description: one partition table per embedding slot, sized and
+        // ranked from the same row the provenance gate reads. Detection slots store no vectors.
+        let reg = Registry::canonical();
+        let specs = reg.vector_tables();
+        assert_eq!(specs.len(), 2);
+        let sem = specs
+            .iter()
+            .find(|s| s.task == TaskKind::SemanticSearch)
+            .unwrap();
+        assert_eq!(sem.dim, EmbeddingDim(512));
+        assert_eq!(sem.metric, DistanceMetric::Cosine);
+        assert!(
+            specs
+                .iter()
+                .any(|s| s.task == TaskKind::FaceRecognition && s.dim == EmbeddingDim(512))
+        );
+        assert!(
+            !specs
+                .iter()
+                .any(|s| matches!(s.task, TaskKind::ObjectDetection | TaskKind::FaceDetection)),
+            "a detection slot must not claim a vector partition"
+        );
+    }
+
+    #[test]
+    fn the_provenance_seam_answers_exactly_as_the_inventory_does() {
+        // The vector index sees the registry only through `EmbeddingProvenance`. If that view
+        // ever drifted from the inherent methods, `db` would gate on different facts than `ml`.
+        let mut reg = Registry::canonical();
+        reg.set_canonical_version(TaskKind::FaceRecognition, ModelVersion::from("7"));
+        for task in TaskKind::ALL {
+            let row = reg.canonical_for(task);
+            assert_eq!(
+                EmbeddingProvenance::embedding_spec(&reg, task),
+                row.and_then(ModelRow::embedding_spec),
+                "embedding_spec drifted for {task:?}"
+            );
+            assert_eq!(
+                EmbeddingProvenance::canonical_version(&reg, task),
+                row.map(|r| r.canonical_version.clone()),
+                "canonical_version drifted for {task:?}"
+            );
+            let id = row.map_or_else(|| ModelId::from("none"), |r| r.model_id.clone());
+            let ver = ModelVersion::from("1");
+            assert_eq!(
+                EmbeddingProvenance::check_insert(&reg, task, &id, &ver),
+                reg.check_insert(task, &id, &ver),
+                "check_insert drifted for {task:?}"
+            );
+        }
+        // The bumped slot's partition follows the swap, so the index queries the new version.
+        assert_eq!(
+            EmbeddingProvenance::canonical_version(&reg, TaskKind::FaceRecognition),
+            Some(ModelVersion::from("7"))
         );
     }
 

@@ -7,4 +7,7 @@ pub use driver::DatabaseDriver;
 pub use rows::{
     AlbumRow, AssetRow, AssetStackRow, AssetTagRow, CachedRepresentationRow, StackMemberRow,
 };
-pub use vector::{EmbeddingInsert, EmbeddingRecord, KnnHit, VectorIndexError};
+pub use vector::{
+    EmbeddingInsert, EmbeddingProvenance, EmbeddingRecord, KnnHit, VectorIndexError,
+    VectorTableSpec,
+};

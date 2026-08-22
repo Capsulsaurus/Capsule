@@ -1,19 +1,26 @@
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use rusqlite::{Connection, params};
 
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
 use crate::db::schema;
+use crate::domain::model_identity::TaskKind;
 
 pub struct DatabaseDriver {
     pub(in crate::db) conn: Connection,
+    /// Tasks whose `vec0` partition table this driver has already created. The DDL is idempotent,
+    /// so this is purely a hot-path memo — see [`crate::db::vector::VectorTableSpec`] for why the
+    /// tables are created by their writer rather than at open time.
+    pub(in crate::db) vector_tables: RefCell<BTreeSet<TaskKind>>,
 }
 
 impl DatabaseDriver {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
-        let driver = Self { conn };
+        let driver = Self::new(conn);
         driver.init_schema()?;
         Ok(driver)
     }
@@ -21,16 +28,24 @@ impl DatabaseDriver {
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open_in_memory()?;
-        let driver = Self { conn };
+        let driver = Self::new(conn);
         driver.init_schema()?;
         Ok(driver)
     }
 
+    fn new(conn: Connection) -> Self {
+        Self {
+            conn,
+            vector_tables: RefCell::new(BTreeSet::new()),
+        }
+    }
+
     pub fn init_schema(&self) -> Result<(), rusqlite::Error> {
         self.conn.execute_batch(schema::DDL)?;
-        // The per-task vector tables are sized from the model registry (their `vec0` dimension is
-        // registry-declared), so they are created here rather than in the static DDL.
-        crate::db::vector::create_vector_tables(&self.conn, &crate::ml::Registry::canonical())?;
+        // The per-task `vec0` tables are deliberately NOT created here: their column width and
+        // metric come from the model that writes them, which this layer knows nothing about.
+        // Each is created on first insert/query from the spec its writer declares, or eagerly via
+        // [`DatabaseDriver::create_vector_tables`].
         self.conn.execute_batch(&format!(
             "PRAGMA user_version = {};",
             schema::SCHEMA_VERSION
