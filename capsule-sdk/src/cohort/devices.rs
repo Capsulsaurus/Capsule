@@ -54,6 +54,14 @@ pub struct DeviceEntry {
     /// The advisory device-cohort hash asserted at session creation, if any.
     #[serde(default)]
     pub cohort_hash: Option<String>,
+    /// The hardware device id asserted at session creation, if any (S-N3).
+    ///
+    /// Client-asserted and unverified, like [`cohort_hash`](Self::cohort_hash) — it gates
+    /// nothing and is absent from the JWT claims. It exists so a support bundle can report
+    /// the `(device_id, session_id)` pair the authentication doc specifies; `id` above stays
+    /// the session id.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 /// One entry of the durable cohort map (persists beyond session expiry). Mirrors the
@@ -140,8 +148,7 @@ impl CohortGroup {
                 .iter()
                 .map(|d| SupportBundleEntry {
                     // The S-C13 listing surfaces only the session id; the hardware
-                    // `device_id` is not yet on this wire surface (server follow-up).
-                    device_id: None,
+                    device_id: d.device_id.clone(),
                     session_id: d.id.clone(),
                     first_seen: d.created_at,
                     last_seen: d.last_active_at,
@@ -254,8 +261,8 @@ impl DevicesView {
 /// One session's row in a [`SupportBundle`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupportBundleEntry {
-    /// The hardware `device_id`, when the surface provides it. `None` today — the
-    /// S-C13 listing exposes only the session id (a server follow-up owes device_id).
+    /// The hardware `device_id` the session was created with, when the client asserted one
+    /// (S-N3). `None` for a session opened by a client that sent no device id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_id: Option<String>,
     /// The session id.
@@ -297,6 +304,22 @@ mod tests {
             ip_address: None,
             is_current: current,
             cohort_hash: cohort.map(str::to_string),
+            device_id: None,
+        }
+    }
+
+    /// The same fixture, but for a client that asserted a hardware device id (S-N3).
+    fn device_with_id(
+        id: &str,
+        device_id: &str,
+        cohort: Option<&str>,
+        created: i64,
+        last: i64,
+        current: bool,
+    ) -> DeviceEntry {
+        DeviceEntry {
+            device_id: Some(device_id.to_string()),
+            ..device(id, cohort, created, last, current)
         }
     }
 
@@ -407,8 +430,67 @@ mod tests {
         let json = serde_json::to_string(&bundle).unwrap();
         let back: SupportBundle = serde_json::from_str(&json).unwrap();
         assert_eq!(bundle, back);
-        // device_id is absent on this surface today; the field is omitted, not null.
+        // `device_id` is `Option`, serialized with `skip_serializing_if` semantics: a
+        // session whose client asserted none is omitted from the bundle, not rendered null.
         assert!(!json.contains("device_id"));
+    }
+
+    /// The authentication doc's support-bundle contract: each session line carries the
+    /// `(device_id, session_id)` **pair**. Before S-N3 the listing exposed only the session
+    /// id, so `device_id` was hard-coded `None` here and the pair could never be reported.
+    #[test]
+    fn support_bundle_carries_the_device_id_session_id_pair() {
+        let listing = SessionListing {
+            devices: vec![
+                device_with_id(
+                    "sess-old",
+                    "018f2b1c-0000-7000-8000-000000000001",
+                    Some("cohortA"),
+                    100,
+                    150,
+                    false,
+                ),
+                device_with_id(
+                    "sess-new",
+                    "018f2b1c-0000-7000-8000-000000000002",
+                    Some("cohortA"),
+                    200,
+                    250,
+                    true,
+                ),
+            ],
+            cohorts: vec![CohortMapEntry {
+                cohort_hash: "cohortA".into(),
+                first_seen: 100,
+                last_seen: 250,
+            }],
+        };
+        let bundle = DevicesView::from_listing(&listing)
+            .current()
+            .unwrap()
+            .support_bundle();
+
+        let pairs: Vec<(Option<&str>, &str)> = bundle
+            .sessions
+            .iter()
+            .map(|s| (s.device_id.as_deref(), s.session_id.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                (Some("018f2b1c-0000-7000-8000-000000000001"), "sess-old"),
+                (Some("018f2b1c-0000-7000-8000-000000000002"), "sess-new"),
+            ]
+        );
+
+        // Two devices sharing one cohort still report distinct device ids — that is the
+        // whole point of the pair: the cohort groups them, the device id separates them.
+        assert_ne!(bundle.sessions[0].device_id, bundle.sessions[1].device_id);
+
+        let json = serde_json::to_string(&bundle).unwrap();
+        assert!(json.contains("device_id"));
+        let back: SupportBundle = serde_json::from_str(&json).unwrap();
+        assert_eq!(bundle, back);
     }
 
     #[test]
