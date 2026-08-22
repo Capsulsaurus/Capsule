@@ -21,30 +21,39 @@ drop in later:
   capsule-core's model; each field notes its eventual source.
 - `src/data/gateway.ts` — the read-only `CapsuleGateway` interface the UI
   depends on.
-- `src/data/mock/` — `mockGateway`, the in-memory sample data backing the UI
-  today.
-- `src/data/server/` — `serverGateway`, a stub for the real adapter (pending
-  the capsule-api E2E rework).
+- `src/data/server/` — `createBrowserServerGateway`, the real key-free gateway
+  (slice `S-D6`). It drains the sync feed into an IndexedDB-backed client store
+  and answers reads from it — the browser's `library.sqlite` analogue.
 - `src/data/hooks.ts` — TanStack Query hooks (`useAssets`, `useAlbum`, …). UI
   components consume **only** these, never a data source directly.
-- `src/data/index.ts` — selects the active gateway (mock for now).
+- `src/data/index.ts` — selects the active gateway. **The mock gateway is
+  retired**; there is no in-memory fallback.
 
-When the server schema is live, implement `ServerGateway` against the checked-in
-Kynos REST/OpenAPI contract through the Spargen-generated SDK and select it in
-`data/index.ts`. If `capsule-core` later ships
-a WebAssembly build, a decode/verify boundary slots in *below* `CapsuleGateway`
-— assets would arrive as ciphertext references plus a `decode()` call — without
-changing the UI.
+Reads return key-free shells: ids, album membership and counts, and
+awaiting-original state are real; titles, cover art, capture dates, dimensions,
+LQIP and locations live in encrypted metadata and stay absent until a decode and
+verify boundary lands *below* `CapsuleGateway`. That boundary is post-v1. With no
+reachable server the store stays empty and the app renders empty states rather
+than failing.
+
+**Transitional.** The gateway currently drains the `capsule.sync.v1` gRPC-web
+feed served by the Salvo server. That transport is retired: it is replaced by the
+Kynos REST sync surface consumed through the Spargen-generated SDK, and the
+gateway's transport layer (`src/data/server/sync/`) is rewritten against it in
+the same change that moves the server. Until then this path works and is tested;
+it is not dead code.
 
 ## Development
 
 ### Prerequisites
 
 - Install [Bun](https://bun.sh).
-- The replacement API is not available yet; UI-only development uses local fixtures
+- A running server for anything beyond empty states — `mise run serve-api`
+  from the repo root. There is no mock gateway to fall back on.
 
-The app runs against the mock gateway out of the box, so no backend is required
-for UI work. Network-backed authentication and library reads remain planned.
+With no reachable server the app still builds, runs, and renders empty states, so
+pure UI work needs no backend. Authenticated writes are not a web surface: the
+browser client is read-only plus guest drops.
 
 ### Commands
 
@@ -70,5 +79,13 @@ the generated catalogs by hand.
 
 ## API
 
-The web client will consume the checked-in Kynos REST/OpenAPI contract through the
-planned Spargen-generated SDK. The replacement server and SDK are not available yet.
+Today the client reads the `capsule.sync.v1` gRPC-web feed directly, through the
+hand-written transport in `src/data/server/sync/`. That is transitional: the
+target is the checked-in Kynos REST/OpenAPI contract consumed through the
+Spargen-generated SDK, which replaces `sync/transport.ts` without changing
+`CapsuleGateway` or anything above it. The Kynos server and its regenerated SDK
+do not exist yet, so the current path stands until they do.
+
+Guest drops and the share-link viewer do not go through this gateway at all —
+they seal and open in the browser via `capsule-wasm`, and are unaffected by the
+transport change.
