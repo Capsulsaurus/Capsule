@@ -185,12 +185,18 @@ private let moduleTargets: [Target] =
         .target(name: "AssetKit"),
     ])
 
-    // Design system + shared UI components (incl. the photo grid).
-    + module("CapsuleUI", dependencies: [
-        .target(name: "CapsuleFoundation"),
-        .target(name: "ImagePipeline"),
-        .target(name: "AssetKit"),
-    ])
+    // Design system + shared UI components: the virtualized timeline geometry,
+    // the shared photo grid, and `PlatformCollection/` — the one UIKit/AppKit
+    // island every grid in the app is built on.
+    + module(
+        "CapsuleUI",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "ImagePipeline"),
+            .target(name: "AssetKit"),
+        ],
+        testDependencies: []
+    )
 
     // Feature modules.
     + module(

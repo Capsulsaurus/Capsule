@@ -262,6 +262,12 @@ enum UtilityCategory: String, CaseIterable, Identifiable, Hashable {
 
 /// A type-erased Collections link row, so Utilities and More can share one
 /// grouped-list builder over their different category enums.
+///
+/// `@MainActor` because the initializers build SwiftUI views and reach
+/// `ButtonStyle.plain`, which is main-actor isolated. Every construction site is
+/// already inside a view body, so this costs nothing and removes the isolation
+/// warning that would become an error under a stricter language mode.
+@MainActor
 struct AnyCollectionLink: Identifiable {
     let id: String
     let navigationLink: AnyView

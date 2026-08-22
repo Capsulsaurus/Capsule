@@ -43,9 +43,9 @@ public extension View {
     /// full presentation surface — so this maps to a `sheet` there, given a
     /// minimum size large enough that a photo viewer is actually usable instead
     /// of the default, form-sized sheet.
-    func capsuleFullScreenCover<Item: Identifiable, Content: View>(
+    func capsuleFullScreenCover<Item: Identifiable>(
         item: Binding<Item?>,
-        @ViewBuilder content: @escaping (Item) -> Content
+        @ViewBuilder content: @escaping (Item) -> some View
     ) -> some View {
         #if os(iOS)
             fullScreenCover(item: item, content: content)

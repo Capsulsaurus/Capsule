@@ -1,6 +1,6 @@
-import CapsuleFoundation
 import AssetKit
 import AVKit
+import CapsuleFoundation
 import CapsuleUI
 import ImagePipeline
 import Photos
