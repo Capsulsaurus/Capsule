@@ -47,6 +47,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::open::HardwareDekBinding;
 pub use self::upload::{DerivativeBlob, UploadBundle};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
@@ -489,6 +490,33 @@ impl Workspace {
     /// the crypto lifecycle writes through to.
     pub fn db(&self) -> &DatabaseDriver {
         &self.library.db
+    }
+
+    /// This device's published **DEK** public encapsulation key — the bytes a peer (or this
+    /// account's own escrow path) wraps a key to so only this device can open it.
+    ///
+    /// Length-tagged by composition (`S-F8`): 1216 bytes for the software X-Wing DEK, 1249 for
+    /// the hardware-bound P-256 hybrid, so a recipient never has to be told which it is holding
+    /// and the two can never be confused for one another.
+    pub fn device_dek_public(&self) -> Vec<u8> {
+        self.account.device.dek.public_bytes()
+    }
+
+    /// Recover the 32-byte shared secret from a ciphertext sealed to
+    /// [`device_dek_public`](Self::device_dek_public).
+    ///
+    /// When the DEK is hardware-bound this performs the classical ECDH **inside the secure
+    /// element** — the device's P-256 scalar is never in this process's memory — so it can fail on
+    /// a cancelled biometric or an evicted key as well as on a malformed ciphertext.
+    pub fn device_dek_decapsulate(&self, ciphertext: &[u8]) -> Result<[u8; 32]> {
+        Ok(self.account.device.dek.decapsulate(ciphertext)?)
+    }
+
+    /// Whether this workspace's DEK has its classical half in a secure element (`S-F8`) rather
+    /// than in software — the honest answer to "is this device actually hardware-bound", read
+    /// from the account's own recorded binding rather than from whether an element was offered.
+    pub fn device_dek_is_hardware_bound(&self) -> bool {
+        self.account.device.dek.is_hardware_bound()
     }
 }
 

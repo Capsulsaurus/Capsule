@@ -47,7 +47,7 @@ pub(crate) use kem::{ESEED_LEN, encapsulate_to_public_derand};
 pub use kem_p256::{
     DEK_P256_CIPHERTEXT_LEN, DEK_P256_PUBLIC_LEN, P256HybridDek, encapsulate_to_p256_public,
 };
-pub use keystore::{Account, AccountFile, DeviceKeys};
+pub use keystore::{Account, AccountFile, DekBinding, DeviceDek, DeviceKeys};
 pub use master::MasterKey;
 pub use p256::P256HybridSigningKey;
 pub use signer::Signer;
