@@ -36,8 +36,15 @@ import {
 } from './sync/transport';
 
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';
-/** The deployed sync feed base — the gRPC service path is appended by the transport. */
-const SYNC_BASE = `${API_BASE}/v1/sync`;
+/**
+ * The deployed sync feed base — the gRPC service path is appended by the transport.
+ *
+ * The service mounts at the server ROOT, not under `/v1`: gRPC addresses a method by its
+ * fully-qualified path, and native tonic clients discard any path on the endpoint URI, so a
+ * prefixed mount is unreachable from them. Versioning rides the proto package
+ * (`capsule.sync.v1`), not the URL.
+ */
+const SYNC_BASE = API_BASE;
 /** Page size requested from the feed (the server clamps to its own max). */
 const PAGE_SIZE = 256;
 /** Bound the initial catch-up so a hostile/huge feed cannot spin forever in one pass. */

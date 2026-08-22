@@ -109,14 +109,6 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                     .push(media::get_drops_router(conn.clone(), &env.server).await?),
             );
     }
-    // The gRPC-over-salvo bridge is exercised end-to-end by slice S-C2 (SLICES.md).
-    #[cfg(feature = "sync")]
-    {
-        // gRPC sync routes
-        v1_router = v1_router.push(
-            Router::with_path("sync").push(sync::get_router(conn.clone(), &env.server).await?),
-        );
-    }
 
     // Add version endpoint
     v1_router = v1_router.push(Router::with_path("version").get(routes::version::get_version));
@@ -136,6 +128,16 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
     let root = Router::new().push(v1_router);
     #[cfg(feature = "media")]
     let root = root.push(well_known_router);
+
+    // The gRPC sync service mounts at the ROOT, not under /v1 — gRPC addresses a method by
+    // its fully-qualified path (`/capsule.sync.v1.SyncService/Sync`), and tonic's client
+    // discards any path on the endpoint URI: `AddOrigin` keeps only the scheme and authority
+    // and lets the generated stub write the path. So a prefixed mount is unreachable from
+    // every native client, no matter how the endpoint is configured. Versioning is not lost —
+    // the proto package already carries it (`capsule.sync.v1`). Exercised end to end by
+    // slice S-C2 (SLICES.md).
+    #[cfg(feature = "sync")]
+    let root = root.push(sync::get_router(conn.clone(), &env.server).await?);
 
     let router;
     #[cfg(feature = "openapi")]

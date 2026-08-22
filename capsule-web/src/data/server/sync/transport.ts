@@ -41,8 +41,9 @@ export class SyncTransportError extends Error {
 export interface GrpcWebTransportConfig {
     /**
      * Feed base URL up to (not including) the gRPC service path — the transport appends
-     * `/capsule.sync.v1.SyncService/Sync`. In the deployed server this is
-     * `${API_BASE}/v1/sync` (see `capsule-api::create_router`).
+     * `/capsule.sync.v1.SyncService/Sync`. In the deployed server this is the bare
+     * `${API_BASE}`: the service mounts at the root, not under `/v1` (see
+     * `capsule-api::create_router` for why).
      */
     baseUrl: string;
     /** The `x-capsule-protocol` version the client speaks (`YYYY-MM-DD`). */
