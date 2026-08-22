@@ -104,6 +104,26 @@ class JustifiedGalleryTest {
     }
 
     @Test
+    fun `the pinned header occupies its reserved slot and nothing beneath it`() {
+        val state = GalleryState()
+        compose.setContent { GalleryHarness(plan = plan, state = state) }
+        compose.waitForIdle()
+
+        val pinned = compose.onNodeWithTag(GalleryTestTags.STICKY_HEADER).fetchSemanticsNode().boundsInRoot
+        val firstCell = compose.onNodeWithTag("cell-0", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+
+        // The overlay sits in a Box that offers the whole viewport as its maximum, so a
+        // header slot whose content fills its parent — the natural thing to write — will
+        // silently grow to cover the entire library. Nothing about measurement, placement or
+        // semantics notices; every cell underneath still reports itself as displayed.
+        assertEquals("the pin must be exactly the height the plan reserved", plan.heightOf(0), pinned.height, 0.5f)
+        assertTrue(
+            "the pin must not cover the photographs beneath it (pinned=$pinned cell=$firstCell)",
+            pinned.bottom <= firstCell.top + 0.5f,
+        )
+    }
+
+    @Test
     fun `an empty section list still renders`() {
         val single = GalleryFixture.plan(assets = 1, perSection = 1)
         val state = GalleryState()

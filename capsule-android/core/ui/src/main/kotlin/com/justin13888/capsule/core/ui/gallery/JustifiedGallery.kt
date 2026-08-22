@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.lazy.layout.LazyLayout
 import androidx.compose.foundation.lazy.layout.LazyLayoutItemProvider
@@ -206,6 +207,14 @@ private fun galleryGestureModifier(
  * trivially correct instead of being a piece of state written during measure and read
  * during composition.
  *
+ * The height is pinned to the slot the plan reserved for this header, exactly as the
+ * in-content copy is by [GalleryMeasurePolicy]. That is not a detail: the overlay sits in a
+ * `Box` that offers the whole viewport as its maximum, so an unconstrained header slot
+ * whose content fills its parent — which is what a caller naturally writes — would grow to
+ * the full height of the gallery and paint opaquely over every photograph beneath it. Both
+ * copies must also agree on height or the push-off hand-off at a section boundary would
+ * visibly jump.
+ *
  * The offset is computed in the layout phase, so travelling through a section costs a
  * placement rather than a recomposition.
  */
@@ -217,11 +226,15 @@ private fun BoxScope.StickyHeader(
 ) {
     val section = state.firstVisibleSection
     if (section < 0 || section >= plan.sectionCount) return
+    val headerSlot = headerSlotOf(plan, section)
+    if (headerSlot < 0) return
+    val height = with(LocalDensity.current) { plan.heightOf(headerSlot).toDp() }
     Box(
         modifier =
             Modifier
                 .align(Alignment.TopStart)
                 .fillMaxWidth()
+                .height(height)
                 .testTag(GalleryTestTags.STICKY_HEADER)
                 .offset { IntOffset(0, stickyHeaderOffset(plan, section, state.scrollY)) },
     ) {
