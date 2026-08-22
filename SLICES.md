@@ -211,6 +211,7 @@ their owed remainder now lives.
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI     | server      | —            | S    | ready   |
 | S-C23 | `revoke_all_sessions` with master-key proof            | server      | —            | M    | ready   |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server      | —            | M-L  | ready   |
+| S-C25 | Album provisioning + UUID album ids (unblocks push)     | server      | —            | M    | ready   |
 | S-E5  | Federation capability gate on the live gRPC method     | federation  | —            | M-L  | ready   |
 | S-X4  | Per-user block MLS Remove + epoch bump                 | crypto/mls  | —            | M    | ready   |
 | S-F8  | Hardware DEK → workspace keystore wiring               | platform    | —            | M    | ready   |
@@ -611,6 +612,49 @@ carries the audience split. Today OIDC is a config struct with zero routes
 - **Done when:** the versioning doc's server-side ceremony bullets pass against
   testcontainer Postgres (stale-session 409, drain, joiner lineage visible on the
   feed). **Tier:** Unit + Smoke; completes E2E case 8's server shape.
+
+### S-C25 — Album provisioning and UUID album ids
+
+- **Contract:** [Filesystem — Server: Ownership Partitioning](capsule-docs/src/content/docs/design/filesystem/server.md)
+  ("a plain **UUID** the server stores and serves… the server learns only which album UUID is
+  currently the default"), [Organization — The Default Album](capsule-docs/src/content/docs/design/organization.md)
+  (the id is derived deterministically from the account master key, so a device can locate it
+  without waiting on a synced pointer), [Validation invariant 6](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-22 while landing S-D18): **a client can never register its album with
+  the server, so `capsule push` cannot succeed.** Two independent causes:
+  1. Every album-id column is a 21-char nanoid — `albums.id`, `album_shares.album_id`,
+     `assets.album_id`, `sync_album_seq.album_id`, `sync_entries.album_id`,
+     `lifecycle_op_replay.album_id` — all from the original pre-key-free schema. The client's
+     album id is a UUID, and Postgres refuses it outright:
+     `value too long for type character(21)`.
+  2. **No album-provisioning endpoint exists.** The whole `/v1/albums` tree is S-C16's
+     `{album_id}/ops`. Nothing creates an album row, so invariant 6 (album exists + writable)
+     can never pass for a client-derived album.
+  Observed end to end: register → import → push reaches the T0 metadata session on the wire
+  and is refused with `error.upload.album_access_denied`.
+- **Deliverable:** widen the six album-id columns to hold a UUID (forward-only migration,
+  backfill-safe — existing nanoid values still fit), and add an **idempotent** album
+  provisioning surface that accepts the caller's derived album id and binds it to the
+  authenticated owner. Idempotency is not optional: the client re-derives the same id on every
+  device and after recovery, so re-registering must be a no-op rather than a conflict.
+- **Privacy constraint:** provisioning must **not** accept an album name. `albums.name` and
+  `albums.description` are plaintext columns predating the key-free model; the server is not
+  entitled to album titles. Do not populate them from client input — see `S-C26`.
+- **Done when:** `capsule push` puts bytes on the server end to end, and re-running it is a
+  no-op; provisioning the same id twice succeeds both times. **Tier:** Unit + Smoke + E2E.
+
+### S-C26 — Retire the plaintext album name/description columns
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) (key-free
+  server), [Filesystem — Server](capsule-docs/src/content/docs/design/filesystem/server.md)
+  ("Album *contents* stay E2E-encrypted").
+- **Gap:** `entity::album` carries `name: String` and `description: String` as plaintext
+  Postgres columns — a residue of the pre-key-free schema, in the same family as the entities
+  S-G3 retired. Album titles are user content and belong in the encrypted sidecar, which is
+  already where clients read them from.
+- **Deliverable:** drop both columns and every write to them; confirm no read path depends on
+  them (the sync feed is key-free and does not carry them).
+- **Done when:** the columns are gone and the API surface is unchanged. **Tier:** Unit.
 
 ## Lane E — federation
 
