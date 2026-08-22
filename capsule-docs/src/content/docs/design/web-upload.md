@@ -10,7 +10,7 @@ This is the realization of the [Keys — Non-registered accounts](/design/crypto
 
 This doc **owns** the upload-link capability, the sealed **drop** wire object, the drop upload protocol, the adoption transition, and the **web client class**. The Drop Key's cryptographic shape and escrow are owned by [Keys — Non-registered accounts](/design/cryptography/keys/#non-registered-accounts); the in-place key-rewrap on adoption is owned by [Keys — Key Chain](/design/cryptography/keys/#key-chain) and [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation); the `key_mode`/`wrapped_file_key` manifest fields are owned by [Provenance — Asset Manifest](/design/cryptography/provenance/#asset-manifest). This doc references those declarations and restates none of them.
 
-Implementation will live in `capsule-core::drop` (drop sealing in WASM, link issuance, adoption rewrap), `capsule-api-media::drops` (drop store, the provisioning user's inbox, the adoption transition), and `capsule-web` (the browser/WASM client). The drop upload reuses the wire mechanics of [`capsule-api-upload`](/design/import/upload-protocol/); adoption is driven through `capsule-sdk`.
+Implementation will live in `capsule-core::drop` (drop sealing in WASM, link issuance, adoption rewrap), `capsule-api::drops` (drop store, the provisioning user's inbox, the adoption transition), and `capsule-web` (the browser/WASM client). The drop upload reuses the wire mechanics of [`capsule-api::upload`](/design/import/upload-protocol/); adoption is driven through `capsule-sdk`.
 
 ## Two Confidentiality Properties
 
@@ -129,7 +129,7 @@ trait DropAdopter {
 // in capsule-core::drop  (sealing; compiled to WASM for capsule-web)
 fn seal_drop(plaintext: impl Read, drop_pubkey: KemPublicKey, crypto_suite_id: u16) -> Result<SealedDrop, Error>;
 
-// in capsule-api-media::drops
+// in capsule-api::drops
 //   POST   /u/{opaque-id}/drop            → open a drop session (link-capability auth; quota + caps checked here)
 //   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (upload-protocol chunk rules verbatim:
 //                                            required X-Capsule-Checksum, application/octet-stream, alignment)
@@ -150,7 +150,7 @@ Concrete error variants are an implementation detail; the opaque-id entropy, fra
 
 ## Validation
 
-The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store + inbox + adoption transition live in `capsule-api-media::drops`.
+The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store + inbox + adoption transition are planned in `capsule-api::drops`.
 
 - **Drop seal round-trip (unit).** Seal a plaintext under a random `K` to a Drop Key public half; decapsulate with the private half; STREAM-decrypt; assert byte-equality. Assert `kem_ct` length matches the suite.
 - **Opaque-id entropy (unit).** Assert generated upload-link ids are ≥128-bit and non-sequential, identical to the [share-link check](/design/share-links/#validation).

@@ -6,7 +6,7 @@ status: draft
 
 Share links let a Capsule user grant view (and possibly limited write) access to an album or a specific asset *without* requiring the recipient to have a Capsule account. The recipient is the [non-registered account](/design/authentication/#account-types) class — no master key, no User IK, no MLS membership. The cryptographic shape (the link secret carries the decryption material; an optional passphrase wraps it with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf)) is owned by [Cryptography — Keys: Non-registered accounts](/design/cryptography/keys/#non-registered-accounts); this doc owns everything else.
 
-Implementation will live in `capsule-api-media::shares` (public-share serving endpoints) and `capsule-core::sharing` (link generation, capability validation).
+Implementation will live in the planned `capsule-api::shares` module (public-share serving endpoints) and `capsule-core::sharing` (link generation, capability validation).
 
 ## Scope (v1)
 
@@ -35,7 +35,7 @@ These are **normative** — the security-relevant decisions are committed; only 
 - **Home-server-only serving.** A share link is served **only by the album's [home server](/design/federation/#album-ownership-v1-single-home-server)**. A federated peer never serves a share; a share-scoped request at a peer returns a **structured `{ home_server }` JSON pointer** the client resolves — explicitly *not* an HTTP redirect, to avoid an open-redirect surface — never content. This keeps revocation and rate-limiting at a single authoritative point.
 - **Revocation cache.** Home-server-only serving still leaves *intra-server* staleness: the serve path may run on several processes or replicas of the one home server, which consult revocation state through a **short-TTL cache (default 60 s)** rather than an authoritative read per request. The posture is fail-closed, matching the [federation revocation list](/design/federation/#token-lifecycle-and-chain-of-trust): a serving process that cannot confirm a link is still live past the TTL refuses rather than serving on stale-allowed state. (A single-process deployment reads revocation state directly and the cache is a no-op.)
 
-**Status note.** v1's two rate limiters are per-process, under a single-replica deployment assumption; a shared (Valkey-backed) limiter for multi-replica home servers is post-v1. The revocation cache's fail-closed rule is implemented as specified.
+**Status note.** v1's two rate limiters are per-process, under a single-replica deployment assumption; a shared (Valkey-backed) limiter for multi-replica home servers is post-v1. The revocation cache's fail-closed rule is normative exactly as specified above and carries unchanged into the `capsule-api::shares` serve path.
 
 ## Contract Skeleton
 
@@ -48,7 +48,7 @@ trait ShareLinkIssuer {
     fn revoke(link_id: ShareLinkId) -> Result<(), Error>;
 }
 
-// in capsule-api-media::shares
+// planned in capsule-api::shares
 //   GET  /s/{opaque-id}                 → metadata blob + LQIP (mandatory server-side strip — see Security Contract)
 //   GET  /s/{opaque-id}/blob/{hash}     → ciphertext blob; client decrypts using link-derived key
 //   GET  /s/{opaque-id}/wrapped-secret  → the passphrase-WRAPPED link material, when the link is

@@ -6,11 +6,11 @@ status: draft
 
 Authentication binds a user identity to their master key, which is the root of every encryption and decryption operation in Capsule. The server can prove "this request is from a session it issued" but cannot prove "this user is who they say they are" — the master key, owned client-side, is the actual identity root. Everything below works to keep that binding intact through the lifetime of a session and across server moves.
 
-Implemented in `capsule-api-auth`: OIDC handler (`oidc`), session ledger (`session`), claim validation (`claims`). The per-device enrollment records (`devices`) are planned with [Device Enrollment](/design/device-enrollment/). The session token format and the OIDC discovery surface below are the contracts other components — including federated peers — depend on.
+Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validation, and per-device records. The retired Salvo implementation remains under `legacy-review/server-salvo/auth/` as review material, not an active server. The session token format and OIDC discovery surface below are the contracts other components — including federated peers — will depend on.
 
 ## Design Principles
 
-- **Two first-class auth paths.** Local auth (password + TOTP, passkeys) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth ships today.
+- **Two first-class auth paths.** Local auth (password + TOTP, passkeys) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth is the default path a deployment gets without configuring an IdP.
 - **Cryptographic binding.** The user's identity is cryptographically bound to their master key. The server never sees the plaintext master key.
 
 ## Account Types
@@ -51,7 +51,7 @@ Every well-known path Capsule serves, in one census. Each path's record format i
 | `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
 | `.well-known/capsule/attestation-keys` | The server's storage-attestation public keys + append-only key history.                                                        | [Storage Verification](/design/import/storage-verification/)                                              |
 
-**Status note.** v1 serves `attestation-keys` today; `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability).
+**Status note.** `attestation-keys` is part of the v1 server contract (specified, and exercised end-to-end against the pre-teardown server); `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability). All of them are served by the planned `capsule-api` Kynos surface.
 
 ## Account Portability
 
@@ -69,7 +69,7 @@ Because the IK signs the move and every device cross-signs to that IK, no server
 
 ## Session and Access Tokens
 
-These are the two token shapes consumers depend on. Both are issued by `capsule-api-auth::session` after a successful authentication ceremony.
+These are the two token shapes consumers depend on. Both will be issued by `capsule-api::auth::session` after a successful authentication ceremony.
 
 ### Session ID
 

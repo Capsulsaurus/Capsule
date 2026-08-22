@@ -6,7 +6,7 @@ status: draft
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).
 
-Federation reuses the existing read primitives — the sync feed, `/blob/{hash}`, the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Planned to live in `capsule-api-sync::federation` (today a stub crate): capability issuance, verification, the pull path, and per-peer rate budgeting.
+Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-api::federation`.
 
 ## Threat Model
 
@@ -16,15 +16,15 @@ This extends the security posture established in the [cryptography](/design/cryp
 
 ## Federation Reuses Existing Primitives
 
-Federation deliberately introduces **no new data protocol**. A remote server fetches exactly the same content-addressed primitives a client uses, over the same transports (see [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed) and the [API surface map](/design/api-surfaces/#surface--transport-map)):
+Federation deliberately introduces **no new data protocol**. A remote server fetches exactly the same content-addressed primitives a client uses over Kynos REST (see [Import — Download & Sync](/design/import/download-sync/#discovering-what-changed) and the [API surface map](/design/api-surfaces/#surface--transport-map)):
 
 | Operation                 | Transport                                      | Purpose                                                                                       |
 | ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `Sync` (album-scoped)     | gRPC (`capsule.sync.v1.SyncService`)           | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
+| `GET /sync?album_id=…&cursor=…` | REST | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
 | `GET /blob/{hash}`        | REST (HTTP `Range`)                            | Fetch an opaque ciphertext blob by its content address.                                       |
-| Capability presentation   | gRPC `authorization` metadata / REST bearer    | Present a [federation capability](#federation-capabilities) to establish or refresh access.   |
+| Capability presentation   | REST `Authorization: Bearer`                   | Present a [federation capability](#federation-capabilities) to establish or refresh access.   |
 
-Rejection semantics are stated in REST terms throughout this doc; on the gRPC feed they map to gRPC status codes per [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).
+Rejection semantics are the HTTP status plus stable `error.*` body defined by [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).
 
 Everything else — notifications, presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
 

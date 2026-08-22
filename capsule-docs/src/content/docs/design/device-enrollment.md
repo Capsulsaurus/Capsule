@@ -11,7 +11,7 @@ A Capsule account has one or more devices, each holding a hardware-bound DSK + D
 
 These are distinct from **[cross-device recovery](/design/backup-recovery/#default-mechanisms)** (which is also a way to bring up a new device, but in the recovery context — the user has lost their other devices and is using the recovery passphrase + master-key escrow to restore).
 
-Implementation lives in `capsule-core::crypto::keys` (key generation and wrapping — implemented) and `capsule-api-auth::devices` (the device directory and enrollment authentication surface — planned). The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are pending the MLS implementation — see the [MLS status note](/design/cryptography/mls/).
+Key generation and wrapping live in `capsule-core::crypto::keys`; the device directory and enrollment authentication surface are planned in `capsule-api::auth::devices`. The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are pending the MLS implementation — see the [MLS status note](/design/cryptography/mls/).
 
 ## First-Device Enrollment
 
@@ -31,7 +31,7 @@ Two design points:
 
 ## Cross-Device Add
 
-**Status note.** The server surface (code issue/redeem, relay channel, directory update) is implemented; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
+**Status note.** The server surface (code issue/redeem, relay channel, directory update) is contract-complete and returns with the planned `capsule-api::auth::devices` module; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
 
 When an existing signed-in device adds a new device to the same account:
 
@@ -63,7 +63,7 @@ The two ceremonies may share underlying code (channel-establishment, key-transfe
 // in capsule-core::crypto::keys
 fn first_device_setup(passphrase: &str) -> Result<EnrollmentResult, EnrollmentError>;
 
-// in capsule-api-auth::devices
+// planned in capsule-api::auth::devices
 fn issue_enrollment_code() -> EnrollmentCode;       // server stores a short-lived record
 fn redeem_enrollment_code(code: EnrollmentCode) -> Result<ChannelHandle, EnrollmentError>;
 
