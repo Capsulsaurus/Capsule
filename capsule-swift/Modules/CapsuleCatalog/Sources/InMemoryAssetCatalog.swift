@@ -1,14 +1,19 @@
-import CapsuleCatalog
 import Foundation
 
-/// An in-memory ``AssetCatalog`` for tests.
+/// An in-memory ``AssetCatalog`` — the reference implementation of the catalog
+/// contract.
 ///
-/// `MockCatalog` is a *faithful* implementation of the catalog contract — same
-/// timeline ordering, soft-delete visibility, and album semantics as the real
-/// SQLite-backed ``CapsuleCatalog`` — so any consumer tested against it sees
-/// realistic behaviour without an FFI dependency. It is an `actor`, matching
-/// the contract's concurrency model.
-public actor MockCatalog: AssetCatalog {
+/// It is *faithful*, not a stub: same timeline ordering, same soft-delete
+/// visibility, same album semantics as the SQLite-backed `FFIAssetCatalog`, so
+/// any consumer exercised against it sees realistic behaviour with no Rust core
+/// linked. It is an `actor`, matching the contract's concurrency model.
+///
+/// It ships rather than living in the test target because three callers need it
+/// outside tests: the mock-lane app, SwiftUI previews, and the scenario
+/// fixtures. The failure-injection knobs below are part of that job — they are
+/// how an edge case that is hard to reproduce against real storage gets
+/// exercised deterministically.
+public actor InMemoryAssetCatalog: AssetCatalog {
     private var assets: [String: CatalogAsset] = [:]
     private var albumsByID: [String: CatalogAlbum] = [:]
     private var stacks: [String: CatalogStack] = [:]
@@ -43,10 +48,10 @@ public actor MockCatalog: AssetCatalog {
 
     public func insertAsset(_ asset: CatalogAsset) throws {
         if failInserts {
-            throw CatalogError.Database(message: "mock: insert failure injected")
+            throw CatalogError.database(message: "mock: insert failure injected")
         }
         guard assets[asset.id] == nil else {
-            throw CatalogError.Database(message: "asset already exists: \(asset.id)")
+            throw CatalogError.database(message: "asset already exists: \(asset.id)")
         }
         assets[asset.id] = asset
     }
@@ -124,7 +129,7 @@ public actor MockCatalog: AssetCatalog {
 
     public func insertAlbum(_ album: CatalogAlbum) throws {
         guard albumsByID[album.id] == nil else {
-            throw CatalogError.Database(message: "album already exists: \(album.id)")
+            throw CatalogError.database(message: "album already exists: \(album.id)")
         }
         albumsByID[album.id] = album
     }

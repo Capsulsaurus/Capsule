@@ -1,3 +1,4 @@
+import CapsuleCatalog
 import CapsuleFoundation
 import Foundation
 
@@ -12,7 +13,7 @@ import Foundation
 ///
 /// - Important: ``init(openingCatalogAt:)`` runs schema migration synchronously;
 ///   construct it off the main actor (e.g. inside a `Task`).
-public actor CapsuleCatalog: AssetCatalog {
+public actor FFIAssetCatalog: AssetCatalog {
     private let catalog: Catalog
 
     /// Routes Rust `log` records into Apple unified logging. A `static let` so
@@ -35,141 +36,233 @@ public actor CapsuleCatalog: AssetCatalog {
     }
 
     /// Open an ephemeral in-memory catalog, for tests and SwiftUI previews.
-    public static func inMemory() throws -> CapsuleCatalog {
+    public static func inMemory() throws -> FFIAssetCatalog {
         CapsuleLog.catalog.debug("opening in-memory catalog")
-        return try CapsuleCatalog(catalog: Catalog.openInMemory())
+        return try FFIAssetCatalog(catalog: Catalog.openInMemory())
     }
 
     public func schemaVersion() throws -> UInt32 {
-        try catalog.schemaVersion()
+        do {
+            return try catalog.schemaVersion()
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     // MARK: Assets
 
     public func insertAsset(_ asset: CatalogAsset) throws {
-        CapsuleLog.catalog.debug("insertAsset id=\(asset.id, privacy: .public)")
-        try catalog.insertAsset(asset: asset.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("insertAsset id=\(asset.id, privacy: .public)")
+            try catalog.insertAsset(asset: asset.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func upsertAsset(_ asset: CatalogAsset) throws {
-        CapsuleLog.catalog.debug("upsertAsset id=\(asset.id, privacy: .public)")
-        try catalog.upsertAsset(asset: asset.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("upsertAsset id=\(asset.id, privacy: .public)")
+            try catalog.upsertAsset(asset: asset.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func asset(id: String) throws -> CatalogAsset? {
-        CapsuleLog.catalog.trace("asset id=\(id, privacy: .public)")
-        return try catalog.findByUuid(uuid: id).map(CatalogAsset.init)
+        do {
+            CapsuleLog.catalog.trace("asset id=\(id, privacy: .public)")
+            return try catalog.findByUuid(uuid: id).map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func asset(hashSHA256: String) throws -> CatalogAsset? {
-        CapsuleLog.catalog.trace("asset hash lookup")
-        return try catalog.findByHash(hash: hashSHA256).map(CatalogAsset.init)
+        do {
+            CapsuleLog.catalog.trace("asset hash lookup")
+            return try catalog.findByHash(hash: hashSHA256).map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func timeline(filter: TimelineFilter, offset: Int, limit: Int) throws -> [CatalogAsset] {
-        let signposter = CapsuleSignpost.catalog
-        let interval = signposter.beginInterval("timeline")
-        defer { signposter.endInterval("timeline", interval) }
-        CapsuleLog.catalog.trace("timeline offset=\(offset) limit=\(limit) filtered=\(!filter.isUnfiltered)")
-        let records = try catalog.queryTimelineFiltered(
-            assetType: filter.assetType,
-            after: filter.capturedAfter,
-            before: filter.capturedBefore,
-            offset: pageValue(offset),
-            limit: pageValue(limit)
-        )
-        return records.map(CatalogAsset.init)
+        do {
+            let signposter = CapsuleSignpost.catalog
+            let interval = signposter.beginInterval("timeline")
+            defer { signposter.endInterval("timeline", interval) }
+            CapsuleLog.catalog.trace("timeline offset=\(offset) limit=\(limit) filtered=\(!filter.isUnfiltered)")
+            let records = try catalog.queryTimelineFiltered(
+                assetType: filter.assetType,
+                after: filter.capturedAfter,
+                before: filter.capturedBefore,
+                offset: pageValue(offset),
+                limit: pageValue(limit)
+            )
+            return records.map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func softDeleteAsset(id: String, deletedAt: Int64) throws {
-        CapsuleLog.catalog.debug("softDeleteAsset id=\(id, privacy: .public)")
-        try catalog.softDelete(uuid: id, deletedAt: deletedAt)
+        do {
+            CapsuleLog.catalog.debug("softDeleteAsset id=\(id, privacy: .public)")
+            try catalog.softDelete(uuid: id, deletedAt: deletedAt)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func restoreAsset(id: String) throws {
-        CapsuleLog.catalog.debug("restoreAsset id=\(id, privacy: .public)")
-        try catalog.restoreAsset(uuid: id)
+        do {
+            CapsuleLog.catalog.debug("restoreAsset id=\(id, privacy: .public)")
+            try catalog.restoreAsset(uuid: id)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func expiredTrash(olderThanSeconds: Int64) throws -> [CatalogAsset] {
-        try catalog.queryExpiredTrash(olderThanSecs: olderThanSeconds).map(CatalogAsset.init)
+        do {
+            return try catalog.queryExpiredTrash(olderThanSecs: olderThanSeconds).map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func trash(offset: Int, limit: Int) throws -> [CatalogAsset] {
-        CapsuleLog.catalog.trace("trash offset=\(offset) limit=\(limit)")
-        return try catalog.queryTrash(offset: pageValue(offset), limit: pageValue(limit))
-            .map(CatalogAsset.init)
+        do {
+            CapsuleLog.catalog.trace("trash offset=\(offset) limit=\(limit)")
+            return try catalog.queryTrash(offset: pageValue(offset), limit: pageValue(limit))
+                .map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func purgeAsset(id: String) throws {
-        CapsuleLog.catalog.debug("purgeAsset id=\(id, privacy: .public)")
-        try catalog.purgeAsset(uuid: id)
+        do {
+            CapsuleLog.catalog.debug("purgeAsset id=\(id, privacy: .public)")
+            try catalog.purgeAsset(uuid: id)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     // MARK: Stacks
 
     public func insertStack(_ stack: CatalogStack) throws {
-        CapsuleLog.catalog.debug("insertStack id=\(stack.id, privacy: .public)")
-        try catalog.insertStack(stack: stack.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("insertStack id=\(stack.id, privacy: .public)")
+            try catalog.insertStack(stack: stack.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func insertStackMember(_ member: CatalogStackMember) throws {
-        CapsuleLog.catalog.debug("insertStackMember stack=\(member.stackID, privacy: .public)")
-        try catalog.insertStackMember(member: member.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("insertStackMember stack=\(member.stackID, privacy: .public)")
+            try catalog.insertStackMember(member: member.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func updateStackHidden(assetID: String, hidden: Bool) throws {
-        CapsuleLog.catalog.debug("updateStackHidden asset=\(assetID, privacy: .public) hidden=\(hidden)")
-        try catalog.updateStackHidden(uuid: assetID, hidden: hidden)
+        do {
+            CapsuleLog.catalog.debug("updateStackHidden asset=\(assetID, privacy: .public) hidden=\(hidden)")
+            try catalog.updateStackHidden(uuid: assetID, hidden: hidden)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func updateStackPrimary(stackID: String, primaryAssetID: String) throws {
-        CapsuleLog.catalog.debug("updateStackPrimary stack=\(stackID, privacy: .public)")
-        try catalog.updateStackPrimary(stackId: stackID, primaryUuid: primaryAssetID)
+        do {
+            CapsuleLog.catalog.debug("updateStackPrimary stack=\(stackID, privacy: .public)")
+            try catalog.updateStackPrimary(stackId: stackID, primaryUuid: primaryAssetID)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func stackMembers(stackID: String) throws -> [CatalogStackMember] {
-        try catalog.listStackMembers(stackId: stackID).map(CatalogStackMember.init)
+        do {
+            return try catalog.listStackMembers(stackId: stackID).map(CatalogStackMember.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     // MARK: Albums
 
     public func insertAlbum(_ album: CatalogAlbum) throws {
-        CapsuleLog.catalog.debug("insertAlbum id=\(album.id, privacy: .public)")
-        try catalog.insertAlbum(album: album.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("insertAlbum id=\(album.id, privacy: .public)")
+            try catalog.insertAlbum(album: album.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func updateAlbum(_ album: CatalogAlbum) throws {
-        CapsuleLog.catalog.debug("updateAlbum id=\(album.id, privacy: .public)")
-        try catalog.updateAlbum(album: album.ffiRecord)
+        do {
+            CapsuleLog.catalog.debug("updateAlbum id=\(album.id, privacy: .public)")
+            try catalog.updateAlbum(album: album.ffiRecord)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func deleteAlbum(id: String) throws {
-        CapsuleLog.catalog.debug("deleteAlbum id=\(id, privacy: .public)")
-        try catalog.deleteAlbum(id: id)
+        do {
+            CapsuleLog.catalog.debug("deleteAlbum id=\(id, privacy: .public)")
+            try catalog.deleteAlbum(id: id)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func album(id: String) throws -> CatalogAlbum? {
-        try catalog.findAlbum(id: id).map(CatalogAlbum.init)
+        do {
+            return try catalog.findAlbum(id: id).map(CatalogAlbum.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func albums() throws -> [CatalogAlbum] {
-        try catalog.listAlbums().map(CatalogAlbum.init)
+        do {
+            return try catalog.listAlbums().map(CatalogAlbum.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func setAssetAlbum(assetID: String, albumID: String?) throws {
-        CapsuleLog.catalog.debug("setAssetAlbum asset=\(assetID, privacy: .public) album=\(albumID ?? "nil", privacy: .public)")
-        try catalog.setAssetAlbum(uuid: assetID, albumId: albumID)
+        do {
+            CapsuleLog.catalog.debug("setAssetAlbum asset=\(assetID, privacy: .public) album=\(albumID ?? "nil", privacy: .public)")
+            try catalog.setAssetAlbum(uuid: assetID, albumId: albumID)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     public func albumAssets(albumID: String, offset: Int, limit: Int) throws -> [CatalogAsset] {
-        CapsuleLog.catalog.trace("albumAssets album=\(albumID, privacy: .public) offset=\(offset) limit=\(limit)")
-        let records = try catalog.queryAlbumAssets(
-            albumId: albumID,
-            offset: pageValue(offset),
-            limit: pageValue(limit)
-        )
-        return records.map(CatalogAsset.init)
+        do {
+            CapsuleLog.catalog.trace("albumAssets album=\(albumID, privacy: .public) offset=\(offset) limit=\(limit)")
+            let records = try catalog.queryAlbumAssets(
+                albumId: albumID,
+                offset: pageValue(offset),
+                limit: pageValue(limit)
+            )
+            return records.map(CatalogAsset.init)
+        } catch {
+            throw nativeCatalogError(error)
+        }
     }
 
     /// Clamp a Swift signed pagination value to the unsigned FFI domain.

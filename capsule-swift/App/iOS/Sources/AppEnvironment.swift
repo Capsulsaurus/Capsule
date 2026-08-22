@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleCatalog
 import CapsuleDiagnostics
 import FeatureTimeline
 import Foundation
@@ -28,14 +29,17 @@ struct AppEnvironment {
 
     init() {
         let layout = ManagedLibraryLayout(root: Self.libraryRoot())
-        let library = ManagedLibrary(layout: layout)
+        // Mock lane: the catalog lives in memory and no Rust core is linked.
+        // The FFI lane swaps this single opener for `FFICatalogOpener`.
+        let library = ManagedLibrary(layout: layout, catalogOpener: InMemoryCatalogOpener())
         let photoKitProvider = PhotoKitProvider()
         let managedProvider = ManagedProvider(library: library)
         let importService = ImportService(
             library: library,
             fileStore: SystemFileStore(),
             hasher: CryptoKitHasher(),
-            metadataExtractor: ImageIOMetadataExtractor()
+            metadataExtractor: ImageIOMetadataExtractor(),
+            sidecarCoder: JSONSidecarCoder()
         )
 
         assetProvider = CompositeAssetProvider(providers: [photoKitProvider, managedProvider])

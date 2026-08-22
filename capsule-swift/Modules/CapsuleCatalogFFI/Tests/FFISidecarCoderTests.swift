@@ -11,10 +11,10 @@ struct SidecarCodecTests {
             uuid: "01956ef3-0000-7000-8000-000000000001",
             assetType: "photo",
             originalFilename: "IMG_1234.HEIC",
-            importTimestamp: 1_720_000_000,
-            modifiedTimestamp: 1_720_000_000,
+            importTimestamp: 1720000000,
+            modifiedTimestamp: 1720000000,
             hashSHA256: String(repeating: "a", count: 64),
-            fileSize: 2_400_000,
+            fileSize: 2400000,
             importerVersion: "capsule-ios/0.1.0",
             rawshiftVersion: "0.0.0"
         )
@@ -23,16 +23,16 @@ struct SidecarCodecTests {
     @Test("a minimal sidecar round-trips through CBOR")
     func minimalRoundTrip() throws {
         let sidecar = makeSidecar()
-        let bytes = try SidecarCodec.encode(sidecar)
+        let bytes = try FFISidecarCoder().encode(sidecar)
         #expect(!bytes.isEmpty)
-        #expect(try SidecarCodec.decode(bytes) == sidecar)
+        #expect(try FFISidecarCoder().decode(bytes) == sidecar)
     }
 
     @Test("a fully-populated sidecar with a stack hint round-trips")
     func fullRoundTrip() throws {
         var sidecar = makeSidecar()
-        sidecar.captureTimestamp = 1_719_990_000
-        sidecar.captureUTC = 1_719_986_400
+        sidecar.captureTimestamp = 1719990000
+        sidecar.captureUTC = 1719986400
         sidecar.captureTimezone = "America/New_York"
         sidecar.captureTimezoneSource = "offset_exif"
         sidecar.width = 4032
@@ -51,7 +51,7 @@ struct SidecarCodecTests {
             stackType: "live_photo"
         )
 
-        #expect(try SidecarCodec.decode(SidecarCodec.encode(sidecar)) == sidecar)
+        #expect(try FFISidecarCoder().decode(FFISidecarCoder().encode(sidecar)) == sidecar)
     }
 
     @Test("an unrecognised asset type is rejected at encode time")
@@ -59,14 +59,14 @@ struct SidecarCodecTests {
         var sidecar = makeSidecar()
         sidecar.assetType = "not_a_real_type"
         #expect(throws: CatalogError.self) {
-            try SidecarCodec.encode(sidecar)
+            try FFISidecarCoder().encode(sidecar)
         }
     }
 
     @Test("decoding malformed bytes throws rather than crashing")
     func malformedBytesRejected() {
         #expect(throws: CatalogError.self) {
-            try SidecarCodec.decode(Data([0xFF, 0x00, 0x13, 0x37]))
+            try FFISidecarCoder().decode(Data([0xFF, 0x00, 0x13, 0x37]))
         }
     }
 }

@@ -71,13 +71,13 @@ struct MockCatalogTests {
     @Test("expiredTrash selects only assets deleted before the cutoff")
     func expiredTrashCutoff() async throws {
         let catalog = MockCatalog()
-        await catalog.setNow(10_000)
+        await catalog.setNow(10000)
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "fresh"))
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "stale"))
-        await catalog.softDeleteAsset(id: "fresh", deletedAt: 9_000)
-        await catalog.softDeleteAsset(id: "stale", deletedAt: 1_000)
+        await catalog.softDeleteAsset(id: "fresh", deletedAt: 9000)
+        await catalog.softDeleteAsset(id: "stale", deletedAt: 1000)
 
-        let expired = await catalog.expiredTrash(olderThanSeconds: 5_000)
+        let expired = await catalog.expiredTrash(olderThanSeconds: 5000)
         #expect(expired.map(\.id) == ["stale"])
     }
 }

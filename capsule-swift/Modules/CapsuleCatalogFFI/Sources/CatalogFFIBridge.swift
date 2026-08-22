@@ -1,3 +1,4 @@
+import CapsuleCatalog
 import Foundation
 
 // Internal conversions between the Swift-native catalog model types and the
