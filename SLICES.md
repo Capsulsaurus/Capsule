@@ -158,15 +158,17 @@ The teardown verdict is final; the **order** is not "retire, then rebuild". It i
   `gen_openapi` binary. Slices whose target is the SDK are marked `RETIRED` because their
   wire contract is re-sourced — not because the crate is being thrown away.
 
-**Environment blocker — lane P rides CI.** `sudo rm -rf /Library/Developer/PrivateFrameworks`
-(the documented fix for the stale `DVTDownloads.framework` shadowing Xcode 26.6) removed
-`CoreSimulator.framework` along with it. `xcodebuild -create-xcframework` now fails with
-**exit 70**, so `mise run setup-swift` and every simulator-backed lane-P verification must
-ride the `build-ios` CI lane until `sudo xcodebuild -runFirstLaunch` is run on the dev host
-to restore the framework. Everything upstream is unaffected: `build-ffi-apple`
-cross-compiles all three Apple targets, uniffi emits both `capsule_core_ffi.swift` and
-`capsule_sdk.swift`, and `lipo` produces the universal simulator slice. **`S-P1` is
-unaffected** — it is pure Rust and verifies with `cargo nextest`.
+**Lane P builds locally again (2026-08-22).** The Xcode host was broken twice over: a stale
+March-2025 `DVTDownloads.framework` shadowed what Xcode 26.6 expects, and the documented fix
+for it (`sudo rm -rf /Library/Developer/PrivateFrameworks`) removed the still-required
+`CoreSimulator.framework` as well, turning a shadowing fault into a missing-framework one
+(`xcodebuild -create-xcframework`, exit 70). `sudo xcodebuild -runFirstLaunch` restored the
+directory with both frameworks, and `mise run build-ffi-apple` now exits 0 and assembles
+`capsule-swift/.ffi/CapsuleCoreFFI.xcframework` with `ios-arm64` and
+`ios-arm64_x86_64-simulator` slices. Simulator-backed lane-P verification runs on the dev host.
+Note for whoever hits this next: `xcodebuild -showsdks` does **not** load the simulator plugin,
+so it is never evidence that this lane works — only a command reaching `-create-xcframework` is.
+swiftformat 0.55 is still SIGKILLed locally, so `format-swift` alone rides CI.
 
 ## Unified Slice Index
 
@@ -229,6 +231,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | ready | |
+| S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -280,14 +283,14 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
-| S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | ready | |
-| S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P4 | Import→seal→upload bridge + status UI | iOS path | S-P1–P3 | L | MIXED | blocked | |
-| S-P5 | Sync-apply into local catalog + render | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | blocked | |
+| S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
+| S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
+| S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | ready | |
+| S-P4 | Import→seal→upload bridge + status UI | iOS path | S-P1–P3 | L | MIXED | blocked | S-P2/S-P3 |
+| S-P5 | Sync-apply into local catalog + render | iOS path | S-P1 | L | MIXED | ready | second-device render → `S-C30` |
+| S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | ready | |
 | S-P7 | Dev-server bring-up (task, keys, blob backend, ATS) | iOS path | — | M | MIXED | done | |
-| S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | blocked | |
+| S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | ready | |
 | S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | ready | |
 | S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | ready | |
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | ready | |
@@ -350,7 +353,7 @@ when" cannot fully pass until the gate lifts.
 | `ptpip-rs` (in-house PTP/IP) | repo not created | `S-B9` (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: `S-F2` Kotlin run, `S-F3` first Android/iOS CI runs + device lanes, `S-F4` Windows ffi build + clippy + real-TPM smoke, `S-F5` Kotlin ECDH adapter, `S-D9` Kotlin harness. |
 | swiftformat 0.55 (mise) | broken on dev host | Binary SIGKILLed (invalid signature); `format-swift` can't run locally. |
-| Xcode 26.6 on the dev host | **broken — blocks simulator-backed lane P locally** | The documented fix for the stale `DVTDownloads.framework` (`sudo rm -rf /Library/Developer/PrivateFrameworks`) also removed `CoreSimulator.framework`, so `xcodebuild -create-xcframework` now fails with **exit 70**. Everything upstream is fine: `build-ffi-apple` cross-compiles all three Apple targets, uniffi emits both `capsule_core_ffi.swift` and `capsule_sdk.swift`, and `lipo` produces the universal simulator slice. **Fix (needs sudo, outside the repo):** `sudo xcodebuild -runFirstLaunch`, then re-run `mise run setup-swift`. Until then `S-P2`–`S-P8` ride the `build-ios` CI lane. **`S-P1` is unaffected** — pure Rust. |
+| Xcode 26.6 on the dev host | **repaired 2026-08-22** | Two faults, one after the other: a stale March-2025 `DVTDownloads.framework` shadowed Xcode 26.6, and `sudo rm -rf /Library/Developer/PrivateFrameworks` (the documented fix) also removed the required `CoreSimulator.framework`, so `-create-xcframework` failed with exit 70 on a *missing* framework. `sudo xcodebuild -runFirstLaunch` restored both. `mise run build-ffi-apple` exits 0 and produces `CapsuleCoreFFI.xcframework`. `xcodebuild -showsdks` does not load the simulator plugin and is not evidence this lane works. |
 | Translation seeds | pending human review | ~350 machine-seeded entries across 12 locales (`S-I1`/`S-I2`/`S-E1`/`S-D3`) flagged in the `context` field; human review is the gate, not agent work. |
 
 ## Lane A — core crypto
@@ -1249,6 +1252,35 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** all three adapters pass one shared conformance suite; a revoke-all reports the
   number of sessions actually removed; and no operation on either port takes an arbitrary
   serializable payload. **Tier:** Unit (in-memory + conformance) + Smoke (Postgres/Valkey).
+
+### S-C30 — Feed `manifest_cbor` carries the signed manifest
+
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
+  ("Each sync entry carries the asset's signed manifest as **opaque canonical CBOR** — never
+  re-modeled as proto fields, because re-encoding would detach it from its signatures");
+  [Clients — Validation Duties](capsule-docs/src/content/docs/design/clients.md)
+  ("Run `verify_asset` on every received asset manifest").
+- **Gap** (found 2026-08-22 by `S-P1`): the feed's `manifest_cbor` is **not the signed
+  manifest**. `capsule-api/upload`'s `prepare_feed_input` re-serializes the server-held
+  `ManifestEnvelope` projection into it (`upload.rs`, "the server holds only the envelope
+  projection"), and the envelope carries no `device_sig` and no `write_sig`. A receiving
+  client therefore cannot run `verify_asset` on a feed entry at all — the two signatures it
+  checks are simply absent from the bytes. The proto comment on `SyncEntry.manifest_cbor`
+  already states the contract the field does not meet, so the wire is honest and the
+  producer is not.
+- **Root cause, and why it is not a one-line fix:** the signed manifest never reaches the
+  server. `capsule_core::lifecycle::upload_bundle` puts the metadata blob, derivatives, and
+  original on the wire; `BlobRole::Provenance` exists but nothing ever uploads one. Closing
+  this means deciding where the signed manifest is carried (a provenance blob per write, or
+  a field on `POST /upload`) and storing it verbatim.
+- **Deliverable:** the client uploads the signed manifest, the server stores it verbatim, and
+  the feed serves those exact bytes.
+- **Done when:** an entry pulled from the feed verifies through
+  [`Workspace::apply_remote_entry`](#s-p1--capsule_sdk-ffi-workspace-verbs) on a second
+  device — today it is `MalformedManifest`. **Tier:** Unit + Integration.
+- **Not blocking `S-P1`:** the SDK's sync-apply verb consumes the *contracted* shape and is
+  proven against it end to end; what is missing is a producer that emits it. It **does** block
+  a real second-device `S-P5` render, which is why this is indexed rather than noted.
 
 ## Lane D — SDK / clients
 

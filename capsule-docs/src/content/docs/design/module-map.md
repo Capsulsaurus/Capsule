@@ -76,6 +76,7 @@ separate typed ports; no generic CAS, transfer, or TTL library is planned.
 | --- | --- |
 | REST client | Spargen-generated Rust from a checked-in OpenAPI 3.1 document |
 | SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
+| Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step, and the `capsule_core` namespace never shares a binary with it |
 | Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work |
 | LQIP | Capsule imports Chromahash directly after v1; Rawshift has no Chromahash responsibility |
 | Import commit | Capsule applies privacy policy, creates sidecars/provenance, encrypts, signs, and commits normalized media results |
