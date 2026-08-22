@@ -19185,6 +19185,16 @@
         }
       }
     },
+    "ios.diagnostics.report.title": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diagnostics Report"
+          }
+        }
+      }
+    },
     "ios.hidden.confirm.title": {
       "localizations": {
         "ar": {
@@ -20001,6 +20011,36 @@
           "stringUnit": {
             "state": "translated",
             "value": "Imports"
+          }
+        }
+      }
+    },
+    "ios.menu.culling_review": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Culling Review"
+          }
+        }
+      }
+    },
+    "ios.menu.help": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule Help"
+          }
+        }
+      }
+    },
+    "ios.menu.import": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import Photos…"
           }
         }
       }
@@ -24843,6 +24883,16 @@
         }
       }
     },
+    "ios.viewer.next_photo": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Next Photo"
+          }
+        }
+      }
+    },
     "ios.viewer.pause_slideshow": {
       "localizations": {
         "ar": {
@@ -25003,6 +25053,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Play Slideshow"
+          }
+        }
+      }
+    },
+    "ios.viewer.previous_photo": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous Photo"
           }
         }
       }

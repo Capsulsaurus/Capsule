@@ -364,7 +364,7 @@
         "context": "CLI `capsule auth register` interactive prompt for the login handle."
     },
     "cli.auth.register.in_progress": {
-        "message": "Creating your Capsule account\u2026",
+        "message": "Creating your Capsule account…",
         "context": "CLI status line printed while `capsule auth register` creates the account."
     },
     "cli.auth.register.success": {
@@ -436,7 +436,7 @@
         "context": "CLI failure line for `capsule list`. {reason} is an error detail."
     },
     "cli.push.in_progress": {
-        "message": "Pushing {assets} asset(s) to {endpoint}\u2026",
+        "message": "Pushing {assets} asset(s) to {endpoint}…",
         "context": "CLI status line printed while `capsule push` uploads. {assets} is a count; {endpoint} is the upload server URL."
     },
     "cli.push.dry_run_notice": {
@@ -1890,5 +1890,29 @@
     "drop.error.passphrase": {
         "message": "This upload needs the link's password. Unlock the page and try again.",
         "context": "Per-file guest-drop upload failure when the passphrase gate rejected the request."
+    },
+    "ios.viewer.previous_photo": {
+        "message": "Previous Photo",
+        "context": "Accessibility label for the Mac viewer's back chevron. macOS has no swipe pager, so paging is arrow keys plus these two buttons."
+    },
+    "ios.viewer.next_photo": {
+        "message": "Next Photo",
+        "context": "Accessibility label for the Mac viewer's forward chevron. macOS has no swipe pager, so paging is arrow keys plus these two buttons."
+    },
+    "ios.diagnostics.report.title": {
+        "message": "Diagnostics Report",
+        "context": "Navigation title of the sheet that shares a redacted diagnostics bundle. Distinct from the button that opens it, which ends in an ellipsis."
+    },
+    "ios.menu.import": {
+        "message": "Import Photos…",
+        "context": "macOS File menu item that opens the photo import picker. Shortcut ⌘I."
+    },
+    "ios.menu.help": {
+        "message": "Capsule Help",
+        "context": "macOS Help menu item linking to the documentation site."
+    },
+    "ios.menu.culling_review": {
+        "message": "Culling Review",
+        "context": "macOS View menu item that enters the keyboard-driven cull review mode. Shortcut ⇧⌘R."
     }
 }

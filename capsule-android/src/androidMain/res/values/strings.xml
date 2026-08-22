@@ -248,6 +248,7 @@
     <string name="ios_diagnostics_crash_alert_body">A redacted diagnostic report can help us fix the crash. It contains no photos or album contents.</string>
     <string name="ios_diagnostics_crash_alert_send">Send Report</string>
     <string name="ios_diagnostics_crash_alert_title">Capsule quit unexpectedly last time</string>
+    <string name="ios_diagnostics_report_title">Diagnostics Report</string>
     <string name="ios_hidden_confirm_title">Hidden Photo</string>
     <string name="ios_hidden_empty_description">Hide photos from the Library with Select → Hide.</string>
     <string name="ios_hidden_empty_title">Nothing Hidden</string>
@@ -258,6 +259,9 @@
     <string name="ios_imports_empty_description">Photos imported into Capsule appear here.</string>
     <string name="ios_imports_empty_title">No Imports</string>
     <string name="ios_imports_title">Imports</string>
+    <string name="ios_menu_culling_review">Culling Review</string>
+    <string name="ios_menu_help">Capsule Help</string>
+    <string name="ios_menu_import">Import Photos…</string>
     <string name="ios_places_empty_description">Photos with location data will appear here.</string>
     <string name="ios_places_empty_title">No Places</string>
     <string name="ios_places_title">Places</string>
@@ -317,8 +321,10 @@
     <string name="ios_viewer_info_shutter">Shutter</string>
     <string name="ios_viewer_info_title">Info</string>
     <string name="ios_viewer_info_type">Type</string>
+    <string name="ios_viewer_next_photo">Next Photo</string>
     <string name="ios_viewer_pause_slideshow">Pause Slideshow</string>
     <string name="ios_viewer_play_slideshow">Play Slideshow</string>
+    <string name="ios_viewer_previous_photo">Previous Photo</string>
     <string name="label_artist">Artist</string>
     <string name="label_credits">Credits</string>
     <string name="label_date">Date</string>
