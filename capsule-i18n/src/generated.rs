@@ -32,6 +32,12 @@ pub(crate) const BUNDLES: &[(&str, &str)] = &[
 /// The server attaches one of these as `ApiError.code`; clients map it to a
 /// localized high-level message. Generated from the source catalog.
 pub mod error_codes {
+    /// `error.album.invalid_id`
+    pub const ALBUM_INVALID_ID: &str = "error.album.invalid_id";
+
+    /// `error.album.not_available`
+    pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
+
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
 

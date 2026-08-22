@@ -10,6 +10,48 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/v1/albums": {
+      "post": {
+        "tags": [
+          "albums"
+        ],
+        "summary": "Register the caller's derived album id with the server.",
+        "description": "Idempotent: re-registering an id the caller already owns succeeds and writes nothing.\n\nAccepts no album name — album titles live in the encrypted sidecar, not on the server.",
+        "operationId": "provision_album",
+        "requestBody": {
+          "description": "Extract json format data from request.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/upload.models.requests.ProvisionAlbumRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The album id was already provisioned to this account; nothing was written"
+          },
+          "201": {
+            "description": "The album was created and bound to the caller"
+          },
+          "400": {
+            "description": "album_id is not a canonical hyphenated UUID"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "403": {
+            "description": "The album id is not available to this account"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/albums/{album_id}/ops": {
       "post": {
         "tags": [
@@ -2457,6 +2499,20 @@
             "type": "string"
           }
         }
+      },
+      "upload.models.requests.ProvisionAlbumRequest": {
+        "type": "object",
+        "description": "Request body for `POST /albums` — album provisioning (slice `S-C25`).\n\n**One field, on purpose.** The album id is derived from the account master key, so it is\nthe only thing the client can tell the server that the server does not already know.\nStrict (`deny_unknown_fields`): a `name` or `description` field is a `400`, never a\nsilently-ignored extra — the plaintext `albums.name`/`albums.description` columns predate\nthe key-free model and the server is not entitled to album titles, which live in the\nencrypted sidecar (slice `S-C26` retires the columns).",
+        "required": [
+          "album_id"
+        ],
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The caller's derived album id, as a canonical lowercase hyphenated UUID."
+          }
+        },
+        "additionalProperties": false
       },
       "upload.models.responses.CreateUploadResponse": {
         "type": "object",

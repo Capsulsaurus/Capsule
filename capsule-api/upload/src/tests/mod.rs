@@ -94,11 +94,12 @@ impl TestCtx {
         Service::new(router)
     }
 
-    /// Build a salvo service over the generic lifecycle-write router (slice `S-C16`), mounted
-    /// at the API root under `albums/` so the transport path is `POST /albums/{id}/ops`.
+    /// Build a salvo service over the `albums/` router, mounted at the API root so the
+    /// transport paths are `POST /albums` (provisioning, slice `S-C25`) and
+    /// `POST /albums/{id}/ops` (lifecycle writes, slice `S-C16`).
     pub(crate) fn ops_service(&self) -> Service {
         let ops_service = crate::service::ops::OpService::new(self.config.clone(), self.db.clone());
-        let state = crate::state::OpsState::new(self.config.clone(), ops_service);
+        let state = crate::state::OpsState::new(self.db.clone(), self.config.clone(), ops_service);
         let inner = crate::routes::get_ops_router(
             state,
             self.config.protocol_min.clone(),

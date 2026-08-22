@@ -10617,6 +10617,26 @@
         }
       }
     },
+    "error.album.invalid_id": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This album could not be registered because its identifier is malformed."
+          }
+        }
+      }
+    },
+    "error.album.not_available": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This album isn't available on your account."
+          }
+        }
+      }
+    },
     "error.auth.invalid_credentials": {
       "localizations": {
         "ar": {

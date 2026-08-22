@@ -43,6 +43,14 @@
         "message": "No data available",
         "context": "Empty-state message when a view has nothing to show."
     },
+    "error.album.invalid_id": {
+        "message": "This album could not be registered because its identifier is malformed.",
+        "context": "HTTP 400 on POST /v1/albums (album provisioning, S-C25): album_id is not a canonical lowercase hyphenated UUID. Always a client bug — the id is derived deterministically from the account master key."
+    },
+    "error.album.not_available": {
+        "message": "This album isn't available on your account.",
+        "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
+    },
     "error.auth.user_already_exists": {
         "message": "An account with these details already exists.",
         "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."

@@ -140,6 +140,8 @@
     <string name="drop_upload_busy">Uploading…</string>
     <string name="drop_upload_button">{count, plural, one {Upload # file} other {Upload # files}}</string>
     <string name="drop_upload_only_badge">Upload only</string>
+    <string name="error_album_invalid_id">This album could not be registered because its identifier is malformed.</string>
+    <string name="error_album_not_available">This album isn\'t available on your account.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_auth_revoke_proof_invalid">That didn\'t confirm as you. Nothing was logged out.</string>

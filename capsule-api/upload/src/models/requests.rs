@@ -37,6 +37,21 @@ pub(crate) struct CreateUploadRequest {
     pub intent_id: Option<String>,
 }
 
+/// Request body for `POST /albums` — album provisioning (slice `S-C25`).
+///
+/// **One field, on purpose.** The album id is derived from the account master key, so it is
+/// the only thing the client can tell the server that the server does not already know.
+/// Strict (`deny_unknown_fields`): a `name` or `description` field is a `400`, never a
+/// silently-ignored extra — the plaintext `albums.name`/`albums.description` columns predate
+/// the key-free model and the server is not entitled to album titles, which live in the
+/// encrypted sidecar (slice `S-C26` retires the columns).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProvisionAlbumRequest {
+    /// The caller's derived album id, as a canonical lowercase hyphenated UUID.
+    pub album_id: String,
+}
+
 /// Request body for a generic lifecycle write, `POST /albums/{album_id}/ops` (slice `S-C16`).
 ///
 /// The signed manifest bundle: the opaque manifest as its [`ManifestEnvelope`] projection

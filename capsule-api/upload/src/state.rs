@@ -39,27 +39,35 @@ impl std::ops::Deref for AppState {
     }
 }
 
-/// State for the generic lifecycle-write surface (`POST /albums/{album_id}/ops`, slice
-/// `S-C16`). Mounted at the API root (not under `/upload`) so the transport path matches the
-/// authorization contract; it carries only the config (for the JWT decode key + quota limits)
-/// and the [`OpService`](crate::service::ops::OpService).
+/// State for the `/albums` route tree, mounted at the API root (not under `/upload`) so the
+/// transport paths match the authorization contract. It backs two surfaces:
+///
+/// - `POST /albums/{album_id}/ops` — the generic lifecycle-write surface (slice `S-C16`),
+///   served by the [`OpService`](crate::service::ops::OpService);
+/// - `POST /albums` — album provisioning (slice `S-C25`), which talks to the database
+///   directly through `service::album::Mutation` and so needs the connection.
+///
+/// The config carries the JWT decode key both handlers authenticate with.
 #[derive(Clone)]
 pub(crate) struct OpsState {
     inner: Arc<OpsStateInner>,
 }
 
 pub(crate) struct OpsStateInner {
+    pub conn: DatabaseConnection,
     pub config: UploadServerConfig,
     pub ops_service: crate::service::ops::OpService,
 }
 
 impl OpsState {
     pub(crate) fn new(
+        conn: DatabaseConnection,
         config: UploadServerConfig,
         ops_service: crate::service::ops::OpService,
     ) -> Self {
         Self {
             inner: Arc::new(OpsStateInner {
+                conn,
                 config,
                 ops_service,
             }),

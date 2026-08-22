@@ -117,11 +117,15 @@ pub async fn get_router<C: Into<UploadServerConfig>>(
         .push(routes::get_router(state, protocol_min, protocol_max)))
 }
 
-/// Build the generic lifecycle-write router (slice `S-C16`), mounted at the API root under
-/// `albums/` so its transport path is `POST /albums/{album_id}/ops` — the singular non-upload
-/// lifecycle surface. Reuses the upload server's `EnvelopeGate` (protocol handshake) and the
-/// key-free envelope battery; no blob bytes ever move through it (a write that moves bytes is
-/// an upload). See [Authorization — The Lifecycle Write Surface].
+/// Build the `albums/` router mounted at the API root, carrying two surfaces:
+///
+/// - `POST /albums` — **album provisioning** (slice `S-C25`): binds a client's derived album
+///   UUID to the authenticated owner, idempotently, so invariant 6 can pass for an album the
+///   client named. A plain authenticated write; no manifest, no bytes.
+/// - `POST /albums/{album_id}/ops` — the singular non-upload lifecycle surface (slice
+///   `S-C16`). Reuses the upload server's `EnvelopeGate` (protocol handshake) and the key-free
+///   envelope battery; no blob bytes ever move through it (a write that moves bytes is an
+///   upload). See [Authorization — The Lifecycle Write Surface].
 ///
 /// [Authorization — The Lifecycle Write Surface]: https://docs/design/authorization/#the-lifecycle-write-surface
 pub async fn get_ops_router<C: Into<UploadServerConfig>>(
@@ -138,8 +142,8 @@ pub async fn get_ops_router<C: Into<UploadServerConfig>>(
 
     let protocol_min = config.protocol_min.clone();
     let protocol_max = config.protocol_max.clone();
-    let ops_service = crate::service::ops::OpService::new(config.clone(), conn);
-    let state = crate::state::OpsState::new(config, ops_service);
+    let ops_service = crate::service::ops::OpService::new(config.clone(), conn.clone());
+    let state = crate::state::OpsState::new(conn, config, ops_service);
 
     Ok(routes::get_ops_router(state, protocol_min, protocol_max))
 }
@@ -157,8 +161,8 @@ pub fn openapi_router() -> Router {
     )
 }
 
-/// The lifecycle-write (`POST /albums/{album_id}/ops`) route tree with no injected state,
-/// for OpenAPI schema extraction only (slice `S-D8`). Mirrors [`get_ops_router`].
+/// The `albums/` route tree (`POST /albums`, `POST /albums/{album_id}/ops`) with no injected
+/// state, for OpenAPI schema extraction only (slice `S-D8`). Mirrors [`get_ops_router`].
 pub fn openapi_ops_router() -> Router {
     routes::ops_route_tree(
         config::DEFAULT_PROTOCOL_MIN.to_string(),

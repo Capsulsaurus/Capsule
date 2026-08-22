@@ -48,6 +48,20 @@ pub(crate) struct QuotaResponse {
     pub state: String,
 }
 
+/// Response for `POST /albums` — album provisioning (S-C25).
+///
+/// Deliberately tiny and key-free: the id the caller asked for, echoed back so a client can
+/// assert the server stored the exact spelling it derived, plus whether this call created the
+/// row. Carries **no** name or description — the server holds no album title (S-C26).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub(crate) struct ProvisionAlbumResponse {
+    /// The provisioned album id, echoed verbatim.
+    pub album_id: String,
+    /// `true` when this call created the row; `false` when it was already provisioned to the
+    /// caller and nothing was written. Informational only — a client treats both as success.
+    pub created: bool,
+}
+
 /// Responses for create upload endpoint
 #[allow(dead_code)]
 pub(crate) enum CreateUploadResponses {

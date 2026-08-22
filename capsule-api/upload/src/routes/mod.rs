@@ -3,6 +3,7 @@ use salvo::prelude::*;
 use crate::envelope::EnvelopeGate;
 use crate::state::{AppState, OpsState};
 
+mod albums;
 mod ops;
 mod quota;
 mod receipt;
@@ -45,10 +46,9 @@ pub(super) fn route_tree(protocol_min: String, protocol_max: String) -> Router {
         .push(gated)
 }
 
-/// The generic lifecycle-write surface, mounted at the API root under `albums/` (slice
-/// `S-C16`) so the transport path is `POST /albums/{album_id}/ops` per the authorization
-/// contract — not under `/upload`. The same fail-closed protocol handshake (invariant 1) the
-/// upload write routes require gates it.
+/// The `/albums` route tree, mounted at the API root (slice `S-C16` + `S-C25`) so the
+/// transport paths are `POST /albums` and `POST /albums/{album_id}/ops` per the authorization
+/// contract — not under `/upload`.
 pub(crate) fn get_ops_router(
     state: OpsState,
     protocol_min: String,
@@ -57,12 +57,26 @@ pub(crate) fn get_ops_router(
     ops_route_tree(protocol_min, protocol_max).hoop(affix_state::inject(state))
 }
 
-/// The lifecycle-write route tree with no injected state, for the OpenAPI schema dump
+/// The `/albums` route tree with no injected state, for the OpenAPI schema dump
 /// (slice `S-D8`). Shares its route shape with [`get_ops_router`].
+///
+/// Two surfaces with deliberately different gating:
+///
+/// - **`POST /albums`** (provisioning, `S-C25`) is a plain authenticated write outside the
+///   envelope handshake. It carries no signed manifest and moves no bytes — it is how a
+///   client gets an album that invariant 6 can *pass*, so gating it on the same handshake as
+///   the writes it unblocks would buy nothing.
+/// - **`POST /albums/{album_id}/ops`** (lifecycle writes, `S-C16`) sits behind the same
+///   fail-closed protocol handshake (invariant 1) the upload write routes require, scoped to
+///   its own sub-router exactly as the upload tree scopes its `gated` branch.
 pub(crate) fn ops_route_tree(protocol_min: String, protocol_max: String) -> Router {
     Router::new()
-        .hoop(EnvelopeGate::new(protocol_min, protocol_max))
-        .push(Router::with_path("{album_id}/ops").post(ops::post_op))
+        .push(Router::new().post(albums::provision_album))
+        .push(
+            Router::new()
+                .hoop(EnvelopeGate::new(protocol_min, protocol_max))
+                .push(Router::with_path("{album_id}/ops").post(ops::post_op)),
+        )
 }
 
 #[handler]

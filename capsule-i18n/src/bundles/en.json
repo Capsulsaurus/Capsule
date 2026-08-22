@@ -139,6 +139,8 @@
   "drop.upload.busy": "Uploading…",
   "drop.upload.button": "{count, plural, one {Upload # file} other {Upload # files}}",
   "drop.upload_only_badge": "Upload only",
+  "error.album.invalid_id": "This album could not be registered because its identifier is malformed.",
+  "error.album.not_available": "This album isn't available on your account.",
   "error.auth.invalid_credentials": "Invalid email or password.",
   "error.auth.rate_limited": "Too many attempts. Please wait and try again.",
   "error.auth.revoke_proof_invalid": "That didn't confirm as you. Nothing was logged out.",

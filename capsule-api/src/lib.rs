@@ -66,8 +66,10 @@ pub async fn create_router(conn: DatabaseConnection, env: &Environment) -> Resul
                 Router::with_path("upload")
                     .push(upload::get_router(conn.clone(), &env.server).await?),
             )
-            // The generic lifecycle-write surface (slice S-C16): `POST /albums/{album_id}/ops`
-            // lives at the API root, not under `/upload`, per the authorization contract.
+            // The `/albums` tree lives at the API root, not under `/upload`, per the
+            // authorization contract: `POST /albums` provisions a client's derived album id
+            // (slice S-C25) and `POST /albums/{album_id}/ops` is the generic lifecycle-write
+            // surface (slice S-C16).
             .push(
                 Router::with_path("albums")
                     .push(upload::get_ops_router(conn.clone(), &env.server).await?),
@@ -180,8 +182,8 @@ pub fn openapi_router() -> Router {
     {
         v1_router = v1_router
             .push(Router::with_path("upload").push(upload::openapi_router()))
-            // `POST /albums/{album_id}/ops` (slice S-C16) lives at the API root, mirroring
-            // `create_router`.
+            // `POST /albums` (slice S-C25) and `POST /albums/{album_id}/ops` (slice S-C16)
+            // live at the API root, mirroring `create_router`.
             .push(Router::with_path("albums").push(upload::openapi_ops_router()));
     }
     #[cfg(feature = "media")]
