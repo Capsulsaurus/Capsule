@@ -13,6 +13,7 @@ use crate::models::responses::{
     Device, DeviceCohort, GetDevicesResponses, LoginResponses, LogoutResponses,
     RefreshTokenResponses, RegisterUserResponses, SessionListingResponse, ValidateTokenResponses,
 };
+use crate::session::SessionContext;
 use crate::state::AppState;
 use crate::utils::headers::get_token_from_headers;
 
@@ -103,10 +104,16 @@ pub async fn login_user(
         email,
         password,
         cohort_hash,
+        device_id,
     } = body.into_inner();
     state
         .auth_service
-        .authenticate_user(&state.session_manager, &email, &password, cohort_hash)
+        .authenticate_user(
+            &state.session_manager,
+            &email,
+            &password,
+            SessionContext::new(cohort_hash, device_id),
+        )
         .await
         .into()
 }
@@ -150,10 +157,12 @@ pub async fn refresh_token(
         return ClaimValidationError::TokenInvalid("Session user mismatch".to_string()).into();
     }
 
-    // Carry the advisory device-cohort across rotation so grouping survives a refresh and the
-    // durable map's `last_seen` keeps advancing (slice `S-C13`). It stays advisory: the refresh
-    // path authorizes on the JWT claims alone, never on this value.
-    let cohort_hash = session.cohort_hash.clone();
+    // Carry the session's asserted provenance across rotation so grouping survives a refresh
+    // and the durable map's `last_seen` keeps advancing (slices `S-C13`, `S-N3`). Both values
+    // stay non-authoritative: the refresh path authorizes on the JWT claims alone, never on
+    // these. The refreshed session must not silently lose its device id, or the support
+    // bundle's `(device_id, session_id)` pair would decay to a bare session id over time.
+    let context = SessionContext::new(session.cohort_hash.clone(), session.device_id.clone());
 
     // Revoke old session (Rotation)
     if let Err(e) = state.session_manager.revoke_session(&sid).await {
@@ -164,7 +173,7 @@ pub async fn refresh_token(
 
     state
         .auth_service
-        .generate_token_pair(&user_id, &state.session_manager, cohort_hash)
+        .generate_token_pair(&user_id, &state.session_manager, context)
         .await
         .into()
 }
@@ -274,6 +283,7 @@ pub async fn get_devices(req: &mut Request, depot: &mut Depot) -> GetDevicesResp
             };
             Device {
                 id: sid,
+                device_id: session.device_id,
                 created_at: session.created_at,
                 last_active_at,
                 user_agent: session.user_agent,

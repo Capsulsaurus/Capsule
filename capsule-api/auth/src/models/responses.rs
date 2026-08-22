@@ -14,9 +14,26 @@ use crate::errors::{
     ClaimValidationError, LoginError, RegisterError, TotpEnrollError, TotpVerificationError,
 };
 
+/// One active session in the session listing (slice `S-C13`), carrying **both** identifiers
+/// the support bundle needs (slice `S-N3`).
+///
+/// [`Device::id`] is the *session* id and [`Device::device_id`] is the *device* id — two
+/// distinct identifier spaces that must both be present, because a support report pairs them
+/// (`{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}`) and one physical
+/// device accumulates several session ids over its life.
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
 pub struct Device {
+    /// The **session** id. Historically the only identifier on this surface; it keeps its
+    /// name so existing clients keep deserializing, and `device_id` is added beside it rather
+    /// than renaming this field into something it is not.
     pub id: String,
+    /// The **device** id this session was opened from (slice `S-N3`): the UUID naming an
+    /// entry in the user's device directory, as asserted by the client at session creation,
+    /// or `None` when it asserted none. Paired with `id` this yields the support bundle's
+    /// `(device_id, session_id)` rows. Client-asserted and therefore never an authorization
+    /// input.
+    #[serde(default)]
+    pub device_id: Option<String>,
     pub created_at: i64,
     pub last_active_at: i64,
     pub user_agent: Option<String>,

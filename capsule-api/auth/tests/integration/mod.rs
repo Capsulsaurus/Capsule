@@ -1,4 +1,5 @@
 mod account_lockout;
+mod ceremony_cohorts;
 mod cohort;
 mod device_directory;
 mod devices;

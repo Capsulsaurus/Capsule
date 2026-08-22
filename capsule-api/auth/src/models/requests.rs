@@ -26,6 +26,12 @@ pub struct RegisterRequest {
     /// [Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts
     #[serde(default)]
     pub cohort_hash: Option<String>,
+    /// The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).
+    /// Optional; recorded so the session listing can emit the support bundle's
+    /// `(device_id, session_id)` pairs. A malformed value is treated as absent, and — like
+    /// the cohort — nothing here gates authorization.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
@@ -48,6 +54,12 @@ pub struct LoginRequest {
     /// [Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts
     #[serde(default)]
     pub cohort_hash: Option<String>,
+    /// The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).
+    /// Optional; recorded so the session listing can emit the support bundle's
+    /// `(device_id, session_id)` pairs. A malformed value is treated as absent, and — like
+    /// the cohort — nothing here gates authorization.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]
@@ -93,6 +105,20 @@ pub struct VerifyTotpLoginRequest {
     #[serde(serialize_with = "crate::models::serialize_secret")]
     pub mfa_token: SecretString,
     pub totp_code: String,
+    /// Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from
+    /// [Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group
+    /// this device's sessions and is never read by any authorization decision — absent or
+    /// garbage values are accepted and behave identically to a valid one.
+    ///
+    /// [Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts
+    #[serde(default)]
+    pub cohort_hash: Option<String>,
+    /// The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).
+    /// Optional; recorded so the session listing can emit the support bundle's
+    /// `(device_id, session_id)` pairs. A malformed value is treated as absent, and — like
+    /// the cohort — nothing here gates authorization.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, ToSchema, Debug)]

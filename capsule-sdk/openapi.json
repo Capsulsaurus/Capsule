@@ -1706,6 +1706,13 @@
             ],
             "description": "Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from\n[Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group\nthis device's sessions and is never read by any authorization decision — absent or\ngarbage values are accepted and behave identically to a valid one.\n\n[Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts"
           },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).\nOptional; recorded so the session listing can emit the support bundle's\n`(device_id, session_id)` pairs. A malformed value is treated as absent, and — like\nthe cohort — nothing here gates authorization."
+          },
           "email": {
             "type": "string"
           },
@@ -1746,6 +1753,13 @@
               "null"
             ],
             "description": "Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from\n[Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group\nthis device's sessions and is never read by any authorization decision — absent or\ngarbage values are accepted and behave identically to a valid one.\n\n[Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts"
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).\nOptional; recorded so the session listing can emit the support bundle's\n`(device_id, session_id)` pairs. A malformed value is treated as absent, and — like\nthe cohort — nothing here gates authorization."
           },
           "email": {
             "type": "string"
@@ -1821,6 +1835,20 @@
           "totp_code"
         ],
         "properties": {
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Advisory device-cohort hash (slice `S-C13`), the client-asserted grouping aid from\n[Authentication — Device Cohorts]. Optional and **unverifiable**: it is stored to group\nthis device's sessions and is never read by any authorization decision — absent or\ngarbage values are accepted and behave identically to a valid one.\n\n[Authentication — Device Cohorts]: https://docs/design/authentication/#device-cohorts"
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory `device_id` (a UUID) this session is opened from (slice `S-N3`).\nOptional; recorded so the session listing can emit the support bundle's\n`(device_id, session_id)` pairs. A malformed value is treated as absent, and — like\nthe cohort — nothing here gates authorization."
+          },
           "mfa_token": {
             "type": "string"
           },
@@ -1837,6 +1865,7 @@
       },
       "auth.models.responses.Device": {
         "type": "object",
+        "description": "One active session in the session listing (slice `S-C13`), carrying **both** identifiers\nthe support bundle needs (slice `S-N3`).\n\n[`Device::id`] is the *session* id and [`Device::device_id`] is the *device* id — two\ndistinct identifier spaces that must both be present, because a support report pairs them\n(`{cohort_hash, [(device_id, session_id, first_seen, last_seen)]}`) and one physical\ndevice accumulates several session ids over its life.",
         "required": [
           "id",
           "created_at",
@@ -1855,8 +1884,16 @@
             "type": "integer",
             "format": "int64"
           },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The **device** id this session was opened from (slice `S-N3`): the UUID naming an\nentry in the user's device directory, as asserted by the client at session creation,\nor `None` when it asserted none. Paired with `id` this yields the support bundle's\n`(device_id, session_id)` rows. Client-asserted and therefore never an authorization\ninput."
+          },
           "id": {
-            "type": "string"
+            "type": "string",
+            "description": "The **session** id. Historically the only identifier on this surface; it keeps its\nname so existing clients keep deserializing, and `device_id` is added beside it rather\nthan renaming this field into something it is not."
           },
           "ip_address": {
             "type": [

@@ -48,6 +48,7 @@ mod tests {
             password: "Password123!".into(),
             name: "Test User".to_string(),
             cohort_hash: None,
+            device_id: None,
         };
         assert!(RegistrationValidator::validate(&request).is_ok());
     }
