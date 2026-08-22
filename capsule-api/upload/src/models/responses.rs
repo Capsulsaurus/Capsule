@@ -1,7 +1,6 @@
+use capsule_wire::headers as wire_headers;
 use model::errors::InternalServerError;
-use salvo::http::StatusCode;
-use salvo::oapi::{EndpointOutRegister, ToSchema};
-use salvo::prelude::*;
+use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::UploadError;
@@ -80,91 +79,38 @@ pub(crate) enum CreateUploadResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for CreateUploadResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(response) => {
-                res.status_code(StatusCode::CREATED);
-                res.add_header("Location", &response.upload_url, true).ok();
-                res.add_header(
-                    "X-Capsule-Suggested-Chunk-Size",
-                    response.suggested_chunk_size.to_string(),
-                    true,
-                )
-                .ok();
-                res.render(Json(response));
-            }
-            Self::Existing { response, offset } => {
-                // Idempotent create: the active session, not a second one (`200`).
-                res.status_code(StatusCode::OK);
-                res.add_header("Location", &response.upload_url, true).ok();
-                res.add_header("X-Capsule-Offset", offset.to_string(), true)
-                    .ok();
-                res.add_header(
-                    "X-Capsule-Suggested-Chunk-Size",
-                    response.suggested_chunk_size.to_string(),
-                    true,
-                )
-                .ok();
-                res.render(Json(response));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::Forbidden => {
-                res.status_code(StatusCode::FORBIDDEN);
-            }
-            Self::BadRequest(msg) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Text::Plain(msg));
-            }
-            Self::Error(e) => {
-                e.write(req, depot, res).await;
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    CreateUploadResponses {
+        Success(response) => 201,
+            header("Location", &response.upload_url)
+            header(
+                wire_headers::SUGGESTED_CHUNK_SIZE,
+                response.suggested_chunk_size.to_string(),
+            )
+            json(response),
+            doc("Upload session created", schema = CreateUploadResponse);
+        // Idempotent create: the active session, not a second one (`200`), carrying the
+        // authoritative offset so the client resumes without a HEAD.
+        Existing { response, offset } => 200,
+            header("Location", &response.upload_url)
+            header(wire_headers::OFFSET, offset.to_string())
+            header(
+                wire_headers::SUGGESTED_CHUNK_SIZE,
+                response.suggested_chunk_size.to_string(),
+            )
+            json(response),
+            undocumented();
+        Unauthorized(msg) => 401, text(msg),
+            doc("Unauthorized - invalid or missing token");
+        Forbidden {} => 403, empty(), doc("Forbidden - insufficient permissions");
+        BadRequest(msg) => 400, text(msg), doc("Bad request - invalid parameters");
+        Error(e) => _, delegate(e), undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for CreateUploadResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("201"),
-            salvo::oapi::Response::new("Upload session created").add_content(
-                "application/json",
-                salvo::oapi::Content::new(CreateUploadResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Bad request - invalid parameters"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized - invalid or missing token"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Forbidden - insufficient permissions"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new(
-                "Conflict - content hash already finalized (error.upload.duplicate_blob; merge trigger)",
-            ),
-        );
-        operation.responses.insert(
-            String::from("413"),
-            salvo::oapi::Response::new("Payload too large - declared size exceeds the limit"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        409 => "Conflict - content hash already finalized (error.upload.duplicate_blob; merge trigger)",
+        413 => "Payload too large - declared size exceeds the limit",
+        500 => "Internal server error",
     }
 }
 
@@ -177,70 +123,29 @@ pub(crate) enum HeadUploadResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for HeadUploadResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(response) => {
-                // A HEAD response carries no body; progress and state ride headers
-                // (X-Capsule-Upload-Status is census-registered).
-                res.status_code(StatusCode::OK);
-                res.add_header("X-Capsule-Offset", response.offset.to_string(), true)
-                    .ok();
-                if let Some(total) = response.total_size {
-                    res.add_header("X-Capsule-Content-Length", total.to_string(), true)
-                        .ok();
-                }
-                res.add_header(
-                    "X-Capsule-Upload-Status",
-                    response.status.as_header_value(),
-                    true,
-                )
-                .ok();
-                res.add_header("Cache-Control", "no-store", true).ok();
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-            }
-            Self::Forbidden => {
-                res.status_code(StatusCode::FORBIDDEN);
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    HeadUploadResponses {
+        // A HEAD response carries no body; progress and state ride headers
+        // (X-Capsule-Upload-Status is census-registered).
+        Success(response) => 200,
+            header(wire_headers::OFFSET, response.offset.to_string())
+            header_option(
+                wire_headers::CONTENT_LENGTH,
+                response.total_size.map(|total| total.to_string()),
+            )
+            header(wire_headers::UPLOAD_STATUS, response.status.as_header_value())
+            header("Cache-Control", "no-store")
+            empty(),
+            doc(
+                "Upload progress and state via X-Capsule-Offset / X-Capsule-Content-Length / X-Capsule-Upload-Status headers (no body)"
+            );
+        Unauthorized(msg) => 401, text(msg), doc("Unauthorized");
+        NotFound {} => 404, empty(), doc("Upload session not found");
+        Forbidden {} => 403, empty(), doc("Forbidden - not owner of session");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for HeadUploadResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        let _ = components;
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new(
-                "Upload progress and state via X-Capsule-Offset / X-Capsule-Content-Length / X-Capsule-Upload-Status headers (no body)",
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Forbidden - not owner of session"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Upload session not found"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -257,78 +162,24 @@ pub(crate) enum PatchUploadResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for PatchUploadResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success { new_offset } => {
-                res.status_code(StatusCode::NO_CONTENT);
-                res.add_header("X-Capsule-Offset", new_offset.to_string(), true)
-                    .ok();
-            }
-            Self::BadRequest(msg) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Text::Plain(msg));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::Forbidden => {
-                res.status_code(StatusCode::FORBIDDEN);
-            }
-            Self::Error(e) => {
-                e.write(req, depot, res).await;
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    PatchUploadResponses {
+        Success { new_offset } => 204,
+            header(wire_headers::OFFSET, new_offset.to_string()) empty(),
+            doc("Chunk uploaded successfully");
+        BadRequest(msg) => 400, text(msg),
+            doc("Bad request - invalid chunk size or checksum");
+        Unauthorized(msg) => 401, text(msg), doc("Unauthorized");
+        Forbidden {} => 403, empty(), doc("Forbidden - not owner of session");
+        Error(e) => _, delegate(e), undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PatchUploadResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("204"),
-            salvo::oapi::Response::new("Chunk uploaded successfully"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Bad request - invalid chunk size or checksum"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Forbidden - not owner of session"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Upload session not found"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new(
-                "Conflict - offset mismatch / chunk conflict / session not active",
-            ),
-        );
-        operation.responses.insert(
-            String::from("413"),
-            salvo::oapi::Response::new("Payload too large - chunk exceeds the 16 MiB maximum"),
-        );
-        operation.responses.insert(
-            String::from("415"),
-            salvo::oapi::Response::new(
-                "Unsupported media type - chunk body must be application/octet-stream",
-            ),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        404 => "Upload session not found",
+        409 => "Conflict - offset mismatch / chunk conflict / session not active",
+        413 => "Payload too large - chunk exceeds the 16 MiB maximum",
+        415 => "Unsupported media type - chunk body must be application/octet-stream",
+        500 => "Internal server error",
     }
 }
 
@@ -343,59 +194,18 @@ pub(crate) enum DeleteUploadResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for DeleteUploadResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::NO_CONTENT);
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::Forbidden => {
-                res.status_code(StatusCode::FORBIDDEN);
-            }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-            }
-            Self::Error(e) => {
-                e.write(req, depot, res).await;
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    DeleteUploadResponses {
+        Success {} => 204, empty(), doc("Upload session deleted");
+        Unauthorized(msg) => 401, text(msg), doc("Unauthorized");
+        Forbidden {} => 403, empty(), doc("Forbidden - not owner of session");
+        NotFound {} => 404, empty(), doc("Upload session not found");
+        Error(e) => _, delegate(e), undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for DeleteUploadResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("204"),
-            salvo::oapi::Response::new("Upload session deleted"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Forbidden - not owner of session"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Upload session not found"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("Conflict - finalization in progress is not interruptible"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        409 => "Conflict - finalization in progress is not interruptible",
+        500 => "Internal server error",
     }
 }
 
@@ -406,42 +216,15 @@ pub(crate) enum ListSessionsResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for ListSessionsResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(response) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(response));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    ListSessionsResponses {
+        Success(response) => 200, json(response),
+            doc("List of upload sessions", schema = ListSessionsResponse);
+        Unauthorized(msg) => 401, text(msg), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for ListSessionsResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("List of upload sessions").add_content(
-                "application/json",
-                salvo::oapi::Content::new(ListSessionsResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -452,42 +235,15 @@ pub(crate) enum QuotaResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for QuotaResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(response) => {
-                res.status_code(StatusCode::OK);
-                res.add_header("Cache-Control", "no-store", true).ok();
-                res.render(Json(response));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    QuotaResponses {
+        Success(response) => 200,
+            header("Cache-Control", "no-store") json(response),
+            doc("The uploader's storage-quota snapshot", schema = QuotaResponse);
+        Unauthorized(msg) => 401, text(msg), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for QuotaResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("The uploader's storage-quota snapshot").add_content(
-                "application/json",
-                salvo::oapi::Content::new(QuotaResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }

@@ -167,64 +167,21 @@ impl From<Vec<AssetVerdict>> for StorageVerifyResponse {
     }
 }
 
-#[async_trait]
-impl Writer for StorageVerifyResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(data) => {
-                res.status_code(StatusCode::OK);
-                Json(data).write(req, depot, res).await;
-            }
-            Self::OkSigned(data) => {
-                res.status_code(StatusCode::OK);
-                Json(data).write(req, depot, res).await;
-            }
-            Self::BadRequest(msg) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ErrorResponse {
-                    code: error_codes::STORAGE_INVALID_REQUEST,
-                    error: msg,
-                }));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::RateLimited => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                res.render(Json(ErrorResponse {
-                    code: error_codes::STORAGE_DEEP_RATE_LIMITED,
-                    error: "deep-scan rate limit exceeded".to_string(),
-                }));
-            }
-            Self::Internal(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for StorageVerifyResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Per-asset durability verdicts").add_content(
-                "application/json",
-                salvo::oapi::Content::new(StorageVerifyResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Structurally invalid request"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid bearer token"),
-        );
-        operation.responses.insert(
-            String::from("429"),
-            salvo::oapi::Response::new("Deep-scan rate limit exceeded"),
-        );
+capsule_wire::salvo_responses! {
+    StorageVerifyResponses {
+        Ok(data) => 200, json(data),
+            doc("Per-asset durability verdicts", schema = StorageVerifyResponse);
+        OkSigned(data) => 200, json(data), undocumented();
+        BadRequest(msg) => 400, json(ErrorResponse {
+            code: error_codes::STORAGE_INVALID_REQUEST,
+            error: msg,
+        }), doc("Structurally invalid request");
+        Unauthorized(msg) => 401, text(msg), doc("Missing or invalid bearer token");
+        RateLimited {} => 429, json(ErrorResponse {
+            code: error_codes::STORAGE_DEEP_RATE_LIMITED,
+            error: "deep-scan rate limit exceeded".to_string(),
+        }), doc("Deep-scan rate limit exceeded");
+        Internal(e) => _, delegate(e), undocumented();
     }
 }
 

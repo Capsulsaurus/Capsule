@@ -225,7 +225,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
-| S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | ready | |
+| S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
+| S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1140,6 +1141,46 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Why it is the precondition:** this is *not* a transport swap. Attempting the Kynos
   migration before the contract types are framework-free would stall every other lane,
   because every SDK, web, and CLI surface reads those types.
+- **Part 1 landed (2026-08-22).** New `capsule-wire` crate — `serde` only, no framework and
+  no retired dependency — holding the neutral response taxonomy (`ResponseSpec`, `BodyShape`,
+  `WireResponses`), the six `X-Capsule-*` header names, and a `salvo_responses!` macro that
+  expands one table per enum into `Writer` + `EndpointOutRegister` + `WireResponses`. A macro
+  body may name `::salvo::…` without its defining crate linking salvo, since it resolves at
+  the expansion site — that is what makes the crate framework-free while the Salvo server
+  keeps working. **80 blocks and 1,898 lines of hand-written glue removed** (40 `Writer` +
+  all 40 `EndpointOutRegister`); `capsule-api` net −1,155, repo net −609.
+  `capsule-sdk/openapi.json` byte-identical. The OpenAPI impl now *iterates* the taxonomy
+  rather than restating it, so the two halves cannot drift, and
+  `every_taxonomy_publishes_exactly_what_it_declares` asserts that across all 20 auth
+  taxonomies. 12 `Writer` impls remain on purpose: they are unpaired, so converting them
+  would *add* OpenAPI surface that does not exist today — a contract change, not a refactor.
+- **Part 2 owed to the Kynos rebuild.** The DTO structs themselves cannot move yet. 39
+  `ToSchema` derives sit on them and salvo-oapi is what emits `openapi.json`; a neutral crate
+  cannot carry that derive (the architecture check counts *optional* dependencies, so the
+  crate may not depend on salvo at all) and an adapter crate cannot implement a foreign trait
+  for a foreign type. The structs move when Kynos replaces salvo as the schema source, which
+  is why the "Done when" above stays unmet and this row is not `done`.
+
+### S-C28 — Publish the statuses the server actually returns
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md)
+  (the rejection-mapping table), [Validation](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-22 by `S-C27`): **thirteen response variants render a concrete HTTP
+  status that `capsule-sdk/openapi.json` never declares** — auth `400`×4, `401`, `404`×2,
+  `409`, `423`, `429`×3, and upload `200`. The spargen-generated client therefore cannot map
+  them: a caller who trips account lockout (`423`) or rate limiting (`429`) on login receives
+  a status the typed client does not know exists. The gap was invisible before S-C27 because
+  it lived *between* two hand-written impls — the `Writer` rendered a status the
+  `EndpointOutRegister` never registered. It is now data: `LoginResponses::undocumented()`
+  returns `[423, 429]` and a test pins it.
+- **Deliverable:** document each status, or delete the variant if it is genuinely unreachable.
+  This **moves the schema**, so the SDK regenerates and `openapi-check` must be re-baselined
+  in the same change — that is why S-C27 preserved the gaps rather than closing them.
+- **Do this at design time on Kynos, not as a Salvo retrofit.** Kynos makes the class of bug
+  impossible: status is part of the return type (`#[derive(Reply)]`), so a status the
+  description omits cannot be rendered. Fold the audit into the Stage 6 port of each surface.
+- **Done when:** every taxonomy's `undocumented()` is empty, and the regenerated schema is
+  committed. **Tier:** Unit.
 
 ## Lane D — SDK / clients
 

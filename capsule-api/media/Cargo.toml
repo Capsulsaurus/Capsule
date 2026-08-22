@@ -20,6 +20,7 @@ capsule-api-upload = { path = "../upload" }
 # crate's own capsule-core dependency unifies features in the workspace build anyway).
 capsule-core = { path = "../../capsule-core", default-features = false }
 capsule-i18n = { path = "../../capsule-i18n" }
+capsule-wire = { path = "../../capsule-wire" }
 base64 = { workspace = true }
 bytes = { workspace = true }
 derive_more = { workspace = true, features = ["from"] }

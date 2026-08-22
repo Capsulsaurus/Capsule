@@ -109,62 +109,26 @@ pub(super) enum IssueResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for IssueResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(data) => {
-                res.status_code(StatusCode::OK);
-                Json(data).write(req, depot, res).await;
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::LocalAuthRequired => {
-                res.status_code(StatusCode::FORBIDDEN);
-                res.render(Json(ApiError::with_code(
-                    "Fresh local device authorization required to add a device",
-                    error_codes::ENROLLMENT_LOCAL_AUTH_REQUIRED,
-                )));
-            }
-            Self::RateLimited { retry_after } => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                if let Ok(v) = retry_after.to_string().parse() {
-                    res.headers_mut()
-                        .insert(salvo::http::header::RETRY_AFTER, v);
-                }
-                res.render(Json(ApiError::with_code(
-                    "Too many enrollment-code requests",
-                    error_codes::ENROLLMENT_RATE_LIMITED,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
+capsule_wire::salvo_responses! {
+    IssueResponses {
+        Ok(data) => 200, json(data),
+            doc("Enrollment code issued", schema = EnrollmentCodeResponse);
+        Unauthorized(e) => _, delegate(e), undocumented();
+        LocalAuthRequired {} => 403, json(ApiError::with_code(
+            "Fresh local device authorization required to add a device",
+            error_codes::ENROLLMENT_LOCAL_AUTH_REQUIRED,
+        )), doc("Fresh local device authorization required");
+        RateLimited { retry_after } => 429,
+            retry_after(retry_after)
+            json(ApiError::with_code(
+                "Too many enrollment-code requests",
+                error_codes::ENROLLMENT_RATE_LIMITED,
+            )),
+            doc("Per-user issuance budget exhausted");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
-}
-
-impl EndpointOutRegister for IssueResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Enrollment code issued").add_content(
-                "application/json",
-                salvo::oapi::Content::new(EnrollmentCodeResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Fresh local device authorization required"),
-        );
-        operation.responses.insert(
-            String::from("429"),
-            salvo::oapi::Response::new("Per-user issuance budget exhausted"),
-        );
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 
@@ -246,44 +210,15 @@ pub(super) enum RedeemResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for RedeemResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(data) => {
-                res.status_code(StatusCode::OK);
-                Json(data).write(req, depot, res).await;
-            }
-            Self::Refused => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::with_code(
-                    "Enrollment code could not be redeemed",
-                    error_codes::ENROLLMENT_CODE_REFUSED,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for RedeemResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Relay channel established").add_content(
-                "application/json",
-                salvo::oapi::Content::new(ChannelResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new(
-                "Unknown, expired, redeemed, or rate-limited code (indistinguishable)",
-            ),
-        );
+capsule_wire::salvo_responses! {
+    RedeemResponses {
+        Ok(data) => 200, json(data),
+            doc("Relay channel established", schema = ChannelResponse);
+        Refused {} => 404, json(ApiError::with_code(
+            "Enrollment code could not be redeemed",
+            error_codes::ENROLLMENT_CODE_REFUSED,
+        )), doc("Unknown, expired, redeemed, or rate-limited code (indistinguishable)");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
 }
 
@@ -326,49 +261,18 @@ pub(super) enum RelaySendResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for RelaySendResponses {
-    async fn write(mut self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::NoContent => {
-                res.status_code(StatusCode::NO_CONTENT);
-            }
-            Self::NoChannel => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::with_code(
-                    "Enrollment relay channel not found",
-                    error_codes::ENROLLMENT_CHANNEL_NOT_FOUND,
-                )));
-            }
-            Self::Malformed(detail) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::with_code(
-                    format!("Malformed relay request: {detail}"),
-                    error_codes::ENROLLMENT_RELAY_MALFORMED,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for RelaySendResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("204"),
-            salvo::oapi::Response::new("Opaque payload accepted for relay"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Unknown direction or missing/oversized payload"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Unknown or expired relay channel"),
-        );
+capsule_wire::salvo_responses! {
+    RelaySendResponses {
+        NoContent {} => 204, empty(), doc("Opaque payload accepted for relay");
+        NoChannel {} => 404, json(ApiError::with_code(
+            "Enrollment relay channel not found",
+            error_codes::ENROLLMENT_CHANNEL_NOT_FOUND,
+        )), doc("Unknown or expired relay channel");
+        Malformed(detail) => 400, json(ApiError::with_code(
+            format!("Malformed relay request: {detail}"),
+            error_codes::ENROLLMENT_RELAY_MALFORMED,
+        )), doc("Unknown direction or missing/oversized payload");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
 }
 
@@ -424,53 +328,19 @@ pub(super) enum RelayRecvResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for RelayRecvResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(data) => {
-                res.status_code(StatusCode::OK);
-                Json(data).write(req, depot, res).await;
-            }
-            Self::NoChannel => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::with_code(
-                    "Enrollment relay channel not found",
-                    error_codes::ENROLLMENT_CHANNEL_NOT_FOUND,
-                )));
-            }
-            Self::Malformed(detail) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::with_code(
-                    format!("Malformed relay request: {detail}"),
-                    error_codes::ENROLLMENT_RELAY_MALFORMED,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for RelayRecvResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Drained opaque relay payloads").add_content(
-                "application/json",
-                salvo::oapi::Content::new(RelayMessagesResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Unknown direction"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Unknown or expired relay channel"),
-        );
+capsule_wire::salvo_responses! {
+    RelayRecvResponses {
+        Ok(data) => 200, json(data),
+            doc("Drained opaque relay payloads", schema = RelayMessagesResponse);
+        NoChannel {} => 404, json(ApiError::with_code(
+            "Enrollment relay channel not found",
+            error_codes::ENROLLMENT_CHANNEL_NOT_FOUND,
+        )), doc("Unknown or expired relay channel");
+        Malformed(detail) => 400, json(ApiError::with_code(
+            format!("Malformed relay request: {detail}"),
+            error_codes::ENROLLMENT_RELAY_MALFORMED,
+        )), doc("Unknown direction");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
 }
 

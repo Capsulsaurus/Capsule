@@ -90,59 +90,20 @@ pub(super) enum ReceiptResponses {
     Internal(String),
 }
 
-#[async_trait]
-impl Writer for ReceiptResponses {
-    async fn write(mut self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(data) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(*data));
-            }
-            Self::NotAvailable => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ErrorResponse {
-                    code: error_codes::UPLOAD_RECEIPT_NOT_AVAILABLE,
-                    error: "the upload has not finished; its receipt is not available yet"
-                        .to_string(),
-                }));
-            }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Text::Plain("upload session not found"));
-            }
-            Self::Forbidden => {
-                res.status_code(StatusCode::FORBIDDEN);
-                res.render(Text::Plain("forbidden"));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::Internal(msg) => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Text::Plain(msg));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for ReceiptResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("The signed custody receipt").add_content(
-                "application/json",
-                salvo::oapi::Content::new(ReceiptResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("Receipt not available (session not yet Completed)"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("No such upload session"),
-        );
+capsule_wire::salvo_responses! {
+    ReceiptResponses {
+        Ok(data) => 200, json(*data),
+            doc("The signed custody receipt", schema = ReceiptResponse);
+        NotAvailable {} => 409, json(ErrorResponse {
+            code: error_codes::UPLOAD_RECEIPT_NOT_AVAILABLE,
+            error: "the upload has not finished; its receipt is not available yet"
+                .to_string(),
+        }), doc("Receipt not available (session not yet Completed)");
+        NotFound {} => 404, text("upload session not found"),
+            doc("No such upload session");
+        Forbidden {} => 403, text("forbidden"), undocumented();
+        Unauthorized(msg) => 401, text(msg), undocumented();
+        Internal(msg) => 500, text(msg), undocumented();
     }
 }
 

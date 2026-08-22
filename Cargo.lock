@@ -891,6 +891,7 @@ dependencies = [
  "capsule-api-service",
  "capsule-core",
  "capsule-i18n",
+ "capsule-wire",
  "derive_more",
  "eyre",
  "jiff",
@@ -961,6 +962,7 @@ dependencies = [
  "capsule-api-upload",
  "capsule-core",
  "capsule-i18n",
+ "capsule-wire",
  "derive_more",
  "ed25519-dalek",
  "eyre",
@@ -1113,6 +1115,7 @@ dependencies = [
  "capsule-core",
  "capsule-i18n",
  "capsule-sdk",
+ "capsule-wire",
  "eyre",
  "futures-util",
  "indexmap 2.14.0",
@@ -1314,6 +1317,14 @@ dependencies = [
  "hex",
  "uuid",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "capsule-wire"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

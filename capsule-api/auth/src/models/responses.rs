@@ -1,9 +1,7 @@
 use derive_more::From;
 use model::errors::InternalServerError;
 use model::passkey::Passkey;
-use salvo::http::StatusCode;
-use salvo::oapi::{EndpointOutRegister, ToSchema};
-use salvo::prelude::*;
+use salvo::oapi::ToSchema;
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
@@ -121,66 +119,24 @@ impl From<RegisterError> for RegisterUserResponses {
     }
 }
 
-#[async_trait]
-impl Writer for RegisterUserResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(token_response) => {
-                res.status_code(StatusCode::CREATED);
-                res.render(Json(token_response));
-            }
-            Self::BadRequest(e) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(e));
-            }
-            Self::UserAlreadyExists => {
-                res.status_code(StatusCode::CONFLICT);
-                // Reference wiring for the i18n error-code contract: attach a stable
-                // catalog code alongside the English detail. Other variants follow
-                // the same pattern as the rollout proceeds.
-                res.render(Json(ApiError::with_code(
-                    "User already exists",
-                    capsule_i18n::error_codes::AUTH_USER_ALREADY_EXISTS,
-                )));
-            }
-            Self::RateLimited(retry_after) => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                res.headers_mut().insert(
-                    salvo::http::header::RETRY_AFTER,
-                    retry_after
-                        .to_string()
-                        .parse()
-                        .expect("formatted integer is a valid header value"),
-                );
-                res.render(Json(ApiError::new("Too many requests")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    RegisterUserResponses {
+        Success(token_response) => 201, json(token_response),
+            doc("Success - user registered and tokens returned", schema = TokenResponse);
+        BadRequest(e) => 400, json(e), doc("Bad request - invalid registration data");
+        // Reference wiring for the i18n error-code contract: a stable catalog code
+        // travels beside the English detail.
+        UserAlreadyExists {} => 409, json(ApiError::with_code(
+            "User already exists",
+            capsule_i18n::error_codes::AUTH_USER_ALREADY_EXISTS,
+        )), doc("User already exists");
+        RateLimited(retry_after) => 429,
+            retry_after(retry_after) json(ApiError::new("Too many requests")),
+            undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for RegisterUserResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("201"),
-            salvo::oapi::Response::new("Success - user registered and tokens returned")
-                .add_content(
-                    "application/json",
-                    salvo::oapi::Content::new(TokenResponse::to_schema(components)),
-                ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Bad request - invalid registration data"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("User already exists"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -214,67 +170,23 @@ impl From<LoginError> for LoginResponses {
     }
 }
 
-#[async_trait]
-impl Writer for LoginResponses {
-    async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(token_response) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(token_response));
-            }
-            Self::BadRequest => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid request")));
-            }
-            Self::InvalidCredentials => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new("Invalid credentials")));
-            }
-            Self::AccountLocked => {
-                res.status_code(StatusCode::LOCKED);
-                res.render(Json(ApiError::new(
-                    "Account locked due to too many failed login attempts",
-                )));
-            }
-            Self::RateLimited(retry_after) => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                res.headers_mut().insert(
-                    salvo::http::header::RETRY_AFTER,
-                    retry_after
-                        .to_string()
-                        .parse()
-                        .expect("formatted integer is a valid header value"),
-                );
-                res.render(Json(ApiError::new("Too many requests")));
-            }
-            Self::InternalServerError(e) => {
-                e.write(_req, _depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    LoginResponses {
+        Success(token_response) => 200, json(token_response),
+            doc("Success - login successful", schema = TokenResponse);
+        BadRequest {} => 400, json(ApiError::new("Invalid request")), doc("Bad request");
+        InvalidCredentials {} => 401, json(ApiError::new("Invalid credentials")),
+            doc("Invalid credentials");
+        AccountLocked {} => 423,
+            json(ApiError::new("Account locked due to too many failed login attempts")),
+            undocumented();
+        RateLimited(retry_after) => 429,
+            retry_after(retry_after) json(ApiError::new("Too many requests")),
+            undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for LoginResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - login successful").add_content(
-                "application/json",
-                salvo::oapi::Content::new(TokenResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Bad request"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid credentials"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -300,43 +212,16 @@ impl From<Result<TokenResponse, InternalServerError>> for RefreshTokenResponses 
     }
 }
 
-#[async_trait]
-impl Writer for RefreshTokenResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(token_response) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(token_response));
-            }
-            Self::InvalidRefreshToken(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.clone())));
-            }
-            Self::InternalServerError(e) => {
-                e.write(req, depot, res).await;
-                return;
-            }
-        }
+capsule_wire::salvo_responses! {
+    RefreshTokenResponses {
+        Success(token_response) => 200, json(token_response),
+            doc("Success - tokens refreshed", schema = TokenResponse);
+        InvalidRefreshToken(e) => 401, json(ApiError::new(e)),
+            doc("Invalid or expired refresh token");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for RefreshTokenResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - tokens refreshed").add_content(
-                "application/json",
-                salvo::oapi::Content::new(TokenResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid or expired refresh token"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -355,32 +240,12 @@ impl From<Result<Claims, ClaimValidationError>> for ValidateTokenResponses {
     }
 }
 
-#[async_trait]
-impl Writer for ValidateTokenResponses {
-    async fn write(self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Valid(user_id) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(user_id));
-            }
-            Self::Invalid(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for ValidateTokenResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Token is valid - returns user ID"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid or expired token"),
-        );
+capsule_wire::salvo_responses! {
+    ValidateTokenResponses {
+        Valid(user_id) => 200, json(user_id),
+            doc("Token is valid - returns user ID");
+        Invalid(e) => 401, json(ApiError::new(e.to_string())),
+            doc("Invalid or expired token");
     }
 }
 
@@ -392,48 +257,18 @@ pub enum ResetPasswordRequestResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for ResetPasswordRequestResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("Password reset request sent")));
-            }
-            Self::BadRequest => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid request")));
-            }
-            Self::RateLimited(retry_after) => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                res.headers_mut().insert(
-                    salvo::http::header::RETRY_AFTER,
-                    retry_after
-                        .to_string()
-                        .parse()
-                        .expect("formatted integer is a valid header value"),
-                );
-                res.render(Json(ApiError::new("Too many requests")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    ResetPasswordRequestResponses {
+        Success {} => 200, json(ApiError::new("Password reset request sent")),
+            doc("Password reset email sent (if user exists)");
+        BadRequest {} => 400, json(ApiError::new("Invalid request")), doc("Bad request");
+        RateLimited(retry_after) => 429,
+            retry_after(retry_after) json(ApiError::new("Too many requests")),
+            undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for ResetPasswordRequestResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Password reset email sent (if user exists)"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Bad request"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -445,41 +280,18 @@ pub enum PasswordResetResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for PasswordResetResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("Password reset successful")));
-            }
-            Self::InvalidToken => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid or expired token")));
-            }
-            Self::InvalidNewPassword => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid new password")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasswordResetResponses {
+        Success {} => 200, json(ApiError::new("Password reset successful")),
+            doc("Password reset successful");
+        InvalidToken {} => 400, json(ApiError::new("Invalid or expired token")),
+            doc("Invalid or expired token, or invalid new password");
+        InvalidNewPassword {} => 400, json(ApiError::new("Invalid new password")),
+            undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasswordResetResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Password reset successful"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Invalid or expired token, or invalid new password"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -491,48 +303,18 @@ pub enum UserProfileResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for UserProfileResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(user_profile) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(user_profile));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::UserNotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("User not found")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    UserProfileResponses {
+        Success(user_profile) => 200, json(user_profile),
+            doc("Success - returns user profile", schema = UserProfile);
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())),
+            doc("Unauthorized - invalid or missing token");
+        UserNotFound {} => 404, json(ApiError::new("User not found")),
+            doc("User not found");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for UserProfileResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - returns user profile").add_content(
-                "application/json",
-                salvo::oapi::Content::new(UserProfile::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized - invalid or missing token"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("User not found"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -545,60 +327,22 @@ pub enum UpdateUserProfileResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for UpdateUserProfileResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(profile) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(profile));
-            }
-            Self::BadRequest => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid request")));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InvalidPassword => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid password")));
-            }
-            Self::UserNotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("User not found")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    UpdateUserProfileResponses {
+        Success(profile) => 200, json(profile),
+            doc("Success - returns updated user profile", schema = UserProfile);
+        BadRequest {} => 400, json(ApiError::new("Invalid request")),
+            doc("Invalid request or password");
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())),
+            doc("Unauthorized - invalid or missing token");
+        InvalidPassword {} => 400, json(ApiError::new("Invalid password")),
+            undocumented();
+        UserNotFound {} => 404, json(ApiError::new("User not found")),
+            doc("User not found");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for UpdateUserProfileResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - returns updated user profile").add_content(
-                "application/json",
-                salvo::oapi::Content::new(UserProfile::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Invalid request or password"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized - invalid or missing token"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("User not found"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -609,37 +353,16 @@ pub enum LogoutResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for LogoutResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("Logout successful")));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    LogoutResponses {
+        Success {} => 200, json(ApiError::new("Logout successful")),
+            doc("Logout successful");
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())),
+            doc("Unauthorized - invalid or missing token");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for LogoutResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Logout successful"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized - invalid or missing token"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -688,48 +411,17 @@ impl From<TotpEnrollError> for TotpEnrollResponses {
     }
 }
 
-#[async_trait]
-impl Writer for TotpEnrollResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(enrollment) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(enrollment));
-            }
-            Self::AlreadyEnabled => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ApiError::new("TOTP is already enabled")));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    TotpEnrollResponses {
+        Success(enrollment) => 200, json(enrollment),
+            doc("Success - TOTP enrollment initiated", schema = TotpEnrollmentResponse);
+        AlreadyEnabled {} => 409, json(ApiError::new("TOTP is already enabled")),
+            doc("TOTP already enabled");
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for TotpEnrollResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - TOTP enrollment initiated").add_content(
-                "application/json",
-                salvo::oapi::Content::new(TotpEnrollmentResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("TOTP already enabled"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -764,49 +456,19 @@ impl From<TotpVerificationError> for TotpVerifyEnrollmentResponses {
     }
 }
 
-#[async_trait]
-impl Writer for TotpVerifyEnrollmentResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("TOTP enabled successfully")));
-            }
-            Self::InvalidCode => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("Invalid TOTP code")));
-            }
-            Self::NotEnrolled => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("TOTP enrollment not initiated")));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    TotpVerifyEnrollmentResponses {
+        Success {} => 200, json(ApiError::new("TOTP enabled successfully")),
+            doc("TOTP enabled successfully");
+        InvalidCode {} => 400, json(ApiError::new("Invalid TOTP code")),
+            doc("Invalid TOTP code or enrollment not initiated");
+        NotEnrolled {} => 400, json(ApiError::new("TOTP enrollment not initiated")),
+            undocumented();
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for TotpVerifyEnrollmentResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("TOTP enabled successfully"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Invalid TOTP code or enrollment not initiated"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -842,66 +504,23 @@ impl From<TotpVerificationError> for TotpVerifyLoginResponses {
     }
 }
 
-#[async_trait]
-impl Writer for TotpVerifyLoginResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(tokens) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(tokens));
-            }
-            Self::InvalidMfaToken => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new("Invalid MFA token")));
-            }
-            Self::InvalidCode => {
-                res.status_code(StatusCode::FORBIDDEN);
-                res.render(Json(ApiError::new("Invalid TOTP code")));
-            }
-            Self::NotEnrolled => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("TOTP not enrolled")));
-            }
-            Self::MaxAttemptsExceeded => {
-                res.status_code(StatusCode::TOO_MANY_REQUESTS);
-                res.render(Json(ApiError::new(
-                    "Maximum verification attempts exceeded",
-                )));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    TotpVerifyLoginResponses {
+        Success(tokens) => 200, json(tokens),
+            doc("Success - login completed", schema = TokenResponse);
+        InvalidMfaToken {} => 401, json(ApiError::new("Invalid MFA token")),
+            doc("Invalid or expired MFA token");
+        InvalidCode {} => 403, json(ApiError::new("Invalid TOTP code")),
+            doc("Invalid TOTP code");
+        NotEnrolled {} => 400, json(ApiError::new("TOTP not enrolled")),
+            doc("TOTP not enrolled");
+        MaxAttemptsExceeded {} => 429,
+            json(ApiError::new("Maximum verification attempts exceeded")),
+            doc("Maximum verification attempts exceeded");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for TotpVerifyLoginResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Success - login completed").add_content(
-                "application/json",
-                salvo::oapi::Content::new(TokenResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid or expired MFA token"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("Invalid TOTP code"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("TOTP not enrolled"),
-        );
-        operation.responses.insert(
-            String::from("429"),
-            salvo::oapi::Response::new("Maximum verification attempts exceeded"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -936,49 +555,19 @@ impl From<TotpVerificationError> for TotpDisableResponses {
     }
 }
 
-#[async_trait]
-impl Writer for TotpDisableResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("TOTP enabled successfully")));
-            }
-            Self::NotEnrolled => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new("TOTP enrollment not initiated")));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InvalidCode => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new("Invalid TOTP code")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    TotpDisableResponses {
+        Success {} => 200, json(ApiError::new("TOTP enabled successfully")),
+            doc("TOTP enabled successfully");
+        NotEnrolled {} => 400, json(ApiError::new("TOTP enrollment not initiated")),
+            doc("Invalid TOTP code or enrollment not initiated");
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())),
+            doc("Invalid or expired MFA token");
+        InvalidCode {} => 401, json(ApiError::new("Invalid TOTP code")), undocumented();
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for TotpDisableResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("TOTP enabled successfully"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Invalid TOTP code or enrollment not initiated"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid or expired MFA token"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -989,43 +578,17 @@ pub enum GetDevicesResponses {
     InternalServerError(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for GetDevicesResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(listing) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(listing));
-            }
-            Self::Unauthorized(e) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(e.to_string())));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    GetDevicesResponses {
+        Success(listing) => 200, json(listing), doc(
+            "Success - returns active sessions (each with its advisory cohort) plus the durable cohort map",
+            schema = SessionListingResponse
+        );
+        Unauthorized(e) => 401, json(ApiError::new(e.to_string())), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for GetDevicesResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new(
-                "Success - returns active sessions (each with its advisory cohort) plus the durable cohort map",
-            )
-            .add_content(
-                "application/json",
-                salvo::oapi::Content::new(SessionListingResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1102,53 +665,20 @@ impl From<InternalServerError> for PasskeyRegistrationStartResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyRegistrationStartResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(ccr) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ccr));
-            }
-            Self::UserNotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("User not found")));
-            }
-            Self::AlreadyExists => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ApiError::new("Passkey already exists")));
-            }
-            Self::RegistrationFailed(msg) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyRegistrationStartResponses {
+        // The webauthn challenge types do not implement ToSchema, so the payload is
+        // published as an untyped object.
+        Success(ccr) => 200, json(ccr), doc("Registration started", schema = object);
+        UserNotFound {} => 404, json(ApiError::new("User not found")), undocumented();
+        AlreadyExists {} => 409, json(ApiError::new("Passkey already exists")),
+            undocumented();
+        RegistrationFailed(msg) => 400, json(ApiError::new(msg)), undocumented();
+        Unauthorized(msg) => 401, json(ApiError::new(msg)), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasskeyRegistrationStartResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Registration started").add_content(
-                "application/json",
-                // salvo::oapi::Content::new(CreationChallengeActions::to_schema(components)), // Webauthn types might not impl ToSchema?
-                salvo::oapi::Content::new(salvo::oapi::Object::new()),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1195,45 +725,17 @@ impl From<InternalServerError> for PasskeyRegistrationFinishResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyRegistrationFinishResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("Passkey registered successfully")));
-            }
-            Self::RegistrationFailed(msg) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyRegistrationFinishResponses {
+        Success {} => 200, json(ApiError::new("Passkey registered successfully")),
+            doc("Passkey registered");
+        RegistrationFailed(msg) => 400, json(ApiError::new(msg)),
+            doc("Registration failed");
+        Unauthorized(msg) => 401, json(ApiError::new(msg)), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasskeyRegistrationFinishResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Passkey registered"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Registration failed"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1274,37 +776,15 @@ impl From<PasskeyAuthenticationError> for PasskeyAuthStartResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyAuthStartResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(rcr) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(rcr));
-            }
-            Self::UserNotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("User not found")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyAuthStartResponses {
+        Success(rcr) => 200, json(rcr), doc("Authentication started");
+        UserNotFound {} => 404, json(ApiError::new("User not found")),
+            doc("User not found");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasskeyAuthStartResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Authentication started"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("User not found"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1327,40 +807,16 @@ impl From<PasskeyAuthenticationError> for PasskeyAuthFinishResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyAuthFinishResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(tokens) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(tokens));
-            }
-            Self::InvalidCredential => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new("Invalid credential")));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyAuthFinishResponses {
+        Success(tokens) => 200, json(tokens),
+            doc("Authentication successful", schema = TokenResponse);
+        InvalidCredential {} => 401, json(ApiError::new("Invalid credential")),
+            doc("Invalid credential");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasskeyAuthFinishResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Authentication successful").add_content(
-                "application/json",
-                salvo::oapi::Content::new(TokenResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Invalid credential"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1383,44 +839,16 @@ impl From<PasskeyManagementError> for PasskeyListResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyListResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success(models) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(models));
-            }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("User not found")));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyListResponses {
+        Success(models) => 200, json(models),
+            doc("List passkeys", schema = Vec<PasskeyModel>);
+        NotFound {} => 404, json(ApiError::new("User not found")), undocumented();
+        Unauthorized(msg) => 401, json(ApiError::new(msg)), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for PasskeyListResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("List passkeys").add_content(
-                "application/json",
-                salvo::oapi::Content::new(Vec::<PasskeyModel>::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    delegated {
+        500 => "Internal server error",
     }
 }
 
@@ -1453,44 +881,139 @@ impl From<PasskeyManagementError> for PasskeyManageResponses {
     }
 }
 
-#[async_trait]
-impl Writer for PasskeyManageResponses {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Success => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(ApiError::new("Success")));
-            }
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("Passkey or User not found")));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(msg)));
-            }
-            Self::InternalServerError(e) => e.write(req, depot, res).await,
-        }
+capsule_wire::salvo_responses! {
+    PasskeyManageResponses {
+        Success {} => 200, json(ApiError::new("Success")),
+            doc("Operation successful");
+        NotFound {} => 404, json(ApiError::new("Passkey or User not found")),
+            doc("Resource not found");
+        Unauthorized(msg) => 401, json(ApiError::new(msg)), doc("Unauthorized");
+        InternalServerError(e) => _, delegate(e), undocumented();
+    }
+    delegated {
+        500 => "Internal server error",
     }
 }
 
-impl EndpointOutRegister for PasskeyManageResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Operation successful"),
+#[cfg(test)]
+mod tests {
+    use capsule_wire::{BodyShape, WireResponses};
+    use salvo::oapi::{Components, EndpointOutRegister, Operation, RefOr};
+
+    use super::*;
+
+    /// The `(status, description)` rows the taxonomy declares as published.
+    fn declared<T: WireResponses>() -> Vec<(u16, String)> {
+        let mut rows: Vec<_> = T::documented()
+            .map(|spec| {
+                (
+                    spec.status.expect("a documented row carries a status"),
+                    spec.description
+                        .expect("a documented row carries a description")
+                        .to_string(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// The `(status, description)` rows the generated OpenAPI registration actually emits.
+    fn registered<T: WireResponses + EndpointOutRegister>() -> Vec<(u16, String)> {
+        let mut components = Components::new();
+        let mut operation = Operation::new();
+        T::register(&mut components, &mut operation);
+        let mut rows: Vec<_> = operation
+            .responses
+            .iter()
+            .map(|(status, response)| {
+                let description = match response {
+                    RefOr::Type(response) => response.description.clone(),
+                    RefOr::Ref(_) => panic!("a registered response is never a bare $ref"),
+                };
+                (
+                    status.parse().expect("a registered key is a status code"),
+                    description,
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// The invariant this slice buys: the OpenAPI document is *derived* from the taxonomy
+    /// table, so the two can no longer disagree the way two hand-written impls could.
+    macro_rules! assert_document_matches_taxonomy {
+        ($($ty:ty),+ $(,)?) => {
+            $(
+                assert_eq!(
+                    registered::<$ty>(),
+                    declared::<$ty>(),
+                    "{} publishes rows its taxonomy does not declare",
+                    ::core::stringify!($ty),
+                );
+            )+
+        };
+    }
+
+    #[test]
+    fn every_taxonomy_publishes_exactly_what_it_declares() {
+        assert_document_matches_taxonomy!(
+            RegisterUserResponses,
+            LoginResponses,
+            RefreshTokenResponses,
+            ValidateTokenResponses,
+            ResetPasswordRequestResponses,
+            PasswordResetResponses,
+            UserProfileResponses,
+            UpdateUserProfileResponses,
+            LogoutResponses,
+            TotpEnrollResponses,
+            TotpVerifyEnrollmentResponses,
+            TotpVerifyLoginResponses,
+            TotpDisableResponses,
+            GetDevicesResponses,
+            PasskeyRegistrationStartResponses,
+            PasskeyRegistrationFinishResponses,
+            PasskeyAuthStartResponses,
+            PasskeyAuthFinishResponses,
+            PasskeyListResponses,
+            PasskeyManageResponses,
         );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Resource not found"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Unauthorized"),
-        );
-        operation.responses.insert(
-            String::from("500"),
-            salvo::oapi::Response::new("Internal server error"),
-        );
+    }
+
+    /// A documented row's status is unique within its taxonomy: two rows sharing a status
+    /// would silently overwrite each other in the document.
+    #[test]
+    fn documented_statuses_are_unique_per_taxonomy() {
+        let rows = declared::<UpdateUserProfileResponses>();
+        let mut statuses: Vec<_> = rows.iter().map(|(status, _)| *status).collect();
+        statuses.dedup();
+        assert_eq!(statuses.len(), rows.len());
+    }
+
+    /// The login taxonomy is the worked example from the slice: a typed success payload, four
+    /// error shapes, a rate-limit row the published document deliberately omits, and a status
+    /// the delegated internal-error taxonomy owns.
+    #[test]
+    fn the_login_taxonomy_records_its_documentation_gaps() {
+        let mut gaps: Vec<_> = LoginResponses::undocumented()
+            .filter_map(|spec| spec.status)
+            .collect();
+        gaps.sort_unstable();
+        assert_eq!(gaps, vec![423, 429]);
+
+        let success = LoginResponses::RESPONSES
+            .first()
+            .expect("the taxonomy is non-empty");
+        assert_eq!(success.status, Some(200));
+        assert_eq!(success.body, BodyShape::Json);
+        assert_eq!(success.schema, Some("TokenResponse"));
+
+        let delegated = LoginResponses::RESPONSES
+            .iter()
+            .find(|spec| spec.body == BodyShape::Delegated && spec.status == Some(500))
+            .expect("the delegated internal-error row is declared");
+        assert_eq!(delegated.description, Some("Internal server error"));
     }
 }
