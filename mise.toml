@@ -11,6 +11,11 @@
 # (mise layers child configs on top of this one).
 
 [tools]
+# Java: the Gradle build (Android app + capsule-core-kotlin) runs on the JDK pinned here.
+# Gradle 9.x rejects JDKs newer than it knows about, and a developer's system JDK is often
+# ahead of that, so the toolchain is pinned rather than inherited. Matches the Temurin 21
+# that `setup-java` installs in the Android CI lanes — bump both together.
+java = "21"
 # hk: git-hook runner (replaces lefthook). The version here MUST match the
 # `amends` URL in hk.pkl, or pkl reports a schema mismatch. Bump both together.
 hk = "1.48.0"
