@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
@@ -25,12 +26,60 @@ use serde_json::{Map, Value};
 /// committed files match (failing if any drifted).
 pub(crate) fn run(root: &Path, check: bool) -> Result<()> {
     let catalogs = Catalogs::load(root)?;
+    // Placeholder parity is checked on every run, not just under `--check`: a translation
+    // that drops or renames an argument is worse than an untranslated one, because it
+    // renders literal braces to the user or throws at format time. Catching it here means
+    // a bad translation never reaches a generated file in the first place.
+    catalogs.check_placeholders()?;
     let outputs = catalogs.render()?;
     if check {
         check_outputs(root, &outputs)
     } else {
         write_outputs(root, &outputs)
     }
+}
+
+/// The ICU arguments a message uses: each name paired with its formatter kind.
+///
+/// A translation must use exactly the same multiset. Comparing names alone would let
+/// `{count, plural, …}` be flattened to a bare `{count}`, which formats to the number
+/// without its pluralised noun — a defect that reads as merely clumsy rather than broken,
+/// and so tends to survive review.
+fn argument_shape(message: &str) -> BTreeMap<(String, String), usize> {
+    static ARGUMENT: OnceLock<Regex> = OnceLock::new();
+    let re = ARGUMENT.get_or_init(|| {
+        Regex::new(
+            r"\{\s*([A-Za-z0-9_]+)\s*(?:,\s*(plural|select|selectordinal|number|date|time)\b)?",
+        )
+        .expect("static regex is valid")
+    });
+    let mut shape: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for caps in re.captures_iter(message) {
+        let name = caps[1].to_string();
+        let kind = caps
+            .get(2)
+            .map_or_else(|| "simple".to_string(), |m| m.as_str().to_string());
+        *shape.entry((name, kind)).or_insert(0) += 1;
+    }
+    shape
+}
+
+/// Whether every `{` in `message` is matched by a later `}`.
+fn braces_balanced(message: &str) -> bool {
+    let mut depth = 0i32;
+    for ch in message.chars() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth < 0 {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    depth == 0
 }
 
 /// The parsed catalogs plus the locale configuration.
@@ -44,6 +93,45 @@ struct Catalogs {
 }
 
 impl Catalogs {
+    /// Verify every translation preserves its source message's ICU arguments.
+    fn check_placeholders(&self) -> Result<()> {
+        let source = self
+            .messages
+            .get(&self.source)
+            .with_context(|| format!("no catalog for source locale {}", self.source))?;
+
+        let mut problems = Vec::new();
+        for (locale, catalog) in &self.messages {
+            if locale == &self.source {
+                continue;
+            }
+            for (key, message) in catalog {
+                let Some(original) = source.get(key) else {
+                    problems.push(format!("{locale}: `{key}` is not in the source catalog"));
+                    continue;
+                };
+                let expected = argument_shape(original);
+                let actual = argument_shape(message);
+                if expected != actual {
+                    problems.push(format!(
+                        "{locale}: `{key}` uses {actual:?} but the source uses {expected:?}"
+                    ));
+                } else if !braces_balanced(message) {
+                    problems.push(format!("{locale}: `{key}` has unbalanced braces"));
+                }
+            }
+        }
+
+        if problems.is_empty() {
+            return Ok(());
+        }
+        bail!(
+            "i18n: {} translation(s) do not match their source message:\n  {}",
+            problems.len(),
+            problems.join("\n  ")
+        );
+    }
+
     /// Read `locales/config.json` and every supported locale's catalog.
     fn load(root: &Path) -> Result<Self> {
         let config = read_json(&root.join("locales/config.json"))?;
@@ -443,12 +531,64 @@ fn check_outputs(root: &Path, outputs: &[(PathBuf, String)]) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{android_qualifier, str_slice_const};
+    use super::{android_qualifier, argument_shape, braces_balanced, str_slice_const};
 
     const PREFIX: &str = "pub(crate) const SUPPORTED_LOCALES: &[&str] = ";
 
     fn owned(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    /// A translation that keeps every argument is accepted.
+    #[test]
+    fn identical_arguments_match() {
+        assert_eq!(
+            argument_shape("Signed in as {email}"),
+            argument_shape("Connecté en tant que {email}"),
+        );
+    }
+
+    /// Dropping an argument leaves the user looking at a sentence with a hole in it.
+    #[test]
+    fn a_dropped_argument_is_a_mismatch() {
+        assert_ne!(argument_shape("Hello {name}"), argument_shape("Bonjour"));
+    }
+
+    /// Renaming one is worse: it formats to literal braces.
+    #[test]
+    fn a_renamed_argument_is_a_mismatch() {
+        assert_ne!(argument_shape("{reason}"), argument_shape("{raison}"));
+    }
+
+    /// Flattening a plural block to a bare argument formats the count without its noun,
+    /// which reads as clumsy rather than broken and so survives review — hence the kind
+    /// is part of the comparison, not just the name.
+    #[test]
+    fn a_flattened_plural_is_a_mismatch() {
+        let source = argument_shape("{count, plural, one {# photo} other {# photos}}");
+        assert_ne!(source, argument_shape("{count} Fotos"));
+    }
+
+    /// Repeating an argument is a different shape from using it once.
+    #[test]
+    fn argument_count_is_part_of_the_shape() {
+        assert_ne!(argument_shape("{a}"), argument_shape("{a} {a}"));
+    }
+
+    /// Whitespace inside the braces is insignificant.
+    #[test]
+    fn spacing_inside_braces_does_not_change_the_shape() {
+        assert_eq!(argument_shape("{ name }"), argument_shape("{name}"));
+    }
+
+    #[test]
+    fn brace_balance_is_checked() {
+        assert!(braces_balanced("plain"));
+        assert!(braces_balanced("{a} and {b}"));
+        assert!(braces_balanced("{count, plural, one {#} other {#}}"));
+        assert!(!braces_balanced("{a"));
+        assert!(!braces_balanced("a}"));
+        assert!(!braces_balanced("}{"));
     }
 
     /// A bare language tag is the qualifier verbatim.
