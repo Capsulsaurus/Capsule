@@ -12,6 +12,7 @@ use std::collections::HashSet;
 
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
+use capsule_sdk::albums::{AlbumClient, AlbumTransport};
 use capsule_sdk::auth::{AuthClient, AuthError, Session};
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
@@ -42,6 +43,10 @@ pub struct RemoteConfig {
     /// Base URL of the upload surface — `POST` creates a session there, and
     /// `PATCH`/`HEAD`/`DELETE` hang under `{upload_endpoint}/{id}`.
     pub upload_endpoint: String,
+    /// Base URL of the album surface — `POST` provisions the caller's derived album id
+    /// there (slice `S-C25`), and the lifecycle-write surface hangs under
+    /// `{albums_endpoint}/{album_id}/ops`.
+    pub albums_endpoint: String,
     /// The client's max-known protocol version (`YYYY-MM-DD`), sent on the
     /// handshake and used as the forward-version ceiling.
     pub protocol_version: String,
@@ -72,6 +77,8 @@ impl RemoteConfig {
             // URL is silently unreachable. Pass the bare origin.
             upload_endpoint: std::env::var("CAPSULE_UPLOAD_ENDPOINT")
                 .unwrap_or_else(|_| Self::upload_endpoint_for(&base)),
+            albums_endpoint: std::env::var("CAPSULE_ALBUMS_ENDPOINT")
+                .unwrap_or_else(|_| Self::albums_endpoint_for(&base)),
             sync_endpoint: std::env::var("CAPSULE_SYNC_ENDPOINT").unwrap_or(base),
             protocol_version: std::env::var("CAPSULE_PROTOCOL")
                 .unwrap_or_else(|_| DEFAULT_PROTOCOL_VERSION.to_string()),
@@ -86,6 +93,12 @@ impl RemoteConfig {
     /// The upload surface hangs off `/v1/upload` on the shared origin.
     fn upload_endpoint_for(base: &str) -> String {
         format!("{base}/v1/upload")
+    }
+
+    /// The album surface hangs off `/v1/albums` on the shared origin — the API root, not
+    /// under `/upload`, per the authorization contract.
+    fn albums_endpoint_for(base: &str) -> String {
+        format!("{base}/v1/albums")
     }
 }
 
@@ -130,6 +143,7 @@ impl RemoteError {
                 code,
                 ..
             })) => code.as_deref(),
+            Self::Push(PushError::Album(error)) => error.error_code(),
             _ => None,
         }
     }
@@ -333,6 +347,12 @@ pub struct PushSummary {
     pub deferred_blobs: usize,
     /// Bytes handed to the upload client this run.
     pub bytes: u64,
+    /// Distinct albums registered with the server this run (slice `S-C25`). Provisioning is
+    /// idempotent, so this counts requests made, not rows created.
+    pub provisioned_albums: usize,
+    /// How many of those registrations actually created a server-side album row. Zero on a
+    /// re-run — the album was already bound.
+    pub created_albums: usize,
     /// Whether this was a dry run (nothing left the device).
     pub dry_run: bool,
 }
@@ -384,12 +404,21 @@ pub async fn held_blobs(
 
 /// Push every managed asset of `workspace` to the server.
 ///
-/// The CLI never hand-rolls a network flow: the bytes ride `capsule_sdk::upload`'s resumable
-/// client, the ordering rides `capsule_sdk::staged`'s scheduler, and the bundle comes from
+/// The CLI never hand-rolls a network flow: the album is provisioned through
+/// `capsule_sdk::push::ensure_album`, the bytes ride `capsule_sdk::upload`'s resumable client,
+/// the ordering rides `capsule_sdk::staged`'s scheduler, and the bundle comes from
 /// `capsule_core`'s `Workspace::upload_bundle` — this function only stitches them together.
 ///
+/// **Provisioning comes first** (slice `S-C25`). An asset's album id is derived from the
+/// account master key, so the server has never heard of it; invariant 6 refuses an upload
+/// into an album that does not exist or is not writable by the caller. Each *distinct* album
+/// the run touches is registered once, lazily, before its first blob session opens — and
+/// because provisioning is idempotent, a second `capsule push` re-registers the same id, gets
+/// the same success, and still moves nothing.
+///
 /// Re-runnable by construction. Nothing is written locally, so a second run against an
-/// unchanged library plans nothing (the feed says every blob is held) and makes no request.
+/// unchanged library plans nothing (the feed says every blob is held) and makes no request
+/// beyond the idempotent album registration.
 #[instrument(skip(store, workspace), fields(endpoint = %remote.upload_endpoint))]
 pub async fn push(
     remote: &RemoteConfig,
@@ -421,12 +450,19 @@ pub async fn push(
     };
 
     let upload = UploadClient::new(UploadTransport::with_session(
-        session,
+        session.clone(),
         &remote.upload_endpoint,
         &remote.protocol_version,
     ))
     .with_connection_class(options.connection);
+    let albums = AlbumClient::new(AlbumTransport::with_session(
+        session,
+        &remote.albums_endpoint,
+    ));
     let scheduler = StagedScheduler::new(options.policy, options.connection);
+    // Albums already registered this run — provisioning is idempotent server-side, so this is
+    // only about not making the same request once per asset.
+    let mut provisioned = HashSet::new();
 
     for asset_id in asset_ids {
         let bundle = workspace.upload_bundle(&asset_id)?;
@@ -447,6 +483,18 @@ pub async fn push(
             continue;
         }
 
+        // Invariant 6 needs the album to exist and be writable before the first session
+        // opens; a dry run deliberately reaches nothing, so it never provisions either.
+        if provisioned.insert(bundle.album_id) {
+            let album = push::ensure_album(&albums, bundle.album_id)
+                .await
+                .map_err(PushError::Album)?;
+            summary.provisioned_albums += 1;
+            if album.created {
+                summary.created_albums += 1;
+            }
+        }
+
         let report = push::push_bundle(&upload, &scheduler, &bundle, &held, options.force).await?;
         summary.already_held_blobs += report.already_held;
         summary.deferred_blobs += report.deferred;
@@ -464,6 +512,8 @@ pub async fn push(
 
     tracing::info!(
         assets = summary.assets,
+        provisioned_albums = summary.provisioned_albums,
+        created_albums = summary.created_albums,
         pushed_assets = summary.pushed_assets,
         uploaded = summary.uploaded_blobs,
         merged = summary.merged_blobs,

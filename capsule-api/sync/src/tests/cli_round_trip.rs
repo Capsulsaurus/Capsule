@@ -212,6 +212,7 @@ async fn cli_login_sync_list_round_trip() {
     let remote = RemoteConfig {
         auth_endpoint: auth_url,
         upload_endpoint: format!("{sync_url}/v1/upload"),
+        albums_endpoint: format!("{sync_url}/v1/albums"),
         sync_endpoint: sync_url,
         protocol_version: CLIENT_MAX_PROTOCOL.to_string(),
     };

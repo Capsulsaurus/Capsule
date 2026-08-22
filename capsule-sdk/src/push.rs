@@ -27,6 +27,7 @@ use capsule_core::lifecycle::UploadBundle;
 use serde::Serialize;
 use tracing::instrument;
 
+use crate::albums::{AlbumClient, AlbumError, ProvisionedAlbum};
 use crate::staged::{StagedAsset, StagedScheduler, TierBlob, TierSessionOutcome, remaining_tiers};
 use crate::upload::{
     BlobRole, CreateUploadRequest, ManifestEnvelope, UploadClient, UploadError, UploadOutcome,
@@ -165,6 +166,36 @@ pub fn create_request(
     }
 }
 
+// ─── Provisioning the album ───────────────────────────────────────────────────
+
+/// Register `album_id` with the server before any blob session opens for it (slice `S-C25`).
+///
+/// The album's id is derived from the account master key, so the client knows it and the
+/// server does not. [Invariant 6] refuses an upload whose album does not exist or is not
+/// writable by the caller, so without this step a real push cannot land a single byte — the
+/// ladder below would open its first session straight into `error.upload.album_access_denied`.
+///
+/// **Idempotent, and relied upon to be.** Provisioning an album the caller already owns is a
+/// success that writes nothing, so this runs unconditionally on every push: there is no
+/// client-side "already registered" flag to keep in sync across devices, which is exactly what
+/// deriving the id from the master key buys. Pushing twice therefore cannot fail here.
+///
+/// No album name crosses the wire — album titles live in the encrypted sidecar.
+///
+/// [Invariant 6]: https://docs/design/threat-model/validation/#server-side-validation-invariants
+#[instrument(skip(client), fields(album_id = %album_id))]
+pub async fn ensure_album(
+    client: &AlbumClient,
+    album_id: uuid::Uuid,
+) -> Result<ProvisionedAlbum, AlbumError> {
+    let provisioned = client.provision(album_id).await?;
+    tracing::info!(
+        created = provisioned.created,
+        "push: album provisioned on the server"
+    );
+    Ok(provisioned)
+}
+
 // ─── Driving a push ───────────────────────────────────────────────────────────
 
 /// What a push **would** do for one bundle: the blobs it plans to open sessions for, in ladder
@@ -213,6 +244,10 @@ pub fn plan<H: std::hash::BuildHasher>(
 /// Errors a push can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum PushError {
+    /// The bundle's album could not be provisioned on the server, so nothing may be uploaded
+    /// into it (invariant 6 would refuse every session).
+    #[error(transparent)]
+    Album(#[from] AlbumError),
     /// A blob's transfer failed non-recoverably.
     #[error(transparent)]
     Upload(#[from] UploadError),

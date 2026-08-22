@@ -13,6 +13,7 @@
 //! their protocols are too stateful for request/response codegen; the generated client covers
 //! the plain request/response surfaces (auth, quota, storage-verify, receipts, devices, …).
 
+pub mod albums;
 pub mod auth;
 pub mod client;
 pub mod cohort;

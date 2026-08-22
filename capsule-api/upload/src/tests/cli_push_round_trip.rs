@@ -143,6 +143,7 @@ fn remote_config(base: &str) -> RemoteConfig {
         auth_endpoint: format!("{base}/v1/auth"),
         sync_endpoint: base.to_string(),
         upload_endpoint: format!("{base}/v1/upload"),
+        albums_endpoint: format!("{base}/v1/albums"),
         protocol_version: CLIENT_MAX_PROTOCOL.to_string(),
     }
 }
