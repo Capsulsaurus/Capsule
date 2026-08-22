@@ -108,6 +108,27 @@ private let moduleTargets: [Target] =
     // Foundation — value types, logging, utilities. No dependencies.
     module("CapsuleFoundation", testDependencies: [])
 
+    // Domain — the display/domain value types, shaped as structural mirrors of
+    // the uniffi records they will eventually be generated from. No I/O, no
+    // platform, no strings: this is the vocabulary every other module speaks.
+    + module(
+        "CapsuleDomain",
+        dependencies: [.target(name: "CapsuleFoundation")],
+        testDependencies: []
+    )
+
+    // Ports — the async protocol seams, one per capability. Feature modules
+    // import ONLY this for data, so swapping the mock adapters for the real
+    // uniffi ones is a change in the composition root and nowhere else.
+    + module(
+        "CapsulePorts",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+        ],
+        testDependencies: []
+    )
+
     // Diagnostics — MetricKit crash/perf collection, consent, breadcrumbs,
     // redacted bug-report bundles, and an opt-in self-hosted uploader.
     + module(
@@ -319,6 +340,8 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "CapsuleFoundationTests",
     "CapsuleDiagnosticsTests",
     "CapsuleCatalogTests",
+    "CapsuleDomainTests",
+    "CapsulePortsTests",
     "CapsuleUITests",
     "ManagedStoreTests",
     "AssetKitTests",
