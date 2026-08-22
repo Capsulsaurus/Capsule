@@ -1,6 +1,6 @@
 //! Repo-maintenance tasks for the Capsule workspace.
 //!
-//! Two commands:
+//! Commands:
 //!
 //! - `set-version <X.Y.Z>` writes a single repo-wide version string into every
 //!   package's source of truth so a release bump stays in sync across Rust, web,
@@ -16,7 +16,10 @@
 //!   `README.<lang>.md` files from the repo-root `README.md` (see
 //!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a
 //!   locale's translation-data file.
+//! - `architecture-check` rejects implicit workspace packages, retired dependencies,
+//!   buildable review-only code, and stale component references (see [`architecture`]).
 
+mod architecture;
 mod drop_kat;
 mod i18n;
 mod i18n_guard;
@@ -31,7 +34,7 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>]>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check>";
 
 /// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
 const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
@@ -53,6 +56,7 @@ fn main() -> Result<()> {
             i18n::run(&repo_root(), check)
         }
         Some("i18n-guard") => i18n_guard::run(&repo_root()),
+        Some("architecture-check") => architecture::run(&repo_root()),
         Some("translate-readme") => {
             let mode = match args.next().as_deref() {
                 None => translate_readme::Mode::Generate { api: false },

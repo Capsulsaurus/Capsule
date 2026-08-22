@@ -143,6 +143,21 @@ run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 [tasks.build-rust]
 run = "cargo build --workspace"
 
+# Boundary gate for the retired architecture (Salvo, GraphQL/gRPC, Progenitor, the legacy
+# media stack). It rejects implicit workspace packages, retired dependencies, buildable
+# manifests under `legacy-review/`, and stale component references.
+#
+# DELIBERATELY NOT IN `check-rust` YET. The Salvo server, the Rust SDK, and the in-repo
+# media stack are still live on this branch and stay that way until the Kynos rebuild
+# reaches parity — `legacy-review/`'s own charter is that code leaves quarantine only once
+# its replacement contract and tests exist, and retiring first would leave the tree with no
+# server, no CLI network commands, and no end-to-end test for the whole rebuild. Until then
+# this runs as a report: its output is the exact worklist the rebuild must clear. Wire it
+# into `check-rust` in the same commit that moves those trees into `legacy-review/`.
+[tasks.architecture-check]
+description = "Report active-workspace and retired-component boundary violations"
+run = "cargo run -q -p xtask -- architecture-check"
+
 # Compile the canonical locales/ catalogs into each platform's native i18n format
 # (Rust bundle, web JSON, Android strings.xml, iOS .xcstrings). See xtask/src/i18n.rs.
 [tasks.i18n]
