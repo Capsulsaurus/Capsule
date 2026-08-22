@@ -1317,6 +1317,7 @@ dependencies = [
  "capsule-i18n",
  "hex",
  "jiff",
+ "p256",
  "prost 0.14.4",
  "rcgen",
  "reqwest",

@@ -9,11 +9,14 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{AssetState, LifecycleError, Result, Workspace, now_rfc3339};
-use crate::backup::{self, BackupArtifact, BackupAsset, BackupInput, RestoreMode};
+use crate::backup::{
+    self, BackupArtifact, BackupAsset, BackupInput, RestoreMode, VerifyOutcome as RecoveryVerdict,
+};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::HybridVerifyingKey;
-use crate::crypto::primitives::CRYPTO_SUITE_ID;
+use crate::crypto::primitives::{CRYPTO_SUITE_ID, DeviceTier};
 use crate::crypto::provenance::{AssetManifest, ProvenanceChain};
+use crate::crypto::pwkdf::WrappedSecret;
 use crate::metadata::crdt::Lww;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -22,6 +25,42 @@ use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 const RECOVERED_ALBUM_NAME: &str = "Recovered album";
 
 impl Workspace {
+    /// Wrap this account's master key under `recovery_secret` into the escrow blob a client
+    /// stores server-side (`PUT /backup/escrow`, slice `S-C12`; driven from the SDK by
+    /// `capsule_sdk::recovery`).
+    ///
+    /// The master key **never leaves this workspace**: the raw bytes are handed straight to
+    /// [`backup::escrow_master_key`] and what comes back out is the passphrase-wrapped blob.
+    /// That is the whole reason this verb lives here rather than a `master_key_bytes()`
+    /// accessor — an FFI surface that could read the master key would be a far larger hazard
+    /// than one that can only mint an escrow of it.
+    ///
+    /// `recovery_secret` is the ≥128-bit secret shown to the user exactly once
+    /// (`capsule_sdk::recovery::MintedSecret`); `tier` selects the Argon2id cost, which is
+    /// recorded in the blob so any device can unwrap it.
+    #[tracing::instrument(skip_all, fields(?tier))]
+    pub fn escrow_master_key(
+        &self,
+        recovery_secret: &[u8],
+        tier: DeviceTier,
+    ) -> Result<WrappedSecret> {
+        let blob =
+            backup::escrow_master_key(self.account.master.as_bytes(), recovery_secret, tier)?;
+        tracing::info!("minted a master-key escrow blob under a fresh recovery secret");
+        Ok(blob)
+    }
+
+    /// Local, network-free check that `recovery_secret` still opens `blob` **to this device's
+    /// master key** — the derived-tag compare that backs the recovery verification cadence
+    /// (`S-D12`).
+    ///
+    /// Delegates wholesale to [`backup::verify_recovery_secret`]; nothing is compared here, and
+    /// no key bytes are surfaced either way. The stale-cache rule (refresh the blob once before
+    /// recording a genuine failure) belongs to the networked caller, not to this predicate.
+    pub fn verify_escrow(&self, blob: &WrappedSecret, recovery_secret: &[u8]) -> RecoveryVerdict {
+        backup::verify_recovery_secret(blob, recovery_secret, self.account.master.as_bytes())
+    }
+
     /// The current provenance head hash for each managed asset (for backup reconciliation).
     pub fn local_heads(&self) -> BTreeMap<Uuid, Hash32> {
         self.assets
@@ -231,5 +270,45 @@ impl Workspace {
         };
         sidecar.sign(&self.account.user_ik);
         Ok(sidecar)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::crypto::primitives::Argon2Params;
+    use crate::lifecycle::fast_workspace;
+
+    /// The escrow verbs are a pair: what `escrow_master_key` mints is exactly what
+    /// `verify_escrow` opens back to *this* device's master key, and a wrong secret does not
+    /// verify. The master key itself never appears in either signature — that is the point of
+    /// putting these on `Workspace` rather than exposing the raw bytes.
+    #[test]
+    fn escrow_round_trips_under_its_recovery_secret() {
+        let lib = TempDir::new().unwrap();
+        let ws = fast_workspace(lib.path());
+        // The FFI/CLI callers use a `DeviceTier`; a test uses the fast cost directly through
+        // the same `pwkdf::wrap` the tier resolves to, so the suite does not pay 256 MiB.
+        let blob = crate::crypto::pwkdf::wrap_with(
+            ws.account.master.as_bytes(),
+            b"correct horse battery staple",
+            Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            ws.verify_escrow(&blob, b"correct horse battery staple"),
+            RecoveryVerdict::Verified
+        );
+        assert_eq!(
+            ws.verify_escrow(&blob, b"the wrong secret"),
+            RecoveryVerdict::NotVerified
+        );
     }
 }

@@ -107,3 +107,9 @@ serde_json = { workspace = true }
 # The S-D18 envelope mapping is asserted against a manifest a real `capsule_core::Workspace`
 # produced, so the push tests build a throwaway library on disk.
 tempfile = "3"
+# A software stand-in for a P-256 secure element, so the S-P1 `FfiHardwareSigner` foreign-trait
+# seam is proven end to end (SEC1 public key in, DER ECDSA signature out — the exact shapes
+# Secure Enclave and StrongBox emit) without an Xcode/Android toolchain. Test-only, and the same
+# pin `capsule-core` already carries for the real composition; nothing here enters the runtime
+# dependency tree.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "arithmetic"] }

@@ -8,7 +8,9 @@ rm -rf "$out"
 # Two uniffi surfaces, one pinned uniffi (0.31.1 — the S-F1 consolidation), one
 # out dir (distinct per-namespace filenames coexist): capsule-core's offline
 # `FfiWorkspace` and capsule-sdk's `FfiCapsuleClient`/`FfiSession` user-flow
-# primitives (S-D9). Each is generated library-mode from its own compiled cdylib.
+# primitives (S-D9) plus its `FfiWorkspace` workspace verbs (S-P1). Each is
+# generated library-mode from its own compiled cdylib. The two namespaces are
+# generated separately and never linked together — see the S-F1 invariant.
 #   crate  package        cdylib basename       generator bin (package-scoped)
 gen() {  # $1=package  $2=cdylib_stem
     cargo build -p "$1" --features ffi
@@ -22,8 +24,45 @@ gen capsule-core libcapsule_core
 gen capsule-sdk  libcapsule_sdk
 
 # Smoke: both surfaces must have produced non-empty sources in both languages.
-test -s "$out/kotlin/uniffi/capsule_core/capsule_core.kt"
-test -s "$out/swift/capsule_core.swift"
-test -s "$out/kotlin/uniffi/capsule_sdk/capsule_sdk.kt"
-test -s "$out/swift/capsule_sdk.swift"
+core_kt="$out/kotlin/uniffi/capsule_core/capsule_core.kt"
+core_swift="$out/swift/capsule_core.swift"
+sdk_kt="$out/kotlin/uniffi/capsule_sdk/capsule_sdk.kt"
+sdk_swift="$out/swift/capsule_sdk.swift"
+for f in "$core_kt" "$core_swift" "$sdk_kt" "$sdk_swift"; do
+    test -s "$f" || { echo "empty or missing binding source: $f" >&2; exit 1; }
+done
+
+# Non-empty is not enough: a verb that fails to cross the namespace boundary still
+# leaves a large, plausible file behind. Assert the surfaces each lane actually
+# consumes are present by name.
+#
+#   S-D9 — the networked user flows (login → upload → status → sync).
+#   S-P1 — the capsule_sdk workspace verbs the whole iOS lane is blocked on:
+#          enroll (incl. hardware-signer parity), album, seal+import, the
+#          seal→upload bridge, verify, sync-apply, escrow, device directory.
+require() {  # $1=file  $2..=symbols
+    local file="$1"; shift
+    for sym in "$@"; do
+        grep -q "$sym" "$file" \
+            || { echo "binding surface missing '$sym' in $file" >&2; exit 1; }
+    done
+}
+for f in "$sdk_kt" "$sdk_swift"; do
+    require "$f" FfiCapsuleClient FfiSession
+    require "$f" FfiWorkspace FfiHardwareSigner FfiSyncEntry FfiAssetFacts FfiUploadBlob
+done
+# Swift and Kotlin lower method names differently (camelCase vs camelCase on the
+# object); assert the verbs per-language rather than assuming one spelling.
+require "$sdk_swift" sealAsset uploadBlobs applySyncEntry escrowBlob \
+    signedDeviceDirectory publishDeviceDirectory escrowPut escrowGet \
+    createWithP256HardwareSigner
+require "$sdk_kt" sealAsset uploadBlobs applySyncEntry escrowBlob \
+    signedDeviceDirectory publishDeviceDirectory escrowPut escrowGet \
+    createWithP256HardwareSigner
+# The core namespace stays its own surface (S-F1): its offline workspace is here and
+# nowhere near the SDK's.
+require "$core_swift" FfiWorkspace HardwareSigner
+require "$core_kt" FfiWorkspace HardwareSigner
+
 echo "uniffi bindings written to $out (capsule_core + capsule_sdk, kotlin + swift)"
+echo "surface check passed: S-D9 client/session + S-P1 workspace verbs present in both languages"

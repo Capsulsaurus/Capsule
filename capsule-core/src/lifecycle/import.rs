@@ -181,6 +181,50 @@ impl Workspace {
             .asset_id)
     }
 
+    /// Import **bytes already in memory** into `album_id` under the file name `file_name`
+    /// (consulted for its extension and nothing else), returning the asset id.
+    ///
+    /// This is the entry point a platform app needs and the CLI does not: PhotoKit, the Android
+    /// MediaStore, and a browser upload all hand over a byte buffer rather than a path the
+    /// library may read at leisure. It stages those bytes in the library's own scratch
+    /// directory and drives the **one** signed write path —
+    /// [`import_asset_with`](Self::import_asset_with) in Move mode, so the staged copy is
+    /// released by the same durable-commit rule that releases any other moved source. There is
+    /// no second sealing implementation here and none is wanted: the file key derivation, STREAM
+    /// encryption, manifest, sidecar, provenance chain, and `verify_asset` self-check are
+    /// byte-for-byte the path a file import takes.
+    ///
+    /// EXIF is read back off the staged file, so a JPEG carrying capture time and GPS is scanned
+    /// exactly as it would be on a file import.
+    #[tracing::instrument(skip_all, fields(album_id = %album_id, file_name, bytes = bytes.len()))]
+    pub fn import_bytes(&mut self, album_id: Uuid, file_name: &str, bytes: &[u8]) -> Result<Uuid> {
+        let ext = Path::new(file_name)
+            .extension()
+            .map_or_else(|| "bin".to_string(), |e| e.to_string_lossy().to_lowercase());
+        let staging = self.root().join(".library").join("staging");
+        fs::create_dir_all(&staging)
+            .map_err(|e| LifecycleError::Io(format!("create staging dir: {e}")))?;
+        let staged = staging.join(format!("{}.{ext}", Uuid::now_v7().simple()));
+        fs::write(&staged, bytes)
+            .map_err(|e| LifecycleError::Io(format!("stage {}: {e}", staged.display())))?;
+
+        let opts = SignedImportOptions {
+            // The staged copy is scratch, and the caller still holds the buffer it handed over,
+            // so releasing on the local durable commit is right: nothing is the only copy.
+            move_source: true,
+            defer_source_release: false,
+            stack: None,
+        };
+        let imported = self.import_asset_with(album_id, &staged, &opts);
+        if imported.is_err() {
+            // A failed import must not leave staged plaintext behind.
+            let _ = fs::remove_file(&staged);
+        }
+        let asset_id = imported?.asset_id;
+        tracing::info!(asset_id = %asset_id, "imported in-memory bytes as a signed asset");
+        Ok(asset_id)
+    }
+
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
@@ -426,6 +470,47 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
     use crate::crypto::keys::HybridSigningKey;
+
+    /// `import_bytes` is the platform-app entry point (PhotoKit / MediaStore hand over a
+    /// buffer, not a path). It must land an asset indistinguishable from a file import — same
+    /// signed artifacts, same `verify_asset` verdict, same plaintext readable back — and must
+    /// leave no staged plaintext behind.
+    #[test]
+    fn import_bytes_lands_a_signed_asset_and_clears_its_staging_copy() {
+        let lib = TempDir::new().unwrap();
+        let bytes = b"\xFF\xD8\xFF\xE0 in-memory jpeg bytes \x00\x01\x02".to_vec();
+
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Camera Roll").unwrap();
+        let asset = ws.import_bytes(album, "IMG_0042.JPG", &bytes).unwrap();
+
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(ws.read_plaintext(&asset).unwrap(), bytes);
+        // The extension came off the file name, lowercased, exactly as a file import derives it.
+        assert_eq!(ws.asset(&asset).unwrap().ext, "jpg");
+        assert!(ws.asset(&asset).unwrap().sidecar.signature.is_some());
+
+        // Move mode released the staged copy: no plaintext is left in the scratch directory.
+        let staging = lib.path().join(".library").join("staging");
+        let leftovers = std::fs::read_dir(&staging)
+            .map(|dir| dir.count())
+            .unwrap_or(0);
+        assert_eq!(leftovers, 0, "the staged plaintext copy must not survive");
+    }
+
+    /// A name with no extension still imports — the extension degrades to `bin` rather than
+    /// the import failing, because a backup tool never refuses bytes it can store.
+    #[test]
+    fn import_bytes_without_an_extension_degrades_to_bin() {
+        let lib = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Camera Roll").unwrap();
+        let asset = ws
+            .import_bytes(album, "no-extension", b"raw bytes")
+            .unwrap();
+        assert_eq!(ws.asset(&asset).unwrap().ext, "bin");
+        assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
 
     #[test]
     fn end_to_end_data_plane() {

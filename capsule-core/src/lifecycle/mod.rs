@@ -36,6 +36,7 @@ mod open;
 mod organize;
 mod provenance;
 mod sharing;
+mod sync_apply;
 mod upload;
 
 use std::collections::{BTreeMap, HashMap};
@@ -48,6 +49,7 @@ use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
 pub use self::open::HardwareDekBinding;
+pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
 pub use self::upload::{DerivativeBlob, UploadBundle};
 use crate::backup::BackupError;
 use crate::crypto::CryptoError;
@@ -423,6 +425,24 @@ impl Workspace {
     /// user-IK-signed artifact this workspace authors) verifies against.
     pub fn user_ik_public(&self) -> HybridVerifyingKey {
         self.account.user_ik.verifying_key()
+    }
+
+    /// This device's stable id — the `created_by_device` every manifest this workspace
+    /// authors carries, and the [`DeviceEntry`](crate::crypto::keys::directory::DeviceEntry)
+    /// key under which its signing key is published in the device directory.
+    pub fn device_id(&self) -> Uuid {
+        self.account.device.device_id
+    }
+
+    /// This workspace's **signed device directory** — the user-IK-signed list of enrolled
+    /// device signing keys `verify_asset` resolves a manifest's `created_by_device` against.
+    ///
+    /// Exposed so a client can publish it (the `S-C9` device-directory surface, driven from
+    /// the SDK by `capsule_sdk::directory`). The directory is a signed, self-verifying
+    /// document: it carries no private key material, and a reader checks it under
+    /// [`user_ik_public`](Self::user_ik_public) before trusting a single entry.
+    pub fn device_directory(&self) -> &DeviceDirectory {
+        &self.directory
     }
 
     /// The account's default album id (derived from the master key).
