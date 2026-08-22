@@ -186,6 +186,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | done | |
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
+| S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | ready | |
 | S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
@@ -240,10 +241,10 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | RETIRED | ready | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
 | S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
-| S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done\* | `capsule cull` → `S-D16` |
+| S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
 | S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
-| S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | ready | |
+| S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | done | |
 | S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
@@ -260,10 +261,10 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-F2 | Secure Enclave / StrongBox hybrid composition | platform/FFI | S-A4, S-F1 | L | ACTIVE | done\* | Kotlin run → owed-CI |
 | S-F3 | Xcode/Gradle binding wiring + on-device CI | platform/FFI | S-F2 | L | ACTIVE | done\* | first CI runs + device lanes → owed-CI |
 | S-F4 | Windows TPM (TBS) backend | platform/FFI | S-A4 | M | ACTIVE | done\* | Windows CI + real-TPM smoke → owed-CI |
-| S-F5 | Hardware DEK binding | platform/FFI | S-F2 | M | ACTIVE | done\* | keystore wiring → `S-F8`; Kotlin ECDH → owed-CI |
+| S-F5 | Hardware DEK binding | platform/FFI | S-F2 | M | ACTIVE | done\* | Kotlin ECDH → owed-CI |
 | S-F6 | `log` → `tracing` migration (core + core-ffi) | platform/FFI | — | S | ACTIVE | done | |
 | S-F7 | core-swift XCTest → swift-testing migration | platform/FFI | — | S | ACTIVE | done | |
-| S-F8 | Hardware DEK → workspace keystore wiring | platform/FFI | — | M | ACTIVE | ready | |
+| S-F8 | Hardware DEK → workspace keystore wiring | platform/FFI | — | M | ACTIVE | done | |
 | S-G1 | GraphQL retirement | legacy-retire | — | M | RETIRED | done | README residual → `S-Z4` |
 | S-G2 | gRPC/plaintext proto retirement | legacy-retire | — | S | RETIRED | done | |
 | S-G3 | Plaintext server entity quarantine | legacy-retire | — | M | RETIRED | done | legacy route deletion → `S-C17` |
@@ -296,7 +297,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-X1 | OpenMLS backend → `OpenMlsAuthority` | crypto/mls | — | L | ACTIVE | done | |
 | S-X2 | MLS membership + Welcome/history delivery | crypto/mls | S-X1 | L | ACTIVE | done | |
 | S-X3 | Album upgrade ceremony + MLS resilience | crypto/mls | S-X2 | L | ACTIVE | done\* | server halves → `S-C24` |
-| S-X4 | Per-user block MLS Remove + epoch bump | crypto/mls | — | M | ACTIVE | ready | |
+| S-X4 | Per-user block MLS Remove + epoch bump | crypto/mls | — | M | ACTIVE | done\* | server composition → `S-C8` |
 | S-Z1 | Library-settings document schema (design) | design/docs | — | S | ACTIVE | done | implementation → post-v1 (OGK cluster) |
 | S-Z2 | Provider migration user guides (docs site) | design/docs | S-B6 | S | ACTIVE | done\* | real-archive round trip → `S-B11` |
 | S-Z3 | Design-doc scope-out + amendment notes | design/docs | — | M | ACTIVE | done | |
@@ -304,13 +305,14 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Z5 | Dead-code removal (exports stub, CLI import planner) | design/docs | — | S | MIXED | done | |
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
 
-**Row counts.** By area: **41 ACTIVE / 46 RETIRED / 35 MIXED**. By status:
-**34 done / 19 done\* / 57 ready / 8 blocked / 4 post-v1**.
+**Row counts.** 126 rows. By area: **44 ACTIVE / 47 RETIRED / 35 MIXED**. By status:
+**41 done / 18 done\* / 54 ready / 8 blocked / 4 post-v1 / 1 part-done** (`S-C27`).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
 ordering. Only three block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
 `S-N1`, and `S-P2`–`S-P6`/`S-P8` behind `S-P1`. Everything else that once read `blocked`
-is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5`),
+is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
+which `S-D16` has since landed),
 spargen shipped and is on crates.io (freeing `S-D8`), and the X-Wing codepoint `0x004D`
 exists and OpenMLS ships it (freeing `S-X1`–`S-X3`, all three of which are now `done` in
 `ACTIVE` `capsule-core`).
@@ -503,9 +505,12 @@ not touch them.
   derived deterministically from the master key, so this is right by construction. But the
   "Done when" says *in a new process* at Tier Unit + Smoke, and every proof is an
   in-process second `Workspace::open` against the same temp dir. There is no
-  process-boundary test: `capsule-cli` has one unit test, no `tests/` directory, and
-  `assert_cmd` appears nowhere in the repo. The CLI wiring is correct by inspection and
-  uncovered by test. Closing that gap is owed when the CLI network commands return.
+  process-boundary test: `capsule-cli` had no `tests/` directory and no way to spawn its own
+  binary. The CLI wiring was correct by inspection and uncovered by test.
+  **Partly closed (`S-D16`):** `capsule-cli/tests/cull_round_trip.rs` now drives the real
+  `capsule` binary over one library across four processes, so `Workspace::open`'s durable
+  restore is proved across a genuine process boundary — for the culling path. The equivalent
+  proof for `import`/`push` is still owed, and rides the CLI network commands' return.
 - **Deliverable:** persist album authorities/AMK ledgers through the keystore
   (encrypted at rest under the master key; MLS group state via the existing
   `export_state`/`import_state` CBOR), plus `Workspace::open` plumbing (passphrase /
@@ -515,6 +520,30 @@ not touch them.
   in a new process; `capsule demo` unaffected; backup restore still round-trips.
 - **Tier:** Unit + Smoke. **Landed:** shipped on this branch — this is what unblocked
   `S-B10`, `S-D16`, `S-D18`, and `S-P1`.
+
+### S-A11 — Publish the DEK in the device directory
+
+- **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md):
+  "Each device's keys are cross-signed into the device directory by the user's IK: 1. **DSK**…
+  2. **DEK** (Device Encryption Key)… **Both are signed by the IK** (hybrid signature)."
+- **Gap** (found 2026-08-22 while landing `S-F8`): only the DSK is. `DeviceEntry` carries
+  `device_id`, `dsk_public`, `added_at` and `revoked_at` — **there is no `dek_public` field**, so
+  the device encryption key is never published and never IK-signed. A peer that wants to
+  encapsulate to one of a user's devices has no authenticated public half to wrap to, and the
+  doc's "both" is simply false today.
+- **Why `S-F8` made it visible:** hardware DEK binding gave `Workspace::device_dek_public()` a
+  real answer for the first time, and nothing anywhere advertises it.
+- **Deliverable:** add the DEK public half to `DeviceEntry` so it rides the IK signature with the
+  DSK, and publish it from the directory-publish path (`S-C9`'s surface).
+- **Cost, stated up front — this is why it is `M` and not `S`:** `DeviceEntry` is inside a
+  **signed, canonically-CBOR-encoded** structure that `verify_asset` and every cross-platform
+  fixture depend on. The field MUST be added as an absent-key optional
+  (`#[serde(default, skip_serializing_if = …)]`); a present-`null` encoding changes
+  `signing_bytes()` and silently breaks re-verification of every directory signed before it.
+  A wire-absence regression test is mandatory, mirroring the one in `manifest.rs`.
+- **Done when:** a directory published with a DEK verifies under the IK; a directory signed
+  before this change still verifies byte-identically; and a peer can encapsulate to a device
+  using only the published entry. **Tier:** Unit.
 
 ## Lane B — media / import
 
@@ -1430,8 +1459,8 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Done when:** the flag → filter → sweep loop round-trips on a fixture library;
   concurrent flags from two devices converge. **Tier:** Unit + Smoke.
 - **Landed:** fully `ACTIVE` — the culling engine and the sidecar `cull` register are
-  local-only and unaffected by the rebuild.
-- **Owed:** `capsule cull` → `S-D16`.
+  local-only and unaffected by the rebuild. The `capsule cull` command that drives it from a
+  terminal landed with `S-D16`; nothing is owed.
 
 ### S-D14 — Local-gallery security gates
 
@@ -1469,6 +1498,13 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Done when:** the flag→filter→sweep loop round-trips on a reopened fixture library.
 - **Tier:** Smoke. Entirely offline — no server involvement, so the rebuild does not
   touch it.
+- **Landed.** `capsule cull --library … [--pick|--neutral|--reject ID]… [--filter FLAG]
+  [--sweep [--retain-days N]]` in `capsule-cli/src/cull.rs`, over `open_workspace`
+  (`S-A10`). The reject sweep is the only destructive step and stays soft per retention.
+  The acceptance is `capsule-cli/tests/cull_round_trip.rs`, which spawns the **real**
+  `capsule` binary once per step (`CARGO_BIN_EXE_capsule`), so the loop crosses a genuine
+  process boundary rather than a second in-process `Workspace::open` — the gap `S-A10`'s
+  verification note documented, now closed for this command. No test dependency was needed.
 
 ### S-D17 — Reactive 401-retry-once
 
@@ -1746,7 +1782,9 @@ Area: `ACTIVE` throughout — `capsule-core-ffi`, `capsule-core-swift`,
 - **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md).
 - **Deliverable:** the device **encryption** key's classical half hardware-bound
   (P-256 ECDH), mirroring the DSK composition. **Depends on:** S-F2. **Tier:** Smoke.
-- **Landed.** **Owed:** keystore wiring → `S-F8`; Kotlin ECDH → owed-CI.
+- **Landed.** The keystore wiring owed here was discharged by `S-F8`: `P256HybridDek` is now
+  the DEK of a real workspace, not only of the FFI smoke.
+  **Owed:** Kotlin ECDH adapter → owed-CI.
 
 ### S-F6 — `log` → `tracing` migration
 
@@ -1780,6 +1818,12 @@ Area: `ACTIVE` throughout — `capsule-core-ffi`, `capsule-core-swift`,
 - **Done when:** a workspace created with a (mock or SE) `HardwareKeyAgreement`
   round-trips lock/unlock; existing software-DEK workspaces unaffected.
 - **Tier:** Unit + Smoke.
+- **Landed.** `DeviceDek` (software X-Wing | hardware `P256HybridDek`) is the account's DEK;
+  `AccountFile` records which in `DekBinding`, seals only the software half, and refuses a
+  software-only unlock of a hardware-bound account rather than degrading. `Workspace` gains
+  `create_with_hardware_dek` / `create_with_hardware_keys` / `open_with_hardware_dek` plus
+  `device_dek_public` / `device_dek_decapsulate` / `device_dek_is_hardware_bound`. Pre-`S-F8`
+  account files decode as software (`serde(default)`), so existing libraries are untouched.
 
 ## Lane G — completed legacy quarantine
 
@@ -2206,6 +2250,15 @@ and all three slices are `done` in `capsule-core`.
   user loses future-epoch decryption; write-tier key rotates. **Tier:** Unit + Smoke.
 - **Area:** `ACTIVE` — the MLS half is core. The server blocklist half it composes with
   is `S-C8` and re-scopes independently.
+- **Landed.** `OpenMlsAuthority::block_user(user_id)` removes **every** leaf that user holds
+  in one `Remove` + `Commit` (mls.md's "all Charlie's devices"), so the epoch bumps exactly
+  once and the write-tier key rotates once. It reuses `S-X2`'s ceremony rather than adding a
+  second: `remove_member` and `block_user` both call one private multi-leaf `remove_leaves`.
+  Blocking a non-member is an idempotent no-op that burns no epoch; blocking the local user
+  is refused (`OpenMlsAuthorityError::BlockSelf`). Prior-epoch keys are deliberately not
+  clawed back, per the doc.
+  **Owed:** calling this from the server's `Blocklist::block_user` alongside the share-row
+  revocation → `S-C8` (that file is server-side and re-scopes with the rebuild).
 
 ## Lane Z — design follow-ups (docs)
 
