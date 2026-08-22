@@ -184,7 +184,7 @@ their owed remainder now lives.
 | S-D17 | Typed REST client reactive 401-retry-once              | sdk/clients | —            | S    | ready   |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI   | sdk/clients | S-A10        | M    | blocked |
 | S-D19 | Hidden-view DB projection + gate wiring                | sdk/clients | —            | S    | ready   |
-| S-D20 | CLI truthfulness pass (status/register/endpoints/flags)| sdk/clients | —            | M    | ready   |
+| S-D20 | CLI truthfulness pass (status/register/endpoints/flags)| sdk/clients | —            | M    | done    |
 | S-N1  | OIDC relying party (server)                            | auth        | —            | L    | ready   |
 | S-N2  | SDK/CLI OIDC login flows                               | auth        | S-N1         | M    | blocked |
 | S-N3  | `device_id` on session listing + ceremony cohorts      | auth        | —            | S    | ready   |

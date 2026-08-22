@@ -30,7 +30,6 @@ use crate::utils::directories::{
 };
 
 pub mod cli;
-pub mod config;
 pub mod db;
 pub mod demo;
 pub mod i18n;
@@ -107,12 +106,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
             AuthCommands::Logout => auth_logout().await?,
             AuthCommands::Status => {
                 println!("{}", "Checking authentication status...".blue());
-                match config::Config::from_default_path() {
-                    Ok(config) => match status::AuthStatus::check(&config).await {
-                        Ok(auth_status) => auth_status.display(),
-                        Err(e) => println!("{}", format!("Error checking auth status: {e}").red()),
-                    },
-                    Err(e) => println!("{}", format!("Error loading config: {e}").red()),
+                let store = session_store()?;
+                match status::AuthStatus::check(&store) {
+                    Ok(auth_status) => auth_status.display(),
+                    Err(e) => println!("{}", format!("Error checking auth status: {e}").red()),
                 }
             }
         },
@@ -293,7 +290,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         // ── Sync ──────────────────────────────────────────────────────────
-        Commands::Sync { force: _, dry_run } => sync(dry_run).await?,
+        Commands::Sync { force, dry_run } => sync(dry_run, force).await?,
 
         // ── Status ────────────────────────────────────────────────────────
         Commands::Status => {
@@ -305,10 +302,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
 
         // ── List ──────────────────────────────────────────────────────────
-        Commands::List {
-            local: _,
-            remote: _,
-        } => list().await?,
+        Commands::List { include_deleted } => list(include_deleted).await?,
 
         // ── Match ─────────────────────────────────────────────────────────
         Commands::Match { path } => {
@@ -574,7 +568,7 @@ async fn auth_logout() -> Result<()> {
 }
 
 /// `capsule sync`: drain the feed over the SDK into the local store.
-async fn sync(dry_run: bool) -> Result<()> {
+async fn sync(dry_run: bool, from_start: bool) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
@@ -601,6 +595,7 @@ async fn sync(dry_run: bool) -> Result<()> {
         &db,
         remote::DEFAULT_SYNC_PAGE_SIZE,
         dry_run,
+        from_start,
     )
     .await
     {
@@ -639,13 +634,13 @@ async fn sync(dry_run: bool) -> Result<()> {
 }
 
 /// `capsule list`: query the sync-fed local store and render it.
-async fn list() -> Result<()> {
+async fn list(include_deleted: bool) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let db = db::init_sqlite()
         .await
         .map_err(|e| eyre!("Failed to open local database: {e}"))?;
 
-    let rows = match remote::list(&db, false).await {
+    let rows = match remote::list(&db, include_deleted).await {
         Ok(rows) => rows,
         Err(error) => {
             let reason = describe_remote_error(&bundle, &error);

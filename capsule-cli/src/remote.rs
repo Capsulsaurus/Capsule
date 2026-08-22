@@ -9,7 +9,7 @@
 //! binary's command arms call and the E2E round-trip drives directly.
 
 use capsule_sdk::auth::{AuthClient, AuthError};
-use capsule_sdk::sync::{SyncConsumer, SyncError};
+use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use sea_orm::{ConnectionTrait, TransactionTrait};
 use thiserror::Error;
 use tracing::instrument;
@@ -189,6 +189,11 @@ pub struct SyncSummary {
 /// rehydrated from the local store. Each validated page is persisted in one
 /// transaction (unless `dry_run`), and the cursor + high-water marks survive to the
 /// next run.
+///
+/// `from_start` discards the persisted cursor and re-drains the feed from the beginning —
+/// the recovery move when the local store has drifted or been partially lost. It does **not**
+/// weaken the anti-rewind contract: the per-album high-water marks are still rehydrated from
+/// the store, so a replayed entry older than what was already applied is still refused.
 #[instrument(skip(store, db))]
 pub async fn sync<C: ConnectionTrait + TransactionTrait>(
     remote: &RemoteConfig,
@@ -196,6 +201,7 @@ pub async fn sync<C: ConnectionTrait + TransactionTrait>(
     db: &C,
     page_size: u32,
     dry_run: bool,
+    from_start: bool,
 ) -> Result<SyncSummary, RemoteError> {
     let persisted = store.load()?.ok_or(RemoteError::NotAuthenticated)?;
     let client = AuthClient::new(&remote.auth_endpoint)?;
@@ -206,6 +212,17 @@ pub async fn sync<C: ConnectionTrait + TransactionTrait>(
         SyncConsumer::with_session(channel, session, remote.protocol_version.clone());
 
     let mut state = syncstore::load_sync_state(db, &remote.protocol_version).await?;
+    if from_start {
+        tracing::info!("sync --force: re-draining the feed from the start of the cursor");
+        // Rebuild with a start cursor but the SAME high-water marks: the cursor is only a
+        // resume point, whereas the marks are the anti-rewind floor. Dropping them too would
+        // let a replayed stale entry overwrite a newer one.
+        let high_water: Vec<(Vec<u8>, u64)> = state
+            .high_water_marks()
+            .map(|(album, seq)| (album.to_vec(), seq))
+            .collect();
+        state = SyncState::restore(&remote.protocol_version, SyncCursor::start(), high_water);
+    }
 
     let mut summary = SyncSummary {
         dry_run,

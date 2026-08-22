@@ -39,7 +39,8 @@ pub(crate) enum Commands {
     },
     /// Sync local and remote data
     Sync {
-        /// Force sync even if there are conflicts
+        /// Discard the saved cursor and re-drain the feed from the start. The per-album
+        /// anti-rewind floor still applies, so this cannot resurrect stale entries.
         #[arg(long)]
         force: bool,
         /// Perform a dry run without making changes
@@ -48,14 +49,11 @@ pub(crate) enum Commands {
     },
     /// Show current status
     Status,
-    /// List files and albums
+    /// List the assets the sync feed has delivered
     List {
-        /// Show only local files
+        /// Include assets the server has tombstoned (deleted) as well as live ones.
         #[arg(long)]
-        local: bool,
-        /// Show only remote files
-        #[arg(long)]
-        remote: bool,
+        include_deleted: bool,
     },
     /// Match metadata for current file
     Match {

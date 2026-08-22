@@ -6,10 +6,9 @@ use eyre::{Result, eyre};
 use humansize::{BINARY, format_size};
 use jiff::Timestamp;
 
-use crate::config::Config;
-use crate::utils::directories::{
-    get_cache_dir, get_config_dir, get_config_file_path, get_data_dir,
-};
+use crate::remote::RemoteConfig;
+use crate::session::SessionStore;
+use crate::utils::directories::{get_cache_dir, get_config_dir, get_data_dir};
 use crate::utils::files::get_available_space;
 
 pub(crate) struct StatusInfo {
@@ -20,21 +19,19 @@ pub(crate) struct StatusInfo {
 }
 
 pub(crate) struct AuthStatus {
-    /// Username of logged in user
-    pub username: Option<String>,
-    /// Whether token is valid according to server
-    pub token_valid: bool,
-    /// Expiry time of the authentication token
+    /// Whether a session is persisted at all. This — not the access token's freshness — is
+    /// what "logged in" means: an expired access token still refreshes silently on the next
+    /// command, so treating it as logged-out would be wrong.
+    pub signed_in: bool,
+    /// Whether the persisted access token is still within its recorded lifetime.
+    pub access_token_fresh: bool,
+    /// Expiry of the persisted access token.
     pub token_expires_at: Option<Timestamp>,
 }
 
 pub(crate) struct LocalEnvStatus {
-    /// Configuration directory
+    /// Configuration directory (holds the persisted session)
     pub config_dir: Option<PathBuf>,
-    /// Path to the configuration file
-    pub config_file_path: Option<PathBuf>,
-    /// Whether the config file exists
-    pub config_file_exists: bool,
     /// Data directory
     pub data_dir: Option<PathBuf>,
     /// Available disk space in data directory
@@ -85,13 +82,14 @@ pub(crate) enum ConnectionStatus {
 
 impl StatusInfo {
     pub(crate) async fn collect() -> Result<Self> {
-        let config = Config::from_default_path().map_err(|e| eyre!(e))?;
+        let remote = RemoteConfig::from_env();
+        let store = crate::session_store()?;
 
         Ok(StatusInfo {
-            auth_status: AuthStatus::check(&config).await?,
+            auth_status: AuthStatus::check(&store)?,
             local_env_status: LocalEnvStatus::check().await?,
-            server_status: ServerStatus::check(&config).await?,
-            sync_status: SyncStatus::check(&config).await?,
+            server_status: ServerStatus::check(&remote).await?,
+            sync_status: SyncStatus::check().await?,
         })
     }
 
@@ -113,42 +111,57 @@ impl StatusInfo {
 }
 
 impl AuthStatus {
-    // TODO: Implement properly
-    pub(crate) async fn check(config: &Config) -> Result<Self> {
-        // Since backend is not implemented, we'll mock the data
-        let username = config.user_id.clone(); // TODO: Fetch from server, otherwise use cache
-        let token_valid = config.auth_token.is_some(); // Assume token is valid if it exists
-        let token_expires_at = if token_valid {
-            Some(Timestamp::now() + jiff::SignedDuration::from_hours(30 * 24)) // Mock expiry 30 days from now
-        } else {
-            None
+    /// Report on the session the CLI actually persisted.
+    ///
+    /// This used to read `CAPSULE_AUTH_TOKEN` from the environment and invent a 30-day
+    /// expiry, so after a successful `capsule auth login` it still reported "Not logged in"
+    /// — the status command contradicted the command that had just succeeded. It now reads
+    /// `session.json`, the same store `auth login` writes and every networked command
+    /// resumes from.
+    ///
+    /// `token_valid` is a *local* judgement: the access token's recorded expiry is in the
+    /// future. It deliberately does not call the server — a status command must work
+    /// offline, and an expired access token is not the same as a dead session, because the
+    /// refresh token may still be good.
+    pub(crate) fn check(store: &SessionStore) -> Result<Self> {
+        let Some(session) = store.load()? else {
+            return Ok(AuthStatus {
+                signed_in: false,
+                access_token_fresh: false,
+                token_expires_at: None,
+            });
         };
 
+        let expires_at = Timestamp::from_second(session.access_expires_at_unix).ok();
+
         Ok(AuthStatus {
-            username,
-            token_valid,
-            token_expires_at,
+            signed_in: true,
+            access_token_fresh: expires_at.is_some_and(|t| t > Timestamp::now()),
+            token_expires_at: expires_at,
         })
     }
 
     pub(crate) fn display(&self) {
         println!("{}", "Authentication Status:".bright_yellow().bold());
 
-        if self.username.is_some() {
-            println!("  {} {}", "Status:".dimmed(), "Logged in".green());
-            if let Some(user) = &self.username {
-                println!("  {} {}", "User:".dimmed(), user.cyan());
-            }
-            if self.token_valid {
-                println!("  {} {}", "Token:".dimmed(), "Valid".green());
-            } else {
-                println!("  {} {}", "Token:".dimmed(), "Invalid".red());
-            }
-            if let Some(expires) = &self.token_expires_at {
-                println!("  {} {}", "Expires:".dimmed(), expires.to_string().dimmed());
-            }
-        } else {
+        if !self.signed_in {
             println!("  {} {}", "Status:".dimmed(), "Not logged in".red());
+            return;
+        }
+
+        println!("  {} {}", "Status:".dimmed(), "Logged in".green());
+        if self.access_token_fresh {
+            println!("  {} {}", "Access token:".dimmed(), "Valid".green());
+        } else {
+            // Not an error state: the next networked command refreshes it transparently.
+            println!(
+                "  {} {}",
+                "Access token:".dimmed(),
+                "Expired (refreshes on next use)".yellow()
+            );
+        }
+        if let Some(expires) = &self.token_expires_at {
+            println!("  {} {}", "Expires:".dimmed(), expires.to_string().dimmed());
         }
     }
 }
@@ -156,19 +169,12 @@ impl AuthStatus {
 impl LocalEnvStatus {
     pub(crate) async fn check() -> Result<Self> {
         let config_dir = get_config_dir();
-        let config_file_path = get_config_file_path();
-        let config_file_exists = config_file_path
-            .clone()
-            .map(|dir| dir.join("config.toml"))
-            .is_some_and(|path| path.exists());
         let data_dir = get_data_dir();
         let available_disk_space = data_dir.clone().and_then(|dir| get_available_space(&dir));
         let cache_dir = get_cache_dir();
 
         Ok(LocalEnvStatus {
             config_dir,
-            config_file_path,
-            config_file_exists,
             data_dir,
             available_disk_space,
             cache_dir,
@@ -184,21 +190,8 @@ impl LocalEnvStatus {
                 "Config Directory:".dimmed(),
                 config_dir.display().to_string().cyan()
             );
-            if self.config_file_exists {
-                println!("  {} {}", "Config File:".dimmed(), "Found".green());
-            } else {
-                println!("  {} {}", "Config File:".dimmed(), "Not found".yellow());
-            }
         } else {
             println!("  {} {}", "Config Directory:".dimmed(), "Not found".red());
-        }
-
-        if let Some(config_file_path) = &self.config_file_path {
-            println!(
-                "  {} {}",
-                "Config File Path:".dimmed(),
-                config_file_path.display().to_string().dimmed()
-            );
         }
 
         if let Some(data_dir) = &self.data_dir {
@@ -227,23 +220,64 @@ impl LocalEnvStatus {
     }
 }
 
+/// How long to wait for the server before calling it unreachable. Short on purpose: this is
+/// a status command, and a hung probe is worse than a fast "Disconnected".
+const SERVER_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl ServerStatus {
-    pub(crate) async fn check(config: &Config) -> Result<Self> {
-        let api_endpoint = config.api_endpoint.clone();
+    /// Probe the server's unauthenticated `/v1/version` through the SDK's generated client.
+    ///
+    /// This previously hardcoded `Disconnected` and "Backend not implemented" — a claim that
+    /// stopped being true once the server shipped, and one a user could not tell apart from
+    /// a genuine outage. The probe needs no session, so it reports honestly whether or not
+    /// the user is logged in.
+    pub(crate) async fn check(remote: &RemoteConfig) -> Result<Self> {
+        // `sync_endpoint` is the bare server origin (see `RemoteConfig::from_env`), which is
+        // exactly the base the generated operation paths hang off.
+        let api_endpoint = remote.sync_endpoint.clone();
 
-        // TODO: Implement this properly
-        // Since backend is not implemented, we'll mock the connection status
-        let connection_status = ConnectionStatus::Disconnected;
-        let api_version = None;
-        let response_time = None;
-        let server_health = Some("Backend not implemented".to_string());
+        let client = match capsule_sdk::rest::Client::new(&api_endpoint) {
+            Ok(client) => client,
+            Err(error) => {
+                return Ok(ServerStatus {
+                    api_endpoint,
+                    connection_status: ConnectionStatus::Error(error.to_string()),
+                    api_version: None,
+                    response_time: None,
+                    server_health: None,
+                });
+            }
+        };
 
-        Ok(ServerStatus {
-            api_endpoint,
-            connection_status,
-            api_version,
-            response_time,
-            server_health,
+        let started = std::time::Instant::now();
+        let probe = tokio::time::timeout(SERVER_PROBE_TIMEOUT, client.get_version()).await;
+        let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+        Ok(match probe {
+            Ok(Ok(response)) => ServerStatus {
+                api_endpoint,
+                connection_status: ConnectionStatus::Connected,
+                api_version: Some(response.into_inner().version),
+                response_time: Some(elapsed),
+                server_health: None,
+            },
+            Ok(Err(error)) => ServerStatus {
+                api_endpoint,
+                connection_status: ConnectionStatus::Error(error.to_string()),
+                api_version: None,
+                response_time: Some(elapsed),
+                server_health: None,
+            },
+            Err(_timed_out) => ServerStatus {
+                api_endpoint,
+                connection_status: ConnectionStatus::Disconnected,
+                api_version: None,
+                response_time: None,
+                server_health: Some(format!(
+                    "no response within {}s",
+                    SERVER_PROBE_TIMEOUT.as_secs()
+                )),
+            },
         })
     }
 
@@ -296,15 +330,33 @@ impl ServerStatus {
 }
 
 impl SyncStatus {
-    pub(crate) async fn check(_config: &Config) -> Result<Self> {
-        // TODO: Implement this properly
-        // Since backend is not implemented, we'll mock the sync status
+    /// Report what the local sync store actually holds.
+    ///
+    /// This previously returned all zeros with a "backend not implemented" comment, so a
+    /// user who had just synced hundreds of assets saw a report claiming nothing existed.
+    /// The store is the sync feed's local projection, so the counts come from it directly.
+    ///
+    /// Upload/download/conflict counts stay at zero and are honest about it: the CLI has no
+    /// upload path yet (slice `S-D18`), and the sync feed is apply-only with no conflict
+    /// surface, so there is nothing to count rather than something we decline to count.
+    pub(crate) async fn check() -> Result<Self> {
+        let db = crate::db::init_sqlite()
+            .await
+            .map_err(|e| eyre!("Failed to open the local sync store: {e}"))?;
+
+        // Tombstones included: a synced-then-deleted asset is still something the store
+        // knows about, and hiding it would understate what a re-sync would reconcile.
+        let rows = crate::remote::list(&db, true).await?;
+        let local_file_count = u32::try_from(rows.len()).unwrap_or(u32::MAX);
+
         Ok(SyncStatus {
+            // The store records a feed cursor, not a wall-clock sync time; reporting a
+            // fabricated timestamp is what this function used to do.
             last_sync: None,
             pending_uploads: 0,
             pending_downloads: 0,
             sync_conflicts: 0,
-            local_file_count: 0,
+            local_file_count,
             remote_file_count: None,
         })
     }
@@ -358,5 +410,94 @@ impl SyncStatus {
         } else {
             println!("  {} {}", "Remote Files:".dimmed(), "Unknown".dimmed());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use capsule_sdk::auth::PersistedSession;
+    use secrecy::SecretString;
+
+    use super::*;
+
+    /// A store at a unique temp path, matching the convention in `session.rs`'s tests
+    /// (no extra dev-dependency for something the standard library covers).
+    fn temp_store(tag: &str) -> SessionStore {
+        SessionStore::new(std::env::temp_dir().join(format!(
+            "capsule-cli-status-{tag}-{}.json",
+            nanoid::nanoid!()
+        )))
+    }
+
+    fn session_expiring_at(unix: i64) -> PersistedSession {
+        PersistedSession {
+            access_token: SecretString::from("access"),
+            refresh_token: SecretString::from("refresh"),
+            access_expires_at_unix: unix,
+        }
+    }
+
+    #[test]
+    fn auth_status_reports_logged_out_without_a_session() {
+        let status = AuthStatus::check(&temp_store("logged-out")).expect("check");
+        assert!(!status.signed_in);
+        assert!(!status.access_token_fresh);
+        assert!(status.token_expires_at.is_none());
+    }
+
+    /// The regression this slice exists for: `auth status` used to read an environment
+    /// variable rather than the session store, so it reported "Not logged in" immediately
+    /// after `auth login` had succeeded.
+    #[test]
+    fn auth_status_reflects_a_session_that_login_persisted() {
+        let store = temp_store("persisted");
+        let future = Timestamp::now().as_second() + 900;
+        store.save(&session_expiring_at(future)).expect("save");
+
+        let status = AuthStatus::check(&store).expect("check");
+        assert!(status.signed_in);
+        assert!(status.access_token_fresh);
+        assert_eq!(status.token_expires_at.map(|t| t.as_second()), Some(future));
+    }
+
+    /// An expired *access* token is not a logged-out session — the refresh token still
+    /// works, and the next networked command renews it transparently. Reporting this as
+    /// logged out would send users to re-authenticate for no reason.
+    #[test]
+    fn an_expired_access_token_is_still_signed_in() {
+        let store = temp_store("expired");
+        let past = Timestamp::now().as_second() - 60;
+        store.save(&session_expiring_at(past)).expect("save");
+
+        let status = AuthStatus::check(&store).expect("check");
+        assert!(status.signed_in, "a persisted session is still a session");
+        assert!(!status.access_token_fresh);
+    }
+
+    /// An unreachable server must be reported as unreachable, not as a hardcoded
+    /// "Backend not implemented" — a user cannot tell that apart from a real outage.
+    #[tokio::test]
+    async fn server_status_reports_an_unreachable_endpoint() {
+        // Port 1 on loopback refuses immediately; this asserts the failure path without
+        // waiting out the probe timeout.
+        let remote = RemoteConfig {
+            auth_endpoint: "http://127.0.0.1:1/v1/auth".to_string(),
+            sync_endpoint: "http://127.0.0.1:1".to_string(),
+            protocol_version: crate::remote::DEFAULT_PROTOCOL_VERSION.to_string(),
+        };
+        let status = ServerStatus::check(&remote).await.expect("check");
+        assert!(
+            matches!(
+                status.connection_status,
+                ConnectionStatus::Error(_) | ConnectionStatus::Disconnected
+            ),
+            "expected a failure status, got {:?}",
+            status.connection_status
+        );
+        assert!(status.api_version.is_none());
+        assert!(
+            status.server_health.as_deref() != Some("Backend not implemented"),
+            "the mocked health string must be gone"
+        );
     }
 }
