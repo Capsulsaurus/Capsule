@@ -12,14 +12,14 @@ struct ManagedLibraryLayoutTests {
     @Test("media files are partitioned by the capture date's UTC month")
     func mediaPartitioning() {
         // 1_720_000_000 → 2024-07-03 12:26:40 UTC.
-        let date = Date(timeIntervalSince1970: 1_720_000_000)
+        let date = Date(timeIntervalSince1970: 1720000000)
         let url = layout.mediaFile(uuid: "abc", fileExtension: "heic", captureDate: date)
         #expect(url.path.hasSuffix("/media/2024/2024-07/abc.heic"))
     }
 
     @Test("the sidecar is the media file's sibling with a .cbor extension")
     func sidecarSibling() {
-        let date = Date(timeIntervalSince1970: 1_720_000_000)
+        let date = Date(timeIntervalSince1970: 1720000000)
         let media = layout.mediaFile(uuid: "abc", fileExtension: "heic", captureDate: date)
         let sidecar = layout.sidecarFile(forMediaFile: media)
         #expect(sidecar.lastPathComponent == "abc.cbor")
@@ -55,7 +55,7 @@ struct CryptoKitHasherTests {
     @Test("streamed file hashing matches in-memory hashing for a large file")
     func streamedMatchesBuffer() async throws {
         let hasher = CryptoKitHasher()
-        let bytes = Data((0 ..< 5_000_000).map { UInt8($0 & 0xFF) })
+        let bytes = Data((0 ..< 5000000).map { UInt8($0 & 0xFF) })
         let url = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
         try bytes.write(to: url)
         defer { try? FileManager.default.removeItem(at: url) }

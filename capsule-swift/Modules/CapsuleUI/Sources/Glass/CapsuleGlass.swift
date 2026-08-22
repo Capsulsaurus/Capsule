@@ -148,13 +148,13 @@ public extension View {
     @ViewBuilder
     func capsuleTabBarMinimizeOnScroll() -> some View {
         #if os(iOS)
-        if #available(iOS 26.0, *) {
-            tabBarMinimizeBehavior(.onScrollDown)
-        } else {
-            self
-        }
+            if #available(iOS 26.0, *) {
+                tabBarMinimizeBehavior(.onScrollDown)
+            } else {
+                self
+            }
         #else
-        self
+            self
         #endif
     }
 

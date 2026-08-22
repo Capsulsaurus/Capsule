@@ -56,7 +56,7 @@ struct AlbumCoverCard: View {
             cover = await thumbnails.thumbnail(for: asset, pixelSize: pixels)
             return
         }
-        let assets = (try? await albumProvider.assets(in: album.id)) ?? []
+        let assets = await (try? albumProvider.assets(in: album.id)) ?? []
         guard let asset = assets.first else { return }
         cover = await thumbnails.thumbnail(for: asset, pixelSize: pixels)
     }

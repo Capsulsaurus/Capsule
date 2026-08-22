@@ -123,8 +123,12 @@ public final class MockMetricsCollector: MetricsCollecting, @unchecked Sendable 
     private let state = OSAllocatedUnfairLock(initialState: Counts())
     public init() {}
 
-    public func start() { state.withLock { $0.started = true; $0.startCount += 1 } }
-    public func stop() { state.withLock { $0.started = false; $0.stopCount += 1 } }
+    public func start() { state.withLock { $0.started = true
+        $0.startCount += 1
+    } }
+    public func stop() { state.withLock { $0.started = false
+        $0.stopCount += 1
+    } }
 
     public var isStarted: Bool { state.withLock { $0.started } }
     public var startCount: Int { state.withLock { $0.startCount } }

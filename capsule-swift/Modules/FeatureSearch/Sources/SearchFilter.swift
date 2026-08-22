@@ -25,13 +25,12 @@ public enum DateRangeOption: String, CaseIterable, Sendable, Equatable, Identifi
 
     /// The concrete date window, or `nil` for ``anytime``.
     func range(referenceDate: Date, calendar: Calendar) -> ClosedRange<Date>? {
-        let component: Calendar.Component?
-        switch self {
-        case .anytime: component = nil
-        case .today: component = .day
-        case .thisWeek: component = .weekOfYear
-        case .thisMonth: component = .month
-        case .thisYear: component = .year
+        let component: Calendar.Component? = switch self {
+        case .anytime: nil
+        case .today: .day
+        case .thisWeek: .weekOfYear
+        case .thisMonth: .month
+        case .thisYear: .year
         }
         guard let component,
               let interval = calendar.dateInterval(of: component, for: referenceDate)

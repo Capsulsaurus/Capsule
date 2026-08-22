@@ -69,9 +69,9 @@ public enum DiskSpaceBucket: String, Codable, Sendable, Equatable, CaseIterable 
 
     static func bucket(forBytes bytes: Int64) -> DiskSpaceBucket {
         switch bytes {
-        case ..<500_000_000: .critical
-        case ..<2_000_000_000: .low
-        case ..<10_000_000_000: .moderate
+        case ..<500000000: .critical
+        case ..<2000000000: .low
+        case ..<10000000000: .moderate
         default: .ample
         }
     }

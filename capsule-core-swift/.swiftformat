@@ -22,4 +22,10 @@
 --trimwhitespace always
 --wraparguments preserve
 --wrapcollections preserve
+# SwiftLint's `opening_brace` rule requires an opening brace on the same line as
+# its declaration. SwiftFormat's `wrapMultilineStatementBraces` moves it onto its
+# own line whenever the condition wraps, so the two gates contradict each other
+# and a file can never satisfy both. SwiftLint wins (it matches the Swift API
+# Design Guidelines and the rest of this codebase), so the rule is disabled here.
+--disable wrapMultilineStatementBraces
 --exclude .build,Sources/CapsuleHardware/capsule_core.swift

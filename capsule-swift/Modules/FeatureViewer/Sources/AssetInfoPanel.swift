@@ -97,7 +97,7 @@ struct AssetInfoPanel: View {
     }
 
     private var megapixels: String {
-        String(format: "%.1f MP", Double(asset.pixelWidth * asset.pixelHeight) / 1_000_000)
+        String(format: "%.1f MP", Double(asset.pixelWidth * asset.pixelHeight) / 1000000)
     }
 
     private var durationText: String {

@@ -32,7 +32,7 @@ public actor CrashDiagnosticStore {
     }
 
     private static func load(from defaults: UserDefaults) -> CrashSummary? {
-        guard let data = defaults.data(forKey: Self.key) else { return nil }
+        guard let data = defaults.data(forKey: key) else { return nil }
         return try? JSONDecoder().decode(CrashSummary.self, from: data)
     }
 }

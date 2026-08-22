@@ -21,8 +21,8 @@ struct TimelineSectioningTests {
     @Test("assets are bucketed into one section per capture day")
     func groupsByDay() {
         // 2024-07-03 12:26:40 UTC and ~27h later, 2024-07-04.
-        let dayOne = Date(timeIntervalSince1970: 1_720_000_000)
-        let dayTwo = Date(timeIntervalSince1970: 1_720_100_000)
+        let dayOne = Date(timeIntervalSince1970: 1720000000)
+        let dayTwo = Date(timeIntervalSince1970: 1720100000)
         let assets = [
             Fixtures.asset(captureDate: dayTwo.addingTimeInterval(120)),
             Fixtures.asset(captureDate: dayTwo),
@@ -41,8 +41,8 @@ struct TimelineSectioningTests {
 
     @Test("the current and prior days are titled Today and Yesterday")
     func relativeDayTitles() {
-        let today = Date(timeIntervalSince1970: 1_720_000_000)
-        let yesterday = today.addingTimeInterval(-86_400)
+        let today = Date(timeIntervalSince1970: 1720000000)
+        let yesterday = today.addingTimeInterval(-86400)
         let sections = TimelineSectioning.sections(
             from: [Fixtures.asset(captureDate: today), Fixtures.asset(captureDate: yesterday)],
             calendar: utcCalendar,
@@ -54,7 +54,7 @@ struct TimelineSectioningTests {
 
     @Test("same-day assets collapse into a single section")
     func sameDayCollapses() {
-        let base = Date(timeIntervalSince1970: 1_720_000_000)
+        let base = Date(timeIntervalSince1970: 1720000000)
         let assets = (0 ..< 4).map { Fixtures.asset(captureDate: base.addingTimeInterval(Double($0) * 600)) }
         let sections = TimelineSectioning.sections(from: assets, calendar: utcCalendar, referenceDate: base)
         #expect(sections.count == 1)
@@ -78,10 +78,10 @@ struct TimelineAggregationTests {
 
     // 2024-07-15, 2024-07-01, 2024-06-20, 2023-12-25 (UTC), newest first.
     private func makeFixture() -> Fixture {
-        let julyA = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1_721_001_600))
-        let julyB = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1_719_792_000))
-        let june = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1_718_841_600))
-        let dec = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1_703_462_400))
+        let julyA = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1721001600))
+        let julyB = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1719792000))
+        let june = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1718841600))
+        let dec = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1703462400))
         return Fixture(assets: [julyA, julyB, june, dec], julyNewest: julyA, dec2023: dec)
     }
 

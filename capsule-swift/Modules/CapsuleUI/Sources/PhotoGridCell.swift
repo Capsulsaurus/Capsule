@@ -77,7 +77,7 @@ final class PhotoGridCell: UICollectionViewCell {
     }
 
     @available(*, unavailable)
-    required init?(coder: NSCoder) {
+    required init?(coder _: NSCoder) {
         fatalError("PhotoGridCell is not loaded from a nib")
     }
 

@@ -130,7 +130,9 @@ public final class DiagnosticsCoordinator {
         diagnostics.install(osLogSink)
         if consent.diagnosticsEnabled {
             diagnostics.install(breadcrumbs)
-            if !metricsRunning { metrics.start(); metricsRunning = true }
+            if !metricsRunning { metrics.start()
+                metricsRunning = true
+            }
         } else if metricsRunning {
             metrics.stop()
             metricsRunning = false

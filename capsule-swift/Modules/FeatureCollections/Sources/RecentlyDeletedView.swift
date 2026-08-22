@@ -56,7 +56,7 @@ struct RecentlyDeletedView: View {
     }
 
     private func reload() async {
-        assets = (try? await trashProvider.trashedAssets()) ?? []
+        assets = await (try? trashProvider.trashedAssets()) ?? []
         isLoading = false
     }
 

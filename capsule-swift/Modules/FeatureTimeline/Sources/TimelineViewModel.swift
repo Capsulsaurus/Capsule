@@ -187,9 +187,9 @@ public final class TimelineViewModel {
         from assets: [Asset]
     ) async -> [PhotoGridSection] {
         switch level {
-        case .all: return TimelineSectioning.sections(from: assets)
-        case .months: return TimelineSectioning.monthSections(from: assets)
-        case .years: return TimelineSectioning.yearSections(from: assets)
+        case .all: TimelineSectioning.sections(from: assets)
+        case .months: TimelineSectioning.monthSections(from: assets)
+        case .years: TimelineSectioning.yearSections(from: assets)
         }
     }
 

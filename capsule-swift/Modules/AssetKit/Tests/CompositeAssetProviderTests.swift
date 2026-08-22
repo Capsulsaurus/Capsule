@@ -8,8 +8,8 @@ import CapsuleTestSupport
 struct CompositeAssetProviderTests {
     @Test("merges providers into one timeline, newest first")
     func mergesChronologically() async throws {
-        let older = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1_000))
-        let newer = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 5_000))
+        let older = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 1000))
+        let newer = Fixtures.asset(captureDate: Date(timeIntervalSince1970: 5000))
         let composite = CompositeAssetProvider(providers: [
             MockAssetProvider(assets: [older]),
             MockAssetProvider(assets: [newer]),

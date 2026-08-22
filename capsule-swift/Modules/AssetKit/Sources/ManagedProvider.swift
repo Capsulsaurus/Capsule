@@ -12,7 +12,7 @@ import ManagedStore
 /// picks up the new assets.
 public actor ManagedProvider: AssetProvider, TrashProvider {
     /// Upper bound on the managed timeline window for the prototype.
-    private static let timelineLimit = 10_000
+    private static let timelineLimit = 10000
 
     private let library: ManagedLibrary
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]

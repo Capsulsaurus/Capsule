@@ -331,9 +331,9 @@ public final class PhotoGridViewController: UIViewController, UICollectionViewDe
     private static func makeLayout(style: PhotoGridStyle, showsHeaders: Bool) -> UICollectionViewLayout {
         switch style {
         case let .uniform(columns):
-            return makeUniformLayout(columnCount: columns, showsHeaders: showsHeaders)
+            makeUniformLayout(columnCount: columns, showsHeaders: showsHeaders)
         case .cards:
-            return makeCardsLayout()
+            makeCardsLayout()
         }
     }
 
