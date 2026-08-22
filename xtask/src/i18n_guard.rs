@@ -21,7 +21,7 @@
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
 //!   A migrated call passes a catalog KEY (`Text("ios.settings.title")`); a literal
 //!   (`Text("Settings")`) is not a key, so it fails.
-//! - **Compose** (`capsule-android/src/**/*.kt`): the string argument of `Text("…")`
+//! - **Compose** (`capsule-android/**/*.kt`): the string argument of `Text("…")`
 //!   and `contentDescription = "…"`. Migrated code uses
 //!   `stringResource(R.string.…)`; a bare literal is not a key, so it fails.
 //!
@@ -90,7 +90,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     )?;
     scan_surface(
         root,
-        &["capsule-android/src"],
+        &["capsule-android"],
         "kt",
         &|content| kotlin_findings(content),
         &|text| keys.contains(text),
@@ -131,8 +131,12 @@ fn scan_surface(
 ) -> Result<()> {
     for rel in roots {
         let dir = root.join(rel);
+        // A missing root is a hard error, not something to skip. Silently continuing is
+        // exactly how this gate stopped covering the Compose surface: the Android module
+        // was restructured, `capsule-android/src` ceased to exist, and the guard went on
+        // reporting success over zero files.
         if !dir.exists() {
-            continue;
+            bail!("i18n-guard root {rel} does not exist — has the tree moved?");
         }
         for path in collect_files(&dir, ext)? {
             let content =
@@ -169,9 +173,22 @@ fn collect_files(dir: &Path, ext: &str) -> Result<Vec<PathBuf>> {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().into_owned();
             if path.is_dir() {
+                // Test source sets are skipped wholesale rather than by filename. A
+                // fixture string in a test is not shipped copy, and Kotlin names its
+                // tests `FooTest.kt` — singular — which the filename filters below miss.
                 if matches!(
                     name.as_str(),
-                    "node_modules" | "target" | "build" | "dist" | ".git" | "Generated"
+                    "node_modules"
+                        | "target"
+                        | "build"
+                        | "dist"
+                        | ".git"
+                        | "Generated"
+                        | "test"
+                        | "androidTest"
+                        | "androidUnitTest"
+                        | "commonTest"
+                        | "testFixtures"
                 ) {
                     continue;
                 }
