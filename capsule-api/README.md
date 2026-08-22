@@ -107,9 +107,13 @@ capsule-api` first or export the file yourself, which is what `serve-api` does:
   - _Append feature flags to enable specific parts of server_
 - The following endpoints should be up:
   - Auth: <http://localhost:3000/v1/auth>
-  - Media: <http://localhost:3000/v1/media>
   - Upload: <http://localhost:3000/v1/upload>
-  - Sync (gRPC): <http://localhost:3000/v1/sync> (requires H2C/gRPC client)
+  - Blobs (content-addressed): <http://localhost:3000/v1/blob>
+  - Shares: <http://localhost:3000/v1/s> · Guest drops: <http://localhost:3000/v1/u>
+  - Discovery: <http://localhost:3000/.well-known/capsule/server-info>
+  - Sync (gRPC): `http://localhost:3000/capsule.sync.v1.SyncService` — at the **root**, not
+    under `/v1`, because tonic clients discard any path on the endpoint URI. Requires an
+    H2C/gRPC client.
 
   - OpenAPI Docs (Scalar): <http://localhost:3000/openapi>
   - OpenAPI Docs (Swagger UI): <http://localhost:3000/swagger-ui>
