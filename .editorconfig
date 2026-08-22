@@ -9,3 +9,11 @@ ktlint_code_style = ktlint_official
 # @Composable functions are PascalCase by Jetpack Compose convention — exempt them
 # from the camelCase function-naming rule.
 ktlint_function_naming_ignore_when_annotated_with = Composable
+
+# Anything under a Gradle build directory is generated, never hand-written: the staged
+# uniffi bindings (snake_case Kotlin, by design) and Compose's resource accessors. ktlint
+# discovers them because a generated-source directory is added to the module's source set,
+# so it is disabled here rather than through a Gradle-side filter, which ktlint's
+# per-source-set tasks do not honour.
+[**/build/**]
+ktlint = disabled

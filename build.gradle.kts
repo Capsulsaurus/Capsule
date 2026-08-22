@@ -24,13 +24,9 @@ subprojects {
             apply(plugin = "org.jlleitschuh.gradle.ktlint")
             apply(plugin = "io.gitlab.arturbosch.detekt")
 
-            // ktlint: don't lint generated sources (Compose resource accessors, the
-            // staged uniffi bindings). Rules themselves come from the root .editorconfig.
-            extensions.configure(org.jlleitschuh.gradle.ktlint.KtlintExtension::class.java) {
-                filter {
-                    exclude { it.file.path.contains("/build/generated/") }
-                }
-            }
+            // ktlint rules, and the exclusion of generated sources under build/, come
+            // from the root .editorconfig — ktlint's per-source-set tasks do not honour a
+            // Gradle-side filter.
 
             // Detekt: merge the shared root config on top of detekt's bundled defaults.
             extensions.configure(io.gitlab.arturbosch.detekt.extensions.DetektExtension::class.java) {
@@ -38,7 +34,7 @@ subprojects {
                 config.setFrom(rootProject.file("detekt.yml"))
             }
             tasks.withType(io.gitlab.arturbosch.detekt.Detekt::class.java).configureEach {
-                exclude("**/build/generated/**")
+                exclude("**/build/**")
             }
         }
     }

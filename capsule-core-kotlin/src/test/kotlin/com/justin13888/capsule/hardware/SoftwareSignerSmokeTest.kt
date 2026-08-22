@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import uniffi.capsule_core.DeviceTier
+import uniffi.capsule_core.FfiClientBuild
 import uniffi.capsule_core.FfiWorkspace
 import uniffi.capsule_core.HardwareSignerException
 import java.nio.file.Files
@@ -46,7 +47,13 @@ class SoftwareSignerSmokeTest {
 
     @Test
     fun softwarePathCreatesWorkspace() {
-        val ws = FfiWorkspace.create(freshRoot(), "correct horse".toByteArray(), DeviceTier.NORMAL)
+        val ws =
+            FfiWorkspace.create(
+                freshRoot(),
+                "correct horse".toByteArray(),
+                DeviceTier.NORMAL,
+                HARNESS_BUILD,
+            )
         assertFalse(ws.userId().isEmpty())
         assertFalse(ws.defaultAlbumId().isEmpty())
     }
@@ -64,7 +71,22 @@ class SoftwareSignerSmokeTest {
                 signer,
                 "device-dsk",
                 ByteArray(32) { 9 },
+                HARNESS_BUILD,
             )
         assertFalse(ws.userId().isEmpty())
+    }
+
+    private companion object {
+        /**
+         * The build identity every manifest this harness authors reports (S-D15).
+         *
+         * Named for the harness rather than for an app, so an asset produced by a test
+         * run is never mistaken for one a shipped client wrote.
+         */
+        private val HARNESS_BUILD =
+            FfiClientBuild(
+                clientId = "capsule-core-kotlin-harness",
+                semver = "0.0.0",
+            )
     }
 }
