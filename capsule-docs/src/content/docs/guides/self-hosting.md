@@ -98,7 +98,6 @@ For the two backing services, `capsule-api/compose.yaml` brings up PostgreSQL an
 podman compose -f capsule-api/compose.yaml up -d   # or: docker compose -f …
 ```
 
-
 ### One-click installer
 
 *Not yet documented (2026-08-21).* No first-party installer script exists in this repository yet. Until one does, follow the container instructions above.
