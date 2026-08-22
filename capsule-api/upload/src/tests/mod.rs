@@ -12,6 +12,7 @@
 
 #![allow(clippy::unwrap_used)]
 
+mod cli_push_round_trip;
 mod gc;
 mod invariants;
 mod lifecycle;

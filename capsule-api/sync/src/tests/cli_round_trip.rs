@@ -211,6 +211,7 @@ async fn cli_login_sync_list_round_trip() {
 
     let remote = RemoteConfig {
         auth_endpoint: auth_url,
+        upload_endpoint: format!("{sync_url}/v1/upload"),
         sync_endpoint: sync_url,
         protocol_version: CLIENT_MAX_PROTOCOL.to_string(),
     };
@@ -226,7 +227,7 @@ async fn cli_login_sync_list_round_trip() {
     );
 
     // `capsule sync` — drains the feed into the CLI store (page size 2 → >1 page).
-    let summary = remote::sync(&remote, &store, &cli_db, 2, false)
+    let summary = remote::sync(&remote, &store, &cli_db, 2, false, false)
         .await
         .expect("sync");
     assert_eq!(summary.applied, SEEDED, "every seeded entry applied");
@@ -242,7 +243,7 @@ async fn cli_login_sync_list_round_trip() {
     );
 
     // A second `capsule sync` is a no-op: the persisted cursor + high-water resume.
-    let again = remote::sync(&remote, &store, &cli_db, 2, false)
+    let again = remote::sync(&remote, &store, &cli_db, 2, false, false)
         .await
         .expect("re-sync");
     assert_eq!(again.applied, 0, "second sync finds nothing new");

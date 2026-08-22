@@ -50,6 +50,15 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
 ] }
 migration = { path = "../migration", package = "capsule-api-migration" }
+# The S-D18 CLI push round trip: the real `capsule-cli` command functions driving the auth +
+# upload + sync services on one origin. The CLI is the leaf client, so it is a dev-dep here
+# (not the reverse) — the same placement S-D1/S-D2/S-D5 use, keeping the server stack out of
+# the CLI's own dev-deps. `sync` serves the feed the push resumes from; `cli-migration`
+# provisions the CLI's sync-fed SQLite store.
+capsule-cli = { path = "../../capsule-cli" }
+cli-migration = { path = "../../capsule-cli/migration", package = "capsule-cli-migration" }
+sync = { path = "../sync", package = "capsule-api-sync" }
+tempfile = "3"
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 sea-orm-migration = { workspace = true }
