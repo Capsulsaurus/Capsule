@@ -89,6 +89,7 @@ public enum DestinationResolution {
         case .folder: "ios.settings.import.kind.folder"
         case .watchedDirectory: "ios.settings.import.kind.watched_dir"
         case .removableVolume: "ios.settings.import.kind.removable_volume"
+        case .takeoutArchive: "ios.settings.import.kind.takeout_archive"
         case .unknown: "ios.settings.import.kind.unknown"
         }
     }

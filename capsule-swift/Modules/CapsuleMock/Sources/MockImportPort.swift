@@ -71,7 +71,8 @@ extension MockTransferStore: ImportPort {
             mode: mode,
             uploadPolicy: uploadPolicy,
             isStreaming: streaming,
-            decisions: scan.candidates.map { decision(for: $0) }
+            decisions: scan.candidates.map { decision(for: $0) },
+            conflicts: scan.candidates.compactMap { conflict(for: $0) }
         )
     }
 
@@ -97,7 +98,14 @@ extension MockTransferStore: ImportPort {
                         total: plan.decisions.count,
                         locator: decision.candidate.locator
                     ))
-                    let outcome = Self.outcome(for: decision)
+                    let outcome = await self.outcome(for: decision)
+                    for stage in Self.ladder(for: outcome, isImporting: decision.isImporting) {
+                        continuation.yield(.candidateStage(
+                            index: position,
+                            locator: decision.candidate.locator,
+                            stage: stage
+                        ))
+                    }
                     results.append(ImportResult(locator: decision.candidate.locator, outcome: outcome))
                     continuation.yield(.candidateFinished(
                         index: position,
@@ -177,11 +185,63 @@ extension MockTransferStore: ImportPort {
         return ImportDecision(candidate: candidate, action: .importAsset)
     }
 
+    /// The candidates the planner will not decide on its own.
+    ///
+    /// Rare on purpose — four in a run of fifteen hundred, which is what the
+    /// confirmation screen has to be legible at. A mock that made every tenth
+    /// file a conflict would produce a screen nobody could design against.
+    private func conflict(for candidate: ImportCandidate) -> ImportConflict? {
+        let hash = MockHash.value(
+            seed: configuration.seed,
+            index: candidate.id.utf8.count,
+            salt: .cull,
+            sub: candidate.locator.utf8.count
+        )
+        guard MockHash.occurs(hash, perMille: 45) else { return nil }
+        let kind = MockHash.element(MockHash.mix(hash), from: ImportConflictKind.knownCases) ?? .sameNameDifferentContent
+        return ImportConflict(
+            candidateID: candidate.id,
+            locator: candidate.locator,
+            kind: kind,
+            existingAssetID: MockHash.hex(hash, digits: 12)
+        )
+    }
+
     /// A deferred derivative is a **successful** import: the original is signed,
     /// encrypted, and verifiable, and only the thumbnail is missing because this
     /// build has no codec. Counting it as a failure would make a HEIC-only
     /// library look like it lost data.
-    private static func outcome(for decision: ImportDecision) -> ImportOutcome {
+    private func outcome(for decision: ImportDecision) -> ImportOutcome {
+        // Failures are scoped to the worlds that already say bytes are not
+        // moving. A healthy library that failed a fraction of every import
+        // would make the retry path reachable at the cost of making the happy
+        // path a lie, and the happy path is what most screens are read against.
+        if configuration.stallsUploads {
+            let hash = MockHash.value(
+                seed: configuration.seed,
+                index: decision.candidate.id.utf8.count,
+                salt: .syncState
+            )
+            if decision.isImporting, MockHash.occurs(hash, perMille: 300) {
+                return .failed(.blobPendingUpload)
+            }
+        }
+        return Self.settledOutcome(for: decision)
+    }
+
+    /// The stage ladder one item walks.
+    ///
+    /// A skipped candidate never enters it: it was decided at plan time and no
+    /// bytes are read, so showing it "encrypting" would be theatre. Which is
+    /// also why the ladder is derived from the outcome rather than emitted
+    /// unconditionally — the stages a UI draws must be stages that happened.
+    private static func ladder(for outcome: ImportOutcome, isImporting: Bool) -> [ImportItemStage] {
+        guard isImporting else { return [.done] }
+        if case .failed = outcome { return [.processing, .encrypting, .failed] }
+        return [.processing, .encrypting, .uploading, .done]
+    }
+
+    private static func settledOutcome(for decision: ImportDecision) -> ImportOutcome {
         switch decision.action {
         case .importAsset:
             .imported(assetID: decision.candidate.id, derivativesDeferred: false)

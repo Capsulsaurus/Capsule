@@ -53,6 +53,58 @@ public protocol ImportPort: Sendable {
     ///
     /// Maps to `import.cancel`.
     func cancel(_ importID: ImportID) async throws
+
+    /// Turn a location the user picked — a folder, a Takeout archive — into its
+    /// canonical ``ImportScope``.
+    ///
+    /// Separate from ``availableScopes()`` because the two answer different
+    /// questions: that one lists what the device found by itself, this one names
+    /// something the user went and pointed at. The scope id is computed in
+    /// `capsule-core` and never in Swift, so a picked location has to come back
+    /// through the port to acquire an identity two devices will agree on.
+    ///
+    /// Maps to `import.resolve_scope`.
+    func resolveScope(sourceKind: SourceKind, locator: String) async throws -> ImportScope
+
+    /// Enumerate a source, streaming progress.
+    ///
+    /// The streaming twin of ``scan(_:)``, for sources large enough that a
+    /// single `await` would be an unexplained multi-minute pause. There is
+    /// deliberately **no cancel call**: a scan writes nothing, so cancelling the
+    /// task that consumes the stream is a complete stop, and a second
+    /// cancellation path would be a second thing to get wrong.
+    ///
+    /// Maps to `import.scan_stream`.
+    func scanStream(_ scope: ImportScope) -> AsyncStream<ImportScanEvent>
+
+    /// Re-attempt the candidates a finished run failed on.
+    ///
+    /// Takes locators rather than a whole plan because that is what a retry
+    /// *is*: the same decisions, applied again to the subset that did not land.
+    /// Re-planning would re-resolve the destination against today's settings and
+    /// could quietly send the retried items somewhere else.
+    ///
+    /// Maps to `import.retry`.
+    func retry(_ importID: ImportID, locators: [String]) async throws -> [ImportResult]
+
+    /// Past runs, newest first.
+    ///
+    /// Maps to `import.history`.
+    func history(limit: Int) async throws -> [ImportSessionRecord]
+
+    /// Rebuild a confirmable plan from a past run, for re-running it.
+    ///
+    /// Returns a *plan*, not a started run: a re-run passes back through the
+    /// same confirmation screen, because the library has changed since and what
+    /// was an import last week may be a duplicate today.
+    ///
+    /// Maps to `import.replan`.
+    func replan(_ importID: ImportID) async throws -> ImportPlan
+
+    /// Drop a finished run from the history list.
+    ///
+    /// Forgets the *record*, never the assets. Maps to `import.dismiss_session`.
+    func dismissSession(_ importID: ImportID) async throws
 }
 
 // MARK: - UploadPort

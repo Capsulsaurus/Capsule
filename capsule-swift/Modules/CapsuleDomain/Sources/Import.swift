@@ -12,10 +12,16 @@ public enum SourceKind: ClosedWireEnum {
     case folder
     case watchedDirectory
     case removableVolume
+    /// A vendor export archive — a Google Takeout `.zip`/`.tgz` and its
+    /// siblings. A distinct kind rather than a ``folder``: the archive carries
+    /// its own sidecar metadata alongside the media, so the scanner reads a
+    /// takeout differently from a directory of the same files.
+    case takeoutArchive
     case unknown(String)
 
     public static let knownCases: [SourceKind] = [
         .cameraRoll, .screenshots, .appCollection, .folder, .watchedDirectory, .removableVolume,
+        .takeoutArchive,
     ]
 
     public init(rawValue: String) {
@@ -30,6 +36,7 @@ public enum SourceKind: ClosedWireEnum {
         case .folder: "folder"
         case .watchedDirectory: "watched_dir"
         case .removableVolume: "removable_volume"
+        case .takeoutArchive: "takeout_archive"
         case let .unknown(raw): raw
         }
     }
@@ -228,6 +235,12 @@ public struct ImportPlan: Sendable, Equatable, Identifiable {
     public var isStreaming: Bool
     /// Per-candidate decisions.
     public var decisions: [ImportDecision]
+    /// Candidates the planner will not decide without being told.
+    ///
+    /// Separate from ``decisions`` because a conflict is a *question*, not a
+    /// verdict: the rest of the plan is confirmable while these are open, and
+    /// collapsing them into a skip would silently answer them.
+    public var conflicts: [ImportConflict]
 
     public init(
         id: ImportID,
@@ -237,7 +250,8 @@ public struct ImportPlan: Sendable, Equatable, Identifiable {
         mode: ImportMode,
         uploadPolicy: UploadPolicy,
         isStreaming: Bool,
-        decisions: [ImportDecision]
+        decisions: [ImportDecision],
+        conflicts: [ImportConflict] = []
     ) {
         self.id = id
         self.scope = scope
@@ -247,6 +261,7 @@ public struct ImportPlan: Sendable, Equatable, Identifiable {
         self.uploadPolicy = uploadPolicy
         self.isStreaming = isStreaming
         self.decisions = decisions
+        self.conflicts = conflicts
     }
 
     /// Which rule resolved the destination album.
@@ -285,6 +300,11 @@ public enum ImportOutcome: Sendable, Equatable, Hashable {
     case unsupported
     case unreadable
     case permissionDenied
+    /// The import failed for a reason that may not recur — a stalled upload, a
+    /// transient encrypt failure. **Retryable**, which is what separates it
+    /// from ``unsupported``: no amount of retrying gives this build a codec it
+    /// does not have.
+    case failed(ErrorCode)
     /// Some members of a stack imported and some did not.
     case partialStack(imported: [String], skipped: [String])
 }
@@ -300,6 +320,11 @@ public enum ImportOutcome: Sendable, Equatable, Hashable {
 public enum ImportProgressEvent: Sendable, Equatable {
     case started(importID: ImportID, totalCandidates: Int)
     case candidateStarted(index: Int, total: Int, locator: String)
+    /// One item moved along the queued → processing → encrypting → uploading
+    /// ladder. Emitted per transition rather than per byte: a thousand-item run
+    /// producing byte-level events would spend more time in the UI than in the
+    /// codec.
+    case candidateStage(index: Int, locator: String, stage: ImportItemStage)
     case candidateFinished(index: Int, locator: String, outcome: ImportOutcome)
     case finished(summary: ImportSummary)
     /// The run was cancelled. Everything already imported stays imported —

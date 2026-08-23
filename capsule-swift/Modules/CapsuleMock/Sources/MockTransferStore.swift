@@ -27,6 +27,7 @@ public actor MockTransferStore {
     private var evictedBytes: UInt64 = 0
     private var cachedBreakdown: LocalStorageBreakdown?
     private var cancelledImports: Set<ImportID> = []
+    private var dismissedImports: Set<ImportID> = []
 
     nonisolated let uploadChanges = ChangeBroadcaster<[UploadSession]>()
     nonisolated let syncChanges = ChangeBroadcaster<SyncStatus>()
@@ -107,6 +108,12 @@ public actor MockTransferStore {
 
     func markImportCancelled(_ identifier: ImportID) { cancelledImports.insert(identifier) }
     func isImportCancelled(_ identifier: ImportID) -> Bool { cancelledImports.contains(identifier) }
+
+    /// Dismissing forgets the *record* of a run, never the assets it brought
+    /// in — which is why it is a separate set from the cancelled one rather than
+    /// a state on the same value.
+    func markImportDismissed(_ identifier: ImportID) { dismissedImports.insert(identifier) }
+    func isImportDismissed(_ identifier: ImportID) -> Bool { dismissedImports.contains(identifier) }
 
     func breakdown(_ make: () -> LocalStorageBreakdown) -> LocalStorageBreakdown {
         if let cachedBreakdown { return cachedBreakdown }
