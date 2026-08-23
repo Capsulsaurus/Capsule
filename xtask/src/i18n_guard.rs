@@ -19,7 +19,7 @@
 //! - **SwiftUI** (`capsule-swift/{App,Modules}/**/*.swift`): the string argument of
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
-//!   A migrated call passes a catalog KEY (`Text("ios.settings.title")`); a literal
+//!   A migrated call passes a catalog KEY (`Text("app.settings.title")`); a literal
 //!   (`Text("Settings")`) is not a key, so it fails.
 //! - **Compose** (`capsule-android/src/**/*.kt`): the string argument of `Text("…")`
 //!   and `contentDescription = "…"`. Migrated code uses
@@ -271,6 +271,7 @@ pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
     });
     let mut findings = matched_findings(content, re, "swift-literal");
     findings.extend(swift_key_parameter_findings(content));
+    findings.extend(swift_computed_property_findings(content));
     findings
 }
 
@@ -293,12 +294,92 @@ fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
     // always is: `case .masterKey: "key.fill"` is a pattern returning an SF
     // Symbol name, not a catalog reference. As in
     // `swift_findings`, `[^"\\]*` keeps this to simple literals, so
-    // interpolated keys (`"ios.x.\(raw).title"`) stay a documented blind spot.
+    // interpolated keys (`"app.x.\(raw).title"`) stay a documented blind spot.
     let re = RE.get_or_init(|| {
         Regex::new(r#"(?:^|[^A-Za-z0-9_.])[A-Za-z]*Key:\s*"([^"\\]*[A-Za-z][^"\\]*)""#)
             .expect("static regex is valid")
     });
     matched_findings(content, re, "swift-key-param")
+}
+
+/// Detect display text returned from a `String`-typed computed property.
+///
+/// The blind spot that hid twenty-two English strings from this gate. A view
+/// that writes `Text("Places")` is caught by ``swift_findings``; a view that
+/// writes `Text(category.title)` is not, and neither is the property behind it:
+///
+/// ```swift
+/// var title: String {
+///     switch self {
+///     case .places: "Places"          // never seen by the gate
+///     }
+/// }
+/// ```
+///
+/// The literal reaches the screen through a variable, so no call site carries
+/// it and no argument label ends in `Key`. Non-English users read those in
+/// English, and the gate reported zero findings the whole time.
+///
+/// Scoped to `case .foo: "Bar"` inside a property named like display text
+/// (`title`, `message`, `label`, `name`, `description`, `subtitle`) — the shape
+/// that actually produced the bug. A `String` property returning a symbol name
+/// or a raw value is not display text and must not be flagged, which is why the
+/// literal must also start with a capital and contain a space *or* be a known
+/// display-ish word: `case .heic: "HEIC"` is a file format, not a sentence.
+fn swift_computed_property_findings(content: &str) -> Vec<Finding> {
+    static PROPERTY: OnceLock<Regex> = OnceLock::new();
+    static CASE: OnceLock<Regex> = OnceLock::new();
+    let property = PROPERTY.get_or_init(|| {
+        Regex::new(
+            r"var\s+[A-Za-z]*(?i:title|message|label|name|description|subtitle)\s*:\s*String\s*\{",
+        )
+        .expect("static regex is valid")
+    });
+    // `case .foo: "Some words"` — a capital, then a space, so an acronym or an
+    // identifier-like token does not match.
+    let case = CASE.get_or_init(|| {
+        Regex::new(r#"case\s+\.[A-Za-z0-9_]+:\s*"([A-Z][^"\\]*\s[^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+
+    let mut findings = Vec::new();
+    for property_match in property.find_iter(content) {
+        let open = property_match.end() - 1;
+        let Some(body) = brace_body(content, open) else {
+            continue;
+        };
+        for capture in case.captures_iter(body) {
+            let group = capture.get(1).expect("group 1 exists");
+            findings.push(Finding {
+                // Offsets are into `body`, which starts one byte past the
+                // brace — so the absolute position is that plus the local one.
+                line: line_of(content, open + 1 + group.start()),
+                text: group.as_str().to_string(),
+                kind: "swift-computed-property",
+            });
+        }
+    }
+    findings
+}
+
+/// The text between the brace at `open` and its match, or `None` if unbalanced.
+fn brace_body(content: &str, open: usize) -> Option<&str> {
+    let bytes = content.as_bytes();
+    debug_assert_eq!(bytes[open], b'{');
+    let mut depth = 0usize;
+    for (offset, byte) in bytes[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return content.get(open + 1..open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Detect string-literal arguments to user-facing Compose APIs.
@@ -543,7 +624,7 @@ mod tests {
     #[test]
     fn swift_flags_literal_but_not_verbatim_or_dynamic() {
         let src = r#"Text("Settings")
-            Text("ios.settings.title")
+            Text("app.settings.title")
             Text(verbatim: "raw")
             Text(model.title)
             .navigationTitle("Albums")
@@ -553,7 +634,7 @@ mod tests {
         assert!(t.contains(&"Settings"));
         assert!(t.contains(&"Albums"));
         // The dotted key IS captured; the runner filters it against the catalog.
-        assert!(t.contains(&"ios.settings.title"));
+        assert!(t.contains(&"app.settings.title"));
         // `verbatim:` and dynamic args are never captured.
         assert!(!t.contains(&"raw"));
     }
@@ -586,6 +667,45 @@ mod tests {
     }
 
     #[test]
+    fn swift_computed_properties_are_scanned() {
+        // The shape that hid twenty-two English strings: display text returned
+        // from a `String` property, reaching the screen through a variable so
+        // no call site ever carries the literal.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .places: "Places and Trips"
+                case .people: "People and Pets"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert!(texts.contains(&"Places and Trips".to_string()));
+        assert!(texts.contains(&"People and Pets".to_string()));
+    }
+
+    #[test]
+    fn swift_computed_properties_ignore_identifier_like_values() {
+        // A `String` property is not automatically display text. Symbol names,
+        // raw values and file formats are single tokens; requiring a space is
+        // what separates a sentence from an identifier.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .heic: "HEIC"
+                case .dng: "DNG"
+                }
+            }
+            var systemImage: String {
+                switch self {
+                case .places: "Map Pin Icon"
+                }
+            }
+        "#;
+        assert!(swift_findings(src).is_empty());
+    }
+
+    #[test]
     fn line_numbers_are_one_based() {
         let src = "line1\nline2 Text(\"x\")\n";
         assert_eq!(line_of(src, 0), 1);
@@ -595,22 +715,22 @@ mod tests {
     #[test]
     fn swift_key_parameters_are_scanned() {
         let src = r#"
-        SettingsRow(titleKey: "ios.settings.storage.title", labelKey: "ios.common.done")
-        EmptyState(emptyDescriptionKey: "ios.import.plan.empty.description")
+        SettingsRow(titleKey: "app.settings.storage.title", labelKey: "app.common.done")
+        EmptyState(emptyDescriptionKey: "app.import.plan.empty.description")
         "#;
         let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
-        assert!(texts.contains(&"ios.settings.storage.title".to_string()));
-        assert!(texts.contains(&"ios.common.done".to_string()));
-        assert!(texts.contains(&"ios.import.plan.empty.description".to_string()));
+        assert!(texts.contains(&"app.settings.storage.title".to_string()));
+        assert!(texts.contains(&"app.common.done".to_string()));
+        assert!(texts.contains(&"app.import.plan.empty.description".to_string()));
     }
 
     /// The whole point of widening the gate: a key nobody added to the catalog
     /// used to compile, render as its own raw text, and fail nothing.
     #[test]
     fn swift_key_parameters_catch_a_key_that_was_never_added() {
-        let src = r#"Row(titleKey: "ios.settings.totally.made.up")"#;
+        let src = r#"Row(titleKey: "app.settings.totally.made.up")"#;
         let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
-        assert_eq!(texts, vec!["ios.settings.totally.made.up".to_string()]);
+        assert_eq!(texts, vec!["app.settings.totally.made.up".to_string()]);
     }
 
     /// A switch over an enum whose case ends in `Key` is not a call site. This
@@ -658,9 +778,9 @@ mod tests {
     #[test]
     fn swift_error_codes_ignores_ui_keys_and_prose() {
         let src = r#"
-        Text("ios.settings.title")
+        Text("app.settings.title")
         // an error.something mentioned in a comment, unquoted
-        Label("ios.error.banner", systemImage: "x")
+        Label("app.error.banner", systemImage: "x")
         "#;
         assert!(swift_error_codes(src).is_empty());
     }
