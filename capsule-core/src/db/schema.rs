@@ -6,7 +6,11 @@
 /// v3: added the `embeddings` provenance companion table (S-H1) — the per-task
 ///     `sqlite-vec` `vec0` tables are created at runtime from the model registry
 ///     (their vector dimension is registry-declared), so they are not in this DDL.
-pub const SCHEMA_VERSION: u32 = 3;
+/// v4: added `assets.is_hidden` (S-D19) — the index projection of the sidecar `hidden`
+///     LWW register. Hidden assets are excluded from every default view and are reachable
+///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
+///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -29,7 +33,10 @@ CREATE TABLE IF NOT EXISTS assets (
     album_id          TEXT,
     rating            INTEGER NOT NULL DEFAULT 0,
     is_deleted        INTEGER NOT NULL DEFAULT 0,
-    deleted_at        INTEGER
+    deleted_at        INTEGER,
+    -- Projection of the sidecar `hidden` LWW register: excluded from default views,
+    -- served only by the gated Hidden view. Not `is_stack_hidden` (stack suppression).
+    is_hidden         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS asset_stacks (
@@ -73,7 +80,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_deleted    ON assets(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_assets_album      ON assets(album_id);
 CREATE INDEX IF NOT EXISTS idx_assets_stack      ON assets(stack_id);
 CREATE INDEX IF NOT EXISTS idx_assets_type       ON assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, capture_utc, capture_timestamp);
+CREATE INDEX IF NOT EXISTS idx_assets_hidden     ON assets(is_hidden);
+CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, is_hidden, capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_stacks_type       ON asset_stacks(stack_type);
 CREATE INDEX IF NOT EXISTS idx_stacks_primary    ON asset_stacks(primary_asset_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_stack  ON stack_members(stack_id);

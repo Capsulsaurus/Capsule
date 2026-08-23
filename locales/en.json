@@ -467,6 +467,54 @@
         "message": "Push failed: {reason}",
         "context": "CLI failure line for `capsule push`. {reason} is a localized or English error detail."
     },
+    "cli.cull.flagged": {
+        "message": "Flagged {count} asset(s) as {flag}.",
+        "context": "CLI confirmation from `capsule cull` after writing culling flags. {count} is a count; {flag} is a localized flag name (pick/neutral/reject)."
+    },
+    "cli.cull.view": {
+        "message": "Cull view: {pick} pick, {neutral} neutral, {reject} reject.",
+        "context": "CLI summary line from `capsule cull` counting the live (non-trashed) assets carrying each culling flag."
+    },
+    "cli.cull.filter_header": {
+        "message": "{count} asset(s) flagged {flag}:",
+        "context": "CLI header above the filtered asset list in `capsule cull --filter`. {flag} is a localized flag name."
+    },
+    "cli.cull.filter_empty": {
+        "message": "No assets are flagged {flag}.",
+        "context": "CLI line shown when `capsule cull --filter` matches nothing. {flag} is a localized flag name."
+    },
+    "cli.cull.row": {
+        "message": "  {asset_id}",
+        "context": "CLI one-line rendering of a single asset in the `capsule cull` filtered view."
+    },
+    "cli.cull.swept": {
+        "message": "Swept {count} rejected asset(s) to trash; recoverable for {retain_days} day(s).",
+        "context": "CLI confirmation from `capsule cull --sweep`. The sweep is a soft delete, so the assets stay restorable for the retention window."
+    },
+    "cli.cull.nothing_to_sweep": {
+        "message": "No rejected assets to sweep.",
+        "context": "CLI line shown when `capsule cull --sweep` finds nothing flagged for rejection."
+    },
+    "cli.cull.unknown_asset": {
+        "message": "Unknown asset {asset_id} in this library.",
+        "context": "CLI failure detail when `capsule cull` is asked to flag an asset id the opened library does not manage."
+    },
+    "cli.cull.failed": {
+        "message": "Cull failed: {reason}",
+        "context": "CLI failure line for `capsule cull`. {reason} is a localized or English error detail."
+    },
+    "cli.cull.flag.pick": {
+        "message": "pick",
+        "context": "Culling flag name: the asset is a keeper. Used inside other `capsule cull` messages."
+    },
+    "cli.cull.flag.neutral": {
+        "message": "neutral",
+        "context": "Culling flag name: the asset has not been culled either way (the default). Used inside other `capsule cull` messages."
+    },
+    "cli.cull.flag.reject": {
+        "message": "reject",
+        "context": "Culling flag name: the asset is marked for rejection. Used inside other `capsule cull` messages."
+    },
     "device.cohort.label.previously_used": {
         "message": "A device you've used before (last seen {last_seen})",
         "context": "Devices screen: label for a device grouping (cohort) the account has enrolled before — e.g. after reinstalling the app. Assert-don't-litigate copy: it states recognition, it never asks the user to confirm or deny. {last_seen} is a formatted date the app supplies."

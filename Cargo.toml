@@ -19,6 +19,8 @@ members = [
     "capsule-i18n",
     "capsule-sdk",
     "capsule-wasm",
+    "capsule-server",
+    "capsule-wire",
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed
@@ -41,6 +43,8 @@ default-members = [
     "capsule-core",
     "capsule-core-ffi",
     "capsule-i18n",
+    "capsule-server",
+    "capsule-wire",
 ]
 resolver = "3"
 
@@ -51,6 +55,12 @@ publish = false
 
 [workspace.dependencies]
 argon2 = "0.5.3"
+# Kynos — the REST/OpenAPI server framework the `capsule-api` rebuild targets. Pinned to an
+# immutable rev, never a branch or tag: Kynos is not published on crates.io and its README
+# reads "Status: Not for public use yet!", so a rev bump is a reviewed dependency change
+# rather than a lockfile refresh. Rationale, MSRV (1.85) and the repin-on-publish exit are
+# recorded in design/dependencies.md, which CLAUDE.md requires before a new dependency lands.
+kynos = { git = "https://github.com/getkono/kynos", rev = "6513109b5725a3e0713808de0eaee6b4b74281e3" }
 base64 = "0.22.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"

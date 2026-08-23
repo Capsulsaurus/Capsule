@@ -62,70 +62,27 @@ pub(super) enum ProvisionResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for ProvisionResponses {
-    async fn write(mut self, _req: &mut Request, _depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Created(body) => {
-                res.status_code(StatusCode::CREATED);
-                res.render(Json(body));
-            }
-            Self::AlreadyProvisioned(body) => {
-                res.status_code(StatusCode::OK);
-                res.render(Json(body));
-            }
-            Self::Unauthorized(detail) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::new(detail)));
-            }
-            Self::InvalidId => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::with_code(
-                    "album_id must be a canonical lowercase hyphenated UUID",
-                    error_codes::ALBUM_INVALID_ID,
-                )));
-            }
-            Self::NotAvailable => {
-                // Fixed message: it must read identically whether the id is bound to another
-                // account or is unavailable for any other reason.
-                res.status_code(StatusCode::FORBIDDEN);
-                res.render(Json(ApiError::with_code(
-                    "This album id is not available to this account",
-                    error_codes::ALBUM_NOT_AVAILABLE,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for ProvisionResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new(
-                "The album id was already provisioned to this account; nothing was written",
-            ),
+capsule_wire::salvo_responses! {
+    ProvisionResponses {
+        Created(body) => 201, json(body),
+            doc("The album was created and bound to the caller");
+        AlreadyProvisioned(body) => 200, json(body), doc(
+            "The album id was already provisioned to this account; nothing was written"
         );
-        operation.responses.insert(
-            String::from("201"),
-            salvo::oapi::Response::new("The album was created and bound to the caller"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("album_id is not a canonical hyphenated UUID"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
-        operation.responses.insert(
-            String::from("403"),
-            salvo::oapi::Response::new("The album id is not available to this account"),
-        );
+        Unauthorized(detail) => 401, json(ApiError::new(detail)),
+            doc("Missing or invalid access token");
+        InvalidId {} => 400, json(ApiError::with_code(
+            "album_id must be a canonical lowercase hyphenated UUID",
+            error_codes::ALBUM_INVALID_ID,
+        )), doc("album_id is not a canonical hyphenated UUID");
+        // Fixed message: it must read identically whether the id is bound to another
+        // account or is unavailable for any other reason.
+        NotAvailable {} => 403, json(ApiError::with_code(
+            "This album id is not available to this account",
+            error_codes::ALBUM_NOT_AVAILABLE,
+        )), doc("The album id is not available to this account");
+        Internal {} => 500, json(ApiError::new("Internal server error")),
+            undocumented();
     }
 }
 

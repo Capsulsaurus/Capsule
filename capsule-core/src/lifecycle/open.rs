@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::Arc;
 
 use jiff::civil::Date;
 use jiff::tz::TimeZone;
@@ -14,15 +15,44 @@ use super::{
     AssetState, LifecycleError, Result, StackPlacement, Workspace, media_dir, now_rfc3339,
 };
 use crate::cbor;
+use crate::crypto::CryptoError;
 use crate::crypto::keys::albumstore::AlbumStore;
 use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
-use crate::crypto::keys::{Account, AccountFile, DeviceDirectory, HybridVerifyingKey, Signer};
+use crate::crypto::keys::{
+    Account, AccountFile, DeviceDirectory, HardwareKeyAgreement, HybridVerifyingKey, Signer,
+};
 use crate::crypto::provenance::{ProvenanceChain, ProvenanceRecord};
 use crate::metadata::crdt::Counter;
 use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
 /// A device is treated as added far in the past so any import timestamp postdates it.
 const DEVICE_ADDED_AT: &str = "2020-01-01T00:00:00Z";
+
+/// A request to bind this workspace's **device encryption key** to a per-platform secure element
+/// (`S-F8`): the P-256 key-agreement element itself plus the alias its key is held under.
+///
+/// Supplying one makes the DEK's classical half hardware-held for the life of the account — see
+/// [`DeviceDek`](crate::crypto::keys::DeviceDek). Omitting it keeps the software X-Wing DEK,
+/// which is the design's explicit fallback for hosts with no element, not a degraded mode.
+///
+/// The alias is used only when the account is **created**; on reopen the alias recorded in the
+/// account file wins, so renaming it here can never silently re-bind an existing account to a
+/// different hardware key.
+#[derive(Clone)]
+pub struct HardwareDekBinding {
+    /// The secure element performing the P-256 ECDH (Secure Enclave / StrongBox / TPM).
+    pub element: Arc<dyn HardwareKeyAgreement>,
+    /// The element's alias for this device's key-agreement key.
+    pub key_alias: String,
+}
+
+impl std::fmt::Debug for HardwareDekBinding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HardwareDekBinding")
+            .field("key_alias", &self.key_alias)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Recover `device`'s `add_id` high-water mark by sweeping the signed sidecars under
 /// `root/media` — the maximum `add_id.counter` this device has ever written, across every
@@ -159,7 +189,7 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
-        Self::create_inner(root, passphrase, params, None)
+        Self::create_inner(root, passphrase, params, None, None)
     }
 
     /// As [`create_with_params`](Self::create_with_params) but signs with a caller-supplied
@@ -172,7 +202,40 @@ impl Workspace {
         params: crate::crypto::primitives::Argon2Params,
         device_signer: Box<dyn Signer>,
     ) -> Result<Self> {
-        Self::create_inner(root, passphrase, params, Some(device_signer))
+        Self::create_inner(root, passphrase, params, Some(device_signer), None)
+    }
+
+    /// As [`create_with_params`](Self::create_with_params) but with the device **encryption** key's
+    /// classical half generated inside `binding`'s secure element and never leaving it (`S-F8`).
+    /// The ML-KEM-768 half is software-sealed under the master key as usual, so the account file
+    /// round-trips; reopening the library needs the same element back, via
+    /// [`open_with_hardware_dek`](Self::open_with_hardware_dek).
+    ///
+    /// This is the DEK counterpart of
+    /// [`create_with_hardware_signer`](Self::create_with_hardware_signer); the two are independent
+    /// (an element may back one, the other, or both — see
+    /// [`create_with_hardware_keys`](Self::create_with_hardware_keys)).
+    pub fn create_with_hardware_dek(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        binding: HardwareDekBinding,
+    ) -> Result<Self> {
+        Self::create_inner(root, passphrase, params, None, Some(binding))
+    }
+
+    /// The general hardware-binding constructor: bind the device signing key, the device
+    /// encryption key, both, or neither. `None`/`None` is exactly
+    /// [`create_with_params`](Self::create_with_params) — the software fallback the design keeps
+    /// for hosts with no secure element.
+    pub fn create_with_hardware_keys(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        device_signer: Option<Box<dyn Signer>>,
+        dek_binding: Option<HardwareDekBinding>,
+    ) -> Result<Self> {
+        Self::create_inner(root, passphrase, params, device_signer, dek_binding)
     }
 
     fn create_inner(
@@ -180,10 +243,29 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
         device_signer: Option<Box<dyn Signer>>,
+        dek_binding: Option<HardwareDekBinding>,
     ) -> Result<Self> {
         let library = crate::library::init::init_library(root, "Capsule")
             .map_err(|e| LifecycleError::Io(format!("init library: {e}")))?;
-        let account = Account::create();
+        let account = match dek_binding {
+            Some(binding) => {
+                tracing::info!(
+                    key_alias = %binding.key_alias,
+                    "workspace create: enrolling the device encryption key's classical half in the \
+                     secure element"
+                );
+                Account::create_with_hardware_dek(binding.element, binding.key_alias).map_err(
+                    |e| {
+                        // The element's own reason (unavailable / cancelled / backend) is the only
+                        // thing that tells an operator whether to retry, so it is logged before it
+                        // is flattened into the `&'static str` the crypto error carries.
+                        tracing::error!(error = %e, "workspace create: hardware DEK enrollment failed");
+                        CryptoError::Key("hardware DEK enrollment failed")
+                    },
+                )?
+            }
+            None => Account::create(),
+        };
         let file = account.to_file_with(passphrase, params)?;
         let acct_bytes =
             cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
@@ -274,6 +356,33 @@ impl Workspace {
         passphrase: &[u8],
         params: crate::crypto::primitives::Argon2Params,
     ) -> Result<Self> {
+        Self::open_inner(root, passphrase, params, None)
+    }
+
+    /// As [`open`](Self::open), re-attaching the secure element that holds this device's
+    /// hardware-bound DEK (`S-F8`). Required for a library created by
+    /// [`create_with_hardware_dek`](Self::create_with_hardware_dek): its DEK's classical half is
+    /// non-exportable, so plain [`open`](Self::open) refuses it rather than degrading to software.
+    ///
+    /// Safe to call for a software-DEK library too — the binding recorded in the account file
+    /// decides, and a software account simply ignores the element. On a **first** open of an
+    /// empty library (no account yet) the fresh account is created hardware-bound under
+    /// `binding.key_alias`.
+    pub fn open_with_hardware_dek(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        binding: HardwareDekBinding,
+    ) -> Result<Self> {
+        Self::open_inner(root, passphrase, params, Some(binding))
+    }
+
+    fn open_inner(
+        root: &Path,
+        passphrase: &[u8],
+        params: crate::crypto::primitives::Argon2Params,
+        dek_binding: Option<HardwareDekBinding>,
+    ) -> Result<Self> {
         let library = crate::library::open_library(root)
             .map_err(|e| LifecycleError::Io(format!("open library: {e}")))?;
         let account_path = root.join(".library").join("account.cbor");
@@ -281,9 +390,19 @@ impl Workspace {
             let bytes = fs::read(&account_path).map_err(|e| LifecycleError::Io(e.to_string()))?;
             let file: AccountFile =
                 cbor::from_slice(&bytes).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
-            file.unlock(passphrase)?
+            file.unlock_with_element(passphrase, dek_binding.map(|b| b.element))?
         } else {
-            let account = Account::create();
+            let account = match dek_binding {
+                Some(binding) => Account::create_with_hardware_dek(
+                    binding.element,
+                    binding.key_alias,
+                )
+                .map_err(|e| {
+                    tracing::error!(error = %e, "workspace open: hardware DEK enrollment failed");
+                    CryptoError::Key("hardware DEK enrollment failed")
+                })?,
+                None => Account::create(),
+            };
             let file = account.to_file_with(passphrase, params)?;
             let acct_bytes =
                 cbor::to_canonical_vec(&file).map_err(|e| LifecycleError::Cbor(e.to_string()))?;
@@ -545,6 +664,7 @@ mod tests {
 
     use super::super::fast_workspace;
     use super::*;
+    use crate::crypto::keys::kem_p256::encapsulate_to_p256_public;
     use crate::crypto::primitives::Argon2Params;
     use crate::crypto::verify_asset::VerifyOutcome;
 
@@ -1088,5 +1208,137 @@ mod tests {
                 .unwrap()
                 .dsk_public
         );
+    }
+
+    // ── S-F8: the device encryption key bound to a secure element, in a real workspace ──
+
+    /// The mock element + alias every S-F8 workspace test binds to. A real Secure Enclave /
+    /// StrongBox / TPM adapter substitutes for the mock without a change above this line — that
+    /// is the point of the [`HardwareKeyAgreement`] seam.
+    fn mock_dek_binding(scalar: u8) -> HardwareDekBinding {
+        use crate::crypto::keys::kem_p256::MockP256KeyAgreement;
+
+        HardwareDekBinding {
+            element: Arc::new(MockP256KeyAgreement::new([scalar; 32], false)),
+            key_alias: "device-dek".into(),
+        }
+    }
+
+    /// **S-F8 acceptance.** A workspace created with a `HardwareKeyAgreement` round-trips
+    /// lock/unlock: close it, reopen it with the same element, and the DEK is still the same
+    /// hardware-bound key — a secret encapsulated to it *before* the close is recovered *after*
+    /// the reopen, with the classical ECDH done inside the element both times.
+    ///
+    /// The asset import either side of the close is what makes this a workspace test rather than
+    /// a keystore one: the hardware DEK must coexist with the whole `S-A10` durable-state
+    /// restore, not merely survive in isolation.
+    #[test]
+    fn hardware_dek_workspace_round_trips_lock_and_unlock() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF hardware-DEK asset").unwrap();
+        let binding = mock_dek_binding(0x7A);
+
+        let (published, ciphertext, sent_secret, asset) = {
+            let mut ws = Workspace::create_with_hardware_dek(
+                lib.path(),
+                b"passphrase",
+                fast_params(),
+                binding.clone(),
+            )
+            .unwrap();
+            assert!(
+                ws.device_dek_is_hardware_bound(),
+                "the workspace's DEK must report itself hardware-bound"
+            );
+
+            let published = ws.device_dek_public();
+            let (ct, sent) = encapsulate_to_p256_public(&published).unwrap();
+            assert_eq!(
+                ws.device_dek_decapsulate(&ct).unwrap(),
+                sent,
+                "the live workspace decapsulates through the element"
+            );
+
+            let album = ws.create_album("Trip").unwrap();
+            let asset = ws.import_asset(album, &img).unwrap();
+            assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+            (published, ct, sent, asset)
+        };
+
+        // Reopen with the element re-attached: the same DEK comes back and still opens the
+        // ciphertext sealed to it in the previous session.
+        let reopened =
+            Workspace::open_with_hardware_dek(lib.path(), b"passphrase", fast_params(), binding)
+                .unwrap();
+        assert!(reopened.device_dek_is_hardware_bound());
+        assert_eq!(reopened.device_dek_public(), published);
+        assert_eq!(
+            reopened.device_dek_decapsulate(&ciphertext).unwrap(),
+            sent_secret,
+            "a secret sealed before the close must open after the reopen"
+        );
+        // `S-A10`'s durable state is unaffected by the hardware binding.
+        assert_eq!(reopened.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// Reopening a hardware-bound library **without** the element fails loudly instead of handing
+    /// back a workspace whose DEK silently decapsulates nothing.
+    #[test]
+    fn reopening_a_hardware_dek_library_without_the_element_is_refused() {
+        let lib = TempDir::new().unwrap();
+        drop(
+            Workspace::create_with_hardware_dek(
+                lib.path(),
+                b"passphrase",
+                fast_params(),
+                mock_dek_binding(0x1D),
+            )
+            .unwrap(),
+        );
+
+        assert!(
+            matches!(
+                Workspace::open(lib.path(), b"passphrase", fast_params()),
+                Err(LifecycleError::Crypto(CryptoError::Key(_)))
+            ),
+            "a hardware-bound library must not open without its secure element"
+        );
+    }
+
+    /// **Existing software-DEK workspaces are unaffected.** A workspace created the ordinary way
+    /// still reports a software DEK, still reopens with plain `open`, and its DEK still
+    /// round-trips under the software X-Wing form — the fallback the design keeps for hosts with
+    /// no secure element.
+    #[test]
+    fn software_dek_workspaces_are_unaffected() {
+        let lib = TempDir::new().unwrap();
+
+        let published = {
+            let ws = fast_workspace(lib.path());
+            assert!(!ws.device_dek_is_hardware_bound());
+            ws.device_dek_public()
+        };
+
+        let reopened = Workspace::open(lib.path(), b"passphrase", fast_params()).unwrap();
+        assert!(!reopened.device_dek_is_hardware_bound());
+        assert_eq!(reopened.device_dek_public(), published);
+
+        let (ct, sent) = crate::crypto::keys::encapsulate_to_public(&published).unwrap();
+        assert_eq!(reopened.device_dek_decapsulate(&ct).unwrap(), sent);
+
+        // A P-256-hybrid ciphertext is length-rejected by the software DEK, so the two
+        // compositions can never be confused for one another.
+        let hw_lib = TempDir::new().unwrap();
+        let hw_ws = Workspace::create_with_hardware_dek(
+            hw_lib.path(),
+            b"passphrase",
+            fast_params(),
+            mock_dek_binding(0x2E),
+        )
+        .unwrap();
+        let (hw_ct, _) = encapsulate_to_p256_public(&hw_ws.device_dek_public()).unwrap();
+        assert!(reopened.device_dek_decapsulate(&hw_ct).is_err());
     }
 }

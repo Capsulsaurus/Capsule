@@ -114,6 +114,10 @@ fn mlkem_from_seed(ml_seed: &[u8; 32]) -> DecapsulationKey<MlKem768> {
 pub struct P256HybridDek {
     agreement: Arc<dyn HardwareKeyAgreement>,
     key_alias: String,
+    /// The 32-byte software seed the ML-KEM-768 half was expanded from. Retained so the keystore
+    /// can seal it under the master key and re-derive this half on unlock (`S-F8`); the classical
+    /// half needs no seed because it never leaves the element.
+    ml_seed: [u8; 32],
     /// ML-KEM-768 decapsulation key (software half).
     dk: DecapsulationKey<MlKem768>,
     /// The element's static P-256 public key (`pk_P`) — the private scalar stays in hardware.
@@ -136,9 +140,25 @@ impl P256HybridDek {
         Ok(Self {
             agreement: hardware,
             key_alias,
+            ml_seed: *ml_seed,
             dk: mlkem_from_seed(ml_seed),
             p256_public,
         })
+    }
+
+    /// The element alias this DEK's classical half is enrolled under. Persisted (in the clear —
+    /// it is a lookup handle, not a secret) in the [`AccountFile`](super::keystore::AccountFile)
+    /// so a reopened workspace can re-bind to the same hardware key (`S-F8`).
+    pub fn key_alias(&self) -> &str {
+        &self.key_alias
+    }
+
+    /// The 32-byte software seed of the ML-KEM-768 half — the value the keystore seals under the
+    /// master key (`S-F8`), mirroring [`DekKeypair::to_seed_bytes`](super::kem::DekKeypair::to_seed_bytes).
+    /// The classical half is *not* covered: it is hardware-held and non-exportable by contract,
+    /// which is exactly why a hardware-bound device cannot be restored from a backup.
+    pub fn to_ml_seed_bytes(&self) -> [u8; 32] {
+        self.ml_seed
     }
 
     /// The published hybrid public-encapsulation-key bytes `ek_M ‖ pk_P` (for the device directory).

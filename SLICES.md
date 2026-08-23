@@ -165,14 +165,22 @@ The teardown verdict is final; the **order** is not "retire, then rebuild". It i
   checkout with no cross-compile. The two lanes meet at one file — `AppEnvironment.swift` —
   and `S-U19` is the only slice in lane U that depends on anything outside it.
 
-**Environment — lane P builds locally again (2026-08-22).** The recorded blocker
-(`CoreSimulator.framework` removed by `sudo rm -rf /Library/Developer/PrivateFrameworks`,
-`xcodebuild -create-xcframework` exit 70) is resolved, as is the separate gap that had
-replaced it: Xcode 26.6 ships the iOS 26.5 SDK but the host carried only 26.0/26.3 runtimes,
-so `xcodebuild` enumerated no iOS simulator destinations at all. `xcodebuild -downloadPlatform
-iOS` fixed that with **no sudo**. `mise run check-swift` now runs format, lint, and the unit
-suites on macOS, iOS, and iPadOS from this host. **`S-P1` is unaffected either way** — it is
-pure Rust and verifies with `cargo nextest`.
+**Environment — both Apple lanes build locally again (2026-08-22).** The Xcode host was
+broken twice over: a stale March-2025 `DVTDownloads.framework` shadowed what Xcode 26.6
+expects, and the documented fix for it (`sudo rm -rf /Library/Developer/PrivateFrameworks`)
+removed the still-required `CoreSimulator.framework` as well, turning a shadowing fault into
+a missing-framework one (`xcodebuild -create-xcframework`, exit 70). `sudo xcodebuild
+-runFirstLaunch` restored the directory with both frameworks. A third gap sat behind that
+one: Xcode 26.6 ships the iOS 26.5 SDK but the host carried only 26.0/26.3 runtimes, so
+`xcodebuild` enumerated no iOS simulator destinations at all — `xcodebuild -downloadPlatform
+iOS` fixed it with **no sudo**.
+
+Both lanes now verify on the dev host. `mise run build-ffi-apple` exits 0 and assembles
+`capsule-swift/.ffi/CapsuleCoreFFI.xcframework` with `ios-arm64` and
+`ios-arm64_x86_64-simulator` slices (lane P); `mise run check-swift` runs format, lint, and
+the unit suites on macOS, iOS, and iPadOS (lane U). Note for whoever hits this next:
+`xcodebuild -showsdks` does **not** load the simulator plugin, so it is never evidence that
+either lane works — only a command reaching `-create-xcframework` or a real destination is.
 
 ## Unified Slice Index
 
@@ -189,10 +197,11 @@ row's remainder now lives.
 | S-A4 | P-256 hybrid DSK variant | core-crypto | — | L | ACTIVE | done | |
 | S-A5 | Share-link crypto (`capsule_core::sharing`) | core-crypto | — | M | ACTIVE | done | |
 | S-A6 | Drop crypto (`capsule_core::drop`, incl. WASM build) | core-crypto | S-A1 | L | ACTIVE | done\* | multi-device OGK re-wrap → post-v1 (OGK cluster) |
-| S-A7 | `gps.datum` sidecar field + BD-09 input fold | core-crypto | — | S | ACTIVE | done\* | fold flip → `S-A8` |
-| S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | ready | |
+| S-A7 | `gps.datum` sidecar field + BD-09 input fold | core-crypto | — | S | ACTIVE | done | |
+| S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | done | |
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
+| S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | ready | |
 | S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
@@ -204,7 +213,7 @@ row's remainder now lives.
 | S-B9 | Tethered camera import (PTP/IP) | media/import | S-B2 | L | MIXED | post-v1 | `ptpip-rs` gate |
 | S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | ready | |
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | blocked | |
-| S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | ready | |
+| S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
@@ -232,7 +241,10 @@ row's remainder now lives.
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
-| S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | ready | |
+| S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
+| S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
+| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | ready | |
+| S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -245,13 +257,16 @@ row's remainder now lives.
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | RETIRED | ready | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
 | S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
-| S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done\* | `capsule cull` → `S-D16` |
-| S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done\* | Hidden projection → `S-D19` |
+| S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
+| S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
-| S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | ready | |
+| S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | done | |
 | S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
-| S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | ready | |
+| S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
+| S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | ready | |
+| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | ready | |
+| S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | ready | |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -262,10 +277,10 @@ row's remainder now lives.
 | S-F2 | Secure Enclave / StrongBox hybrid composition | platform/FFI | S-A4, S-F1 | L | ACTIVE | done\* | Kotlin run → owed-CI |
 | S-F3 | Xcode/Gradle binding wiring + on-device CI | platform/FFI | S-F2 | L | ACTIVE | done\* | first CI runs + device lanes → owed-CI |
 | S-F4 | Windows TPM (TBS) backend | platform/FFI | S-A4 | M | ACTIVE | done\* | Windows CI + real-TPM smoke → owed-CI |
-| S-F5 | Hardware DEK binding | platform/FFI | S-F2 | M | ACTIVE | done\* | keystore wiring → `S-F8`; Kotlin ECDH → owed-CI |
+| S-F5 | Hardware DEK binding | platform/FFI | S-F2 | M | ACTIVE | done\* | Kotlin ECDH → owed-CI |
 | S-F6 | `log` → `tracing` migration (core + core-ffi) | platform/FFI | — | S | ACTIVE | done | |
 | S-F7 | core-swift XCTest → swift-testing migration | platform/FFI | — | S | ACTIVE | done | |
-| S-F8 | Hardware DEK → workspace keystore wiring | platform/FFI | — | M | ACTIVE | ready | |
+| S-F8 | Hardware DEK → workspace keystore wiring | platform/FFI | — | M | ACTIVE | done | |
 | S-G1 | GraphQL retirement | legacy-retire | — | M | RETIRED | done | README residual → `S-Z4` |
 | S-G2 | gRPC/plaintext proto retirement | legacy-retire | — | S | RETIRED | done | |
 | S-G3 | Plaintext server entity quarantine | legacy-retire | — | M | RETIRED | done | legacy route deletion → `S-C17` |
@@ -281,14 +296,14 @@ row's remainder now lives.
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
-| S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | ready | |
-| S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P4 | Import→seal→upload bridge + status UI | iOS path | S-P1–P3 | L | MIXED | blocked | |
-| S-P5 | Sync-apply into local catalog + render | iOS path | S-P1 | L | MIXED | blocked | |
-| S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | blocked | |
+| S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
+| S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
+| S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | ready | |
+| S-P4 | Import→seal→upload bridge + status UI | iOS path | S-P1–P3 | L | MIXED | blocked | S-P2/S-P3 |
+| S-P5 | Sync-apply into local catalog + render | iOS path | S-P1 | L | MIXED | ready | second-device render → `S-C30` |
+| S-P6 | SE signer wiring into the app + iOS cohort reader | iOS path | S-P1 | M | ACTIVE | ready | |
 | S-P7 | Dev-server bring-up (task, keys, blob backend, ATS) | iOS path | — | M | MIXED | done | |
-| S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | blocked | |
+| S-P8 | Swift behavioral FFI harness (flips S-D9) | iOS path | S-P1, S-P7 | M | MIXED | ready | |
 | S-Q1 | Mark/complete E2E cases 2, 3, 11 | e2e | — | S | MIXED | ready | |
 | S-Q2 | E2E case 6: backup → fresh-device restore | e2e | — | M | MIXED | ready | |
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | ready | |
@@ -313,11 +328,11 @@ row's remainder now lives.
 | S-U16 | Test + verification infrastructure | apple-ui | S-U4 | L | ACTIVE | done\* | remaining screen suites ride their own slices |
 | S-U17 | `check-swift` CI gate | apple-ui | S-U2 | S | ACTIVE | done | |
 | S-U18 | Catalog keys for the Apple client | apple-ui | S-I1 | M | ACTIVE | done\* | keys for slices still `ready` land with them |
-| S-U19 | SDK adapter swap (`CapsuleSDKAdapter`) | apple-ui | S-P1, S-U1 | M | MIXED | blocked | |
+| S-U19 | SDK adapter swap (`CapsuleSDKAdapter`) | apple-ui | S-P1, S-U1 | M | MIXED | ready | |
 | S-X1 | OpenMLS backend → `OpenMlsAuthority` | crypto/mls | — | L | ACTIVE | done | |
 | S-X2 | MLS membership + Welcome/history delivery | crypto/mls | S-X1 | L | ACTIVE | done | |
 | S-X3 | Album upgrade ceremony + MLS resilience | crypto/mls | S-X2 | L | ACTIVE | done\* | server halves → `S-C24` |
-| S-X4 | Per-user block MLS Remove + epoch bump | crypto/mls | — | M | ACTIVE | ready | |
+| S-X4 | Per-user block MLS Remove + epoch bump | crypto/mls | — | M | ACTIVE | done\* | server composition → `S-C8` |
 | S-Z1 | Library-settings document schema (design) | design/docs | — | S | ACTIVE | done | implementation → post-v1 (OGK cluster) |
 | S-Z2 | Provider migration user guides (docs site) | design/docs | S-B6 | S | ACTIVE | done\* | real-archive round trip → `S-B11` |
 | S-Z3 | Design-doc scope-out + amendment notes | design/docs | — | M | ACTIVE | done | |
@@ -325,14 +340,17 @@ row's remainder now lives.
 | S-Z5 | Dead-code removal (exports stub, CLI import planner) | design/docs | — | S | MIXED | done | |
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
 
-**Row counts.** By area: **59 ACTIVE / 46 RETIRED / 36 MIXED**. By status:
-**40 done / 23 done\* / 65 ready / 9 blocked / 4 post-v1**.
+**Row counts.** 148 rows — the 74 from the v1 campaign, wave 2, and the 19 of
+lane U. By area: **63 ACTIVE / 49 RETIRED / 36 MIXED**. By status:
+**49 done / 21 done\* / 70 ready / 3 blocked / 4 post-v1 / 1 part-done** (`S-C27`).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Only four block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
-`S-N1`, `S-P2`–`S-P6`/`S-P8` behind `S-P1`, and `S-U19` behind `S-P1` as well. Lane U
-exists precisely so that the rest of the Apple client does **not** wait on that chain. Everything else that once read `blocked`
-is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5`),
+ordering. Only three block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
+`S-N1`, and `S-P4` behind `S-P2`/`S-P3`. `S-P1` landing freed the rest of lane P and
+`S-U19` with it; lane U was built so the other eighteen Apple-client slices never waited
+on that chain in the first place. Everything else that once read `blocked`
+is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
+which `S-D16` and `S-P1` have since landed),
 spargen shipped and is on crates.io (freeing `S-D8`), and the X-Wing codepoint `0x004D`
 exists and OpenMLS ships it (freeing `S-X1`–`S-X3`, all three of which are now `done` in
 `ACTIVE` `capsule-core`).
@@ -371,7 +389,7 @@ when" cannot fully pass until the gate lifts.
 | `ptpip-rs` (in-house PTP/IP) | repo not created | `S-B9` (post-v1). |
 | Self-hosted device runners | unprovisioned | The `strongbox-device`/`secure-enclave` CI lanes exist, manual-trigger, inert. Owed-CI items park here: `S-F2` Kotlin run, `S-F3` first Android/iOS CI runs + device lanes, `S-F4` Windows ffi build + clippy + real-TPM smoke, `S-F5` Kotlin ECDH adapter, `S-D9` Kotlin harness. |
 | swiftformat 0.55 (mise) | **resolved 2026-08-22** | The install was a corrupt app-bundle extraction whose `Info.plist` no longer matched its signature, so the hardened runtime SIGKILLed it (exit 137). `mise uninstall swiftformat@0.55 && mise install` yields a plain 0.55.6 binary that runs. Running it for the first time surfaced a real config conflict — swiftformat's `wrapMultilineStatementBraces` versus swiftlint's `opening_brace` — now resolved by disabling the swiftformat rule. |
-| Xcode 26.6 on the dev host | **resolved 2026-08-22** | `CoreSimulator.framework` is present again and `xcodebuild -create-xcframework` exits 0. The residual failure was different from the recorded one: Xcode 26.6 ships the iOS **26.5** SDK but the host had only 26.0/26.3 runtimes, so `xcodebuild` enumerated *no* iOS simulator destinations at all (`-showdestinations` listed only ineligible device entries). `xcodebuild -downloadPlatform iOS` — **no sudo needed** — installed the 26.5 runtime and restored them. Both the simulator and macOS destinations now build and test locally; the older 18.3/26.0/26.3 runtimes were deleted to reclaim ~16 GB. Lane P no longer has to ride CI. |
+| Xcode 26.6 on the dev host | **resolved 2026-08-22** | Three faults in sequence. A stale March-2025 `DVTDownloads.framework` shadowed Xcode 26.6; the documented fix for that (`sudo rm -rf /Library/Developer/PrivateFrameworks`) also removed the still-required `CoreSimulator.framework`, turning it into a missing-framework failure (`-create-xcframework`, exit 70); `sudo xcodebuild -runFirstLaunch` restored both. Behind those sat a third: Xcode 26.6 ships the iOS **26.5** SDK but the host carried only 26.0/26.3 runtimes, so `xcodebuild` enumerated *no* iOS simulator destinations (`-showdestinations` listed only ineligible device entries). `xcodebuild -downloadPlatform iOS` — **no sudo** — installed 26.5 and restored them; the older runtimes were deleted to reclaim ~16 GB. `mise run build-ffi-apple` exits 0 and produces `CapsuleCoreFFI.xcframework`; `mise run check-swift` runs on macOS, iOS and iPadOS. Neither Apple lane has to ride CI. `xcodebuild -showsdks` does not load the simulator plugin and is never evidence that either does. |
 | Translation seeds | pending human review | ~350 machine-seeded entries across 12 locales (`S-I1`/`S-I2`/`S-E1`/`S-D3`) flagged in the `context` field; human review is the gate, not agent work. |
 
 ## Lane A — core crypto
@@ -482,8 +500,8 @@ not touch them.
 - **Done when:** the metadata doc's datum-verbatim-storage Validation bullet passes
   (GCJ-02 round-trips unconverted; BD-09 folds within bound; WGS-84 stays wire-absent and
   byte-identical); `mise run check-rust` green.
-- **Tier:** Unit. **Landed:** field + enum + wire behaviour shipped; the fold itself is
-  still `DatumFoldError::FoldGated`. **Owed:** fold flip → `S-A8`.
+- **Tier:** Unit. **Landed:** field, enum, wire behaviour, and the fold itself (the
+  bounded inverse landed with `S-A8`; `DatumFoldError::FoldGated` is gone). **Owed:** —.
 
 ### S-A8 — BD-09 bounded input fold
 
@@ -526,9 +544,12 @@ not touch them.
   derived deterministically from the master key, so this is right by construction. But the
   "Done when" says *in a new process* at Tier Unit + Smoke, and every proof is an
   in-process second `Workspace::open` against the same temp dir. There is no
-  process-boundary test: `capsule-cli` has one unit test, no `tests/` directory, and
-  `assert_cmd` appears nowhere in the repo. The CLI wiring is correct by inspection and
-  uncovered by test. Closing that gap is owed when the CLI network commands return.
+  process-boundary test: `capsule-cli` had no `tests/` directory and no way to spawn its own
+  binary. The CLI wiring was correct by inspection and uncovered by test.
+  **Partly closed (`S-D16`):** `capsule-cli/tests/cull_round_trip.rs` now drives the real
+  `capsule` binary over one library across four processes, so `Workspace::open`'s durable
+  restore is proved across a genuine process boundary — for the culling path. The equivalent
+  proof for `import`/`push` is still owed, and rides the CLI network commands' return.
 - **Deliverable:** persist album authorities/AMK ledgers through the keystore
   (encrypted at rest under the master key; MLS group state via the existing
   `export_state`/`import_state` CBOR), plus `Workspace::open` plumbing (passphrase /
@@ -538,6 +559,30 @@ not touch them.
   in a new process; `capsule demo` unaffected; backup restore still round-trips.
 - **Tier:** Unit + Smoke. **Landed:** shipped on this branch — this is what unblocked
   `S-B10`, `S-D16`, `S-D18`, and `S-P1`.
+
+### S-A11 — Publish the DEK in the device directory
+
+- **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md):
+  "Each device's keys are cross-signed into the device directory by the user's IK: 1. **DSK**…
+  2. **DEK** (Device Encryption Key)… **Both are signed by the IK** (hybrid signature)."
+- **Gap** (found 2026-08-22 while landing `S-F8`): only the DSK is. `DeviceEntry` carries
+  `device_id`, `dsk_public`, `added_at` and `revoked_at` — **there is no `dek_public` field**, so
+  the device encryption key is never published and never IK-signed. A peer that wants to
+  encapsulate to one of a user's devices has no authenticated public half to wrap to, and the
+  doc's "both" is simply false today.
+- **Why `S-F8` made it visible:** hardware DEK binding gave `Workspace::device_dek_public()` a
+  real answer for the first time, and nothing anywhere advertises it.
+- **Deliverable:** add the DEK public half to `DeviceEntry` so it rides the IK signature with the
+  DSK, and publish it from the directory-publish path (`S-C9`'s surface).
+- **Cost, stated up front — this is why it is `M` and not `S`:** `DeviceEntry` is inside a
+  **signed, canonically-CBOR-encoded** structure that `verify_asset` and every cross-platform
+  fixture depend on. The field MUST be added as an absent-key optional
+  (`#[serde(default, skip_serializing_if = …)]`); a present-`null` encoding changes
+  `signing_bytes()` and silently breaks re-verification of every directory signed before it.
+  A wire-absence regression test is mandatory, mirroring the one in `manifest.rs`.
+- **Done when:** a directory published with a DEK verifies under the IK; a directory signed
+  before this change still verifies byte-identically; and a peer can encapsulate to a device
+  using only the published entry. **Tier:** Unit.
 
 ## Lane B — media / import
 
@@ -1168,6 +1213,110 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Why it is the precondition:** this is *not* a transport swap. Attempting the Kynos
   migration before the contract types are framework-free would stall every other lane,
   because every SDK, web, and CLI surface reads those types.
+- **Part 1 landed (2026-08-22).** New `capsule-wire` crate — `serde` only, no framework and
+  no retired dependency — holding the neutral response taxonomy (`ResponseSpec`, `BodyShape`,
+  `WireResponses`), the six `X-Capsule-*` header names, and a `salvo_responses!` macro that
+  expands one table per enum into `Writer` + `EndpointOutRegister` + `WireResponses`. A macro
+  body may name `::salvo::…` without its defining crate linking salvo, since it resolves at
+  the expansion site — that is what makes the crate framework-free while the Salvo server
+  keeps working. **80 blocks and 1,898 lines of hand-written glue removed** (40 `Writer` +
+  all 40 `EndpointOutRegister`); `capsule-api` net −1,155, repo net −609.
+  `capsule-sdk/openapi.json` byte-identical. The OpenAPI impl now *iterates* the taxonomy
+  rather than restating it, so the two halves cannot drift, and
+  `every_taxonomy_publishes_exactly_what_it_declares` asserts that across all 20 auth
+  taxonomies. 12 `Writer` impls remain on purpose: they are unpaired, so converting them
+  would *add* OpenAPI surface that does not exist today — a contract change, not a refactor.
+- **Part 2 owed to the Kynos rebuild.** The DTO structs themselves cannot move yet. 39
+  `ToSchema` derives sit on them and salvo-oapi is what emits `openapi.json`; a neutral crate
+  cannot carry that derive (the architecture check counts *optional* dependencies, so the
+  crate may not depend on salvo at all) and an adapter crate cannot implement a foreign trait
+  for a foreign type. The structs move when Kynos replaces salvo as the schema source, which
+  is why the "Done when" above stays unmet and this row is not `done`.
+
+### S-C28 — Publish the statuses the server actually returns
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md)
+  (the rejection-mapping table), [Validation](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-22 by `S-C27`): **thirteen response variants render a concrete HTTP
+  status that `capsule-sdk/openapi.json` never declares** — auth `400`×4, `401`, `404`×2,
+  `409`, `423`, `429`×3, and upload `200`. The spargen-generated client therefore cannot map
+  them: a caller who trips account lockout (`423`) or rate limiting (`429`) on login receives
+  a status the typed client does not know exists. The gap was invisible before S-C27 because
+  it lived *between* two hand-written impls — the `Writer` rendered a status the
+  `EndpointOutRegister` never registered. It is now data: `LoginResponses::undocumented()`
+  returns `[423, 429]` and a test pins it.
+- **Deliverable:** document each status, or delete the variant if it is genuinely unreachable.
+  This **moves the schema**, so the SDK regenerates and `openapi-check` must be re-baselined
+  in the same change — that is why S-C27 preserved the gaps rather than closing them.
+- **Do this at design time on Kynos, not as a Salvo retrofit.** Kynos makes the class of bug
+  impossible: status is part of the return type (`#[derive(Reply)]`), so a status the
+  description omits cannot be rendered. Fold the audit into the Stage 6 port of each surface.
+- **Done when:** every taxonomy's `undocumented()` is empty, and the regenerated schema is
+  committed. **Tier:** Unit.
+
+### S-C29 — The two storage ports, and the generic blob store they replace
+
+- **Contract:** `legacy-review/server-salvo/REVIEW.md` ("`AuthStateStore` and `UploadSessionStore`
+  remain separate Capsule-owned contracts with Postgres, Valkey, and deterministic in-memory
+  adapters"), [Module Map — Planned Server Modules](capsule-docs/src/content/docs/design/module-map.md)
+  ("no generic CAS, transfer, or TTL library is planned"), AGENTS.md's Rust Architecture Decisions.
+- **Why it is the next foundational piece:** every remaining lane-C surface reads or writes one of
+  these two stores, so nothing else in the Kynos rebuild can start until their shape is fixed.
+- **Gap** (found 2026-08-22 while scoping the rebuild): the Salvo `SessionStorage` trait is not a
+  port, it is a grab-bag. It mixes session records, the per-user session index, MFA attempt
+  counters and rate-limit counters — and then adds `save_temp_data<T>` / `get_temp_data<T>` /
+  `delete_temp_data`, **a generic serialize-anything key-value store with a caller-supplied TTL**.
+  That is the abstraction the architecture decisions explicitly refuse, and it is load-bearing
+  today: it carries four unrelated typed things, namespaced only by hand-formatted string keys —
+  the revoke-all `ChallengeRecord` (`revocation.rs`), device enrollment's `EnrollmentRecord`,
+  `ChannelState` and its relay queue (`enrollment.rs`), and WebAuthn ceremony state under
+  `passkey_reg:{id}` / `passkey_auth:{id}` (`routes/passkey.rs`). Type safety is lost at the
+  boundary, key collisions are prevented by convention, and each record's lifetime is an argument
+  rather than a property of what it is.
+- **A correctness bug the shape causes, to be fixed by construction rather than patched:**
+  `revoke_session` deletes the session record but leaves its id in the per-user index, so
+  `revoke_all_for_user` counts index entries and over-reports "signed out N devices" by one per
+  prior refresh. The record and the index are one fact and must be written and removed together;
+  a port whose operations cannot express the split cannot reproduce the bug.
+- **Deliverable:** `AuthStateStore` and `UploadSessionStore` as two separate typed traits, plus
+  **typed ceremony stores** replacing the blob store — one per ceremony, each owning its own record
+  type and its own TTL as a property, not a parameter. Three adapters each: Postgres, Valkey
+  (`redis-rs`), and a deterministic in-memory one. A single **conformance suite every adapter must
+  pass**, so "the in-memory adapter behaves like Valkey" is asserted rather than assumed — that
+  suite is what lets the rest of the rebuild be tested without a container, which is the
+  acceptance gap module-map.md sets for Kynos.
+- **Done when:** all three adapters pass one shared conformance suite; a revoke-all reports the
+  number of sessions actually removed; and no operation on either port takes an arbitrary
+  serializable payload. **Tier:** Unit (in-memory + conformance) + Smoke (Postgres/Valkey).
+
+### S-C30 — Feed `manifest_cbor` carries the signed manifest
+
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
+  ("Each sync entry carries the asset's signed manifest as **opaque canonical CBOR** — never
+  re-modeled as proto fields, because re-encoding would detach it from its signatures");
+  [Clients — Validation Duties](capsule-docs/src/content/docs/design/clients.md)
+  ("Run `verify_asset` on every received asset manifest").
+- **Gap** (found 2026-08-22 by `S-P1`): the feed's `manifest_cbor` is **not the signed
+  manifest**. `capsule-api/upload`'s `prepare_feed_input` re-serializes the server-held
+  `ManifestEnvelope` projection into it (`upload.rs`, "the server holds only the envelope
+  projection"), and the envelope carries no `device_sig` and no `write_sig`. A receiving
+  client therefore cannot run `verify_asset` on a feed entry at all — the two signatures it
+  checks are simply absent from the bytes. The proto comment on `SyncEntry.manifest_cbor`
+  already states the contract the field does not meet, so the wire is honest and the
+  producer is not.
+- **Root cause, and why it is not a one-line fix:** the signed manifest never reaches the
+  server. `capsule_core::lifecycle::upload_bundle` puts the metadata blob, derivatives, and
+  original on the wire; `BlobRole::Provenance` exists but nothing ever uploads one. Closing
+  this means deciding where the signed manifest is carried (a provenance blob per write, or
+  a field on `POST /upload`) and storing it verbatim.
+- **Deliverable:** the client uploads the signed manifest, the server stores it verbatim, and
+  the feed serves those exact bytes.
+- **Done when:** an entry pulled from the feed verifies through
+  [`Workspace::apply_remote_entry`](#s-p1--capsule_sdk-ffi-workspace-verbs) on a second
+  device — today it is `MalformedManifest`. **Tier:** Unit + Integration.
+- **Not blocking `S-P1`:** the SDK's sync-apply verb consumes the *contracted* shape and is
+  proven against it end to end; what is missing is a producer that emits it. It **does** block
+  a real second-device `S-P5` render, which is why this is indexed rather than noted.
 
 ## Lane D — SDK / clients
 
@@ -1378,8 +1527,8 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Done when:** the flag → filter → sweep loop round-trips on a fixture library;
   concurrent flags from two devices converge. **Tier:** Unit + Smoke.
 - **Landed:** fully `ACTIVE` — the culling engine and the sidecar `cull` register are
-  local-only and unaffected by the rebuild.
-- **Owed:** `capsule cull` → `S-D16`.
+  local-only and unaffected by the rebuild. The `capsule cull` command that drives it from a
+  terminal landed with `S-D16`; nothing is owed.
 
 ### S-D14 — Local-gallery security gates
 
@@ -1417,6 +1566,13 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Done when:** the flag→filter→sweep loop round-trips on a reopened fixture library.
 - **Tier:** Smoke. Entirely offline — no server involvement, so the rebuild does not
   touch it.
+- **Landed.** `capsule cull --library … [--pick|--neutral|--reject ID]… [--filter FLAG]
+  [--sweep [--retain-days N]]` in `capsule-cli/src/cull.rs`, over `open_workspace`
+  (`S-A10`). The reject sweep is the only destructive step and stays soft per retention.
+  The acceptance is `capsule-cli/tests/cull_round_trip.rs`, which spawns the **real**
+  `capsule` binary once per step (`CARGO_BIN_EXE_capsule`), so the loop crosses a genuine
+  process boundary rather than a second in-process `Workspace::open` — the gap `S-A10`'s
+  verification note documented, now closed for this command. No test dependency was needed.
 
 ### S-D17 — Reactive 401-retry-once
 
@@ -1492,6 +1648,67 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Landed:** the CLI half is `ACTIVE`. The **endpoint path grammar** (`/v1/auth`,
   `/v1/sync`, port 3000) is Salvo's and must be re-derived from the Kynos surface — keep
   `CAPSULE_ENDPOINT` as the single base so that is a one-line change.
+
+### S-D21 — Index rebuild loses gated state
+
+- **Contract:** [Local Gallery — SR1](capsule-docs/src/content/docs/design/local-gallery.md),
+  [Organization — Hidden Assets](capsule-docs/src/content/docs/design/organization.md),
+  [Maintenance](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Gap** (found 2026-08-22 while landing `S-D19`): **an index rebuild un-hides every hidden
+  asset.** `library::rebuild` reconstructs rows from `crate::sidecar::AssetSidecar`, a different
+  on-disk shape from the `SidecarV1` that actually carries the `hidden` LWW register and that
+  `lifecycle::write_asset_files` writes. Rebuilt rows come back `is_hidden = false`, so the
+  recovery-first path silently drops a security-relevant projection. The divergence between the
+  two sidecar types predates `S-D19` — the hidden view is only what made it observable.
+- **Severity:** this is a gate bypass, not a cosmetic loss. Rebuild is the recovery path, so the
+  state it cannot carry is exactly the state a user cannot re-assert after losing an index.
+- **Deliverable:** rebuild from the signed `SidecarV1` where one exists (it is the write path's
+  own output), keeping the unsigned `AssetSidecar` read purely as the pre-signed-path
+  compatibility case `S-B2`/`S-G4` left behind; project `hidden` — and audit whether `cull`,
+  `stack_membership` and the trash state survive a rebuild, since they ride the same register.
+- **Done when:** a library with a hidden asset survives `rebuild_index` with the asset still
+  hidden and still absent from default projections; the same for whatever else the audit finds.
+  **Tier:** Unit.
+
+### S-D22 — FFI `Catalog` bypasses the SR1 view gates
+
+- **Contract:** [Local Gallery — SR1](capsule-docs/src/content/docs/design/local-gallery.md):
+  "Opening the **Recently Deleted** (trash) view or the **Hidden** view requires fresh local
+  authentication… One grant covers a short grace window (default 5 minutes, per-view)."
+- **Gap** (found 2026-08-22 while landing `S-D19`): `capsule-core-ffi`'s
+  `Catalog::query_trash` calls `self.driver().query_trash(..)` directly, with no `GateKeeper`.
+  The gate is implemented and tested in `capsule-core` (`GateKeeper::query_recently_deleted`),
+  but the FFI surface — the one the native apps actually call — goes straight past it. `S-D19`
+  deliberately did **not** add a matching ungated `query_hidden`, so the Hidden view is
+  reachable only through the gate; trash is the outlier.
+- **Why it matters now:** the iOS lane is unblocked, so this stops being theoretical the moment
+  an app consumes the catalog. Note SR1 scopes itself honestly — it is "view-time UX protection
+  against a borrowed-unlocked-phone snoop", **not** a cryptographic boundary — so this is a
+  broken stated contract rather than a data-confidentiality break.
+- **Deliverable:** route the FFI trash listing through `GateKeeper`, taking a grant the same way
+  the Rust surface does, and audit the rest of the `Catalog` surface for other direct-driver
+  reads that a design doc gates.
+- **Done when:** the FFI trash listing refuses without a grant and serves with one, mirroring
+  `gated_hidden_query_refuses_without_grant_and_serves_with_one`. **Tier:** Unit.
+
+### S-D23 — Client SQLite schema has no upgrade path
+
+- **Contract:** [Client Filesystem](capsule-docs/src/content/docs/design/filesystem/client.md),
+  [Maintenance](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Gap** (found 2026-08-22 while landing `S-D19`): `db::schema::init_schema` is
+  `CREATE TABLE IF NOT EXISTS` plus a `PRAGMA user_version` stamp. It creates the current schema
+  on a fresh database and **does nothing at all to an existing one**, so a column added in a new
+  version never appears in a library created under an older one. `S-D19`'s v4 `assets.is_hidden`
+  is the newest instance; v2 and v3 added and renamed columns the same way, so the gap is the
+  pattern rather than any one version.
+- **Why it has not bitten:** every library in existence is recreated by developers, and
+  `rebuild_index` reconstructs from sidecars. Neither is an upgrade path, and both stop being
+  available the moment a real user has a library worth keeping.
+- **Deliverable:** a forward-only stepwise migrator keyed on `user_version` — the client-side
+  analogue of the server's sea-orm migrations — with a test that a library created at each
+  historical version opens, migrates, and answers every projection.
+- **Done when:** a v1-created fixture library opens at the current version with every column
+  present and the gated/default projections correct. **Tier:** Unit.
 
 ## Lane E — federation / sharing
 
@@ -1633,7 +1850,9 @@ Area: `ACTIVE` throughout — `capsule-core-ffi`, `capsule-core-swift`,
 - **Contract:** [Keys — Device Keys](capsule-docs/src/content/docs/design/cryptography/keys.md).
 - **Deliverable:** the device **encryption** key's classical half hardware-bound
   (P-256 ECDH), mirroring the DSK composition. **Depends on:** S-F2. **Tier:** Smoke.
-- **Landed.** **Owed:** keystore wiring → `S-F8`; Kotlin ECDH → owed-CI.
+- **Landed.** The keystore wiring owed here was discharged by `S-F8`: `P256HybridDek` is now
+  the DEK of a real workspace, not only of the FFI smoke.
+  **Owed:** Kotlin ECDH adapter → owed-CI.
 
 ### S-F6 — `log` → `tracing` migration
 
@@ -1667,6 +1886,12 @@ Area: `ACTIVE` throughout — `capsule-core-ffi`, `capsule-core-swift`,
 - **Done when:** a workspace created with a (mock or SE) `HardwareKeyAgreement`
   round-trips lock/unlock; existing software-DEK workspaces unaffected.
 - **Tier:** Unit + Smoke.
+- **Landed.** `DeviceDek` (software X-Wing | hardware `P256HybridDek`) is the account's DEK;
+  `AccountFile` records which in `DekBinding`, seals only the software half, and refuses a
+  software-only unlock of a hardware-bound account rather than degrading. `Workspace` gains
+  `create_with_hardware_dek` / `create_with_hardware_keys` / `open_with_hardware_dek` plus
+  `device_dek_public` / `device_dek_decapsulate` / `device_dek_is_hardware_bound`. Pre-`S-F8`
+  account files decode as software (`serde(default)`), so existing libraries are untouched.
 
 ## Lane G — completed legacy quarantine
 
@@ -2297,7 +2522,8 @@ host — see the environment table above. This lane does not ride CI.
   mock does, selected in `AppEnvironment`. This is the slice that turns Lane U from a
   demo into the product, and it is deliberately the **only** slice in the lane that
   depends on anything outside it.
-- **Depends on:** S-P1 (**blocked** — the SDK FFI verbs do not exist yet).
+- **Depends on:** S-P1 (**done** — the SDK FFI workspace verbs landed 2026-08-22, so this
+  slice is `ready`).
 - **Done when:** the app runs against `mise run serve-api` with no view, view-model, or
   navigation code changed relative to the mock lane. That "nothing else moved" diff is the
   evidence the seam held. **Tier:** Smoke.
@@ -2345,6 +2571,15 @@ and all three slices are `done` in `capsule-core`.
   user loses future-epoch decryption; write-tier key rotates. **Tier:** Unit + Smoke.
 - **Area:** `ACTIVE` — the MLS half is core. The server blocklist half it composes with
   is `S-C8` and re-scopes independently.
+- **Landed.** `OpenMlsAuthority::block_user(user_id)` removes **every** leaf that user holds
+  in one `Remove` + `Commit` (mls.md's "all Charlie's devices"), so the epoch bumps exactly
+  once and the write-tier key rotates once. It reuses `S-X2`'s ceremony rather than adding a
+  second: `remove_member` and `block_user` both call one private multi-leaf `remove_leaves`.
+  Blocking a non-member is an idempotent no-op that burns no epoch; blocking the local user
+  is refused (`OpenMlsAuthorityError::BlockSelf`). Prior-epoch keys are deliberately not
+  clawed back, per the doc.
+  **Owed:** calling this from the server's `Blocklist::block_user` alongside the share-row
+  revocation → `S-C8` (that file is server-side and re-scopes with the rebuild).
 
 ## Lane Z — design follow-ups (docs)
 

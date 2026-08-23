@@ -1,6 +1,19 @@
 use std::path::PathBuf;
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
+use uuid::Uuid;
+
+/// The trinary culling flag as a command-line value (`--filter pick`). Maps onto
+/// `capsule_core`'s `CullFlag`; kept separate so the argument surface owns its own spelling.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CullFlagArg {
+    /// A keeper.
+    Pick,
+    /// Not yet culled either way — the never-flagged default.
+    Neutral,
+    /// Marked for rejection; the set `--sweep` moves to trash.
+    Reject,
+}
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
@@ -54,6 +67,35 @@ pub(crate) enum Commands {
         /// the above-index tiers on the connection class, instead of opening all eagerly
         #[arg(long)]
         staged: bool,
+    },
+    /// Review a local library: flag assets, filter by flag, sweep rejects to trash
+    Cull {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so culling
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Flag an asset as a keeper (repeatable)
+        #[arg(long, value_name = "ASSET_ID")]
+        pick: Vec<Uuid>,
+        /// Clear an asset's flag back to the never-flagged default (repeatable)
+        #[arg(long, value_name = "ASSET_ID")]
+        neutral: Vec<Uuid>,
+        /// Flag an asset for rejection (repeatable)
+        #[arg(long, value_name = "ASSET_ID")]
+        reject: Vec<Uuid>,
+        /// List the assets carrying one flag instead of only counting them
+        #[arg(long, value_name = "FLAG")]
+        filter: Option<CullFlagArg>,
+        /// Move every rejected asset to trash. The only destructive step, and soft per
+        /// retention — swept assets stay restorable until the window elapses.
+        #[arg(long)]
+        sweep: bool,
+        /// Retention window, in days, the sweep's soft delete stamps
+        #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
+        retain_days: i64,
     },
     /// Manage the local library
     Library {

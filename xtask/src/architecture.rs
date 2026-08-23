@@ -238,7 +238,20 @@ fn walk_files(directory: &Path, visit: &mut impl FnMut(&Path) -> Result<()>) -> 
 fn is_ignored_directory(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | ".gradle" | "build" | "dist" | "legacy-review" | "node_modules" | "target")
+        // `.claude` holds agent worktrees (`.claude/worktrees/<name>`), each a full checkout of
+        // this repository. Walking them counts every violation a second time per worktree — an
+        // agent working in one saw 63 while the parent tree reported 115 for the same commit.
+        // The worktree has its own root and checks itself; from here it is somebody else's tree.
+        Some(
+            ".claude"
+                | ".git"
+                | ".gradle"
+                | "build"
+                | "dist"
+                | "legacy-review"
+                | "node_modules"
+                | "target"
+        )
     )
 }
 

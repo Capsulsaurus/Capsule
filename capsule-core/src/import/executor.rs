@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::db::rows::{AssetStackRow, StackMemberRow};
 use crate::domain::{ImportMode, MemberRole};
+use crate::import::default_album::resolve_default_album;
 use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
@@ -33,8 +34,9 @@ type ExecError = Box<dyn std::error::Error + Send + Sync>;
 ///
 /// Every `ImportDecision::Import` candidate is committed through the signed lifecycle path; skip
 /// decisions are reported verbatim. Assets are written into the album resolved from
-/// `config.target_album_id` (a UUID string) or, when unset, the workspace's default album — which
-/// must already exist in the workspace.
+/// `config.album` through [`resolve_default_album`] — the explicit pick, else the owner's
+/// `default_album_id` pointer, else the workspace's derived de facto album — which must already
+/// exist in the workspace.
 #[tracing::instrument(
     skip_all,
     fields(candidates = plan.actions.len(), mode = ?config.import_mode)
@@ -46,10 +48,17 @@ pub fn execute(
     on_event: impl Fn(ImportProgressEvent),
     cancel: &CancellationToken,
 ) -> Result<ImportExecutionSummary, ExecError> {
-    let album_id = match &config.target_album_id {
-        Some(s) => Uuid::parse_str(s).map_err(|e| format!("invalid target album id {s:?}: {e}"))?,
-        None => workspace.default_album_id(),
-    };
+    // The library is the only authority on the derived de facto album (rule 3), so bind it
+    // here and run the *same* resolution the planner ran — one policy, never two. The plan's
+    // recorded `album` is the explainability trail; this is the authoritative destination.
+    let resolved = resolve_default_album(&config.album.with_derived(workspace.default_album_id()))
+        .map_err(|e| format!("cannot resolve a destination album: {e}"))?;
+    tracing::info!(
+        album_id = %resolved.album_id,
+        rule = resolved.rule.as_str(),
+        "import destination resolved"
+    );
+    let album_id = resolved.album_id;
 
     let total = plan.actions.len() as u64;
     let total_files: u64 = plan
@@ -279,7 +288,7 @@ mod tests {
     fn noop_event(_: ImportProgressEvent) {}
 
     /// A workspace with fast Argon2 params + its default album created, so imports have a signed
-    /// destination (the executor resolves `target_album_id: None` to the default album).
+    /// destination (the executor resolves an unbound context to the derived de facto album).
     fn signed_workspace(dir: &Path) -> Workspace {
         let mut ws = Workspace::create_with_params(
             dir,

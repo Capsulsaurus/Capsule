@@ -779,4 +779,76 @@ mod tests {
         assert_eq!(gps.lon, 116.39745);
         assert!(back.verify(&ik.verifying_key()));
     }
+
+    /// S-A8 datum-verbatim-storage (BD-09 arm): BD-09 is **never a storable datum**. A
+    /// BD-09 input is folded at the edge and enters the sidecar as `datum = gcj02`, within
+    /// the documented sub-metre bound and deterministically — the same input yields a
+    /// byte-identical sidecar every time.
+    ///
+    /// The known-answer pair is the GCJ-02 anchor from the arm above pushed through the
+    /// closed-form *forward* GCJ-02 → BD-09 transform; folding it must land back on the
+    /// anchor.
+    #[test]
+    fn bd09_input_is_folded_to_gcj02_within_bound_and_deterministically() {
+        use crate::domain::{BD09_FOLD_BOUND_METRES, Bd09Coord, fold_bd09_to_gcj02};
+
+        /// The GCJ-02 point the BD-09 input below is the forward image of.
+        const GCJ02_TRUTH: (f64, f64) = (39.90869, 116.39745);
+        const BD09_INPUT: Bd09Coord = Bd09Coord {
+            lat: 39.915_033_233_576_175,
+            lon: 116.403_823_024_761_45,
+        };
+        /// Metres per degree of latitude, for expressing the residual as a distance.
+        const METRES_PER_DEGREE: f64 = 111_320.0;
+
+        let (lat, lon) = fold_bd09_to_gcj02(BD09_INPUT).unwrap();
+
+        // Within the documented sub-metre bound of the true GCJ-02 point.
+        let d_lat = (lat - GCJ02_TRUTH.0) * METRES_PER_DEGREE;
+        let d_lon = (lon - GCJ02_TRUTH.1) * METRES_PER_DEGREE * lat.to_radians().cos();
+        let error_metres = d_lat.hypot(d_lon);
+        assert!(
+            error_metres < BD09_FOLD_BOUND_METRES,
+            "BD-09 fold must land within {BD09_FOLD_BOUND_METRES} m, got {error_metres} m"
+        );
+
+        // BD-09 never reaches the wire: what is stored is the folded GCJ-02 pair.
+        let stored = |lat: f64, lon: f64| {
+            let mut s = minimal();
+            s.gps = Some(Gps {
+                lat,
+                lon,
+                source: GpsSource::Manual,
+                datum: GpsDatum::Gcj02,
+            });
+            s
+        };
+        let s = stored(lat, lon);
+        let bytes = s.to_canonical_vec();
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        let gps = back.gps.as_ref().unwrap();
+        assert_eq!(
+            gps.datum,
+            GpsDatum::Gcj02,
+            "a folded BD-09 input stores as gcj02"
+        );
+        assert_ne!(
+            gps.lat.to_bits(),
+            BD09_INPUT.lat.to_bits(),
+            "BD-09 must never be stored verbatim"
+        );
+        assert_ne!(
+            gps.lon.to_bits(),
+            BD09_INPUT.lon.to_bits(),
+            "BD-09 must never be stored verbatim"
+        );
+
+        // Deterministic: an independent fold of the same input encodes byte-identically.
+        let (again_lat, again_lon) = fold_bd09_to_gcj02(BD09_INPUT).unwrap();
+        assert_eq!(
+            bytes,
+            stored(again_lat, again_lon).to_canonical_vec(),
+            "same BD-09 input must yield a byte-identical sidecar"
+        );
+    }
 }

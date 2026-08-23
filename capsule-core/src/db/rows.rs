@@ -18,6 +18,11 @@ pub struct AssetRow {
     pub rating: i64,
     pub is_deleted: bool,
     pub deleted_at: Option<i64>,
+    /// Projection of the sidecar `hidden` LWW register (SSoT: design/organization
+    /// § Hidden Assets). Excluded from every default view; served only by the gated
+    /// Hidden view. Distinct from `is_stack_hidden`, which suppresses non-primary
+    /// members of a collapsed stack.
+    pub is_hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

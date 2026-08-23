@@ -15,7 +15,8 @@ use capsule_core::domain::ImportMode;
 use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
-    CancellationToken, ImportConfig, ImportOutcome, ImportProgressEvent, execute, plan,
+    CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
+    execute, plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;
@@ -32,6 +33,7 @@ use crate::utils::directories::{
 };
 
 pub mod cli;
+pub mod cull;
 pub mod db;
 pub mod demo;
 pub mod i18n;
@@ -204,7 +206,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     ImportMode::Copy
                 },
                 force_reimport_duplicates: force,
-                target_album_id: None,
+                // No explicit pick and no owner pointer on the CLI yet: bind the library's
+                // derived de facto album so the plan records the rule that fired (S-B12).
+                album: DefaultAlbumContext::derived(ws.default_album_id()),
                 ..Default::default()
             };
 
@@ -297,6 +301,39 @@ async fn dispatch(cli: Cli) -> Result<()> {
         } => {
             let ws = open_workspace(&library, passphrase_stdin)?;
             push_workspace(&ws, push_options(dry_run, force, staged)).await?;
+        }
+
+        // ── Cull ──────────────────────────────────────────────────────────
+        Commands::Cull {
+            library,
+            passphrase_stdin,
+            pick,
+            neutral,
+            reject,
+            filter,
+            sweep,
+            retain_days,
+        } => {
+            let request = cull::CullRequest {
+                pick,
+                neutral,
+                reject,
+                filter: filter.map(Into::into),
+                sweep,
+                retain_days,
+            };
+            let mut ws = open_workspace(&library, passphrase_stdin)?;
+            let bundle = i18n::cli_bundle();
+            match cull::apply(&mut ws, &request) {
+                Ok(summary) => cull::render(&bundle, &request, &summary),
+                Err(error) => {
+                    let reason = cull::describe_error(&bundle, &error);
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::CULL_FAILED, &[("reason", Value::Str(&reason))])
+                    ));
+                }
+            }
         }
 
         // ── Demo ──────────────────────────────────────────────────────────

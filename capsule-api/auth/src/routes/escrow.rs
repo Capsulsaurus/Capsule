@@ -58,43 +58,19 @@ pub(super) enum StoreEscrowResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for StoreEscrowResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::NoContent => {
-                res.status_code(StatusCode::NO_CONTENT);
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::Malformed(detail) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::with_code(
-                    format!("Malformed escrow blob: {detail}"),
-                    error_codes::ESCROW_MALFORMED,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
+capsule_wire::salvo_responses! {
+    StoreEscrowResponses {
+        NoContent {} => 204, empty(),
+            doc("Escrow stored (any prior blob replaced in place)");
+        Unauthorized(e) => _, delegate(e), undocumented();
+        Malformed(detail) => 400, json(ApiError::with_code(
+            format!("Malformed escrow blob: {detail}"),
+            error_codes::ESCROW_MALFORMED,
+        )), doc("Escrow blob failed the size sanity bound");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
-}
-
-impl EndpointOutRegister for StoreEscrowResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("204"),
-            salvo::oapi::Response::new("Escrow stored (any prior blob replaced in place)"),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Escrow blob failed the size sanity bound"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 
@@ -110,48 +86,26 @@ pub(super) enum FetchEscrowResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for FetchEscrowResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(bytes) => {
-                res.status_code(StatusCode::OK);
-                res.add_header("Content-Type", "application/octet-stream", true)
-                    .ok();
+capsule_wire::salvo_responses! {
+    FetchEscrowResponses {
+        Ok(bytes) => 200,
+            header("Content-Type", "application/octet-stream")
+            custom { |res|
                 if let Err(e) = res.write_body(bytes) {
                     tracing::error!("failed to write escrow body: {e}");
                     res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
                 }
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new("No escrow stored for this user")));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
+            },
+            doc(
+                "The wrapped master-key escrow, returned verbatim as opaque bytes (application/octet-stream)"
+            );
+        Unauthorized(e) => _, delegate(e), undocumented();
+        NotFound {} => 404, json(ApiError::new("No escrow stored for this user")),
+            doc("No escrow stored for this user");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
-}
-
-impl EndpointOutRegister for FetchEscrowResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new(
-                "The wrapped master-key escrow, returned verbatim as opaque bytes (application/octet-stream)",
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("No escrow stored for this user"),
-        );
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 

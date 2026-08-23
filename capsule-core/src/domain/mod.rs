@@ -8,7 +8,10 @@ pub mod stack_type;
 
 pub use capture_tz_source::CaptureTzSource;
 pub use detection_method::DetectionMethod;
-pub use gps_datum::{Bd09Coord, DatumFoldError, GpsDatum, fold_bd09_to_gcj02};
+pub use gps_datum::{
+    BD09_FOLD_BOUND_METRES, BD09_FOLD_TOLERANCE_DEGREES, Bd09Coord, DatumFoldError, GpsDatum,
+    fold_bd09_to_gcj02,
+};
 pub use import_mode::ImportMode;
 pub use member_role::MemberRole;
 pub use model_identity::{

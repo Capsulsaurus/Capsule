@@ -62,60 +62,25 @@ pub(super) enum PublishDirectoryResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for PublishDirectoryResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(body) => {
-                res.status_code(StatusCode::OK);
-                Json(body).write(req, depot, res).await;
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::Malformed(detail) => {
-                res.status_code(StatusCode::BAD_REQUEST);
-                res.render(Json(ApiError::with_code(
-                    format!("Malformed device directory: {detail}"),
-                    error_codes::DIRECTORY_MALFORMED,
-                )));
-            }
-            Self::VersionConflict { stored, submitted } => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ApiError::with_code(
-                    format!(
-                        "Directory version {submitted} does not advance the stored version {stored}"
-                    ),
-                    error_codes::DIRECTORY_VERSION_CONFLICT,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for PublishDirectoryResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Directory published").add_content(
-                "application/json",
-                salvo::oapi::Content::new(PublishDirectoryResponse::to_schema(components)),
+capsule_wire::salvo_responses! {
+    PublishDirectoryResponses {
+        Ok(body) => 200, json(body),
+            doc("Directory published", schema = PublishDirectoryResponse);
+        Unauthorized(e) => _, delegate(e), undocumented();
+        Malformed(detail) => 400, json(ApiError::with_code(
+            format!("Malformed device directory: {detail}"),
+            error_codes::DIRECTORY_MALFORMED,
+        )), doc("Malformed device directory document");
+        VersionConflict { stored, submitted } => 409, json(ApiError::with_code(
+            format!(
+                "Directory version {submitted} does not advance the stored version {stored}"
             ),
-        );
-        operation.responses.insert(
-            String::from("400"),
-            salvo::oapi::Response::new("Malformed device directory document"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("Directory version does not advance (invariant 23)"),
-        );
+            error_codes::DIRECTORY_VERSION_CONFLICT,
+        )), doc("Directory version does not advance (invariant 23)");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
+    }
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 
@@ -131,50 +96,27 @@ pub(super) enum FetchDirectoryResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for FetchDirectoryResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(bytes) => {
-                res.status_code(StatusCode::OK);
-                res.add_header("Content-Type", "application/cbor", true)
-                    .ok();
+capsule_wire::salvo_responses! {
+    FetchDirectoryResponses {
+        Ok(bytes) => 200,
+            header("Content-Type", "application/cbor")
+            custom { |res|
                 if let Err(e) = res.write_body(bytes) {
                     tracing::error!("failed to write directory body: {e}");
                     res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
                 }
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-                res.render(Json(ApiError::new(
-                    "No device directory published for this user",
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
+            },
+            doc(
+                "The signed device directory, returned verbatim as opaque CBOR (application/cbor)"
+            );
+        Unauthorized(e) => _, delegate(e), undocumented();
+        NotFound {} => 404, json(ApiError::new(
+            "No device directory published for this user",
+        )), doc("No directory published for this user");
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
-}
-
-impl EndpointOutRegister for FetchDirectoryResponses {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new(
-                "The signed device directory, returned verbatim as opaque CBOR (application/cbor)",
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("No directory published for this user"),
-        );
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 

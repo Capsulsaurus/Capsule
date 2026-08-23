@@ -32,13 +32,28 @@
 
 use std::sync::Arc;
 
+use capsule_core::lifecycle::LifecycleError;
+
 use crate::auth::{AuthClient, AuthError, Session};
+use crate::directory::{DirectoryClient, DirectoryError};
+use crate::recovery::{RecoveryClient, RecoveryError};
 use crate::sync::{
     BlobManifest, BlobRef, ChangeKind, FeedEntry, SyncConsumer, SyncCursor, SyncError, SyncPage,
 };
 use crate::upload::{
     BlobRole, CreateUploadRequest, HeadInfo, ManifestEnvelope, UploadClient, UploadError,
     UploadOutcome, UploadTransport,
+};
+
+/// The `capsule-core`-facing workspace verbs (`S-P1`): enroll/open, albums, seal + import,
+/// verify, sync-apply, escrow minting, and the signed device directory. Separated from the
+/// networked client/session surface below because it is the half that touches no transport.
+mod workspace;
+
+pub use workspace::{
+    FfiAlbum, FfiAssetFacts, FfiAssetMetadata, FfiClientBuild, FfiDeviceTier, FfiHardwareSigner,
+    FfiHardwareSignerError, FfiSyncApplyOutcome, FfiSyncEntry, FfiUploadBlob, FfiVerifyOutcome,
+    FfiWorkspace,
 };
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
@@ -74,6 +89,28 @@ pub enum FfiError {
         /// English detail (developer/log message).
         message: String,
     },
+    /// A local workspace operation failed — opening the library, sealing an asset, reading a
+    /// managed asset. This is the *workspace* failing, never an entry being refused: a refused
+    /// sync entry is a [`FfiSyncApplyOutcome::Quarantined`] verdict, not an error.
+    #[error("workspace error: {message}")]
+    Workspace {
+        /// English detail (developer/log message).
+        message: String,
+    },
+    /// A master-key escrow flow (store/fetch) failed.
+    #[error("escrow failed: {message}")]
+    Escrow {
+        /// English detail (developer/log message).
+        message: String,
+    },
+    /// A device-directory flow (publish/fetch) failed.
+    #[error("device directory failed ({code:?}): {message}")]
+    Directory {
+        /// Stable `error.*` catalog code, when one applies.
+        code: Option<String>,
+        /// English detail (developer/log message).
+        message: String,
+    },
     /// A foreign argument was structurally invalid (e.g. an un-parseable URL) before
     /// any network call.
     #[error("invalid argument: {message}")]
@@ -81,6 +118,39 @@ pub enum FfiError {
         /// What was wrong with the argument.
         message: String,
     },
+}
+
+impl From<LifecycleError> for FfiError {
+    fn from(err: LifecycleError) -> Self {
+        Self::Workspace {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<RecoveryError> for FfiError {
+    fn from(err: RecoveryError) -> Self {
+        // An auth failure under an escrow call keeps its auth identity so callers can trigger
+        // interactive re-authentication, exactly as the upload mapping does.
+        if let RecoveryError::Auth(auth) = err {
+            return auth.into();
+        }
+        Self::Escrow {
+            message: err.to_string(),
+        }
+    }
+}
+
+impl From<DirectoryError> for FfiError {
+    fn from(err: DirectoryError) -> Self {
+        if let DirectoryError::Auth(auth) = err {
+            return auth.into();
+        }
+        Self::Directory {
+            code: err.error_code().map(str::to_string),
+            message: err.to_string(),
+        }
+    }
 }
 
 impl From<AuthError> for FfiError {
@@ -158,6 +228,18 @@ impl From<FfiBlobRole> for BlobRole {
     }
 }
 
+impl From<BlobRole> for FfiBlobRole {
+    fn from(role: BlobRole) -> Self {
+        match role {
+            BlobRole::Original => Self::Original,
+            BlobRole::Derivative => Self::Derivative,
+            BlobRole::Metadata => Self::Metadata,
+            BlobRole::Provenance => Self::Provenance,
+            BlobRole::Backup => Self::Backup,
+        }
+    }
+}
+
 /// FFI mirror of [`ManifestEnvelope`] — the server-visible envelope fields the
 /// import pipeline builds and signs; opaque to this layer, carried verbatim.
 #[derive(uniffi::Record)]
@@ -222,6 +304,30 @@ impl From<FfiManifestEnvelope> for ManifestEnvelope {
     }
 }
 
+impl From<ManifestEnvelope> for FfiManifestEnvelope {
+    fn from(env: ManifestEnvelope) -> Self {
+        Self {
+            crypto_suite_id: env.crypto_suite_id,
+            protocol_version: env.protocol_version,
+            album_id: env.album_id,
+            file_id: env.file_id,
+            amk_version: env.amk_version,
+            ciphertext_hash: env.ciphertext_hash,
+            plaintext_size: env.plaintext_size,
+            chunk_size: env.chunk_size,
+            key_mode: env.key_mode,
+            metadata_blob_hash: env.metadata_blob_hash,
+            created_by_user: env.created_by_user,
+            created_by_device: env.created_by_device,
+            client_version: env.client_version,
+            timestamp: env.timestamp,
+            action: env.action,
+            prior_provenance_hash: env.prior_provenance_hash,
+            retention_until: env.retention_until,
+        }
+    }
+}
+
 /// FFI mirror of [`CreateUploadRequest`] — the `POST /upload` body.
 #[derive(uniffi::Record)]
 pub struct FfiUploadRequest {
@@ -249,6 +355,27 @@ pub struct FfiUploadRequest {
 
 impl From<FfiUploadRequest> for CreateUploadRequest {
     fn from(req: FfiUploadRequest) -> Self {
+        Self {
+            size: req.size,
+            hash: req.hash,
+            content_type: req.content_type,
+            crypto_suite_id: req.crypto_suite_id,
+            protocol_version: req.protocol_version,
+            blob_role: req.blob_role.into(),
+            manifest_envelope: req.manifest_envelope.into(),
+            album_id: req.album_id,
+            owner_id: req.owner_id,
+            intent_id: req.intent_id,
+        }
+    }
+}
+
+/// The reverse mapping, so [`FfiWorkspace::upload_blobs`] can hand back exactly what
+/// [`FfiSession::upload`] takes. It reuses `capsule_sdk::push`'s envelope projection wholesale
+/// — the invariant-15 per-blob `ciphertext_hash` rule has one implementation, in `push`, and
+/// this is a shape conversion over its output.
+impl From<CreateUploadRequest> for FfiUploadRequest {
+    fn from(req: CreateUploadRequest) -> Self {
         Self {
             size: req.size,
             hash: req.hash,
@@ -579,6 +706,88 @@ impl FfiSession {
         let cursor = SyncCursor::from_bytes(cursor);
         let page = consumer.pull(&cursor, page_size).await?;
         Ok(page.into())
+    }
+
+    /// Store or replace this account's **master-key escrow blob** (`PUT /backup/escrow`).
+    /// `blob` is the opaque canonical CBOR
+    /// [`FfiWorkspace::escrow_blob`](FfiWorkspace::escrow_blob) minted — the master key itself
+    /// never crosses this boundary in either direction.
+    ///
+    /// Single active escrow: the server replaces any prior blob in the same transaction, so the
+    /// secret a rotation retired unwraps nothing.
+    ///
+    /// `api_base_url` is the API root the session authenticates against (the per-call endpoint
+    /// convention this surface already uses for `sync_pull`).
+    pub async fn escrow_put(&self, api_base_url: String, blob: Vec<u8>) -> Result<(), FfiError> {
+        let blob =
+            capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
+                message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
+            })?;
+        RecoveryClient::new(self.session.clone(), &api_base_url)
+            .store_escrow(&blob)
+            .await?;
+        Ok(())
+    }
+
+    /// Fetch this account's escrow blob (`GET /backup/escrow`) as opaque canonical CBOR — the
+    /// bytes [`FfiWorkspace::verify_escrow_blob`](FfiWorkspace::verify_escrow_blob) checks and
+    /// a recovery flow unwraps. Fails with an `Escrow` error when no escrow is enrolled yet.
+    pub async fn escrow_get(&self, api_base_url: String) -> Result<Vec<u8>, FfiError> {
+        let cache = RecoveryClient::new(self.session.clone(), &api_base_url)
+            .fetch_escrow()
+            .await?;
+        capsule_core::cbor::to_canonical_vec(cache.blob()).map_err(|e| FfiError::Escrow {
+            message: format!("encoding the fetched escrow blob failed: {e}"),
+        })
+    }
+
+    /// Publish this device's **signed device directory**, returning the `directory_version` the
+    /// server now stores. `directory_cbor` is the opaque document
+    /// [`FfiWorkspace::signed_device_directory`](FfiWorkspace::signed_device_directory)
+    /// produced; it travels verbatim, because re-encoding it would detach it from the signature
+    /// it carries.
+    ///
+    /// Publish when the document changes (a device enrolled or revoked). The version must
+    /// advance — republishing an unchanged document answers the version-conflict code.
+    pub async fn publish_device_directory(
+        &self,
+        api_base_url: String,
+        directory_cbor: Vec<u8>,
+    ) -> Result<u64, FfiError> {
+        let directory = capsule_core::cbor::from_slice(&directory_cbor).map_err(|e| {
+            FfiError::InvalidArgument {
+                message: format!("not a canonical DeviceDirectory: {e}"),
+            }
+        })?;
+        let version = DirectoryClient::new(self.session.clone(), &api_base_url)
+            .publish(&directory)
+            .await?;
+        Ok(version)
+    }
+
+    /// Fetch a user's signed device directory, **verified under `pinned_user_ik`** (the bytes
+    /// [`FfiWorkspace::user_ik_public`](FfiWorkspace::user_ik_public) returns) before it is
+    /// handed back. A document that does not verify is an error, never a return value.
+    pub async fn fetch_device_directory(
+        &self,
+        api_base_url: String,
+        user_id: String,
+        pinned_user_ik: Vec<u8>,
+    ) -> Result<Vec<u8>, FfiError> {
+        let user_id = uuid::Uuid::parse_str(&user_id).map_err(|e| FfiError::InvalidArgument {
+            message: format!("user_id: {user_id:?} is not a UUID ({e})"),
+        })?;
+        let pinned = capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(&pinned_user_ik)
+            .map_err(|e| FfiError::InvalidArgument {
+                message: format!("pinned_user_ik is not a hybrid verifying key: {e}"),
+            })?;
+        let directory = DirectoryClient::new(self.session.clone(), &api_base_url)
+            .fetch(user_id, &pinned)
+            .await?;
+        capsule_core::cbor::to_canonical_vec(&directory).map_err(|e| FfiError::Directory {
+            code: None,
+            message: format!("re-encoding the verified directory failed: {e}"),
+        })
     }
 
     /// Revoke the session server-side and clear the local store (idempotent).

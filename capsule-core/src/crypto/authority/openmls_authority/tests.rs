@@ -1575,3 +1575,213 @@ fn e2e_case_8_album_upgrade_ceremony() {
         VerifyOutcome::Accept
     );
 }
+
+// ── Per-user block (moderation.md § Blocklists, slice `S-X4`) ──────────────
+
+/// Join a second device belonging to an **existing** member's user, relaying the add commit to
+/// `others` so every view stays converged. `add_and_join` cannot do this: it assumes the admin is
+/// the group's only member.
+fn add_and_join_relaying(
+    admin: &mut OpenMlsAuthority,
+    joiner: &Device,
+    others: &mut [&mut OpenMlsAuthority],
+    policy: HistoryPolicy,
+) -> OpenMlsAuthority {
+    let identity = joiner.identity();
+    let key_package: KeyPackage = identity.key_package().unwrap();
+    let outcome = admin.add_member(key_package, &joiner.directory()).unwrap();
+    for other in others.iter_mut() {
+        other.process_commit(to_in(outcome.commit.clone())).unwrap();
+        for m in &outcome.key_delivery {
+            other.process_key_delivery(to_in(m.clone())).unwrap();
+        }
+    }
+    let history: Vec<MlsMessageIn> = outcome.key_delivery.into_iter().map(to_in).collect();
+    OpenMlsAuthority::join_via_welcome(identity, to_in(outcome.welcome), history, policy).unwrap()
+}
+
+/// **The `S-X4` acceptance — moderation.md's per-user-block bullet, end to end.**
+///
+/// Blocking a user removes **all** their devices in a single `Remove` + `Commit` (mls.md's
+/// "removing all Charlie's devices"), so the AMK epoch bumps exactly **once** for the whole user,
+/// the write-tier key rotates, and neither of the blocked user's devices can reach any future
+/// epoch's content key or write capability. Their pre-block keys are deliberately **not** clawed
+/// back — the design says so explicitly.
+#[test]
+fn per_user_block_removes_every_device_bumps_the_epoch_and_rotates_the_write_tier() {
+    let album = Uuid::from_u128(0x0B10);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+
+    // Bob joins with two devices — one user, two leaves.
+    let bob_a_dev = Device::new(0x2, 0x22, 2);
+    let bob_b_dev = Device::new(0x2, 0x23, 4);
+    let mut bob_a = add_and_join(&mut admin, &bob_a_dev, HistoryPolicy::Full);
+    let bob_b = add_and_join_relaying(
+        &mut admin,
+        &bob_b_dev,
+        &mut [&mut bob_a],
+        HistoryPolicy::Full,
+    );
+    assert_converged(&[&admin, &bob_a, &bob_b]);
+
+    let before = admin.epoch_ceiling();
+    let bob_user = bob_a_dev.user_id;
+    assert_eq!(
+        admin.leaf_indices_of_user(bob_user).len(),
+        2,
+        "both of Bob's devices must be visible as leaves of the same user"
+    );
+    let shared_amk = admin.amk(before).unwrap();
+    let shared_write_tier = admin.write_tier_pubkey(before).unwrap();
+
+    // ── The block ──
+    let outcome = admin.block_user(bob_user).unwrap();
+    assert!(!outcome.already_absent());
+    assert_eq!(outcome.user_id, bob_user);
+    assert_eq!(
+        outcome.removed_leaves.len(),
+        2,
+        "a per-user block removes the user's whole device set"
+    );
+    assert_eq!(
+        outcome.amk_version,
+        AmkVersion(before.0 + 1),
+        "one commit for the whole user means exactly one epoch bump, not one per device"
+    );
+    assert_eq!(admin.epoch_ceiling(), outcome.amk_version);
+    assert!(admin.leaf_indices_of_user(bob_user).is_empty());
+
+    // The AMK and the write-tier key both rotate at the new epoch.
+    let after = outcome.amk_version;
+    assert_ne!(
+        admin.amk(after).unwrap(),
+        shared_amk,
+        "the content key must rotate so the blocked user cannot read future epochs"
+    );
+    assert_ne!(
+        admin.write_tier_pubkey(after).unwrap(),
+        shared_write_tier,
+        "the write-tier key must rotate so the blocked user cannot author future writes"
+    );
+    // The rotated write-tier private half is held by the blocker and usable immediately.
+    assert!(admin.write_tier_signing_key(after).is_some());
+
+    // ── Both of Bob's devices lose future-epoch decryption ──
+    let removal = outcome.removal.unwrap();
+    let mut bob_b = bob_b;
+    for bob in [&mut bob_a, &mut bob_b] {
+        assert!(
+            bob.process_commit(to_in(removal.commit.clone())).is_err(),
+            "a removed device is evicted and cannot advance past its removal epoch"
+        );
+        for m in &removal.key_delivery {
+            assert!(bob.process_key_delivery(to_in(m.clone())).is_err());
+        }
+        assert!(bob.amk(after).is_none(), "no future-epoch content key");
+        assert!(
+            bob.write_tier_signing_key(after).is_none(),
+            "no future-epoch write capability"
+        );
+        assert!(bob.write_tier_pubkey(after).is_none());
+        // …but the epochs they legitimately held are NOT clawed back (moderation.md).
+        assert_eq!(
+            bob.amk(before).unwrap(),
+            shared_amk,
+            "prior epochs stay readable — removal is forward-only by design"
+        );
+    }
+}
+
+/// **Idempotency.** The server-side block row is idempotent, so the MLS half must be too: a repeat
+/// block finds no leaves, produces no commit, and — critically — does **not** burn an epoch. A
+/// spurious bump would strand every honest concurrent uploader in the pending window for nothing.
+#[test]
+fn blocking_a_non_member_is_a_no_op_and_burns_no_epoch() {
+    let album = Uuid::from_u128(0x0B11);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let bob_dev = Device::new(0x2, 0x22, 2);
+    let _bob = add_and_join(&mut admin, &bob_dev, HistoryPolicy::Full);
+
+    let first = admin.block_user(bob_dev.user_id).unwrap();
+    assert!(!first.already_absent());
+    let after_first = admin.epoch_ceiling();
+
+    // Blocking again — and blocking a user who was never a member — are both no-ops.
+    for user in [bob_dev.user_id, Uuid::from_u128(0x0B0B)] {
+        let repeat = admin.block_user(user).unwrap();
+        assert!(repeat.already_absent());
+        assert!(repeat.removal.is_none());
+        assert!(repeat.removed_leaves.is_empty());
+        assert_eq!(repeat.amk_version, after_first);
+        assert_eq!(
+            admin.epoch_ceiling(),
+            after_first,
+            "an already-absent user must not cost an epoch"
+        );
+    }
+}
+
+/// A device cannot evict itself from its own group, so blocking the local user is refused rather
+/// than silently reported as a successful block.
+#[test]
+fn blocking_the_local_user_is_refused() {
+    let album = Uuid::from_u128(0x0B12);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let before = admin.epoch_ceiling();
+
+    assert!(matches!(
+        admin.block_user(admin_dev.user_id),
+        Err(OpenMlsAuthorityError::BlockSelf(_))
+    ));
+    assert_eq!(admin.epoch_ceiling(), before, "the refusal is total");
+}
+
+/// **Block scoping stays a crypto-layer removal.** After the block the remaining members converge
+/// on the new epoch and a manifest signed under the rotated write-tier key verifies, while one
+/// signed under the *pre-block* key at the *post-block* epoch does not — the write-tier rotation
+/// is load-bearing, not cosmetic.
+#[test]
+fn after_a_block_only_the_rotated_write_tier_authorizes_new_writes() {
+    let album = Uuid::from_u128(0x0B13);
+    let admin_dev = Device::new(0x1, 0x11, 1);
+    let mut admin =
+        OpenMlsAuthority::create_album(admin_dev.identity(), album, HistoryPolicy::Full).unwrap();
+    let bob_dev = Device::new(0x2, 0x22, 2);
+    let mut bob = add_and_join(&mut admin, &bob_dev, HistoryPolicy::Full);
+    let carol_dev = Device::new(0x3, 0x33, 3);
+    let mut carol =
+        add_and_join_relaying(&mut admin, &carol_dev, &mut [&mut bob], HistoryPolicy::Full);
+
+    let before = admin.epoch_ceiling();
+    let stale_write_tier = admin.write_tier_signing_key(before).unwrap().clone();
+
+    // Block Bob; Carol (a remaining member) relays the commit + key delivery.
+    let outcome = admin.block_user(bob_dev.user_id).unwrap();
+    let removal = outcome.removal.unwrap();
+    carol.process_commit(to_in(removal.commit.clone())).unwrap();
+    for m in &removal.key_delivery {
+        carol.process_key_delivery(to_in(m.clone())).unwrap();
+    }
+    assert_converged(&[&admin, &carol]);
+
+    let after = outcome.amk_version;
+    let (good, directory) =
+        signed_manifest(album, after, admin.write_tier_signing_key(after).unwrap());
+    assert_eq!(
+        verify_asset(&good, CIPHERTEXT, &directory, &admin, None),
+        VerifyOutcome::Accept
+    );
+
+    let (stale, stale_dir) = signed_manifest(album, after, &stale_write_tier);
+    assert_ne!(
+        verify_asset(&stale, CIPHERTEXT, &stale_dir, &admin, None),
+        VerifyOutcome::Accept,
+        "the pre-block write-tier key must not authorize a post-block epoch"
+    );
+}

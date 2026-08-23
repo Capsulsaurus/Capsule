@@ -76,36 +76,15 @@ pub(super) enum ChallengeResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for ChallengeResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(body) => {
-                res.status_code(StatusCode::OK);
-                Json(body).write(req, depot, res).await;
-            }
-            Self::Unauthorized(e) => e.write(req, depot, res).await,
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
+capsule_wire::salvo_responses! {
+    ChallengeResponses {
+        Ok(body) => 200, json(body),
+            doc("Single-use revoke-all challenge issued", schema = RevokeAllChallengeResponse);
+        Unauthorized(e) => _, delegate(e), undocumented();
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
-}
-
-impl EndpointOutRegister for ChallengeResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Single-use revoke-all challenge issued").add_content(
-                "application/json",
-                salvo::oapi::Content::new(RevokeAllChallengeResponse::to_schema(components)),
-            ),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid access token"),
-        );
+    delegated {
+        401 => "Missing or invalid access token",
     }
 }
 
@@ -158,53 +137,22 @@ pub(super) enum RevokeAllResponses {
     Internal,
 }
 
-#[async_trait]
-impl Writer for RevokeAllResponses {
-    async fn write(mut self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            Self::Ok(body) => {
-                res.status_code(StatusCode::OK);
-                Json(body).write(req, depot, res).await;
-            }
-            Self::ProofRequired(detail) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::with_code(
-                    format!("Master-key proof required to revoke all sessions: {detail}"),
-                    error_codes::AUTH_REVOKE_PROOF_REQUIRED,
-                )));
-            }
-            Self::ProofInvalid => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Json(ApiError::with_code(
-                    "Master-key proof did not verify; no sessions were revoked",
-                    error_codes::AUTH_REVOKE_PROOF_INVALID,
-                )));
-            }
-            Self::Internal => {
-                res.status_code(StatusCode::INTERNAL_SERVER_ERROR);
-                res.render(Json(ApiError::new("Internal server error")));
-            }
-        }
-    }
-}
-
-impl EndpointOutRegister for RevokeAllResponses {
-    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Every session revoked, the calling session included")
-                .add_content(
-                    "application/json",
-                    salvo::oapi::Content::new(RevokeAllResponse::to_schema(components)),
-                ),
+capsule_wire::salvo_responses! {
+    RevokeAllResponses {
+        Ok(body) => 200, json(body),
+            doc("Every session revoked, the calling session included", schema = RevokeAllResponse);
+        ProofRequired(detail) => 401, json(ApiError::with_code(
+            format!("Master-key proof required to revoke all sessions: {detail}"),
+            error_codes::AUTH_REVOKE_PROOF_REQUIRED,
+        )), doc(
+            "Missing proof (error.auth.revoke_proof_required) or a proof that did not \
+             verify (error.auth.revoke_proof_invalid); nothing is revoked either way"
         );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new(
-                "Missing proof (error.auth.revoke_proof_required) or a proof that did not \
-                 verify (error.auth.revoke_proof_invalid); nothing is revoked either way",
-            ),
-        );
+        ProofInvalid {} => 401, json(ApiError::with_code(
+            "Master-key proof did not verify; no sessions were revoked",
+            error_codes::AUTH_REVOKE_PROOF_INVALID,
+        )), undocumented();
+        Internal {} => 500, json(ApiError::new("Internal server error")), undocumented();
     }
 }
 

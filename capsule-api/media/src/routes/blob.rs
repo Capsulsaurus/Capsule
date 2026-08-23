@@ -62,63 +62,24 @@ pub(super) enum BlobServeResponse {
     Internal(InternalServerError),
 }
 
-#[async_trait]
-impl Writer for BlobServeResponse {
-    async fn write(self, req: &mut Request, depot: &mut Depot, res: &mut Response) {
-        match self {
-            // NamedFile honors the request's `Range` header: 200 full, 206 partial (with
-            // `Content-Range`), 416 unsatisfiable, plus `Accept-Ranges: bytes`.
-            Self::Serve(file) => file.write(req, depot, res).await,
-            Self::NotFound => {
-                res.status_code(StatusCode::NOT_FOUND);
-            }
-            Self::Gone => {
-                res.status_code(StatusCode::GONE);
-            }
-            Self::PendingUpload => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(ErrorResponse {
-                    code: error_codes::BLOB_PENDING_UPLOAD,
-                    error: "the asset's original has not been uploaded yet".to_string(),
-                }));
-            }
-            Self::Unauthorized(msg) => {
-                res.status_code(StatusCode::UNAUTHORIZED);
-                res.render(Text::Plain(msg));
-            }
-            Self::Internal(e) => {
-                e.write(req, depot, res).await;
-            }
-        }
+capsule_wire::salvo_responses! {
+    BlobServeResponse {
+        // NamedFile honors the request's `Range` header: 200 full, 206 partial (with
+        // `Content-Range`), 416 unsatisfiable, plus `Accept-Ranges: bytes`.
+        Serve(file) => _, delegate(*file), undocumented();
+        NotFound {} => 404, empty(), doc("Unknown content address");
+        Gone {} => 410, empty(),
+            doc("Blob gone (taken down, quarantined, mid-GC, or dangling)");
+        PendingUpload {} => 409, json(ErrorResponse {
+            code: error_codes::BLOB_PENDING_UPLOAD,
+            error: "the asset's original has not been uploaded yet".to_string(),
+        }), doc("Original not yet uploaded (error.blob.pending_upload)");
+        Unauthorized(msg) => 401, text(msg), doc("Missing or invalid bearer token");
+        Internal(e) => _, delegate(e), undocumented();
     }
-}
-
-impl EndpointOutRegister for BlobServeResponse {
-    fn register(_components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        operation.responses.insert(
-            String::from("200"),
-            salvo::oapi::Response::new("Opaque ciphertext blob (full, or 206 for a range)"),
-        );
-        operation.responses.insert(
-            String::from("401"),
-            salvo::oapi::Response::new("Missing or invalid bearer token"),
-        );
-        operation.responses.insert(
-            String::from("404"),
-            salvo::oapi::Response::new("Unknown content address"),
-        );
-        operation.responses.insert(
-            String::from("409"),
-            salvo::oapi::Response::new("Original not yet uploaded (error.blob.pending_upload)"),
-        );
-        operation.responses.insert(
-            String::from("410"),
-            salvo::oapi::Response::new("Blob gone (taken down, quarantined, mid-GC, or dangling)"),
-        );
-        operation.responses.insert(
-            String::from("416"),
-            salvo::oapi::Response::new("Requested range not satisfiable"),
-        );
+    delegated {
+        200 => "Opaque ciphertext blob (full, or 206 for a range)",
+        416 => "Requested range not satisfiable",
     }
 }
 
