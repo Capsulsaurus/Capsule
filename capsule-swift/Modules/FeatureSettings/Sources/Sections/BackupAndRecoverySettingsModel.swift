@@ -145,27 +145,39 @@ public final class BackupAndRecoverySettingsModel {
     ///   it is unsatisfied — the check lives here, not only in a disabled
     ///   button, because a disabled button is a rendering decision and this is a
     ///   contract.
-    /// - Returns: whether the restore ran.
+    /// - Returns: whether the restore actually succeeded. A refusal and a
+    ///   failure are both `false` and are distinguished by ``phase`` — but they
+    ///   must not both be `true`. Returning `true` for a restore that threw
+    ///   would tell a caller the account had been restored when it had not,
+    ///   which on this particular screen means dismissing the flow and leaving
+    ///   the user believing their library is back.
     @discardableResult
     public func commitRestore(gate: TypedPhraseGate) async -> Bool {
         guard gate.isSatisfied else { return false }
         let secret = restoreSecretInput
         guard !secret.isEmpty else { return false }
-        await perform {
+        return await perform {
             self.restoredAccount = try await self.recovery.restore(usingRecoverySecret: secret)
             self.restoreSecretInput = ""
             self.summary = try await self.recovery.summary()
         }
-        return true
     }
 
-    private func perform(_ work: @escaping () async throws -> Void) async {
+    /// Run `work`, turning a throw into a rendered ``phase``.
+    ///
+    /// - Returns: whether `work` completed without throwing. Callers that report
+    ///   an outcome must use this rather than assuming success, since the throw
+    ///   is deliberately swallowed into `phase` here.
+    @discardableResult
+    private func perform(_ work: @escaping () async throws -> Void) async -> Bool {
         isWorking = true
         defer { isWorking = false }
         do {
             try await work()
+            return true
         } catch {
             phase = await connectivity.phase(for: error)
+            return false
         }
     }
 }

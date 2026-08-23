@@ -65,9 +65,16 @@ public struct SettingsConnectivity: Sendable {
     ///
     /// `false` when the class cannot be read at all. Guessing "offline" from an
     /// unreadable state would blame the network for a bug.
+    ///
+    /// Deliberately `== .offline` rather than `!isUsable`. `isUsable` is also
+    /// false for an **unknown** class — one written by a newer client — and an
+    /// unknown class is the same epistemic position as an unreadable one: we do
+    /// not know. Treating it as offline makes ``phase(for:)`` return `.offline`
+    /// and discard the real error code, so a user on a working connection would
+    /// be told to check their network while the actual failure went unreported.
     public func isOffline() async -> Bool {
         guard let connection = await connectionClass() else { return false }
-        return !connection.isUsable
+        return connection == .offline
     }
 
     /// Classify a thrown error into the phase a screen should render.

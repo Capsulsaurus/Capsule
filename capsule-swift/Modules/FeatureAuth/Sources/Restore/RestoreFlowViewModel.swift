@@ -87,8 +87,16 @@ public final class RestoreFlowViewModel {
     }
 
     /// Whether enough shares are selected to reconstruct the seed.
+    ///
+    /// Counts only shares that can actually contribute. An invalidated share is
+    /// deliberately still selectable — it is shown rather than hidden, so a user
+    /// holding a dead share learns it is dead — but counting it here would enable
+    /// the action for a selection that cannot possibly reconstruct, and the
+    /// failure would surface as a port error during a recovery, which is the
+    /// worst moment to be told the button should never have been enabled.
     public var canReconstructFromShares: Bool {
-        selectedShareIDs.count >= Self.defaultShamirThreshold
+        let usable = shares.filter { !$0.isInvalidated && selectedShareIDs.contains($0.id) }
+        return usable.count >= Self.defaultShamirThreshold
     }
 
     // MARK: Actions

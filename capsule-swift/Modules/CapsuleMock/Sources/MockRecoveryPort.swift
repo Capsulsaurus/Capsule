@@ -120,12 +120,19 @@ extension MockIdentityStore: RecoveryPort {
 
     /// A passphrase of the shape the real generator produces — words a person
     /// can write down, not hex.
+    ///
+    /// Twelve of them, because that is the length the real generator emits: a
+    /// BIP39-style 2048-word list carries 11 bits a word, so twelve is the
+    /// shortest phrase that clears the 128-bit floor *Backup & Recovery —
+    /// Master-Key Escrow* sets. A shorter mock would put every preview of the
+    /// reveal screen into its below-floor state, which is the one state that
+    /// screen is supposed to be able to prove is *not* happening.
     private static func passphrase(seed: UInt64, generation: Int) -> String {
         let words = [
             "harbor", "lantern", "quartz", "meadow", "cobalt", "thistle",
             "ember", "willow", "granite", "cinder", "marlin", "juniper",
         ]
-        return (0 ..< 6).map { position -> String in
+        return (0 ..< 12).map { position -> String in
             let hash = MockHash.value(seed: seed, index: generation &* 16 &+ position, salt: .identity, sub: 5150)
             return MockHash.element(hash, from: words) ?? "harbor"
         }.joined(separator: "-")

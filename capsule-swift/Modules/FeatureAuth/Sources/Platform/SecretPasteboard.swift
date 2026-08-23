@@ -46,9 +46,17 @@ public enum SecretPasteboard {
                 ]
             )
         #elseif canImport(AppKit)
+            let concealed = NSPasteboard.PasteboardType(concealedType)
             let pasteboard = NSPasteboard.general
-            pasteboard.clearContents()
-            pasteboard.setString("", forType: NSPasteboard.PasteboardType(concealedType))
+            // `declareTypes` is not optional here. `setString(_:forType:)` writes
+            // nothing and returns `false` for a type the pasteboard has not been
+            // told to expect, and a custom type is never implied — so without
+            // this the concealed marker, which is the entire macOS mitigation,
+            // silently fails to land while the secret itself is still written.
+            // Both types are declared in one call because `declareTypes` clears
+            // the pasteboard, so a second call would drop the first payload.
+            pasteboard.declareTypes([concealed, .string], owner: nil)
+            pasteboard.setString("", forType: concealed)
             pasteboard.setString(secret, forType: .string)
         #endif
     }
