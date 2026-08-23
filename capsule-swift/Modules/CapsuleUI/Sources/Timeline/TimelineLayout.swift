@@ -280,7 +280,13 @@ public struct TimelineLayout: Sendable, Equatable {
         let row = relative / stride
         let rowIndex = rounding == .downward ? Int(row.rounded(.down)) : Int(row.rounded(.up))
         let clamped = max(0, min(rowIndex, rowCount(inSection: section)))
-        return clamped * metrics.columns
+        // Clamped to the section's *item* count, not to `rows × columns`. A
+        // ragged last row makes those differ, and the difference is not
+        // cosmetic: a `y` in the gap below a section resolves to its full row
+        // count, and an unclamped `rows × columns` would then run past the
+        // section's end and silently skip that many items of the *next*
+        // section — the first rows under a section boundary rendering blank.
+        return min(clamped * metrics.columns, sections[section].count)
     }
 
     private func rowCount(inSection section: Int) -> Int {
