@@ -33,6 +33,31 @@ private let iOSOnlyDeploymentTargets: DeploymentTargets = .iOS("26.0")
 /// `mise run build-ffi-apple` first — the xcframework must already exist.
 private let ffiEnabled = Environment.ffi.getBoolean(default: false)
 
+/// `NSPhotoLibraryUsageDescription`, declared **only** in the FFI lane.
+///
+/// The mock lane's library is entirely synthetic and nothing in it constructs
+/// `PhotoKitProvider` — so declaring photo-library usage there is a permission
+/// the app asks for and never exercises. That is not cosmetic. iOS presents the
+/// limited-library alert automatically at launch for any app that declares the
+/// key and holds a `.limited` grant, which is why a fully mocked build was
+/// greeting the user with a Photos prompt over the home screen before it had
+/// drawn a single pixel — with no call anywhere in our own code. It also
+/// contradicts the offline-first contract in *Local Gallery* FR1/FR2/NFR1: the
+/// gallery must work with no system access at all, and an app that asks for
+/// access it cannot use is not demonstrating that.
+///
+/// Omitting the key also makes the invariant self-enforcing. If a mock-lane code
+/// path ever does reach PhotoKit, iOS terminates the process with a usage-
+/// description crash instead of silently prompting — a loud failure naming the
+/// exact call site, which is what we want.
+///
+/// The picker-driven import path needs no entry here either way: `PHPicker` and
+/// SwiftUI's `PhotosPicker` run out of process and require no authorization. The
+/// key belongs to *direct* PhotoKit access, which only the FFI lane will have.
+private let photoLibraryUsage: [String: Plist.Value] = ffiEnabled
+    ? ["NSPhotoLibraryUsageDescription": "Capsule shows and organizes the photos and videos in your library."]
+    : [:]
+
 /// The Swift-6 language settings shared by every Capsule target. MARKETING_VERSION is
 /// the iOS app's version source of truth, kept in sync across every package by
 /// `mise run set-version` (xtask).
@@ -238,10 +263,16 @@ private let moduleTargets: [Target] =
     // Design system + shared UI components: the virtualized timeline geometry,
     // the shared photo grid, and `PlatformCollection/` — the one UIKit/AppKit
     // island every grid in the app is built on.
+    //
+    // It depends on `CapsuleDomain` but deliberately **not** on `CapsulePorts`:
+    // the design system renders domain states — a seal, a cull flag, a sync
+    // tier — but must never be able to fetch one. `AssetWindowStore` is generic
+    // over a fetch closure for exactly that reason.
     + module(
         "CapsuleUI",
         dependencies: [
             .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
             .target(name: "ImagePipeline"),
             .target(name: "AssetKit"),
         ],
@@ -290,14 +321,20 @@ private let moduleTargets: [Target] =
     )
 
     // Transfers, quota, storage reclamation, sync status, and the
-    // NOTE: `FeatureTransfer` and `FeatureSharing` are present in the repository
-    // but deliberately NOT in this graph. Both crash the Swift 6.3 compiler in
-    // IRGen — `llvm::report_fatal_error` via `report_at_maximum_capacity` inside
-    // `SyncCallEmission::setArgs`, reached from `IRGenSILFunction::emitSILFunction`
-    // while compiling `ModerationView.swift` and `UploadDetailView.swift`. It is
-    // not a type error: both modules typecheck clean for iOS and macOS, and the
-    // crash survives stripping their `#Preview` blocks. Re-add them here once the
-    // trigger is isolated (or the toolchain moves).
+    // per-asset custody receipt.
+    + module(
+        "FeatureTransfer",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+            .target(name: "CapsuleUI"),
+            // SwiftUI previews are driven by real scenarios, so the mock is a
+            // build dependency of the screens, not only of their tests.
+            .target(name: "CapsuleMock"),
+        ],
+        testDependencies: []
+    )
 
     // Onboarding, sign-in, the first-device enrollment ceremony,
     // recovery, and the device/session ledger.
@@ -317,6 +354,22 @@ private let moduleTargets: [Target] =
     )
 
     // Share links, guest-drop inbox, LAN peering, federation, and
+    // moderation.
+    + module(
+        "FeatureSharing",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
+            .target(name: "CapsuleNavigation"),
+            .target(name: "CapsuleUI"),
+            // SwiftUI previews are driven by real scenarios, so the mock is a
+            // build dependency of the screens, not only of their tests.
+            .target(name: "CapsuleMock"),
+        ],
+        testDependencies: []
+    )
+
     // The eighteen-section settings tree — a grouped list on iOS,
     // a tabbed Settings window on macOS.
     + module(
@@ -326,6 +379,22 @@ private let moduleTargets: [Target] =
             .target(name: "CapsuleDomain"),
             .target(name: "CapsulePorts"),
             .target(name: "CapsuleNavigation"),
+            .target(name: "CapsuleUI"),
+            // SwiftUI previews are driven by real scenarios, so the mock is a
+            // build dependency of the screens, not only of their tests.
+            .target(name: "CapsuleMock"),
+        ],
+        testDependencies: []
+    )
+
+    // The photo-import pipeline: source picker, scan, plan confirmation,
+    // execution, and history.
+    + module(
+        "FeatureImport",
+        dependencies: [
+            .target(name: "CapsuleFoundation"),
+            .target(name: "CapsuleDomain"),
+            .target(name: "CapsulePorts"),
             .target(name: "CapsuleUI"),
             // SwiftUI previews are driven by real scenarios, so the mock is a
             // build dependency of the screens, not only of their tests.
@@ -357,8 +426,6 @@ private let appTarget: Target = .target(
         // iOS-only keys; macOS ignores them rather than erroring, so one plist
         // serves every destination.
         "UILaunchScreen": ["UIColorName": ""],
-        "NSPhotoLibraryUsageDescription":
-            "Capsule shows and organizes the photos and videos in your library.",
         // macOS: without a category the Mac app shows as "Developer Tools" in
         // Finder and the App Store. Photography is what this is.
         "LSApplicationCategoryType": "public.app-category.photography",
@@ -367,7 +434,7 @@ private let appTarget: Target = .target(
         // NOT weaken ATS for real servers, unlike NSAllowsArbitraryLoads. Production
         // deployments are HTTPS and unaffected.
         "NSAppTransportSecurity": ["NSAllowsLocalNetworking": true],
-    ]),
+    ].merging(photoLibraryUsage) { current, _ in current }),
     sources: ["App/Sources/**"],
     // The i18n string catalog is generated by `xtask i18n` from `locales/`.
     // SwiftUI resolves `LocalizedStringKey` lookups against the main app
@@ -382,6 +449,15 @@ private let appTarget: Target = .target(
         .target(name: "FeatureViewer"),
         .target(name: "FeatureCollections"),
         .target(name: "FeatureSearch"),
+        .target(name: "FeatureAlbums"),
+        // The composition root reaches every feature module by definition: it is
+        // the one place a `Route` is turned into the screen that presents it, and
+        // a screen it cannot name is a destination it cannot wire.
+        .target(name: "FeatureAuth"),
+        .target(name: "FeatureImport"),
+        .target(name: "FeatureSettings"),
+        .target(name: "FeatureSharing"),
+        .target(name: "FeatureTransfer"),
         .target(name: "CapsuleUI"),
         .target(name: "ImagePipeline"),
         .target(name: "AssetKit"),
@@ -394,6 +470,24 @@ private let appTarget: Target = .target(
         .target(name: "CapsuleNavigation"),
     ] + (ffiEnabled ? [.target(name: "CapsuleCatalogFFI")] : []),
     settings: appSettings
+)
+
+/// The composition root's own unit tests.
+///
+/// Hosted by the app because what they assert lives there: which `Route`
+/// resolves to a real screen and which is still a scaffold is a fact about the
+/// wiring, not about any module, and it is exactly the fact that rots silently.
+/// swift-testing, like every other unit target here — XCTest stays confined to
+/// the XCUITest bundle below.
+private let appTestTarget: Target = .target(
+    name: "CapsuleAppTests",
+    destinations: appDestinations,
+    product: .unitTests,
+    bundleId: "\(bundlePrefix).CapsuleAppTests",
+    deploymentTargets: appDeploymentTargets,
+    sources: ["App/Tests/**"],
+    dependencies: [.target(name: "Capsule")],
+    settings: frameworkSettings
 )
 
 /// The XCUITest bundle — UI automation and the accessibility audits.
@@ -429,15 +523,19 @@ private let testTargetNames: [TestableTarget] = (ffiEnabled ? ["CapsuleCatalogFF
     "FeatureViewerTests",
     "FeatureAlbumsTests",
     "FeatureSearchTests",
+    "FeatureTransferTests",
+    "FeatureSharingTests",
     "FeatureAuthTests",
     "FeatureSettingsTests",
+    "FeatureImportTests",
+    "CapsuleAppTests",
 ]
 
 // MARK: - Project
 
 let project = Project(
     name: "Capsule",
-    targets: moduleTargets + [appTarget, uiTestTarget],
+    targets: moduleTargets + [appTarget, appTestTarget, uiTestTarget],
     schemes: [
         .scheme(
             name: "Capsule",
