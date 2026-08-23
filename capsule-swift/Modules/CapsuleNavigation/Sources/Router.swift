@@ -48,7 +48,23 @@ public final class Router {
     /// The detail column's route on the split shell, `nil` when the column is
     /// showing its placeholder. Always `nil` on the stacked shell, where detail
     /// routes are ordinary pushes.
+    ///
+    /// Only ever set when ``hasDetailColumn`` is true. A route parked here that
+    /// no column renders is a route the user never sees, which is worse than a
+    /// push into the wrong column — it looks like the tap did nothing.
     public var detail: Route?
+
+    /// Whether the shell on screen actually renders ``detail``.
+    ///
+    /// Separate from ``shell`` because "is this a split view" and "does that
+    /// split view have somewhere to put a detail route" are different
+    /// questions, and the answer to the second is currently **no**:
+    /// `SplitShell` is a two-column split view — a sidebar and one navigation
+    /// stack — so a detail route diverted into ``detail`` would be rendered by
+    /// nobody. The routing rule stays in the model, gated on this, so the day
+    /// the shell grows a third column it is one line here rather than a
+    /// rediscovery of why pushes vanish.
+    public var hasDetailColumn: Bool
 
     /// Whether the sidebar is showing. Router state rather than view state
     /// because ⌃⌘S toggles it from the menu bar, which is outside any view.
@@ -58,9 +74,14 @@ public final class Router {
     /// a restored router only carries the history that actually exists.
     private var stacks: [SidebarItem: [Route]]
 
-    public init(shell: NavigationShell, selection: SidebarItem = .library) {
+    public init(
+        shell: NavigationShell,
+        selection: SidebarItem = .library,
+        hasDetailColumn: Bool = false
+    ) {
         self.shell = shell
         self.selection = selection
+        self.hasDetailColumn = hasDetailColumn
         detail = nil
         isSidebarVisible = true
         stacks = [:]
@@ -120,7 +141,10 @@ public extension Router {
     /// The out-of-band form: a background import finishing can extend the
     /// Imports history while the user stays in Albums.
     func push(_ route: Route, in item: SidebarItem) {
-        let isVisibleDetail = shell == .split && item == selection && route.preferredColumn == .detail
+        let isVisibleDetail = hasDetailColumn
+            && shell == .split
+            && item == selection
+            && route.preferredColumn == .detail
         if isVisibleDetail {
             detail = route
             return
@@ -157,7 +181,7 @@ public extension Router {
     /// it intact. Used where one screen supersedes another rather than stacking
     /// on it — changing timeline zoom, stepping through onboarding.
     func replace(_ route: Route) {
-        if shell == .split, route.preferredColumn == .detail {
+        if hasDetailColumn, shell == .split, route.preferredColumn == .detail {
             detail = route
             return
         }

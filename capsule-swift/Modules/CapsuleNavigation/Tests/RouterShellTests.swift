@@ -11,7 +11,7 @@ import CapsuleNavigation
 struct RouterColumnTests {
     @Test("a detail route fills the detail column instead of the content stack")
     func detailRoutesGoToTheDetailColumn() {
-        let router = Router(shell: .split)
+        let router = Router(shell: .split, hasDetailColumn: true)
         router.push(.album(RouteFixtures.albumID))
 
         router.push(.viewer(RouteFixtures.assetID, context: .album(RouteFixtures.albumID)))
@@ -22,7 +22,7 @@ struct RouterColumnTests {
 
     @Test("a new content route clears the stale detail selection")
     func contentRoutesClearDetail() {
-        let router = Router(shell: .split)
+        let router = Router(shell: .split, hasDetailColumn: true)
         router.push(.viewer(RouteFixtures.assetID, context: .library))
 
         router.push(.album(RouteFixtures.albumID))
@@ -33,7 +33,7 @@ struct RouterColumnTests {
 
     @Test("back dismisses the detail column before unwinding the content stack")
     func popPrefersTheDetailColumn() {
-        let router = Router(shell: .split)
+        let router = Router(shell: .split, hasDetailColumn: true)
         router.push(.album(RouteFixtures.albumID))
         router.push(.viewer(RouteFixtures.assetID, context: .album(RouteFixtures.albumID)))
 
@@ -50,6 +50,34 @@ struct RouterColumnTests {
 
         #expect(router.detail == nil)
         #expect(router.path.count == 2)
+    }
+
+    /// The regression test for a bug that shipped silently: `push` diverted every
+    /// detail route into `Router.detail`, and `SplitShell` is a *two*-column
+    /// split view that reads only the stack. Every detail route pushed on iPad
+    /// or Mac went into a property no view rendered — a tap that did nothing.
+    /// Nothing caught it because no screen called `push` yet.
+    @Test("a split shell with no detail column pushes detail routes onto its stack")
+    func splitShellWithoutDetailColumnStillShowsTheRoute() {
+        let router = Router(shell: .split)
+        #expect(!router.hasDetailColumn)
+
+        router.push(.album(RouteFixtures.albumID))
+        router.push(.viewer(RouteFixtures.assetID, context: .album(RouteFixtures.albumID)))
+
+        #expect(router.detail == nil, "nothing renders `detail`, so nothing may be parked there")
+        #expect(router.path.count == 2, "the route has to be somewhere the user can see it")
+    }
+
+    @Test("replace also refuses a detail column the shell does not render")
+    func replaceRespectsTheMissingDetailColumn() {
+        let router = Router(shell: .split)
+        router.push(.album(RouteFixtures.albumID))
+
+        router.replace(.albumMembers(RouteFixtures.albumID))
+
+        #expect(router.detail == nil)
+        #expect(router.path == [.albumMembers(RouteFixtures.albumID)])
     }
 
     @Test("the column a route wants does not depend on the shell showing it")
