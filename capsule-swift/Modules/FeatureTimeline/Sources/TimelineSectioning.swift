@@ -5,40 +5,49 @@ import Foundation
 /// Groups a chronological asset list into the dated sections the grid renders.
 ///
 /// Pure and deterministic — no I/O, no shared state — so the timeline's
-/// day-bucketing is exhaustively unit-testable. Input assets are assumed to be
-/// in newest-first order (the contract of ``AssetProvider/loadTimeline()``), so
-/// a single linear pass groups each run of same-day assets.
+/// day-bucketing is exhaustively unit-testable.
+///
+/// Assets are *expected* newest-first (the contract of
+/// ``AssetProvider/loadTimeline()``), but bucketing does **not** assume it. An
+/// earlier version grouped consecutive runs of the same day, which meant an
+/// input where one day appeared in two non-adjacent runs produced two sections
+/// with the same id — and `UICollectionViewDiffableDataSource` treats duplicate
+/// section identifiers as a programmer error and raises, so a merely
+/// out-of-order timeline crashed the app on launch rather than rendering
+/// slightly oddly. Coalescing by key costs one dictionary and makes the failure
+/// unrepresentable.
 public enum TimelineSectioning {
     /// Bucket `assets` into one ``PhotoGridSection`` per capture day.
+    ///
+    /// Section order follows each day's **first** appearance in `assets`, so a
+    /// correctly sorted input is unaffected; within a section, assets keep their
+    /// input order.
     public static func sections(
         from assets: [Asset],
         calendar: Calendar = .current,
         referenceDate: Date = .now
     ) -> [PhotoGridSection] {
-        var sections: [PhotoGridSection] = []
-        var dayStart: Date?
-        var bucket: [Asset] = []
-
-        func flush() {
-            guard let day = dayStart, !bucket.isEmpty else { return }
-            sections.append(PhotoGridSection(
-                id: dayKey(day, calendar: calendar),
-                title: dayTitle(day, calendar: calendar, referenceDate: referenceDate),
-                assets: bucket
-            ))
-            bucket.removeAll(keepingCapacity: true)
-        }
+        var order: [String] = []
+        var buckets: [String: (day: Date, assets: [Asset])] = [:]
 
         for asset in assets {
             let day = calendar.startOfDay(for: asset.captureDate)
-            if day != dayStart {
-                flush()
-                dayStart = day
+            let key = dayKey(day, calendar: calendar)
+            if buckets[key] == nil {
+                order.append(key)
+                buckets[key] = (day, [])
             }
-            bucket.append(asset)
+            buckets[key]?.assets.append(asset)
         }
-        flush()
-        return sections
+
+        return order.compactMap { key in
+            guard let bucket = buckets[key], !bucket.assets.isEmpty else { return nil }
+            return PhotoGridSection(
+                id: key,
+                title: dayTitle(bucket.day, calendar: calendar, referenceDate: referenceDate),
+                assets: bucket.assets
+            )
+        }
     }
 
     /// A stable `yyyy-MM-dd` key for a day.
@@ -99,36 +108,40 @@ public enum TimelineSectioning {
         }
     }
 
-    /// A single linear pass picking the newest asset of each contiguous period.
-    /// Relies on the newest-first input contract, so a period's assets form one
-    /// run and its first (newest) asset is the representative.
+    /// One section per period, keeping each period's first-seen asset as its
+    /// representative card.
+    ///
+    /// Coalesces by key rather than by contiguous run, for the same reason
+    /// ``sections(from:calendar:referenceDate:)`` does: a period appearing in
+    /// two non-adjacent runs would otherwise emit two sections sharing an id,
+    /// and a diffable data source raises on duplicate section identifiers. The
+    /// representative stays the *first* asset seen for the period, which under
+    /// the newest-first input contract is the newest one.
     private static func periodSections(
         from assets: [Asset],
         calendar: Calendar,
         granularity: Granularity
     ) -> [PhotoGridSection] {
-        var sections: [PhotoGridSection] = []
-        var currentKey: DateComponents?
-        var representative: Asset?
-
-        func flush() {
-            guard let currentKey, let representative else { return }
-            sections.append(PhotoGridSection(
-                id: periodKey(currentKey, granularity: granularity),
-                title: periodTitle(currentKey, granularity: granularity, calendar: calendar),
-                assets: [representative]
-            ))
-        }
+        var order: [String] = []
+        var representatives: [String: (components: DateComponents, asset: Asset)] = [:]
 
         for asset in assets {
-            let key = calendar.dateComponents(granularity.components, from: asset.captureDate)
-            if key != currentKey {
-                flush()
-                currentKey = key
-                representative = asset
+            let components = calendar.dateComponents(granularity.components, from: asset.captureDate)
+            let key = periodKey(components, granularity: granularity)
+            if representatives[key] == nil {
+                order.append(key)
+                representatives[key] = (components, asset)
             }
         }
-        flush()
+
+        let sections: [PhotoGridSection] = order.compactMap { key in
+            guard let entry = representatives[key] else { return nil }
+            return PhotoGridSection(
+                id: key,
+                title: periodTitle(entry.components, granularity: granularity, calendar: calendar),
+                assets: [entry.asset]
+            )
+        }
         return sections
     }
 
