@@ -65,7 +65,7 @@ struct TimelineTile: View {
             ZStack(alignment: .topLeading) {
                 if selected { Color.black.opacity(0.12) }
                 Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 18))
+                    .font(.body)
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(selected ? Color.accentColor : CapsuleTheme.Colors.onMedia)
                     .shadow(radius: 1, y: 0.5)

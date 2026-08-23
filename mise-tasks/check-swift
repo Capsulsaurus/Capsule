@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #MISE description="The Swift CI gate: format, lint, and test on every Apple destination"
-#MISE depends=["format-check-swift", "lint-check-swift", "test-swift"]
+# `test-swift-ui` pulls in `test-swift`, so naming both here would say nothing
+# extra and invite someone to "parallelise" them again.
+#MISE depends=["format-check-swift", "lint-check-swift", "test-swift-ui"]
 set -euo pipefail
 if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift checks (not macOS)"; exit 0; fi
-echo "✓ swift: format, lint, and tests are green on macOS, iOS, and iPadOS"
+echo "✓ swift: format, lint, unit tests on macOS/iOS/iPadOS, and the iPhone UI sweep are green"

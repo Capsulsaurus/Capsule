@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#MISE description="Walk the Apple client's UI: reachability and launch flows (macOS only)"
+#MISE depends=["test-swift"]
+set -euo pipefail
+if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift UI tests (not macOS)"; exit 0; fi
+
+# One destination, not three. This suite boots a simulator and drives the app,
+# which is minutes rather than seconds, and what it asserts — reachability,
+# launch behaviour — is logic rather than layout, so a second form factor would
+# re-run the same code for the same answer. `test-swift` covers all three.
+#
+# iPhone rather than iPad because the compact shell has a surface the regular
+# one does not: Browse exists precisely because a phone cannot show twenty
+# sidebar rows, so the phone is where reachability can actually regress.
+#
+# `AccessibilityAuditTests` is deliberately NOT in this list, and that is a
+# statement about the app rather than about the suite: the audit fails today on
+# most surfaces and always has — verified against the tree before any of this
+# work — because it lived in a scheme no gate ran. Adding it here would paint
+# `check-swift` red for everyone on a backlog it did not create. Run it with
+# `mise run audit-swift`; the residual failures are lane U's, and closing them
+# is what lets this list grow.
+# Depends on `test-swift` so the two never run at once. Both need a generated
+# project, and mise runs independent dependencies in parallel — two concurrent
+# `tuist generate` runs delete and rewrite the same `.xcodeproj` underneath each
+# other, which fails with a missing `xcshareddata/xcschemes`. Ordering them also
+# keeps two simulator-driving xcodebuilds off one machine at once.
+cd capsule-swift
+mise exec -- tuist generate --no-open
+
+set -o pipefail
+xcodebuild test \
+    -workspace Capsule.xcworkspace \
+    -scheme CapsuleAppUITests \
+    -configuration Debug \
+    -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
+    -only-testing:CapsuleAppUITests/SectionReachabilityTests \
+    -only-testing:CapsuleAppUITests/LaunchFlowTests \
+    CODE_SIGNING_ALLOWED=NO \
+    | mise exec -- xcbeautify

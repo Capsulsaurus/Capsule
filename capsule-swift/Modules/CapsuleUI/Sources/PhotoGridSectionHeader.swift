@@ -11,7 +11,7 @@ struct PhotoGridSectionHeader: View {
 
     var body: some View {
         Text(title)
-            .font(.system(size: 15, weight: .semibold))
+            .font(.subheadline.weight(.semibold))
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
             .padding(.horizontal, CapsuleTheme.Spacing.medium)
             .padding(.vertical, CapsuleTheme.Spacing.small)

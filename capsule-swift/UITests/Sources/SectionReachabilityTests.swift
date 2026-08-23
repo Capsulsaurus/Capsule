@@ -174,8 +174,18 @@ final class SectionReachabilityTests: CapsuleUITestCase {
                 continue
             }
             row.tap()
+            // Wait for the push to land before judging what it landed on. A
+            // bare `waitForExistence(timeout: 2)` races the navigation
+            // animation, and it races it *asymmetrically*: a section that
+            // really is a placeholder reports "no scaffold" simply because the
+            // screen has not arrived, so the suite fails on a busy machine and
+            // passes on an idle one.
+            XCTAssertTrue(
+                app.navigationBars.buttons.firstMatch.waitForExistence(timeout: 10),
+                "'\(section)' never pushed a screen"
+            )
             XCTAssertEqual(
-                element("route.scaffold").waitForExistence(timeout: 2),
+                element("route.scaffold").waitForExistence(timeout: 3),
                 Self.placeholderSections.contains(section),
                 "'\(section)' disagrees with the declared placeholder list"
             )

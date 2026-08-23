@@ -11,6 +11,11 @@ import XCTest
 /// explicit mock scenario, and running the accessibility audit. A screen that is
 /// only reachable in one scenario is still audited, because the audit runs
 /// against whatever is on screen when it is called.
+/// `@MainActor` on the base class rather than on the one method that needs it:
+/// the audit hands its issues back on the main actor, and annotating a single
+/// helper would make every call site in every subclass implicitly async. XCUITest
+/// bodies already run on the main thread, so this states what was already true.
+@MainActor
 class CapsuleUITestCase: XCTestCase {
     /// The app under test, launched by ``launch(scenario:)``.
     private(set) var app: XCUIApplication!
@@ -58,10 +63,39 @@ class CapsuleUITestCase: XCTestCase {
         line: UInt = #line
     ) {
         do {
-            try app.performAccessibilityAudit(for: .all.subtracting(excluding))
+            try app.performAccessibilityAudit(for: .all.subtracting(excluding)) { issue in
+                // Report rather than swallow. The throwing form fails with
+                // "Contrast failed" and nothing else — not which element, not
+                // what ratio, not where on screen — which makes a failure
+                // impossible to act on and, in practice, a failure nobody runs.
+                XCTFail(
+                    """
+                    \(Self.name(of: issue.auditType)): \(issue.compactDescription)
+                      element: \(issue.element?.debugDescription ?? "unknown")
+                      detail:  \(issue.detailedDescription)
+                    """,
+                    file: file,
+                    line: line
+                )
+                return true
+            }
         } catch {
-            XCTFail("Accessibility audit failed: \(error)", file: file, line: line)
+            XCTFail("Accessibility audit could not run: \(error)", file: file, line: line)
         }
+    }
+
+    /// A readable name for an audit type, which is an `OptionSet` and prints as
+    /// a raw value otherwise.
+    private static func name(of type: XCUIAccessibilityAuditType) -> String {
+        var names: [String] = []
+        if type.contains(.contrast) { names.append("contrast") }
+        if type.contains(.elementDetection) { names.append("element-detection") }
+        if type.contains(.hitRegion) { names.append("hit-region") }
+        if type.contains(.sufficientElementDescription) { names.append("element-description") }
+        if type.contains(.dynamicType) { names.append("dynamic-type") }
+        if type.contains(.textClipped) { names.append("text-clipped") }
+        if type.contains(.trait) { names.append("trait") }
+        return names.isEmpty ? "audit" : names.joined(separator: "+")
     }
 
     /// Wait for an element, failing with a useful message rather than a bare

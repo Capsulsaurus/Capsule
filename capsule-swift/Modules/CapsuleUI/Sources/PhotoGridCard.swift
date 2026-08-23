@@ -43,7 +43,7 @@ struct PhotoGridCard: View {
     /// exactly where the HIG says glass must not go.
     private var titleOverlay: some View {
         Text(title)
-            .font(.system(size: 22, weight: .bold))
+            .font(.title2.weight(.bold))
             .foregroundStyle(CapsuleTheme.Colors.onMedia)
             .shadow(radius: 2, y: 0.5)
             .frame(maxWidth: .infinity, alignment: .leading)

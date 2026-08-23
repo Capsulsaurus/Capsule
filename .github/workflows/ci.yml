@@ -384,7 +384,7 @@ jobs:
   # this gate is fast and runs on every PR that touches the app. The Rust-backed lane
   # lives in build-ios.yml behind its own path filter.
   swift:
-    name: Swift (format + lint + test on macOS/iOS/iPadOS)
+    name: Swift (format + lint + unit tests on macOS/iOS/iPadOS + iPhone UI sweep)
     needs: changes
     if: ${{ needs.changes.outputs.swift == 'true' }}
     runs-on: macos-26
@@ -399,7 +399,12 @@ jobs:
         with:
           working_directory: capsule-swift
           install_args: tuist swiftlint swiftformat xcbeautify
-      - name: Check (format + lint + test)
+      - name: Check (format + lint + unit tests + UI sweep)
+        # `check-swift` now also boots an iPhone simulator and walks the app, so
+        # this job is minutes rather than seconds. That is the trade: section
+        # reachability is the kind of regression that unit tests cannot see —
+        # fifteen sections were unreachable on iPhone while every suite passed.
+        timeout-minutes: 45
         run: mise run check-swift
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required

@@ -63,10 +63,10 @@ struct PhotoGridTile: View {
     private var liveBadge: some View {
         if asset.mediaType == .livePhoto {
             Image(systemName: "livephoto")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(CapsuleTheme.Colors.onMedia)
-                .shadow(radius: 1, y: 0.5)
                 .frame(width: 16, height: 16)
+                .mediaScrim()
                 .padding(.leading, CapsuleTheme.Spacing.xSmall)
                 .padding(.bottom, CapsuleTheme.Spacing.xSmall)
         }
@@ -79,7 +79,7 @@ struct PhotoGridTile: View {
     private var trailingBadge: some View {
         if context.isSelecting {
             Image(systemName: context.isSelected(asset.id) ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 18))
+                .font(.body)
                 .symbolRenderingMode(.hierarchical)
                 .foregroundStyle(context.isSelected(asset.id) ? Color.accentColor : CapsuleTheme.Colors.onMedia)
                 .shadow(radius: 1, y: 0.5)
@@ -88,11 +88,11 @@ struct PhotoGridTile: View {
                 .padding(.bottom, CapsuleTheme.Spacing.xSmall)
         } else if asset.mediaType == .video {
             Text(Self.durationText(asset.duration))
-                .font(.system(size: 12, weight: .semibold))
+                .font(.caption2.weight(.semibold).monospacedDigit())
                 .foregroundStyle(CapsuleTheme.Colors.onMedia)
-                .shadow(radius: 1, y: 0.5)
+                .mediaScrim()
                 .padding(.trailing, CapsuleTheme.Spacing.xSmall)
-                .padding(.bottom, CapsuleTheme.Spacing.xxSmall)
+                .padding(.bottom, CapsuleTheme.Spacing.xSmall)
         }
     }
 

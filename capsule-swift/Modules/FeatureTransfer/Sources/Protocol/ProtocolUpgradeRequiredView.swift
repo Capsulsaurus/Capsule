@@ -28,6 +28,16 @@ public struct ProtocolUpgradeRequiredView: View {
     /// offering a button that does nothing.
     private let updateAction: (@MainActor () -> Void)?
 
+    /// The hero glyph's size, scaled by the user's text size.
+    ///
+    /// `@ScaledMetric` rather than a bare point size: a fixed `.system(size:)`
+    /// does not grow with Dynamic Type at all, which the accessibility audit
+    /// reports as "Dynamic Type font sizes are unsupported" — and which means a
+    /// user who needs larger text gets a normal-sized icon above it. A text
+    /// style would be the simpler answer, but none of them is 56 points, and
+    /// this glyph is the screen's whole visual anchor.
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 56
+
     public init(updateAction: (@MainActor () -> Void)? = nil) {
         self.updateAction = updateAction
     }
@@ -35,7 +45,7 @@ public struct ProtocolUpgradeRequiredView: View {
     public var body: some View {
         VStack(spacing: CapsuleTheme.Spacing.large) {
             Image(systemName: "exclamationmark.octagon.fill")
-                .font(.system(size: 56))
+                .font(.system(size: heroSize))
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
             Text("ios.transfer.upgrade.title")
