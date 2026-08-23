@@ -56,6 +56,12 @@ pub mod error_codes {
     /// `error.blob.pending_upload`
     pub const BLOB_PENDING_UPLOAD: &str = "error.blob.pending_upload";
 
+    /// `error.client.unclassified`
+    pub const CLIENT_UNCLASSIFIED: &str = "error.client.unclassified";
+
+    /// `error.client.unexpected`
+    pub const CLIENT_UNEXPECTED: &str = "error.client.unexpected";
+
     /// `error.directory.malformed`
     pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
 
@@ -154,6 +160,9 @@ pub mod error_codes {
 
     /// `error.sync.unauthenticated`
     pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
+
+    /// `error.unexpected`
+    pub const UNEXPECTED: &str = "error.unexpected";
 
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
