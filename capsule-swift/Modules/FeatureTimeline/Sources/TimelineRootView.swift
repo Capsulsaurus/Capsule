@@ -45,84 +45,82 @@ public struct TimelineRootView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.tab.library")
-                .capsuleNavigationBarInline()
-                // `.navigation` / `.primaryAction` rather than `.topBarLeading`
-                // / `.topBarTrailing`: the topBar placements exist only where
-                // there is a navigation bar, while these two resolve to the same
-                // leading/trailing slots on iOS and to the window toolbar on macOS.
-                .toolbar {
-                    if isSelecting {
-                        ToolbarItem(placement: .navigation) {
-                            Button("ios.common.cancel") { exitSelection() }
-                        }
-                        ToolbarItem(placement: .principal) {
-                            Text(selectionTitle).font(.headline)
-                        }
-                    } else {
-                        ToolbarItem(placement: .navigation) { importButton }
-                        if model.state == .ready, !model.sections.isEmpty {
-                            ToolbarItem(placement: .principal) { levelPicker }
-                            if model.level == .all {
-                                ToolbarItem(placement: .primaryAction) { densityMenu }
-                                ToolbarItem(placement: .primaryAction) { selectButton }
-                            }
+        content
+            .navigationTitle("ios.tab.library")
+            .capsuleNavigationBarInline()
+            // `.navigation` / `.primaryAction` rather than `.topBarLeading`
+            // / `.topBarTrailing`: the topBar placements exist only where
+            // there is a navigation bar, while these two resolve to the same
+            // leading/trailing slots on iOS and to the window toolbar on macOS.
+            .toolbar {
+                if isSelecting {
+                    ToolbarItem(placement: .navigation) {
+                        Button("ios.common.cancel") { exitSelection() }
+                    }
+                    ToolbarItem(placement: .principal) {
+                        Text(selectionTitle).font(.headline)
+                    }
+                } else {
+                    ToolbarItem(placement: .navigation) { importButton }
+                    if model.state == .ready, !model.sections.isEmpty {
+                        ToolbarItem(placement: .principal) { levelPicker }
+                        if model.level == .all {
+                            ToolbarItem(placement: .primaryAction) { densityMenu }
+                            ToolbarItem(placement: .primaryAction) { selectButton }
                         }
                     }
                 }
-        }
-        .task { await model.load() }
-        .capsuleFullScreenCover(item: $viewerSelection) { selection in
-            AssetViewerView(
-                assets: selection.assets,
-                startIndex: selection.startIndex,
-                provider: assetProvider,
-                mediaLoader: mediaLoader,
-                albumProvider: albumProvider
-            )
-        }
-        .photoImportPicker(isPresented: $importer.isPickerPresented) { sources in
-            Task { await importer.importPicked(sources) }
-        }
-        .overlay {
-            if importer.isImporting { importProgressOverlay }
-        }
-        .alert(
-            "ios.timeline.import_complete.title",
-            isPresented: importResultBinding,
-            presenting: importer.lastResult
-        ) { _ in
-            Button("ios.common.ok") {}
-        } message: { result in
-            Text(Self.importSummary(result))
-        }
-        .overlay(alignment: .bottom) {
-            if isSelecting { selectionActionBar }
-        }
-        .confirmationDialog(
-            "Delete \(selectedIDs.count) Items?",
-            isPresented: $isDeleteConfirmPresented,
-            titleVisibility: .visible
-        ) {
-            Button("Delete \(selectedIDs.count) Items", role: .destructive) {
-                Task { await deleteSelected() }
             }
-        }
-        .confirmationDialog(
-            "ios.add_to_album.title",
-            isPresented: $isAddToAlbumPresented,
-            titleVisibility: .visible
-        ) {
-            ForEach(userAlbums) { album in
-                Button(album.title) { Task { await addSelectedToAlbum(album) } }
+            .task { await model.load() }
+            .capsuleFullScreenCover(item: $viewerSelection) { selection in
+                AssetViewerView(
+                    assets: selection.assets,
+                    startIndex: selection.startIndex,
+                    provider: assetProvider,
+                    mediaLoader: mediaLoader,
+                    albumProvider: albumProvider
+                )
             }
-        } message: {
-            Text(userAlbums.isEmpty
-                ? LocalizedStringKey("ios.add_to_album.empty_collections")
-                : LocalizedStringKey("ios.add_to_album.choose"))
-        }
+            .photoImportPicker(isPresented: $importer.isPickerPresented) { sources in
+                Task { await importer.importPicked(sources) }
+            }
+            .overlay {
+                if importer.isImporting { importProgressOverlay }
+            }
+            .alert(
+                "ios.timeline.import_complete.title",
+                isPresented: importResultBinding,
+                presenting: importer.lastResult
+            ) { _ in
+                Button("ios.common.ok") {}
+            } message: { result in
+                Text(Self.importSummary(result))
+            }
+            .overlay(alignment: .bottom) {
+                if isSelecting { selectionActionBar }
+            }
+            .confirmationDialog(
+                "Delete \(selectedIDs.count) Items?",
+                isPresented: $isDeleteConfirmPresented,
+                titleVisibility: .visible
+            ) {
+                Button("Delete \(selectedIDs.count) Items", role: .destructive) {
+                    Task { await deleteSelected() }
+                }
+            }
+            .confirmationDialog(
+                "ios.add_to_album.title",
+                isPresented: $isAddToAlbumPresented,
+                titleVisibility: .visible
+            ) {
+                ForEach(userAlbums) { album in
+                    Button(album.title) { Task { await addSelectedToAlbum(album) } }
+                }
+            } message: {
+                Text(userAlbums.isEmpty
+                    ? LocalizedStringKey("ios.add_to_album.empty_collections")
+                    : LocalizedStringKey("ios.add_to_album.choose"))
+            }
     }
 
     @ViewBuilder

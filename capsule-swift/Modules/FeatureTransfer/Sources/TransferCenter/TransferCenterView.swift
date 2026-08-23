@@ -45,20 +45,18 @@ public struct TransferCenterView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.transfer.title")
-                .toolbar { toolbar }
-                .safeAreaInset(edge: .bottom) {
-                    ConnectionFooter(
-                        connection: model.connection,
-                        policy: model.policy,
-                        aggregateBytesPerSecond: model.aggregateBytesPerSecond
-                    )
-                }
-        }
-        .task { await model.load() }
-        .inspector(isPresented: .constant(inspectedAsset != nil)) { inspector }
+        content
+            .navigationTitle("ios.transfer.title")
+            .toolbar { toolbar }
+            .safeAreaInset(edge: .bottom) {
+                ConnectionFooter(
+                    connection: model.connection,
+                    policy: model.policy,
+                    aggregateBytesPerSecond: model.aggregateBytesPerSecond
+                )
+            }
+            .task { await model.load() }
+            .inspector(isPresented: .constant(inspectedAsset != nil)) { inspector }
     }
 
     // MARK: Chrome

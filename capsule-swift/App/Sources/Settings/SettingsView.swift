@@ -18,46 +18,44 @@ struct SettingsView: View {
     @State private var isBuildingReport = false
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Toggle("ios.settings.diagnostics.toggle", isOn: diagnosticsBinding)
-                } header: {
-                    Text("ios.settings.diagnostics.header")
-                } footer: {
-                    Text("ios.settings.diagnostics.footer")
-                }
-
-                Section {
-                    Toggle("ios.settings.upload.toggle", isOn: uploadBinding)
-                    if consent.remoteUploadEnabled {
-                        TextField("https://your-server/v1/telemetry", text: $endpointText)
-                            .capsuleURLFieldStyle()
-                            .onSubmit(saveEndpoint)
-                    }
-                } header: {
-                    Text("ios.settings.upload.header")
-                } footer: {
-                    Text("ios.settings.upload.footer")
-                }
-
-                Section {
-                    Button("ios.settings.report.button") {
-                        Task { await buildReport() }
-                    }
-                    .disabled(isBuildingReport)
-                } footer: {
-                    Text("ios.settings.report.footer")
-                }
-
-                Section {
-                    LabeledContent("ios.settings.version", value: appVersion)
-                }
+        Form {
+            Section {
+                Toggle("ios.settings.diagnostics.toggle", isOn: diagnosticsBinding)
+            } header: {
+                Text("ios.settings.diagnostics.header")
+            } footer: {
+                Text("ios.settings.diagnostics.footer")
             }
-            .navigationTitle("ios.tab.settings")
-            .task { await load() }
-            .sheet(item: $report) { DiagnosticsReportView(report: $0) }
+
+            Section {
+                Toggle("ios.settings.upload.toggle", isOn: uploadBinding)
+                if consent.remoteUploadEnabled {
+                    TextField("https://your-server/v1/telemetry", text: $endpointText)
+                        .capsuleURLFieldStyle()
+                        .onSubmit(saveEndpoint)
+                }
+            } header: {
+                Text("ios.settings.upload.header")
+            } footer: {
+                Text("ios.settings.upload.footer")
+            }
+
+            Section {
+                Button("ios.settings.report.button") {
+                    Task { await buildReport() }
+                }
+                .disabled(isBuildingReport)
+            } footer: {
+                Text("ios.settings.report.footer")
+            }
+
+            Section {
+                LabeledContent("ios.settings.version", value: appVersion)
+            }
         }
+        .navigationTitle("ios.tab.settings")
+        .task { await load() }
+        .sheet(item: $report) { DiagnosticsReportView(report: $0) }
     }
 
     // MARK: Bindings

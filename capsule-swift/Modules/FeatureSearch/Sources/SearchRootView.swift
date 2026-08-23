@@ -32,23 +32,21 @@ public struct SearchRootView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.tab.search")
-                .capsuleNavigationBarInline()
-                .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "ios.search.prompt")
-                .searchSuggestions { suggestionList }
-        }
-        .task { await model.load() }
-        .capsuleFullScreenCover(item: $viewerSelection) { selection in
-            AssetViewerView(
-                assets: selection.assets,
-                startIndex: selection.startIndex,
-                provider: assetProvider,
-                mediaLoader: mediaLoader,
-                albumProvider: albumProvider
-            )
-        }
+        content
+            .navigationTitle("ios.tab.search")
+            .capsuleNavigationBarInline()
+            .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "ios.search.prompt")
+            .searchSuggestions { suggestionList }
+            .task { await model.load() }
+            .capsuleFullScreenCover(item: $viewerSelection) { selection in
+                AssetViewerView(
+                    assets: selection.assets,
+                    startIndex: selection.startIndex,
+                    provider: assetProvider,
+                    mediaLoader: mediaLoader,
+                    albumProvider: albumProvider
+                )
+            }
     }
 
     @ViewBuilder

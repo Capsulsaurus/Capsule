@@ -31,12 +31,10 @@ public struct QuarantineInboxView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.quarantine.title")
-        }
-        .task { await model.load() }
-        .inspector(isPresented: .constant(inspected != nil)) { inspector }
+        content
+            .navigationTitle("ios.quarantine.title")
+            .task { await model.load() }
+            .inspector(isPresented: .constant(inspected != nil)) { inspector }
     }
 
     @ViewBuilder
