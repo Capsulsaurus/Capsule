@@ -16,8 +16,8 @@
     "target": "## 功能特性"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **原生且跨平台**：Capsule 可在所有常见的桌面和移动平台上使用，且在每个平台上都快速、原生。"
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **原生与跨平台**：Capsule 为每个平台构建真正的原生应用，而不是把一个 Web 应用套上多层外壳，因此每个应用在其运行的平台上都快速且符合平台习惯。每个原生客户端最终都应功能完整并与平台深度集成；当前已有哪些，见下表。"
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **开源**：Capsule 将永远保持开源，您可以自行搭建服务器。"
+  },
+  {
+    "source": "## Clients",
+    "target": "## 客户端"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "每一行给出该客户端的**目标范围**与**当前状态**——两者刻意分开，因为范围是承诺，状态只是某一时刻的快照。每个原生客户端最终都应功能完整并与平台深度集成，到达的先后顺序记录在[客户端设计文档](https://capsule.justinchung.net/design/clients/)中。Web 客户端是唯一有意为之的例外，永久只读。"
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| 客户端 | 目标范围 | 当前状态 |\n| --- | --- | --- |\n| iOS | 功能完整，与平台深度集成 | 所有主要界面均已构建，基于内存数据运行；尚未与服务器通信 |\n| Android（手机） | 功能完整，与平台深度集成 | 早期骨架 |\n| iPadOS | 功能完整；与 macOS 共用视图 | 随 iOS 应用一同发布 |\n| macOS | 功能完整，符合桌面习惯 | 随 iOS 应用一同发布 |\n| Android 平板 | 功能完整；与手机共用布局 | 尚未开始 |\n| Windows、Linux | 功能完整，与平台深度集成 | 尚未开始 |\n| Web | **永久只读。** 浏览你自己的图库，以及公开分享链接和访客上传链接。从不写入，也从不注册设备。由你的服务器提供并统一版本，而非由你安装。 | 可用；正在改接到新的服务器 API |"
   },
   {
     "source": "## Is Capsule for you?",

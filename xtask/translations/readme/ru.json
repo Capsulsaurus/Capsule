@@ -16,8 +16,8 @@
     "target": "## Возможности"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **Нативность и кроссплатформенность**: Capsule доступен на всех распространённых настольных и мобильных платформах. На каждой из них приложения быстрые и нативные."
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **Нативность и кроссплатформенность**: Capsule создаётся как настоящее нативное приложение под каждую платформу, а не как одно веб-приложение в нескольких оболочках, поэтому каждое из них быстрое и органичное там, где работает. Каждый нативный клиент должен в итоге стать полнофункциональным и интегрированным с платформой; что есть сегодня, показано в таблице ниже."
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **Открытый исходный код**: Capsule всегда будет проектом с открытым исходным кодом, и вы можете разместить собственный сервер."
+  },
+  {
+    "source": "## Clients",
+    "target": "## Клиенты"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "В каждой строке указаны **предполагаемый охват** клиента и его **состояние сегодня** — они намеренно разделены, потому что охват это обязательство, а состояние — снимок момента. Каждый нативный клиент должен в итоге стать полнофункциональным и интегрированным с платформой; порядок, в котором они к этому придут, зафиксирован в [проектном документе о клиентах](https://capsule.justinchung.net/design/clients/). Веб-клиент — единственное намеренное исключение и остаётся доступным только для чтения навсегда."
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| Клиент | Предполагаемый охват | Состояние сегодня |\n| --- | --- | --- |\n| iOS | Полнофункциональный, интегрирован с платформой | Все основные экраны построены и работают на данных в памяти; с сервером пока не общается |\n| Android (телефон) | Полнофункциональный, интегрирован с платформой | Ранний каркас |\n| iPadOS | Полнофункциональный; использует те же представления, что и macOS | Поставляется вместе с приложением для iOS |\n| macOS | Полнофункциональный, в духе настольной системы | Поставляется вместе с приложением для iOS |\n| Планшет Android | Полнофункциональный; использует те же макеты, что и телефон | Не начат |\n| Windows, Linux | Полнофункциональный, интегрирован с платформой | Не начат |\n| Web | **Только чтение, навсегда.** Просмотр собственной библиотеки, а также публичные ссылки для обмена и гостевой загрузки. Никогда не пишет и не регистрирует устройство. Раздаётся и версионируется вашим сервером, а не устанавливается вами. | Пригоден к использованию; переводится на новый серверный API |"
   },
   {
     "source": "## Is Capsule for you?",

@@ -26,6 +26,14 @@
 - Keys use dotted namespaces (`area.subarea.name`). Server errors carry a stable `code` from the `error.*` namespace (referenced via `capsule_i18n::error_codes`); clients localize the code while the English detail message stays English.
 - See the [i18n design doc](capsule-docs/src/content/docs/design/i18n.md) for the full contract and `locales/README.md` for the contributor workflow.
 
+## Client & UI
+
+- Platform tiers: **iOS and Android phone stabilize first**, then iPadOS and Android tablet, then macOS; Windows and Linux are deferred. This is an ordering, not a hierarchy — every native client is meant to end up fully featured and platform-integrated. The canonical table is [Clients — Platform Tiers](capsule-docs/src/content/docs/design/clients.md).
+- What clients share: **iPadOS and macOS share views**; **iOS and Android share layouts and feature sets but not design language**; Apple logic is shared across iOS/iPadOS/macOS behind one route enum and one router, with shells chosen by size class rather than `#if os(...)`. A difference between two clients must be justified by a difference in the platform — "written first" is not a justification.
+- Design language: shared skeleton, per-platform material. HIG and SF Symbols on Apple, Material on Android; neither emulates the other and neither invents a third house style. Bespoke components only for concepts the host platform has no analogue for.
+- The **web client is permanently read-only** — authenticated viewing plus public share and guest-upload links — server-owned, and version-locked to its server. It is the one client allowed to assume its peer's exact version; native clients must stay lenient, which is why protocol evolution is additive.
+- Catalog keys are namespaced by **surface, not by client**: a product concept present on more than one platform takes no platform prefix, because the generated Android and Apple catalogs are emitted from the same keys. Only genuinely platform-only chrome (a macOS menu bar) carries one. See [Internationalization](#internationalization).
+
 ## Rust Architecture Decisions
 
 - The public server surface is Kynos REST/OpenAPI only. Do not reintroduce Salvo, GraphQL, or gRPC.

@@ -16,8 +16,8 @@
     "target": "## 機能"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **ネイティブかつクロスプラットフォーム**: Capsuleは一般的なデスクトップおよびモバイルプラットフォームすべてで利用できます。どのプラットフォームでも高速でネイティブに動作します。"
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **ネイティブかつマルチプラットフォーム**: Capsuleは、1つのWebアプリを複数のガワで包むのではなく、プラットフォームごとに本物のネイティブアプリとして作られています。そのため、動作する場所ごとに高速で作法にかなっています。すべてのネイティブクライアントは最終的に全機能を備えプラットフォームと統合されることを目指しています。現時点で何があるかは下の表をご覧ください。"
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **オープンソース**: Capsuleは永久にオープンソースであり、自分自身のサーバーをホストすることができます。"
+  },
+  {
+    "source": "## Clients",
+    "target": "## クライアント"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "各行はクライアントの**目指す範囲**と**現在の状況**を示します。範囲は約束であり状況はその時点のスナップショットなので、二つは意図的に分けてあります。すべてのネイティブクライアントは最終的に全機能を備えプラットフォームと統合されることを目指しており、その到達順序は[クライアント設計ドキュメント](https://capsule.justinchung.net/design/clients/)に記録されています。Webクライアントだけが意図的な例外で、恒久的に読み取り専用です。"
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| クライアント | 目指す範囲 | 現在の状況 |\n| --- | --- | --- |\n| iOS | 全機能を備え、プラットフォームと統合 | 主要画面はすべて構築済みで、メモリ上のデータで動作。サーバーとの通信はまだ |\n| Android（スマートフォン） | 全機能を備え、プラットフォームと統合 | 初期の骨組み |\n| iPadOS | 全機能を備え、macOSとビューを共有 | iOSアプリに同梱 |\n| macOS | 全機能を備え、デスクトップの作法に沿う | iOSアプリに同梱 |\n| Androidタブレット | 全機能を備え、スマートフォンとレイアウトを共有 | 未着手 |\n| Windows、Linux | 全機能を備え、プラットフォームと統合 | 未着手 |\n| Web | **恒久的に読み取り専用。** 自分のライブラリの閲覧に加え、公開共有リンクとゲストアップロードリンク。書き込みは一切せず、デバイス登録も行いません。ご自身がインストールするのではなく、サーバーが配信しバージョン管理します。 | 利用可能。新しいサーバーAPIへの切り替え作業中 |"
   },
   {
     "source": "## Is Capsule for you?",
