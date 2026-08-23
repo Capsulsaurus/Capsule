@@ -44,30 +44,28 @@ public enum PlatformCollectionLayout: Equatable, Sendable {
 /// layout class, the supplementary element kind, and the header's height
 /// dimension have to branch.
 enum PlatformCollectionLayoutBuilder {
-    /// A horizontal group of `count` identical items.
+    /// A horizontal group of `count` items, each sized to `1 / count` of the row.
     ///
-    /// UIKit renamed this argument to `repeatingSubitem:` and deprecated the old
-    /// `subitem:` spelling; AppKit's `NSCollectionLayoutGroup` never gained the
-    /// new label. One helper keeps that difference in a single place instead of
-    /// forking both call sites.
+    /// The item's own fractional width does the dividing, and the group is given
+    /// an explicit array of that many items. The obvious alternative — a single
+    /// item at `fractionalWidth(1)` handed to `repeatingSubitem:count:` — is the
+    /// documented pattern, but it does **not** divide the row here: it produced
+    /// one full-width tile per row on every platform, so a five-column photo
+    /// grid rendered as a stack of full-width bands. It compiled, ran, scrolled,
+    /// and was wrong, which is why `UniformGridLayoutTests` now measures real
+    /// resolved frames rather than trusting the API's semantics.
+    ///
+    /// Sizing the item explicitly also removes the UIKit/AppKit fork this helper
+    /// existed for: `subitems:` is spelled the same on both.
     private static func horizontalGroup(
         layoutSize: NSCollectionLayoutSize,
         item: NSCollectionLayoutItem,
         count: Int
     ) -> NSCollectionLayoutGroup {
-        #if os(macOS)
-            return NSCollectionLayoutGroup.horizontal(
-                layoutSize: layoutSize,
-                subitem: item,
-                count: count
-            )
-        #else
-            return NSCollectionLayoutGroup.horizontal(
-                layoutSize: layoutSize,
-                repeatingSubitem: item,
-                count: count
-            )
-        #endif
+        NSCollectionLayoutGroup.horizontal(
+            layoutSize: layoutSize,
+            subitems: Array(repeating: item, count: max(1, count))
+        )
     }
 
     /// The supplementary element kind used for section headers.
@@ -118,14 +116,14 @@ enum PlatformCollectionLayoutBuilder {
     ) -> NSCollectionLayoutSection {
         let columnCount = max(1, columns)
         let inset = itemSpacing / 2
+        let fraction = 1.0 / CGFloat(columnCount)
         let item = NSCollectionLayoutItem(layoutSize: NSCollectionLayoutSize(
-            widthDimension: .fractionalWidth(1),
+            widthDimension: .fractionalWidth(fraction),
             heightDimension: .fractionalHeight(1)
         ))
         item.contentInsets = NSDirectionalEdgeInsets(
             top: inset, leading: inset, bottom: inset, trailing: inset
         )
-        let fraction = 1.0 / CGFloat(columnCount)
         let group = horizontalGroup(
             layoutSize: NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(1),
