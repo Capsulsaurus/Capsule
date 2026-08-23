@@ -3515,6 +3515,10 @@
     "message": "Pairing revoked",
     "context": "Status of a nearby device whose pairing has been withdrawn."
   },
+  "ios.places.approximate": {
+    "message": "Approximate location",
+    "context": "Badge on a map pin whose coordinates are stored in a datum that does not match the map, so the pin may be offset."
+  },
   "ios.places.empty.description": {
     "message": "Photos with location data will appear here.",
     "context": "iOS Places map empty-state description."
@@ -3522,6 +3526,14 @@
   "ios.places.empty.title": {
     "message": "No Places",
     "context": "iOS Places map empty-state title."
+  },
+  "ios.places.preview.accessibility": {
+    "message": "{count, plural, one {# photo} other {# photos}} at this place",
+    "context": "VoiceOver label for the fanned photo preview shown for a map pin."
+  },
+  "ios.places.preview.open": {
+    "message": "Open",
+    "context": "Button on a map pin's photo preview that opens the full grid for that place."
   },
   "ios.places.title": {
     "message": "Places",

@@ -77,6 +77,13 @@ extension MockIntelligenceStore: PlacesPort {
             else { continue }
             identifiers.append(contentsOf: tripIdentifiers(library: library, ordinal: ordinal))
         }
+        // Home is a cluster too. `clusters(in:)` has always counted it — it is
+        // usually the *largest* pin, everything not on a trip — but this only
+        // ever walked the trip table, so opening it produced a pin advertising
+        // thousands of photos and holding none.
+        if identifiers.isEmpty, matchesHome(clusterID: clusterID) {
+            identifiers = homeIdentifiers(library: library, limit: offset + limit)
+        }
         let window = MockQueryEngine.window(identifiers, request: request)
         return try await Page(
             items: libraryStore.assets(for: window),
@@ -159,5 +166,36 @@ extension MockIntelligenceStore: PlacesPort {
         let tripTotal = MockTables.trips.indices.reduce(0) { $0 + tripAssetCount(library: library, ordinal: $1) }
         let located = Int(Double(library.assetCount) * 0.7)
         return max(0, located - tripTotal)
+    }
+
+    /// Whether `clusterID` names the home cell at any granularity.
+    private func matchesHome(clusterID: String) -> Bool {
+        (1 ... 12).contains {
+            cellKey(
+                latitude: MockTables.home.latitude,
+                longitude: MockTables.home.longitude,
+                granularity: $0
+            ) == clusterID
+        }
+    }
+
+    /// Home's assets: located ones that are not on a trip.
+    ///
+    /// Walked from the newest end and stopped at `limit`, because home is
+    /// defined by exclusion and materialising it in full is the whole-library
+    /// scan `homeAssetCount` refuses to do. A caller that pages deeper walks
+    /// further; nothing asks for all of it, and the badge stays an estimate.
+    private func homeIdentifiers(library: MockLibrary, limit: Int) -> [AssetID] {
+        let tripDays = Set(MockTables.trips.indices.flatMap { tripDayRange(library: library, ordinal: $0) })
+        var out: [AssetID] = []
+        out.reserveCapacity(limit)
+        for dayIndex in 0 ..< library.dayCount where !tripDays.contains(dayIndex) {
+            for index in library.indexRange(forDay: dayIndex)
+                where library.geolocation(for: MockAssetRef(kind: .live, index: index)) != nil {
+                out.append(library.identifier(at: index))
+                if out.count >= limit { return out }
+            }
+        }
+        return out
     }
 }

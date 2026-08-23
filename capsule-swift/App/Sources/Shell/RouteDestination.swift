@@ -137,6 +137,7 @@ extension RouteDestination {
 
     var placesDestination: some View {
         PlacesMapView(
+            places: environment.places,
             assetProvider: environment.assetProvider,
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,

@@ -29,5 +29,21 @@ public enum CapsuleTheme {
         public static let favorite = Color.red
         /// Foreground for controls floating over photo content.
         public static let onMedia = Color.white
+
+        /// The hairline around a photo card that floats over other content.
+        ///
+        /// A near-white rather than pure white, and never a system separator:
+        /// this border's whole job is to hold a photograph apart from whatever
+        /// is behind it — a map, another photo in a fanned stack — and a
+        /// semantic separator colour inverts in dark mode, which is exactly
+        /// when a card over a dark map needs a *light* edge most.
+        public static let cardBorder = Color(white: 0.96)
+    }
+
+    /// Widths for the hairlines the theme owns.
+    public enum Stroke {
+        /// The card hairline. Thin enough to read as an edge rather than a
+        /// frame at any Dynamic Type size.
+        public static let hairline: CGFloat = 1.5
     }
 }

@@ -184,6 +184,30 @@ final class SectionReachabilityTests: CapsuleUITestCase {
         }
     }
 
+    /// A map pin previews its photos in place, on a device with no pointer.
+    ///
+    /// Hover is the pointer affordance and there is no hover on a phone, so the
+    /// first tap has to do that job — otherwise the priority platform is the
+    /// one that loses the feature. The second tap, on the fan itself, opens the
+    /// place.
+    func testMapPinPreviewsItsPhotosOnTap() throws {
+        launch(scenario: .healthy)
+        try XCTSkipUnless(select("browse"), "this shell has no Browse tab")
+        let places = element("browse.places")
+        try XCTSkipUnless(places.waitForExistence(timeout: 5), "Browse has no Places row")
+        places.tap()
+
+        let pin = app.descendants(matching: .any).matching(identifier: "place.pin").firstMatch
+        XCTAssertTrue(pin.waitForExistence(timeout: 10), "the map drew no pins")
+        pin.tap()
+
+        let preview = app.descendants(matching: .any).matching(identifier: "place.preview").firstMatch
+        XCTAssertTrue(
+            preview.waitForExistence(timeout: 10),
+            "tapping a pin showed no photo preview"
+        )
+    }
+
     /// Dismiss the system authentication alert, if one is up.
     ///
     /// Hidden is gated on fresh local authentication, and a simulator with no

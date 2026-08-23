@@ -26215,6 +26215,16 @@
         }
       }
     },
+    "ios.places.approximate": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approximate location"
+          }
+        }
+      }
+    },
     "ios.places.empty.description": {
       "localizations": {
         "ar": {
@@ -26375,6 +26385,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "No Places"
+          }
+        }
+      }
+    },
+    "ios.places.preview.accessibility": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "{count, plural, one {# photo} other {# photos}} at this place"
+          }
+        }
+      }
+    },
+    "ios.places.preview.open": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open"
           }
         }
       }

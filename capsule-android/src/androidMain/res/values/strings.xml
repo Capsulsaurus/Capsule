@@ -879,8 +879,11 @@
     <string name="ios_peering_trust_discovered">Not paired</string>
     <string name="ios_peering_trust_paired">Paired</string>
     <string name="ios_peering_trust_revoked">Pairing revoked</string>
+    <string name="ios_places_approximate">Approximate location</string>
     <string name="ios_places_empty_description">Photos with location data will appear here.</string>
     <string name="ios_places_empty_title">No Places</string>
+    <string name="ios_places_preview_accessibility">{count, plural, one {# photo} other {# photos}} at this place</string>
+    <string name="ios_places_preview_open">Open</string>
     <string name="ios_places_title">Places</string>
     <string name="ios_quarantine_action_discard">Discard</string>
     <string name="ios_quarantine_action_discard_description">Destroy what was kept. This can\'t be undone.</string>
