@@ -29,6 +29,14 @@ struct PhotoGridTile: View {
             .overlay(alignment: .bottomTrailing) { trailingBadge }
             .clipped()
             .contentShape(Rectangle())
+            // The tile is the accessibility element — the badge overlay is
+            // hidden, so a VoiceOver sweep of a grid reads one element per
+            // photo rather than five. The identifier is what lets a UI sweep
+            // open a photo at all: before it, no test could reach the viewer.
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("grid.tile")
+            .accessibilityLabel(Text(asset.captureDate, format: .dateTime.day().month().year()))
+            .accessibilityAddTraits(.isButton)
             .task(id: DecodeRequest(id: asset.id, size: context.decodeSize)) {
                 await loadThumbnail()
             }

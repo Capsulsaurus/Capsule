@@ -208,6 +208,36 @@ final class SectionReachabilityTests: CapsuleUITestCase {
         )
     }
 
+    /// The viewer's chrome is split by meaning: what acts on the photo is in
+    /// the bar, what acts on the sequence is behind the overflow, and playback
+    /// sits on the media.
+    ///
+    /// The bar used to hold six equal slots whose play button was the
+    /// *slideshow* — the one symbol every viewer on the platform uses for
+    /// playing the thing on screen.
+    func testViewerChromeIsSplitByMeaning() throws {
+        launch(scenario: .healthy)
+        let firstTile = app.descendants(matching: .any).matching(identifier: "grid.tile").firstMatch
+        guard firstTile.waitForExistence(timeout: 15) else {
+            throw XCTSkip("the timeline drew no tiles to open")
+        }
+        firstTile.tap()
+
+        XCTAssertTrue(
+            element("viewer.title").waitForExistence(timeout: 10),
+            "the viewer does not say which photo is on screen"
+        )
+        XCTAssertTrue(element("viewer.more").exists, "the overflow menu is missing")
+        XCTAssertTrue(element("viewer.delete").exists, "delete is missing from the bar")
+
+        // The viewer used to be a permanent spinner outside a PhotoKit library:
+        // its loader asked PhotoKit and answered nil for everything else, which
+        // is every managed and every mocked asset. Chrome is worth nothing over
+        // a photo that never appears.
+        let image = app.descendants(matching: .any).matching(identifier: "viewer.image").firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 15), "the viewer never showed the photo")
+    }
+
     /// Dismiss the system authentication alert, if one is up.
     ///
     /// Hidden is gated on fresh local authentication, and a simulator with no

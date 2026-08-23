@@ -39,7 +39,7 @@ public struct AssetViewerView: View {
             Color.black.ignoresSafeArea()
             pager
         }
-        .overlay(alignment: .topLeading) { closeButton }
+        .overlay(alignment: .top) { topBar }
         .overlay(alignment: .bottom) { bottomBar }
         .capsuleStatusBarHidden()
         .onDisappear { model.stopSlideshow() }
@@ -78,6 +78,26 @@ public struct AssetViewerView: View {
         }
     }
 
+    // MARK: Top chrome
+
+    /// Close, what you are looking at, and everything that is not about *this*
+    /// photo.
+    ///
+    /// The top bar used to be a lone close button: the viewer never said which
+    /// photo was on screen, and a paged viewer without a date is a viewer you
+    /// can get lost in.
+    private var topBar: some View {
+        HStack(alignment: .center) {
+            closeButton
+            Spacer(minLength: CapsuleTheme.Spacing.small)
+            title
+            Spacer(minLength: CapsuleTheme.Spacing.small)
+            overflowMenu
+        }
+        .padding(.horizontal, CapsuleTheme.Spacing.large)
+        .padding(.top, CapsuleTheme.Spacing.small)
+    }
+
     private var closeButton: some View {
         Button {
             dismiss()
@@ -88,40 +108,109 @@ public struct AssetViewerView: View {
                 .padding(10)
                 .capsuleGlass(in: Circle(), interactive: true)
         }
-        .padding(.leading, 16)
-        .padding(.top, 8)
+        .accessibilityLabel("ios.common.done")
     }
 
-    private var bottomBar: some View {
-        HStack(spacing: 0) {
-            shareButton
-            barButton(model.isPlayingSlideshow ? "pause.fill" : "play.fill") {
-                model.toggleSlideshow()
+    @ViewBuilder
+    private var title: some View {
+        if let date = model.currentAsset?.captureDate {
+            VStack(spacing: 0) {
+                Text(date, format: .dateTime.day().month(.abbreviated).year())
+                    .font(.footnote.weight(.semibold))
+                Text(date, format: .dateTime.hour().minute())
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
-            .accessibilityLabel(model.isPlayingSlideshow
-                ? LocalizedStringKey("ios.viewer.pause_slideshow")
-                : LocalizedStringKey("ios.viewer.play_slideshow"))
-            barButton("info.circle") { model.isInfoPanelPresented = true }
+            .foregroundStyle(CapsuleTheme.Colors.onMedia)
+            .shadow(radius: 3)
+            .accessibilityIdentifier("viewer.title")
+        }
+    }
+
+    /// Actions on the *sequence* or the library, not on the photo.
+    ///
+    /// Slideshow lived in the bottom bar behind a `play.fill`, next to five
+    /// per-asset actions and colliding with the one symbol every viewer uses
+    /// for playing the thing on screen. It plays the whole sequence, so it
+    /// belongs with the other things that are not about this photo.
+    private var overflowMenu: some View {
+        Menu {
+            Button {
+                model.toggleSlideshow()
+            } label: {
+                Label(
+                    model.isPlayingSlideshow
+                        ? LocalizedStringKey("ios.viewer.pause_slideshow")
+                        : LocalizedStringKey("ios.viewer.play_slideshow"),
+                    systemImage: model.isPlayingSlideshow ? "pause" : "play"
+                )
+            }
             if model.currentAsset?.isManaged == true {
-                barButton("rectangle.stack.badge.plus") {
+                Button {
                     Task {
                         await model.loadUserAlbums()
                         isAddToAlbumPresented = true
                     }
+                } label: {
+                    Label("ios.add_to_album.title", systemImage: "rectangle.stack.badge.plus")
                 }
             }
-            barButton(favoriteSymbol, tint: favoriteTint) {
-                Task { await model.toggleFavorite() }
-            }
-            barButton("trash") {
-                Task {
-                    if await model.deleteCurrentAsset() { dismiss() }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.headline)
+                .foregroundStyle(.white)
+                .padding(10)
+                .capsuleGlass(in: Circle(), interactive: true)
+        }
+        .accessibilityLabel("ios.viewer.more")
+        .accessibilityIdentifier("viewer.more")
+    }
+
+    // MARK: Bottom chrome
+
+    /// What you can do to *this* photo, in the order the platform trained
+    /// people to expect: give it away, keep it, learn about it — and, held
+    /// apart, throw it away.
+    ///
+    /// Four slots rather than six. Slideshow and Add to Album moved to the
+    /// overflow menu because neither acts on the photo, and playback moved onto
+    /// the media itself; what is left is the set every photo viewer on the
+    /// platform puts here.
+    ///
+    /// Delete sits in its own glass group with a gap before it. An equal-width
+    /// run of six identical glyphs makes the destructive one exactly as easy to
+    /// hit by accident as the others, and a viewer is a place where fingers
+    /// move fast. `CapsuleGlassContainer` groups them because glass cannot
+    /// sample glass.
+    private var bottomBar: some View {
+        CapsuleGlassContainer(spacing: CapsuleTheme.Spacing.medium) {
+            HStack(spacing: CapsuleTheme.Spacing.medium) {
+                HStack(spacing: 0) {
+                    shareButton
+                    barButton(favoriteSymbol, tint: favoriteTint) {
+                        Task { await model.toggleFavorite() }
+                    }
+                    .accessibilityLabel("ios.viewer.favorite")
+                    barButton("info.circle") { model.isInfoPanelPresented = true }
+                        .accessibilityLabel("ios.viewer.info")
                 }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, CapsuleTheme.Spacing.medium)
+                .padding(.horizontal, CapsuleTheme.Spacing.small)
+                .capsuleGlass(in: Capsule())
+
+                barButton("trash") {
+                    Task {
+                        if await model.deleteCurrentAsset() { dismiss() }
+                    }
+                }
+                .accessibilityLabel("ios.viewer.delete")
+                .accessibilityIdentifier("viewer.delete")
+                .fixedSize()
+                .padding(CapsuleTheme.Spacing.medium)
+                .capsuleGlass(in: Circle())
             }
         }
-        .padding(.vertical, CapsuleTheme.Spacing.medium)
-        .padding(.horizontal, CapsuleTheme.Spacing.small)
-        .capsuleGlass(in: Capsule())
         .padding(.horizontal, CapsuleTheme.Spacing.large)
         .padding(.bottom, CapsuleTheme.Spacing.small)
     }

@@ -39033,6 +39033,36 @@
         }
       }
     },
+    "ios.viewer.delete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Delete"
+          }
+        }
+      }
+    },
+    "ios.viewer.favorite": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Favorite"
+          }
+        }
+      }
+    },
+    "ios.viewer.info": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Info"
+          }
+        }
+      }
+    },
     "ios.viewer.info.aperture": {
       "localizations": {
         "ar": {
@@ -40263,12 +40293,52 @@
         }
       }
     },
+    "ios.viewer.live.replay": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LIVE"
+          }
+        }
+      }
+    },
+    "ios.viewer.live.replay.accessibility": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Replay Live Photo motion"
+          }
+        }
+      }
+    },
+    "ios.viewer.more": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "More"
+          }
+        }
+      }
+    },
     "ios.viewer.next_photo": {
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
             "value": "Next Photo"
+          }
+        }
+      }
+    },
+    "ios.viewer.pause": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pause"
           }
         }
       }
@@ -40351,6 +40421,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pause Slideshow"
+          }
+        }
+      }
+    },
+    "ios.viewer.play": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Play"
           }
         }
       }

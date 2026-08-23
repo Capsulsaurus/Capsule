@@ -1844,6 +1844,9 @@
     <string name="ios_transfer_upgrade_no_channel">Update Capsule however you installed it.</string>
     <string name="ios_transfer_upgrade_title">Update Required</string>
     <string name="ios_transfer_uploads_empty">No uploads in progress.</string>
+    <string name="ios_viewer_delete">Delete</string>
+    <string name="ios_viewer_favorite">Favorite</string>
+    <string name="ios_viewer_info">Info</string>
     <string name="ios_viewer_info_aperture">Aperture</string>
     <string name="ios_viewer_info_camera">Camera</string>
     <string name="ios_viewer_info_capture">Capture</string>
@@ -1859,8 +1862,13 @@
     <string name="ios_viewer_info_shutter">Shutter</string>
     <string name="ios_viewer_info_title">Info</string>
     <string name="ios_viewer_info_type">Type</string>
+    <string name="ios_viewer_live_replay">LIVE</string>
+    <string name="ios_viewer_live_replay_accessibility">Replay Live Photo motion</string>
+    <string name="ios_viewer_more">More</string>
     <string name="ios_viewer_next_photo">Next Photo</string>
+    <string name="ios_viewer_pause">Pause</string>
     <string name="ios_viewer_pause_slideshow">Pause Slideshow</string>
+    <string name="ios_viewer_play">Play</string>
     <string name="ios_viewer_play_slideshow">Play Slideshow</string>
     <string name="ios_viewer_previous_photo">Previous Photo</string>
     <string name="label_artist">Artist</string>

@@ -148,8 +148,13 @@ struct AppEnvironment {
         albumProvider = PortBackedAlbumProvider(albums: mock.albums, library: mock.library)
         trashProvider = PortBackedTrashProvider(organize: mock.organize, library: mock.library)
         hiddenStore = HiddenStore()
-        thumbnails = PortBackedThumbnailProvider(renderer: mock.thumbnails)
-        mediaLoader = ViewerMediaLoader()
+        let renderer = PortBackedThumbnailProvider(renderer: mock.thumbnails)
+        thumbnails = renderer
+        // The viewer's own loader asks PhotoKit first and answers `nil` for
+        // anything that is not a system asset — which is everything in this
+        // lane, so the viewer showed a spinner and never a photo. The renderer
+        // that draws the grid draws the viewer's pixels too.
+        mediaLoader = ViewerMediaLoader(fallback: renderer)
         importer = Self.makeImporter()
 
         serverDiscovery = PreviewServerDiscovery(environment: mock)

@@ -16,6 +16,10 @@ import SwiftUI
     /// A `PHLivePhotoView` bridged into SwiftUI; plays the motion hint on appear.
     struct LivePhotoView: UIViewRepresentable {
         let livePhoto: PHLivePhoto
+        /// Bumped by the LIVE badge to replay. A counter rather than a `Bool`
+        /// because playback is an event, not a state: the second replay has to
+        /// be distinguishable from the first.
+        var playbackTicket: Int = 0
 
         func makeUIView(context _: Context) -> PHLivePhotoView {
             let view = PHLivePhotoView()
@@ -23,10 +27,22 @@ import SwiftUI
             return view
         }
 
-        func updateUIView(_ view: PHLivePhotoView, context _: Context) {
-            guard view.livePhoto !== livePhoto else { return }
-            view.livePhoto = livePhoto
-            view.startPlayback(with: .hint)
+        func updateUIView(_ view: PHLivePhotoView, context: Context) {
+            if view.livePhoto !== livePhoto {
+                view.livePhoto = livePhoto
+                view.startPlayback(with: .hint)
+                context.coordinator.lastTicket = playbackTicket
+                return
+            }
+            guard playbackTicket != context.coordinator.lastTicket else { return }
+            context.coordinator.lastTicket = playbackTicket
+            view.startPlayback(with: .full)
+        }
+
+        func makeCoordinator() -> Coordinator { Coordinator() }
+
+        final class Coordinator {
+            var lastTicket = 0
         }
     }
 
@@ -35,6 +51,8 @@ import SwiftUI
     /// A `PHLivePhotoView` bridged into SwiftUI; plays the motion hint on appear.
     struct LivePhotoView: NSViewRepresentable {
         let livePhoto: PHLivePhoto
+        /// Bumped by the LIVE badge to replay. See the iOS twin.
+        var playbackTicket: Int = 0
 
         /// macOS `PHLivePhotoView` has no `contentMode`; it always fits its
         /// bounds preserving aspect, which is the behaviour iOS opts into.
@@ -42,10 +60,22 @@ import SwiftUI
             PHLivePhotoView()
         }
 
-        func updateNSView(_ view: PHLivePhotoView, context _: Context) {
-            guard view.livePhoto !== livePhoto else { return }
-            view.livePhoto = livePhoto
-            view.startPlayback(with: .hint)
+        func updateNSView(_ view: PHLivePhotoView, context: Context) {
+            if view.livePhoto !== livePhoto {
+                view.livePhoto = livePhoto
+                view.startPlayback(with: .hint)
+                context.coordinator.lastTicket = playbackTicket
+                return
+            }
+            guard playbackTicket != context.coordinator.lastTicket else { return }
+            context.coordinator.lastTicket = playbackTicket
+            view.startPlayback(with: .full)
+        }
+
+        func makeCoordinator() -> Coordinator { Coordinator() }
+
+        final class Coordinator {
+            var lastTicket = 0
         }
     }
 

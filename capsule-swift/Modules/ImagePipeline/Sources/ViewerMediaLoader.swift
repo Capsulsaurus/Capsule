@@ -36,7 +36,26 @@ public struct AssetExifMetadata: Sendable, Equatable {
 /// non-`Sendable` `PHLivePhoto` / `AVPlayerItem` to viewer views directly.
 @MainActor
 public final class ViewerMediaLoader {
-    public init() {}
+    /// Where a full image comes from when the asset is not a PhotoKit one.
+    ///
+    /// Every method below reaches PhotoKit through `phAsset(for:)`, which
+    /// answers `nil` for anything that is not a `.photoKit` identifier — so a
+    /// managed or mocked asset produced *no image at all* and the viewer sat on
+    /// its spinner forever. That is not a mock-lane quirk: the same is true of
+    /// any asset in the on-disk managed store, which is where every imported
+    /// photo lives.
+    ///
+    /// A thumbnail provider rather than a second decode path, because the
+    /// provider is already the thing that knows how to render an asset the
+    /// library owns, and asking it for viewer-sized pixels is the same question
+    /// the grid asks with a smaller number.
+    private let fallback: (any ThumbnailProvider)?
+
+    /// - Parameter fallback: consulted when PhotoKit has nothing. Optional so
+    ///   the PhotoKit-only lane can leave it out and get the old behaviour.
+    public init(fallback: (any ThumbnailProvider)? = nil) {
+        self.fallback = fallback
+    }
 
     /// A display-resolution image for `asset`, decoded to `targetSize` pixels.
     ///
@@ -44,7 +63,9 @@ public final class ViewerMediaLoader {
     /// a `UIImage` on iOS and an `NSImage` on macOS — so the result is already a
     /// ``PlatformImage`` on both and needs no conversion here.
     public func fullImage(for asset: Asset, targetSize: CGSize) async -> PlatformImage? {
-        guard let phAsset = phAsset(for: asset) else { return nil }
+        guard let phAsset = phAsset(for: asset) else {
+            return await fallback?.thumbnail(for: asset, pixelSize: targetSize)
+        }
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = true

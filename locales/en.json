@@ -7375,6 +7375,18 @@
     "message": "No uploads in progress.",
     "context": "Shown in place of the upload list when nothing is uploading."
   },
+  "ios.viewer.delete": {
+    "message": "Delete",
+    "context": "Accessibility label for the delete button in the photo viewer."
+  },
+  "ios.viewer.favorite": {
+    "message": "Favorite",
+    "context": "Accessibility label for the heart button in the photo viewer."
+  },
+  "ios.viewer.info": {
+    "message": "Info",
+    "context": "Accessibility label for the info button in the photo viewer."
+  },
   "ios.viewer.info.aperture": {
     "message": "Aperture",
     "context": "iOS asset info row label: aperture (f-number)."
@@ -7435,13 +7447,33 @@
     "message": "Type",
     "context": "iOS asset info row label: media type."
   },
+  "ios.viewer.live.replay": {
+    "message": "LIVE",
+    "context": "Badge over a Live Photo that replays its motion when tapped. 'LIVE' is Apple's own label for the feature and stays English on Apple platforms."
+  },
+  "ios.viewer.live.replay.accessibility": {
+    "message": "Replay Live Photo motion",
+    "context": "VoiceOver label for the LIVE badge over a Live Photo."
+  },
+  "ios.viewer.more": {
+    "message": "More",
+    "context": "Overflow menu in the photo viewer's top bar, holding actions on the sequence or the library rather than on the photo."
+  },
   "ios.viewer.next_photo": {
     "message": "Next Photo",
     "context": "Accessibility label for the Mac viewer's forward chevron. macOS has no swipe pager, so paging is arrow keys plus these two buttons."
   },
+  "ios.viewer.pause": {
+    "message": "Pause",
+    "context": "Button over a video in the viewer that pauses playback."
+  },
   "ios.viewer.pause_slideshow": {
     "message": "Pause Slideshow",
     "context": "iOS viewer bottom-bar accessibility label to pause the slideshow."
+  },
+  "ios.viewer.play": {
+    "message": "Play",
+    "context": "Button over a video in the viewer that starts playback."
   },
   "ios.viewer.play_slideshow": {
     "message": "Play Slideshow",
