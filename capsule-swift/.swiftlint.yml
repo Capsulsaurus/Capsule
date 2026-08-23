@@ -5,12 +5,6 @@ included:
 
 excluded:
   - .build
-  # Parked: both modules are in the repository and typecheck clean, but are not
-  # in the Tuist graph because they crash the Swift 6.3 compiler in IRGen (see
-  # the note in Project.swift). Linting code that cannot be compiled produces
-  # findings nobody can verify, so they are excluded until they build again.
-  - Modules/FeatureTransfer
-  - Modules/FeatureSharing
   - .ffi
   - Derived
 

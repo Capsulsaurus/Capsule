@@ -126,9 +126,11 @@ public final class FederationViewModel {
         case .reachable:
             .reachable
         case let .degraded(days):
-            days >= Self.downtimeBudgetDays
-                ? .unreachableServer(consecutiveFailedDays: days)
-                : .transientOutage(consecutiveFailedDays: days)
+            if days >= Self.downtimeBudgetDays {
+                .unreachableServer(consecutiveFailedDays: days)
+            } else {
+                .transientOutage(consecutiveFailedDays: days)
+            }
         case let .circuitOpen(until):
             .backingOff(until: until)
         case .blocked:

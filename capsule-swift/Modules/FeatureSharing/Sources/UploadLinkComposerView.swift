@@ -24,8 +24,9 @@ public struct UploadLinkComposerView: View {
             ),
             retry: { Task { await model.load() } },
             content: {
-            form
-        }
+                form
+            }
+        )
         .navigationTitle("ios.drops.compose.title")
         .task { await model.load() }
         .onDisappear { model.reset() }

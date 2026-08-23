@@ -43,4 +43,4 @@
 # "call can throw, but it is not marked with 'try'". Off, for the same reason as
 # hoistTry: the whole test suite is macro invocations.
 --disable preferKeyPath
---exclude .ffi,Derived,.build,Modules/FeatureTransfer,Modules/FeatureSharing
+--exclude .ffi,Derived,.build

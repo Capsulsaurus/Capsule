@@ -101,7 +101,7 @@ struct StorageConsumerRow: View {
 
     private var titleKey: LocalizedStringKey {
         switch consumer.kind {
-        case .tier: consumer.tier?.badge.titleKey ?? "ios.storage.consumer.unknown"
+        case .tier: consumer.tier.map { LocalizedStringKey($0.badge.titleKey) } ?? "ios.storage.consumer.unknown"
         case .trash: "ios.storage.consumer.trash"
         case .unreleasedOriginals: "ios.storage.consumer.unreleased"
         }

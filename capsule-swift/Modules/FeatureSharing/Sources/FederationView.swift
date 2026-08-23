@@ -39,15 +39,16 @@ public struct FederationView: View {
             ),
             retry: { Task { await model.reload() } },
             content: {
-            List(model.albums, selection: $model.selection) { album in
-                AggregatedAlbumRow(
-                    album: album,
-                    renderedCount: model.renderedAssetCount(in: album),
-                    isDegraded: model.isDegraded(album),
-                    hasUnreachableOwner: model.hasUnreachableOwner(album)
-                )
+                List(model.albums, selection: $model.selection) { album in
+                    AggregatedAlbumRow(
+                        album: album,
+                        renderedCount: model.renderedAssetCount(in: album),
+                        isDegraded: model.isDegraded(album),
+                        hasUnreachableOwner: model.hasUnreachableOwner(album)
+                    )
+                }
             }
-        }
+        )
     }
 
     @ViewBuilder

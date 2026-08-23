@@ -46,9 +46,12 @@ struct PrivacyStripView: View {
     @ViewBuilder
     private var footer: some View {
         if policy.allowsRetention, let setRetention {
+            // Called, not forwarded: handing the stored `@MainActor @Sendable`
+            // closure straight to `set:` makes SILGen emit an `@isolated(any)`
+            // reabstraction thunk that crashes IRGen in Swift 6.3.3.
             Toggle("ios.export.retain.toggle", isOn: Binding(
                 get: { policy.retainsIdentifyingMetadata },
-                set: setRetention
+                set: { setRetention($0) }
             ))
             Text("ios.export.retain.footer")
                 .font(.footnote)

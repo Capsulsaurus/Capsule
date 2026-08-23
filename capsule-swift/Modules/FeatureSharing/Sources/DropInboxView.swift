@@ -50,10 +50,11 @@ public struct DropInboxView: View {
             ),
             retry: { Task { await model.reload() } },
             content: {
-            List(model.drops, selection: $model.selection) { drop in
-                DropCardView(drop: drop).tag(drop.id)
+                List(model.drops, selection: $model.selection) { drop in
+                    DropCardView(drop: drop).tag(drop.id)
+                }
             }
-        }
+        )
     }
 
     @ViewBuilder

@@ -24,8 +24,9 @@ public struct ModerationView: View {
             ),
             retry: { Task { await model.load() } },
             content: {
-            form
-        }
+                form
+            }
+        )
         .navigationTitle("ios.moderation.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
@@ -192,9 +193,11 @@ struct UntrustedOriginRow: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+            // Called, not forwarded — see ``PrivacyStripView``: forwarding the
+            // stored closure into `set:` crashes IRGen in Swift 6.3.3.
             Toggle("ios.moderation.untrusted.consent", isOn: Binding(
                 get: { origin.isConsented },
-                set: setConsent
+                set: { setConsent($0) }
             ))
         }
         .padding(.vertical, CapsuleTheme.Spacing.xxSmall)

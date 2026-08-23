@@ -27,8 +27,9 @@ public struct ShareLinkListView: View {
             ),
             retry: { Task { await model.load() } },
             content: {
-            list
-        }
+                list
+            }
+        )
         .navigationTitle("ios.share.list.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
