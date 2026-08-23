@@ -68,6 +68,7 @@ The owner docs are:
 | Translation catalog format + locale resolution + error-code scheme + supported language set + README translation | [Internationalization](/design/i18n/) |
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 | API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
+| Developer-reference generation contract + reference IA                | [Developer Documentation](/design/developer-docs/)                 |
 | Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
 | Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
 | Tethered camera import (PTP/IP source adapter)                        | [Import — Camera Import](/design/import/camera-import/)             |

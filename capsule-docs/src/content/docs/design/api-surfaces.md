@@ -10,6 +10,9 @@ contract**. This document owns the surface-to-module map and the HTTP carriage o
 Handshake rules remain owned by Threat Model — Validation, and stable error-code identity by
 [Internationalization](/design/i18n/#server-error-codes).
 
+How these surfaces are published as developer reference — the artifact each is generated from and
+the gate that keeps it current — is [Developer Documentation](/design/developer-docs/).
+
 ## Surface ↔ Transport Map
 
 | Surface | Transport | Planned module | Owner doc |
