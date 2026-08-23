@@ -82,6 +82,7 @@ public extension Route {
     /// Ways of slicing the library.
     private static func collectionOwner(of route: Route) -> SidebarItem? {
         switch route {
+        case .browse: .browse
         case .albums, .album, .albumMembers, .albumPolicy, .smartAlbum, .smartAlbumEditor: .albums
         case .people, .person: .people
         case .places, .place: .places

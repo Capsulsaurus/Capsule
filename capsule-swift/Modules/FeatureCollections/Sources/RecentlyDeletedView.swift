@@ -9,12 +9,16 @@ import SwiftUI
 /// third-party apps can't enumerate, so this lists managed assets. Rendered as a
 /// list (by date) rather than a thumbnail grid, since managed-store thumbnails
 /// are a separate follow-up.
-struct RecentlyDeletedView: View {
+public struct RecentlyDeletedView: View {
     @State private var assets: [Asset] = []
     @State private var isLoading = true
     let trashProvider: any TrashProvider
 
-    var body: some View {
+    public init(trashProvider: any TrashProvider) {
+        self.trashProvider = trashProvider
+    }
+
+    public var body: some View {
         Group {
             if isLoading {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)

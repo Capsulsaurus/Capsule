@@ -55,6 +55,7 @@ enum RouteFixtures {
         (.viewer(assetID, context: .album(albumID)), .albums),
         (.viewer(photoKitAsset, context: .timeline(.trash)), .trash),
         (.culling(.timeline(fullQuery)), .hidden),
+        (.browse, .browse),
         (.albums, .albums),
         (.album(albumID), .albums),
         (.albumMembers(albumID), .albums),

@@ -33,10 +33,13 @@ struct RouteDestination: View {
         // MARK: Library
 
         case .timeline: timelineDestination
-        case .memories, .duplicates, .trash, .hidden: collectionsDestination
+        case .memories, .duplicates: unbuilt
+        case .trash: trashDestination
+        case .hidden: hiddenDestination
         case .viewer, .culling: unbuilt
 
         // MARK: Collections
+        case .browse: BrowseIndexView()
         case .albums: albumsDestination
         case let .album(id): albumDetailDestination(id)
         case .albumMembers, .albumPolicy: unbuilt
@@ -112,17 +115,23 @@ extension RouteDestination {
 
     /// Memories, duplicates, trash, and hidden.
     ///
-    /// One screen for four sections while each is still a tab on the same
-    /// utilities surface. They keep separate routes because they are separate
-    /// destinations with separate histories; what they share for now is a view.
-    var collectionsDestination: some View {
-        CollectionsRootView(
-            albumProvider: environment.albumProvider,
+    /// Soft-deleted assets inside their retention window.
+    ///
+    /// Routed to the screen that shows them. Until Browse existed, `.trash`
+    /// resolved to an *album index* — the screen worked, and no route reached
+    /// it, because the only thing that did was a parallel `UtilityCategory`
+    /// vocabulary inside a different view.
+    var trashDestination: some View {
+        RecentlyDeletedView(trashProvider: environment.trashProvider)
+    }
+
+    /// User-hidden assets, behind the fresh-local-auth gate.
+    var hiddenDestination: some View {
+        HiddenView(
             assetProvider: environment.assetProvider,
-            trashProvider: environment.trashProvider,
             hiddenStore: environment.hiddenStore,
             thumbnails: environment.thumbnails,
-            mediaLoader: environment.mediaLoader
+            authenticator: environment.localAuthenticator
         )
     }
 

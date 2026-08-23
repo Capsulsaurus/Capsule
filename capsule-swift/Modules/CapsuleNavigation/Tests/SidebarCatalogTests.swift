@@ -37,11 +37,41 @@ struct SidebarCatalogTests {
         }
     }
 
-    @Test("the compact shell shows a tab bar's worth, and reaches the rest")
-    func tabsAndOverflowPartitionTheSections() {
+    /// The assertion this file exists for. Fifteen sections were unreachable on
+    /// iPhone for as long as `overflow` was derived and rendered by nobody, and
+    /// no test failed — because the old version of this test only checked the
+    /// two sets partitioned, never that anything drew the second one.
+    @Test("the phone reaches every section: as a tab, or through Browse")
+    func placementCoversEveryPhoneSurface() {
         #expect((4 ... 5).contains(SidebarItem.tabs.count))
-        #expect(Set(SidebarItem.tabs).isDisjoint(with: Set(SidebarItem.overflow)))
-        #expect(SidebarItem.tabs.count + SidebarItem.overflow.count == SidebarItem.allCases.count)
+        #expect(Set(SidebarItem.tabs).isDisjoint(with: Set(SidebarItem.browsable)))
+        #expect(Set(SidebarItem.tabs).union(SidebarItem.browsable) == Set(SidebarItem.allCases))
+    }
+
+    @Test("the sidebar lists every section except the one that indexes them")
+    func sidebarListsEverythingButBrowse() {
+        #expect(Set(SidebarItem.sidebarRows) == Set(SidebarItem.allCases).subtracting([.browse]))
+        #expect(SidebarItem.browse.placement == .phoneTab)
+    }
+
+    @Test("every section a phone cannot select directly is hosted by Browse")
+    func compactHostIsTotal() {
+        for item in SidebarItem.allCases {
+            #expect(item.compactHost == item || item.compactHost == .browse)
+            #expect(item.compactHost.placement.isPhoneTab, "\(item) is hosted by a non-tab")
+        }
+    }
+
+    @Test("the two filtered group lookups agree with the total one")
+    func groupLookupsPartition() {
+        for group in SidebarGroup.allCases {
+            let all = Set(SidebarItem.sections(in: group))
+            let rows = Set(SidebarItem.sidebarRows(in: group))
+            let browsable = Set(SidebarItem.browsable(in: group))
+            #expect(rows.isSubset(of: all))
+            #expect(browsable.isSubset(of: rows))
+            #expect(all.subtracting(rows).allSatisfy { $0.placement == .phoneTab })
+        }
     }
 
     @Test("grouping covers every section without repeating one")

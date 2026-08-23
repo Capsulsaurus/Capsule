@@ -150,3 +150,67 @@ struct RouterCommandTests {
         #expect(router.currentViewerContext == .library)
     }
 }
+
+// MARK: - RouterBrowseHostTests
+
+/// The phone's tab bar carries four of twenty sections, so `select` has to put
+/// the other sixteen somewhere a tab can show.
+///
+/// Before Browse existed this was not merely unhandled — it was broken in a way
+/// nothing reported: `select` set `selection` to a section no `Tab` claimed, so
+/// ⌘I left the iPhone tab bar with no valid selection at all.
+@Suite("A phone reaches a non-tab section through Browse")
+@MainActor
+struct RouterBrowseHostTests {
+    @Test("selecting a section the tab bar does not carry lands in Browse")
+    func nonTabSectionsAreHostedByBrowse() {
+        let router = Router(shell: .stacked)
+
+        router.select(.federation)
+
+        #expect(router.selection == .browse)
+        #expect(router[section: .browse] == [.federation])
+    }
+
+    @Test("a destination inside a browsed section keeps that section beneath it")
+    func browsedDestinationsKeepTheirIndex() {
+        let router = Router(shell: .stacked)
+
+        router.select(.album(RouteFixtures.albumID))
+
+        #expect(router.selection == .browse)
+        #expect(router[section: .browse] == [.albums, .album(RouteFixtures.albumID)])
+    }
+
+    @Test("a section with its own tab is still selected directly")
+    func tabSectionsAreUnaffected() {
+        let router = Router(shell: .stacked)
+
+        router.select(.timeline(.all))
+
+        #expect(router.selection == .library)
+        #expect(router[section: .browse].isEmpty)
+    }
+
+    @Test("the split shell selects the section itself, Browse being sidebar-less")
+    func splitShellSelectsTheOwner() {
+        let router = Router(shell: .split)
+
+        router.select(.federation)
+
+        #expect(router.selection == .federation)
+        #expect(router[section: .browse].isEmpty)
+    }
+
+    /// ⌘I. It resolves to `Route.imports`, whose section has no tab — so on a
+    /// phone it used to select a section the tab bar could not show.
+    @Test("import media reaches Imports on a phone")
+    func importCommandReachesImportsOnAPhone() {
+        let router = Router(shell: .stacked)
+
+        #expect(router.perform(.importMedia))
+
+        #expect(router.selection == .browse)
+        #expect(router.topRoute == .imports)
+    }
+}

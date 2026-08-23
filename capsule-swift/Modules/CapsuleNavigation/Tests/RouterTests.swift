@@ -55,8 +55,11 @@ struct RouterSectionIsolationTests {
 struct RouterSelectionTests {
     @Test("every route in the census lands in its owning section")
     func selectResolvesOwnership() {
+        // The split shell, because ownership is a property of the route while
+        // *hosting* is a property of the shell: a phone reaches a non-tab
+        // section through Browse, which `RouterBrowseHostTests` covers.
         for sample in RouteFixtures.census {
-            let router = Router(shell: .stacked)
+            let router = Router(shell: .split)
             router.select(sample.route)
             #expect(router.selection == sample.section, "\(sample.route)")
         }
@@ -64,7 +67,7 @@ struct RouterSelectionTests {
 
     @Test("selecting a section's landing screen switches without clearing it")
     func selectingARootPreservesHistory() {
-        let router = Router(shell: .stacked)
+        let router = Router(shell: .split)
         router.selection = .trash
         router.push(.viewer(RouteFixtures.assetID, context: .timeline(.trash)))
         router.selection = .library
@@ -77,7 +80,7 @@ struct RouterSelectionTests {
 
     @Test("selecting a deeper route pushes it onto the owning section")
     func selectPushesNonRootRoutes() {
-        let router = Router(shell: .stacked)
+        let router = Router(shell: .split)
 
         router.select(.person(RouteFixtures.personID))
 
@@ -99,7 +102,7 @@ struct RouterSelectionTests {
     @Test("every section's landing screen is a route the router can route back")
     func everySectionRootRoundTrips() {
         for item in SidebarItem.allCases {
-            let router = Router(shell: .stacked)
+            let router = Router(shell: .split)
             router.select(item.rootRoute)
             #expect(router.selection == item, "\(item) root does not route home")
             #expect(router.path.isEmpty, "\(item) root should not push")

@@ -158,7 +158,9 @@ struct LinkSecretRedactionTests {
 struct RouterDeepLinkTests {
     @Test("an inbound link selects the owning section and hands back the secret")
     func openNavigatesAndReturnsTheLink() throws {
-        let router = Router(shell: .stacked)
+        // The split shell: a link's *owning section* is the thing under test,
+        // and on a phone a non-tab section is hosted by Browse instead.
+        let router = Router(shell: .split)
         let url = try #require(URL(string: "https://capsule.example/s/abc123#deadbeef"))
 
         let link = try #require(router.open(url))
@@ -169,7 +171,7 @@ struct RouterDeepLinkTests {
 
     @Test("an unrecognised URL leaves navigation exactly where it was")
     func unknownURLsDoNotNavigate() throws {
-        let router = Router(shell: .stacked)
+        let router = Router(shell: .split)
         router.select(.person(RouteFixtures.personID))
         let url = try #require(URL(string: "capsule://nonsense/1"))
 

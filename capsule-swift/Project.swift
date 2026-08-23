@@ -306,6 +306,10 @@ private let moduleTargets: [Target] =
             .target(name: "AssetKit"),
             .target(name: "ImagePipeline"),
             .target(name: "FeatureViewer"),
+            // Named because `AlbumsRootView` links a `Route`, which is the only
+            // vocabulary the shell's navigation stack accepts. A feature module
+            // takes this dependency when it names a route and not before.
+            .target(name: "CapsuleNavigation"),
         ],
         testDependencies: [supportDependency]
     )
@@ -408,6 +412,9 @@ private let moduleTargets: [Target] =
         "FeatureCollections",
         dependencies: [
             .target(name: "CapsuleUI"),
+            // `HiddenView` sits behind the SR1 local-auth gate, whose seam is a
+            // port so the mocked app can satisfy it without the system sheet.
+            .target(name: "CapsulePorts"),
             .target(name: "AssetKit"),
             .target(name: "ImagePipeline"),
             .target(name: "FeatureViewer"),

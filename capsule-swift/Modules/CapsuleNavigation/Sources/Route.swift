@@ -79,6 +79,11 @@ public enum Route: Sendable, Hashable, Codable {
 
     // MARK: Collections
 
+    /// The phone's index of every section its tab bar does not carry.
+    ///
+    /// Deliberately has no deep-link grammar: a URL names content, and this
+    /// names a shell's table of contents.
+    case browse
     /// The album index — user albums and smart albums together.
     case albums
     /// One album's contents.

@@ -31,24 +31,43 @@ struct AlbumCoverCard: View {
         .task(id: album.id) { await loadCover() }
     }
 
+    /// The square cover.
+    ///
+    /// A `Rectangle` sized first and the artwork hung off it as an `overlay`,
+    /// rather than both as siblings in a `ZStack`. A `scaledToFill` image
+    /// reports an ideal size derived from the *image*, and inside a `ZStack`
+    /// that size participates in sizing the stack — so the tile grew to the
+    /// thumbnail's proportions, came out at 3:4 instead of square, and the
+    /// second row of the grid drew on top of the first. An `overlay` is
+    /// measured against its host and cannot do that.
+    ///
+    /// `.clipped()` as well as the `clipShape`: the shape trims the corners,
+    /// but a `scaledToFill` image still paints outside the frame until
+    /// something says otherwise.
     private var coverImage: some View {
-        ZStack {
-            // `.fill.secondary` rather than `Color(.secondarySystemBackground)`:
-            // that colour is a `UIColor`, and the semantic SwiftUI fill styles
-            // resolve to the right grouped-background tone on both platforms.
-            Rectangle().fill(.fill.secondary)
-            if let cover {
-                Image(platformImage: cover)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Image(systemName: album.isUserAlbum ? "rectangle.stack" : "sparkles.rectangle.stack")
+        // `.fill.secondary` rather than `Color(.secondarySystemBackground)`:
+        // that colour is a `UIColor`, and the semantic SwiftUI fill styles
+        // resolve to the right grouped-background tone on both platforms.
+        Rectangle()
+            .fill(.fill.secondary)
+            .aspectRatio(1, contentMode: .fit)
+            .overlay {
+                if let cover {
+                    Image(platformImage: cover)
+                        .resizable()
+                        .scaledToFill()
+                } else {
+                    Image(
+                        systemName: album.isUserAlbum
+                            ? "rectangle.stack"
+                            : "sparkles.rectangle.stack"
+                    )
                     .font(.largeTitle)
                     .foregroundStyle(.secondary)
+                }
             }
-        }
-        .aspectRatio(1, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: CapsuleTheme.Radius.card))
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: CapsuleTheme.Radius.card))
     }
 
     private func loadCover() async {
@@ -62,28 +81,5 @@ struct AlbumCoverCard: View {
         let assets = await (try? albumProvider.assets(in: album.id)) ?? []
         guard let asset = assets.first else { return }
         cover = await thumbnails.thumbnail(for: asset, pixelSize: pixels)
-    }
-}
-
-/// A single tappable row in the Collections Utilities / More groups.
-struct CollectionRow: View {
-    let systemImage: String
-    let title: String
-
-    var body: some View {
-        HStack(spacing: CapsuleTheme.Spacing.medium) {
-            Image(systemName: systemImage)
-                .font(.body)
-                .foregroundStyle(.tint)
-                .frame(width: 28)
-            Text(title).foregroundStyle(.primary)
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, CapsuleTheme.Spacing.medium)
-        .padding(.vertical, CapsuleTheme.Spacing.medium)
-        .contentShape(Rectangle())
     }
 }

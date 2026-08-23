@@ -635,6 +635,7 @@
     <string name="ios_federation_summary_complete_footer">Every contributor\'s server is reachable, so you\'re seeing the whole album.</string>
     <string name="ios_federation_summary_partial_footer">You\'re seeing everything Capsule can reach right now. The rest is on servers that aren\'t answering — nothing has been removed, and it returns when they do.</string>
     <string name="ios_federation_title">Servers</string>
+    <string name="ios_hidden_auth_reason">View your hidden photos</string>
     <string name="ios_hidden_confirm_title">Hidden Photo</string>
     <string name="ios_hidden_empty_description">Hide photos from the Library with Select → Hide.</string>
     <string name="ios_hidden_empty_title">Nothing Hidden</string>
@@ -1573,6 +1574,7 @@
     <string name="ios_share_state_offline_description">Capsule needs your server to create or change a link.</string>
     <string name="ios_share_state_offline_title">No Connection</string>
     <string name="ios_sidebar_albums">Albums</string>
+    <string name="ios_sidebar_browse">Browse</string>
     <string name="ios_sidebar_devices">Devices</string>
     <string name="ios_sidebar_drops">Inbox</string>
     <string name="ios_sidebar_duplicates">Duplicates</string>

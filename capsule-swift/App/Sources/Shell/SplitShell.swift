@@ -19,7 +19,7 @@ struct SplitShell: View {
             List(selection: sidebarSelection) {
                 ForEach(SidebarGroup.allCases, id: \.self) { group in
                     Section(LocalizedStringKey(group.titleKey)) {
-                        ForEach(SidebarItem.sections(in: group)) { item in
+                        ForEach(SidebarItem.sidebarRows(in: group)) { item in
                             Label(
                                 LocalizedStringKey(item.titleKey),
                                 systemImage: item.systemImage

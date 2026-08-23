@@ -60,6 +60,15 @@ struct AppEnvironment {
     let mediaLoader: ViewerMediaLoader
     let importer: LibraryImporter
 
+    /// The local-authentication gate in front of Trash and Hidden (*SR1*).
+    ///
+    /// Stored rather than forwarded because it is a *system* seam rather than a
+    /// library read, and the mock lane deliberately does not compose the system
+    /// one: `LAContext` on a device with no enrolled credential presents a
+    /// SpringBoard passcode sheet over the app, which is exactly the kind of
+    /// out-of-process prompt this composition root exists to keep out.
+    let localAuthenticator: any LocalAuthenticator
+
     /// Persisted diagnostics & telemetry consent (local-only by default).
     let consentStore: ConsentStore
     /// Wires MetricKit, breadcrumbs, the crash prompt, and bug-report export.
@@ -150,6 +159,8 @@ struct AppEnvironment {
         let records = InMemoryModerationRecords()
         moderationRecords = records
         untrustedOriginPolicy = records
+
+        localAuthenticator = MockLocalAuthenticator()
 
         let consent = ConsentStore()
         consentStore = consent

@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsulePorts
 import Foundation
 import Observation
 
@@ -16,41 +17,6 @@ public enum GatedLibraryView: String, Sendable, Hashable, CaseIterable, Codable 
 
     /// The catalog key for this view's name.
     public var titleKey: String { "ios.settings.security.gate.\(rawValue)" }
-}
-
-// MARK: - LocalAuthMethod
-
-/// Which authenticator the gate will actually use on this device.
-///
-/// *SR1* specifies "biometric where enrolled (Face ID / Touch ID /
-/// BiometricPrompt), else the device or account credential" — so this is an
-/// ordered fallback, not a user preference, and the screen reports what will
-/// happen rather than offering a choice the platform does not give.
-public enum LocalAuthMethod: Sendable, Equatable, Hashable {
-    /// A biometric is enrolled and will be used.
-    case biometric
-    /// No biometric is enrolled; the device passcode or account password will
-    /// be used.
-    case deviceCredential
-    /// The device has no credential set at all, so the gate cannot challenge.
-    /// Reported plainly rather than silently letting the views open — the user
-    /// needs to know their trash is unprotected, and only they can fix it.
-    case unavailable
-
-    /// The catalog key describing this method.
-    public var descriptionKey: String {
-        switch self {
-        case .biometric: "ios.settings.security.method.biometric"
-        case .deviceCredential: "ios.settings.security.method.credential"
-        case .unavailable: "ios.settings.security.method.unavailable"
-        }
-    }
-
-    /// The tone the row is drawn in. Reinforcement for the text, never a
-    /// substitute for it.
-    public var tone: SettingsTone {
-        self == .unavailable ? .caution : .positive
-    }
 }
 
 // MARK: - LocalAuthGate
@@ -123,19 +89,16 @@ public final class LocalAuthGate {
     }
 }
 
-// MARK: - LocalAuthenticator
+// MARK: - Drawing a method
 
-/// The seam over the platform's local-authentication ceremony.
-///
-/// A protocol rather than a direct `LAContext` call so a view model is testable
-/// without a device: the ceremony itself is the one part of this screen that
-/// cannot be exercised in a unit test, and it is therefore the one part that
-/// must be behind a stub.
-public protocol LocalAuthenticator: Sendable {
-    /// Which authenticator this device would actually use.
-    func availableMethod() async -> LocalAuthMethod
-
-    /// Run the ceremony. Returns `false` when the user cancelled — a cancel is
-    /// not an error and must not be reported as one.
-    func authenticate(reasonKey: String) async throws -> Bool
+public extension LocalAuthMethod {
+    /// The tone the row is drawn in. Reinforcement for the text, never a
+    /// substitute for it.
+    ///
+    /// An extension here rather than a property on the port: which
+    /// authenticator a device has is a fact about the device, and what colour
+    /// to paint it is a fact about this screen.
+    var tone: SettingsTone {
+        self == .unavailable ? .caution : .positive
+    }
 }

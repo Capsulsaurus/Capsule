@@ -1,8 +1,8 @@
 import AssetKit
+import CapsulePorts
 import CapsuleUI
 import FeatureViewer
 import ImagePipeline
-import LocalAuthentication
 import SwiftUI
 
 /// The Hidden album — photos hidden via the Library's select → Hide action,
@@ -10,7 +10,7 @@ import SwiftUI
 ///
 /// Hidden ids live in a Swift ``HiddenStore`` overlay (symmetric across PhotoKit
 /// and managed sources); the assets are resolved back through the provider.
-struct HiddenView: View {
+public struct HiddenView: View {
     @State private var unlocked = false
     @State private var assets: [Asset] = []
     @State private var isLoading = false
@@ -18,18 +18,21 @@ struct HiddenView: View {
     private let assetProvider: any AssetProvider
     private let hiddenStore: HiddenStore
     private let thumbnails: any ThumbnailProvider
+    private let authenticator: any LocalAuthenticator
 
-    init(
+    public init(
         assetProvider: any AssetProvider,
         hiddenStore: HiddenStore,
-        thumbnails: any ThumbnailProvider
+        thumbnails: any ThumbnailProvider,
+        authenticator: any LocalAuthenticator
     ) {
         self.assetProvider = assetProvider
         self.hiddenStore = hiddenStore
         self.thumbnails = thumbnails
+        self.authenticator = authenticator
     }
 
-    var body: some View {
+    public var body: some View {
         Group {
             if !unlocked {
                 lockedView
@@ -83,17 +86,25 @@ struct HiddenView: View {
         Binding(get: { unhideTarget != nil }, set: { if !$0 { unhideTarget = nil } })
     }
 
+    /// Run the gate through the injected authenticator.
+    ///
+    /// Through the seam rather than `LAContext` directly. This screen used to
+    /// build its own context, which made it a second implementation of a
+    /// ceremony `LocalAuthGate` already owns — and meant the mocked app, which
+    /// composes no system services anywhere else, opened a system passcode
+    /// sheet the moment someone tapped Hidden.
+    ///
+    /// A device with no credential at all opens: *Local Gallery — SR1* wants
+    /// the gate reported as unavailable rather than the view sealed shut, and
+    /// `SettingsSecurityView` is where that is said out loud.
     private func authenticate() async {
-        let context = LAContext()
-        var error: NSError?
-        guard context.canEvaluatePolicy(.deviceOwnerAuthentication, error: &error) else {
-            // No biometrics/passcode enrolled (e.g. a fresh simulator): allow in.
+        if await authenticator.availableMethod() == .unavailable {
             unlocked = true
             await loadHidden()
             return
         }
-        let success = await (try? context.evaluatePolicy(
-            .deviceOwnerAuthentication, localizedReason: "View your hidden photos"
+        let success = await (try? authenticator.authenticate(
+            reasonKey: "ios.hidden.auth.reason"
         )) ?? false
         unlocked = success
         if success { await loadHidden() }

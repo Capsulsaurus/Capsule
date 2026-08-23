@@ -7,9 +7,10 @@ import Foundation
 ///
 /// Array order is display order for every shell, so the iPad sidebar, the
 /// iPhone tab bar, and the iPhone overflow list cannot drift out of agreement.
-/// The four promoted tabs are the four the app already ships — Library,
-/// Collections (Albums), Search, Settings — so existing muscle memory survives
-/// the arrival of the other fifteen sections.
+/// Four sections are promoted to the phone's tab bar — Library, Browse, Search,
+/// Settings. Albums gives up the tab it used to hold and becomes the first row
+/// of Browse, because a tab bar that carries four of twenty sections has to
+/// spend one of them on reaching the other sixteen.
 public extension SidebarItem {
     /// Every section, in sidebar order.
     static let descriptors: [SidebarItemDescriptor] = [
@@ -17,37 +18,42 @@ public extension SidebarItem {
         SidebarItemDescriptor(
             item: .memories, rootRoute: .memories,
             titleKey: "ios.sidebar.memories", systemImage: "sparkles.rectangle.stack",
-            placement: .overflow, group: .library
+            placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .duplicates, rootRoute: .duplicates,
             titleKey: "ios.sidebar.duplicates", systemImage: "square.on.square",
-            placement: .overflow, group: .library
+            placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .trash, rootRoute: .trash,
             titleKey: "ios.sidebar.trash", systemImage: "trash",
-            placement: .overflow, group: .library
+            placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .hidden, rootRoute: .hidden,
             titleKey: "ios.sidebar.hidden", systemImage: "eye.slash",
-            placement: .overflow, group: .library
+            placement: .sidebar, group: .library
+        ),
+        SidebarItemDescriptor(
+            item: .browse, rootRoute: .browse,
+            titleKey: "ios.sidebar.browse", systemImage: "square.grid.2x2",
+            placement: .phoneTab, group: .collections
         ),
         SidebarItemDescriptor(
             item: .albums, rootRoute: .albums,
             titleKey: "ios.sidebar.albums", systemImage: "rectangle.stack",
-            placement: .tab, group: .collections
+            placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .people, rootRoute: .people,
             titleKey: "ios.sidebar.people", systemImage: "person.2",
-            placement: .overflow, group: .collections
+            placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .places, rootRoute: .places,
             titleKey: "ios.sidebar.places", systemImage: "map",
-            placement: .overflow, group: .collections
+            placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .search, rootRoute: .search(.all, text: nil),
@@ -57,47 +63,47 @@ public extension SidebarItem {
         SidebarItemDescriptor(
             item: .transfers, rootRoute: .transferCenter,
             titleKey: "ios.sidebar.transfers", systemImage: "arrow.up.arrow.down.circle",
-            placement: .overflow, group: .activity
+            placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .imports, rootRoute: .imports,
             titleKey: "ios.sidebar.imports", systemImage: "square.and.arrow.down",
-            placement: .overflow, group: .activity
+            placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .shares, rootRoute: .shares,
             titleKey: "ios.sidebar.shares", systemImage: "link",
-            placement: .overflow, group: .activity
+            placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .drops, rootRoute: .drops,
             titleKey: "ios.sidebar.drops", systemImage: "tray.and.arrow.down",
-            placement: .overflow, group: .activity
+            placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .quarantine, rootRoute: .quarantine,
             titleKey: "ios.sidebar.quarantine", systemImage: "exclamationmark.shield",
-            placement: .overflow, group: .activity
+            placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .devices, rootRoute: .devices,
             titleKey: "ios.sidebar.devices", systemImage: "laptopcomputer.and.iphone",
-            placement: .overflow, group: .system
+            placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .peers, rootRoute: .peers,
             titleKey: "ios.sidebar.peers", systemImage: "network",
-            placement: .overflow, group: .system
+            placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .federation, rootRoute: .federation,
             titleKey: "ios.sidebar.federation", systemImage: "globe",
-            placement: .overflow, group: .system
+            placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .storage, rootRoute: .storage,
             titleKey: "ios.sidebar.storage", systemImage: "internaldrive",
-            placement: .overflow, group: .system
+            placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .settings, rootRoute: .settings(.default),
@@ -139,17 +145,47 @@ public extension SidebarItem {
 
     /// The sections the iPhone tab bar shows, in order.
     static let tabs: [SidebarItem] = descriptors
-        .filter { $0.placement == .tab }
+        .filter { $0.placement.isPhoneTab }
         .map(\.item)
 
-    /// The sections the iPhone reaches through its overflow surface, in order.
-    static let overflow: [SidebarItem] = descriptors
-        .filter { $0.placement == .overflow }
+    /// The rows the iPad and Mac sidebar lists, in order — every section except
+    /// the one whose only job is to index the others.
+    static let sidebarRows: [SidebarItem] = descriptors
+        .filter { $0.placement.isSidebarRow }
         .map(\.item)
 
-    /// The sections under one sidebar heading, in order.
+    /// What the Browse index offers: every section the phone's tab bar does not
+    /// already carry.
+    ///
+    /// Derived rather than listed, so promoting a section to a tab removes it
+    /// from Browse in the same edit that promotes it — the failure this whole
+    /// table exists to prevent is a section that is in neither place.
+    static let browsable: [SidebarItem] = descriptors
+        .filter { $0.placement == .sidebar }
+        .map(\.item)
+
+    /// The tab that reaches this section on a phone: itself if it has one, and
+    /// Browse otherwise.
+    var compactHost: SidebarItem { placement.isPhoneTab ? self : .browse }
+
+    /// Every section under one heading, in order.
+    ///
+    /// The *total* partition, which is what the catalog tests assert over. View
+    /// code almost always wants one of the two filtered forms below: this one
+    /// includes Browse, and a sidebar that renders it grows a row that opens an
+    /// index of the rows beside it.
     static func sections(in group: SidebarGroup) -> [SidebarItem] {
         descriptors.filter { $0.group == group }.map(\.item)
+    }
+
+    /// One heading's sidebar rows, in order.
+    static func sidebarRows(in group: SidebarGroup) -> [SidebarItem] {
+        descriptors.filter { $0.group == group && $0.placement.isSidebarRow }.map(\.item)
+    }
+
+    /// One heading's Browse rows, in order.
+    static func browsable(in group: SidebarGroup) -> [SidebarItem] {
+        descriptors.filter { $0.group == group && $0.placement == .sidebar }.map(\.item)
     }
 
     private static let descriptorsByItem: [SidebarItem: SidebarItemDescriptor] =

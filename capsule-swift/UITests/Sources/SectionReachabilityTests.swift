@@ -21,14 +21,27 @@ final class SectionReachabilityTests: CapsuleUITestCase {
     /// can actually reach. Finishing People means deleting a string here — and
     /// forgetting to fails ``testPlaceholderSectionsAreStillPlaceholders``,
     /// which is the point: the list shrinks because a test says so.
-    private static let placeholderSections: Set<String> = ["people"]
+    private static let placeholderSections: Set<String> = ["people", "memories", "duplicates"]
 
     /// Every section the sidebar can offer, so a walk can name where it landed.
     private static let allSections = [
-        "library", "memories", "duplicates", "trash", "hidden",
+        "library", "browse", "memories", "duplicates", "trash", "hidden",
         "albums", "people", "places", "search",
         "transfers", "imports", "shares", "drops", "quarantine",
         "devices", "peers", "federation", "storage", "settings",
+    ]
+
+    /// The sections the phone's tab bar does not carry, and which Browse must
+    /// therefore list. Mirrors `SidebarItem.browsable`, in its order.
+    ///
+    /// Hand-written rather than imported: this bundle drives the app through
+    /// identifiers rather than linking its types, the same way the section list
+    /// above does.
+    private static let browsableSections = [
+        "memories", "duplicates", "trash", "hidden",
+        "albums", "people", "places",
+        "transfers", "imports", "shares", "drops", "quarantine",
+        "devices", "peers", "federation", "storage",
     ]
 
     /// Every section this shell can select lands on a real screen — unless it is
@@ -141,6 +154,53 @@ final class SectionReachabilityTests: CapsuleUITestCase {
         /// one, so its section is read off the page it presents instead.
         let name: String?
         let element: XCUIElement
+    }
+
+    /// Every section the phone's tab bar cannot carry is reachable through
+    /// Browse — which is the only reason Browse exists.
+    ///
+    /// Fifteen sections were unreachable on iPhone before this, and no test
+    /// failed: the catalog derived an `overflow` list that no shell rendered,
+    /// and the suite that checked the placement partition never checked that
+    /// anything *drew* the second half of it. A partition is not reachability.
+    func testBrowseIndexReachesEverySection() throws {
+        launch(scenario: .healthy)
+        try XCTSkipUnless(select("browse"), "this shell has no Browse tab")
+
+        for section in Self.browsableSections {
+            let row = element("browse.\(section)")
+            guard row.waitForExistence(timeout: 5) else {
+                XCTFail("the Browse index has no row for '\(section)'")
+                continue
+            }
+            row.tap()
+            XCTAssertEqual(
+                element("route.scaffold").waitForExistence(timeout: 2),
+                Self.placeholderSections.contains(section),
+                "'\(section)' disagrees with the declared placeholder list"
+            )
+            dismissSystemAuthPrompt()
+            goBack()
+        }
+    }
+
+    /// Dismiss the system authentication alert, if one is up.
+    ///
+    /// Hidden is gated on fresh local authentication, and a simulator with no
+    /// enrolled biometry falls back to a passcode alert owned by SpringBoard —
+    /// not by the app. Left standing it swallows every later tap, so the sweep
+    /// finds no rows and reports the *next* section missing rather than this
+    /// one being modal. That the prompt appears at all is the gate working;
+    /// this only gets the walk past it.
+    private func dismissSystemAuthPrompt() {
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for label in ["Cancel", "Fallback"] {
+            let button = springboard.buttons[label]
+            if button.exists, button.isHittable {
+                button.tap()
+                return
+            }
+        }
     }
 
     /// Which section a selector landed on.

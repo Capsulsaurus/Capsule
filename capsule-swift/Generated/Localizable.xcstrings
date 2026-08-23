@@ -23055,6 +23055,16 @@
         }
       }
     },
+    "ios.hidden.auth.reason": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "View your hidden photos"
+          }
+        }
+      }
+    },
     "ios.hidden.confirm.title": {
       "localizations": {
         "ar": {
@@ -34735,6 +34745,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "Albums"
+          }
+        }
+      }
+    },
+    "ios.sidebar.browse": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browse"
           }
         }
       }

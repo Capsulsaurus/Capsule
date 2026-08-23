@@ -1,4 +1,6 @@
 import AssetKit
+import CapsuleNavigation
+import CapsuleUI
 import ImagePipeline
 import SwiftUI
 
@@ -26,43 +28,32 @@ public struct AlbumsRootView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            content
-                .navigationTitle("ios.albums.title")
-                // `.primaryAction` rather than `.topBarTrailing`: the topBar
-                // placements exist only where there is a navigation bar, while
-                // this one resolves to the same trailing slot on iOS and to the
-                // window toolbar on macOS.
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button { isCreatingAlbum = true } label: {
-                            Image(systemName: "plus")
-                        }
-                        .accessibilityLabel("ios.albums.new_album.title")
+        content
+            .navigationTitle("ios.albums.title")
+            // `.primaryAction` rather than `.topBarTrailing`: the topBar
+            // placements exist only where there is a navigation bar, while
+            // this one resolves to the same trailing slot on iOS and to the
+            // window toolbar on macOS.
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { isCreatingAlbum = true } label: {
+                        Image(systemName: "plus")
                     }
+                    .accessibilityLabel("ios.albums.new_album.title")
                 }
-                .navigationDestination(for: AlbumSummary.self) { album in
-                    AlbumDetailView(
-                        album: album,
-                        albumProvider: albumProvider,
-                        assetProvider: assetProvider,
-                        thumbnails: thumbnails,
-                        mediaLoader: mediaLoader
-                    )
-                }
-        }
-        .task { await model.load() }
-        .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
-            TextField("ios.albums.new_album.name_field", text: $newAlbumName)
-            Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
-            Button("ios.common.create") {
-                let name = newAlbumName
-                newAlbumName = ""
-                Task { await model.createAlbum(named: name) }
             }
-        } message: {
-            Text("ios.albums.new_album.message")
-        }
+            .task { await model.load() }
+            .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
+                TextField("ios.albums.new_album.name_field", text: $newAlbumName)
+                Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
+                Button("ios.common.create") {
+                    let name = newAlbumName
+                    newAlbumName = ""
+                    Task { await model.createAlbum(named: name) }
+                }
+            } message: {
+                Text("ios.albums.new_album.message")
+            }
     }
 
     @ViewBuilder
@@ -76,37 +67,52 @@ public struct AlbumsRootView: View {
                 description: Text("ios.albums.empty.description")
             )
         } else {
-            List {
-                if !model.userAlbums.isEmpty {
-                    Section("ios.albums.section.my_albums") {
-                        ForEach(model.userAlbums) { albumRow($0) }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
+                    if !model.userAlbums.isEmpty {
+                        albumSection("ios.albums.section.my_albums", model.userAlbums)
+                    }
+                    if !model.smartAlbums.isEmpty {
+                        albumSection("ios.albums.section.smart_albums", model.smartAlbums)
                     }
                 }
-                if !model.smartAlbums.isEmpty {
-                    Section("ios.albums.section.smart_albums") {
-                        ForEach(model.smartAlbums) { albumRow($0) }
+                .padding()
+            }
+        }
+    }
+
+    /// One headed grid of album covers.
+    ///
+    /// A cover grid rather than a list of rows, because an album is identified
+    /// by what is in it long before it is identified by its name — and because
+    /// the container/view distinction the design docs insist on is carried by
+    /// the tile's own glyph, which a text row has nowhere to put.
+    @ViewBuilder
+    private func albumSection(_ titleKey: LocalizedStringKey, _ albums: [AlbumSummary]) -> some View {
+        VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
+            Text(titleKey)
+                .font(.title3.weight(.semibold))
+            LazyVGrid(columns: Self.coverColumns, spacing: CapsuleTheme.Spacing.medium) {
+                ForEach(albums) { album in
+                    NavigationLink(value: Route.album(album.id)) {
+                        AlbumCoverCard(
+                            album: album,
+                            albumProvider: albumProvider,
+                            assetProvider: assetProvider,
+                            thumbnails: thumbnails
+                        )
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("album.\(album.title)")
                 }
             }
         }
     }
 
-    private func albumRow(_ album: AlbumSummary) -> some View {
-        NavigationLink(value: album) {
-            HStack(spacing: 12) {
-                Image(systemName: album.isUserAlbum
-                    ? "rectangle.stack.fill"
-                    : "sparkles.rectangle.stack.fill")
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-                    .frame(width: 32)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(album.title)
-                    Text("^[\(album.count) Photo](inflect: true)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-    }
+    /// Two columns on a phone and as many as fit elsewhere — an adaptive grid
+    /// rather than a fixed count, so the iPad and Mac windows earn their width
+    /// instead of showing two enormous tiles.
+    private static let coverColumns = [
+        GridItem(.adaptive(minimum: 150), spacing: CapsuleTheme.Spacing.medium),
+    ]
 }

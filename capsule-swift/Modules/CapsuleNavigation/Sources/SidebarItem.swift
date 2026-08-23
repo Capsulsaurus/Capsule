@@ -15,6 +15,12 @@ import Foundation
 /// back should land where you left, not at the album list.
 public enum SidebarItem: String, Sendable, Hashable, Codable, CaseIterable, Identifiable {
     case library
+    /// The phone's index of every section its tab bar cannot carry.
+    ///
+    /// A section that exists because of a shell rather than because of a
+    /// concept: iPad and Mac list all nineteen in the sidebar and have no use
+    /// for it, so it is the one section the sidebar never shows.
+    case browse
     case albums
     case memories
     case people
@@ -42,15 +48,27 @@ public enum SidebarItem: String, Sendable, Hashable, Codable, CaseIterable, Iden
 /// Where a section surfaces in the compact (iPhone) shell.
 ///
 /// A tab bar holds four or five items before it becomes unreadable, and the app
-/// has nineteen sections. Rather than let each shell invent its own subset —
+/// has twenty sections. Rather than let each shell invent its own subset —
 /// which is how sections become quietly unreachable on one platform — the
-/// subset is declared once, here, and the compact shell renders ``tabs``
-/// directly and ``overflow`` behind a "More" surface.
+/// subset is declared once, here: the compact shell renders ``tabs``, and every
+/// other section is listed by the Browse index that one of those tabs opens.
 public enum SidebarPlacement: String, Sendable, Hashable, Codable, CaseIterable {
-    /// Promoted to the iPhone tab bar.
+    /// Both surfaces: a tab on the iPhone tab bar, a row in the sidebar.
     case tab
-    /// Reachable on iPhone only through the overflow surface.
-    case overflow
+    /// The sidebar only. On a phone the section is reached through Browse.
+    case sidebar
+    /// The iPhone tab bar only.
+    ///
+    /// Exactly one section is this — ``SidebarItem/browse`` — because listing
+    /// it in the sidebar would be a row whose entire content is the rows next
+    /// to it.
+    case phoneTab
+
+    /// Whether the compact shell promotes this to the tab bar.
+    public var isPhoneTab: Bool { self != .sidebar }
+
+    /// Whether the regular-width sidebar lists this section.
+    public var isSidebarRow: Bool { self != .phoneTab }
 }
 
 // MARK: - SidebarGroup

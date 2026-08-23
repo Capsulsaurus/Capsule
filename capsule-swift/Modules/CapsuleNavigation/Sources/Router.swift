@@ -198,10 +198,26 @@ public extension Router {
     /// knowing the current shell state: deep links, menu commands, notification
     /// taps, widget activations. Selecting a section's own landing screen is a
     /// section switch and nothing more, so an in-progress stack there survives.
+    ///
+    /// On a phone the tab bar carries four of the twenty sections, and
+    /// `TabView(selection:)` cannot show a selection no tab claims — setting
+    /// one leaves the bar with nothing highlighted and the user nowhere. So a
+    /// section the tab bar does not carry is entered through
+    /// ``SidebarItem/browse``, with its own landing screen underneath the
+    /// destination so Back means what it looks like it means.
     func select(_ route: Route) {
-        selection = route.owningSection
-        guard !route.isSectionRoot else { return }
-        push(route)
+        let owner = route.owningSection
+        guard shell == .stacked, owner.compactHost == .browse else {
+            selection = owner
+            guard !route.isSectionRoot else { return }
+            push(route)
+            return
+        }
+        selection = .browse
+        // Replaces rather than appends: a link, a menu command or a
+        // notification means "go here", and arriving on top of somebody's
+        // half-finished Browse history would make Back a maze.
+        self[section: .browse] = route.isSectionRoot ? [route] : [owner.rootRoute, route]
     }
 
     /// Switch to `route`'s section and make `route` its only screen.

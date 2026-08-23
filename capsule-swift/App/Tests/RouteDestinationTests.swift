@@ -30,6 +30,11 @@ struct RouteDestinationTests {
     ///
     /// Adding a line is therefore a decision, and reviewable as one.
     static let unbuilt: [UnbuiltRoute] = [
+        // These two used to resolve to the album index, which scored as "a
+        // screen" because it is not a scaffold. Showing the wrong screen is a
+        // worse answer than admitting there is none.
+        UnbuiltRoute(.memories, "the generated memories shelf is not built"),
+        UnbuiltRoute(.duplicates, "the duplicate-review surface is not built"),
         UnbuiltRoute(.viewer(assetID, context: .library), "the full-screen viewer is not built"),
         UnbuiltRoute(.culling(.library), "the keyboard cull pass is not built"),
         UnbuiltRoute(.albumMembers(albumID), "the participant list is not built"),
@@ -230,6 +235,7 @@ extension RouteDestinationTests {
             .memories, .duplicates, .trash, .hidden,
             .viewer(assetID, context: .library),
             .culling(.library),
+            .browse,
             .albums, .album(albumID), .albumMembers(albumID), .albumPolicy(albumID),
             .smartAlbum(smartAlbumID), .smartAlbumEditor(nil), .smartAlbumEditor(smartAlbumID),
             .people, .person(personID),
