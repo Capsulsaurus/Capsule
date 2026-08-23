@@ -25,6 +25,7 @@ struct SplitShell: View {
                                 systemImage: item.systemImage
                             )
                             .tag(item)
+                            .accessibilityIdentifier("sidebar.\(item.rawValue)")
                         }
                     }
                 }

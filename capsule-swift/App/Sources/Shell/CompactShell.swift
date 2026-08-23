@@ -33,7 +33,14 @@ struct CompactShell: View {
                                 RouteDestination(route: route, environment: environment)
                             }
                     }
+                    // Names the section currently *showing*, which is how the
+                    // UI sweep knows where a tap landed without reading the
+                    // catalog it cannot import.
+                    .accessibilityIdentifier("section.\(item.rawValue)")
                 }
+                // On the tab bar *item*, not on its page: the sweep has to be
+                // able to select a section it is not already looking at.
+                .accessibilityIdentifier("tab.\(item.rawValue)")
             }
         }
         .tabViewStyle(.sidebarAdaptable)

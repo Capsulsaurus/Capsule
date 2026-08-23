@@ -10,76 +10,137 @@ import SwiftUI
 /// This is the one place the navigation vocabulary meets the screens, and it is
 /// deliberately a single exhaustive `switch`: adding a `Route` case without
 /// giving it a destination is then a compile error rather than a dead tap
-/// discovered by a user.
+/// discovered by a user. That is also why the cases with no screen yet are
+/// **named individually** rather than swept up by a `default:` — a `default:`
+/// would silently absorb the next case somebody adds, which is the exact failure
+/// the exhaustiveness exists to prevent.
 ///
-/// Destinations that are not built yet resolve to ``RouteScaffold``, which keeps
-/// the section's own name and symbol. That is what lets the sidebar, deep links,
-/// menu commands, and the UI-test sweep all run end to end while the individual
-/// screens are still being filled in.
+/// The switch dispatches; it does not build. Each destination is a small
+/// property or function, most of them in `Destinations/`, so this file stays a
+/// readable table of contents. Nothing here holds state: it reads ports off
+/// ``AppEnvironment`` and hands them to screens, and the screens (or a
+/// ``ResolvedDestination``) own whatever has to be remembered.
 struct RouteDestination: View {
     let route: Route
     let environment: AppEnvironment
 
+    // Thirty-odd branches is what "every destination in the app" costs. The
+    // complexity score is the guarantee, not a smell: collapsing it would mean
+    // giving up the compile error.
+    @ViewBuilder
     var body: some View {
         switch route {
-        case .timeline:
-            TimelineRootView(
-                assetProvider: environment.assetProvider,
-                albumProvider: environment.albumProvider,
-                thumbnails: environment.thumbnails,
-                mediaLoader: environment.mediaLoader,
-                importer: environment.importer,
-                hiddenStore: environment.hiddenStore
-            )
+        // MARK: Library
 
-        case .albums:
-            AlbumsRootView(
-                albumProvider: environment.albumProvider,
-                assetProvider: environment.assetProvider,
-                thumbnails: environment.thumbnails,
-                mediaLoader: environment.mediaLoader
-            )
+        case .timeline: timelineDestination
+        case .memories, .duplicates, .trash, .hidden: collectionsDestination
+        case .viewer, .culling: unbuilt
 
-        // The Collections screen is the compact shell's route to everything the
-        // iPhone tab bar cannot hold, so it stands in for those sections until
-        // each gets its own destination.
-        case .memories, .duplicates, .trash, .hidden, .imports:
-            CollectionsRootView(
-                albumProvider: environment.albumProvider,
-                assetProvider: environment.assetProvider,
-                trashProvider: environment.trashProvider,
-                hiddenStore: environment.hiddenStore,
-                thumbnails: environment.thumbnails,
-                mediaLoader: environment.mediaLoader
-            )
+        // MARK: Collections
+        case .albums: albumsDestination
+        case let .album(id): albumDetailDestination(id)
+        case .albumMembers, .albumPolicy: unbuilt
+        case .smartAlbum, .smartAlbumEditor: unbuilt
+        case .people, .person: unbuilt
+        case .places, .place: placesDestination
+        case .search: searchDestination
 
-        case .places, .place:
-            PlacesMapView(
-                assetProvider: environment.assetProvider,
-                albumProvider: environment.albumProvider,
-                thumbnails: environment.thumbnails,
-                mediaLoader: environment.mediaLoader
-            )
+        // MARK: Transfer and provenance
+        case .transferCenter: transferCenterDestination
+        case let .uploadDetail(id): uploadDetailDestination(id)
+        case let .custodyReceipt(id): custodyReceiptDestination(id)
+        case .imports: importsDestination
+        case .importSession: unbuilt
+        case .quarantine: quarantineDestination
+        case let .quarantineItem(id): quarantineItemDestination(id)
 
-        case .search:
-            SearchRootView(
-                assetProvider: environment.assetProvider,
-                albumProvider: environment.albumProvider,
-                thumbnails: environment.thumbnails,
-                mediaLoader: environment.mediaLoader
-            )
+        // MARK: Sharing
+        case .shares: sharesDestination
+        case .shareDetail: unbuilt
+        case .drops: dropsDestination
+        case let .drop(id): dropDestination(id)
+        case .linkRedemption: unbuilt
 
-        case .settings:
-            SettingsView(
-                consentStore: environment.consentStore,
-                diagnostics: environment.diagnostics
-            )
+        // MARK: Fleet and federation
+        case .devices: devicesDestination
+        case .peers: peersDestination
+        case .federation: federationDestination
 
-        default:
-            RouteScaffold(
-                titleKey: route.owningSection.titleKey,
-                systemImage: route.owningSection.systemImage
-            )
+        // MARK: Storage and system
+        case .quota: quotaDestination
+        case .storage: storageDestination
+        case .maintenance: maintenanceDestination
+        case let .settings(section): settingsDestination(section)
+        case let .onboarding(step): onboardingDestination(step)
         }
+    }
+
+    /// The stand-in for a route that navigates correctly but has no screen yet.
+    ///
+    /// It borrows the owning section's own name and symbol, so the gap still
+    /// reads as *that place* rather than as a generic error.
+    var unbuilt: some View {
+        RouteScaffold(
+            titleKey: route.owningSection.titleKey,
+            systemImage: route.owningSection.systemImage
+        )
+    }
+}
+
+// MARK: - Library and collections
+
+extension RouteDestination {
+    var timelineDestination: some View {
+        TimelineRootView(
+            assetProvider: environment.assetProvider,
+            albumProvider: environment.albumProvider,
+            thumbnails: environment.thumbnails,
+            mediaLoader: environment.mediaLoader,
+            importer: environment.importer,
+            hiddenStore: environment.hiddenStore
+        )
+    }
+
+    var albumsDestination: some View {
+        AlbumsRootView(
+            albumProvider: environment.albumProvider,
+            assetProvider: environment.assetProvider,
+            thumbnails: environment.thumbnails,
+            mediaLoader: environment.mediaLoader
+        )
+    }
+
+    /// Memories, duplicates, trash, and hidden.
+    ///
+    /// One screen for four sections while each is still a tab on the same
+    /// utilities surface. They keep separate routes because they are separate
+    /// destinations with separate histories; what they share for now is a view.
+    var collectionsDestination: some View {
+        CollectionsRootView(
+            albumProvider: environment.albumProvider,
+            assetProvider: environment.assetProvider,
+            trashProvider: environment.trashProvider,
+            hiddenStore: environment.hiddenStore,
+            thumbnails: environment.thumbnails,
+            mediaLoader: environment.mediaLoader
+        )
+    }
+
+    var placesDestination: some View {
+        PlacesMapView(
+            assetProvider: environment.assetProvider,
+            albumProvider: environment.albumProvider,
+            thumbnails: environment.thumbnails,
+            mediaLoader: environment.mediaLoader
+        )
+    }
+
+    var searchDestination: some View {
+        SearchRootView(
+            assetProvider: environment.assetProvider,
+            albumProvider: environment.albumProvider,
+            thumbnails: environment.thumbnails,
+            mediaLoader: environment.mediaLoader
+        )
     }
 }

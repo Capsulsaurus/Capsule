@@ -5,6 +5,8 @@ import CapsuleDomain
 import CapsuleFoundation
 import CapsuleMock
 import CapsulePorts
+import FeatureAuth
+import FeatureSharing
 import FeatureTimeline
 import Foundation
 import ImagePipeline
@@ -95,6 +97,32 @@ struct AppEnvironment {
     var maintenance: any MaintenancePort { mock.maintenance }
     var settings: any SettingsPort { mock.settings }
 
+    // MARK: Ceremony ports
+
+    // Sign-in, server discovery, and first-device enrollment are declared by
+    // `FeatureAuth` rather than by `CapsulePorts`: they are ceremonies driven by
+    // the SDK, not library reads, and the protocol that describes one belongs
+    // beside the screens that run it. They are stored rather than forwarded
+    // because `MockEnvironment` does not own them — this is the seam where a
+    // real SDK-backed adapter will be substituted, and it is the only place that
+    // has to change when it is.
+
+    /// Domain lookup and server pinning, for the Connect-a-Server step.
+    let serverDiscovery: any ServerDiscoveryPort
+    /// Handle/password sign-in and account creation.
+    let credentials: any LocalCredentialPort
+    /// The staged first-device enrollment ceremony.
+    let firstDeviceEnrollment: any FirstDeviceEnrollmentPort
+
+    /// The moderation audit ledger and the appeals filed against it. Declared by
+    /// `FeatureSharing` rather than `CapsulePorts` because an appeal is
+    /// authenticated by master-key proof rather than by the session, which makes
+    /// it a ceremony rather than a library read.
+    let moderationRecords: any ModerationRecordPort
+    /// Which unrecognised origins are being withheld pending a decision. Backed
+    /// by the same store as ``moderationRecords`` — one ledger, two questions.
+    let untrustedOriginPolicy: any UntrustedOriginPolicy
+
     var federation: any FederationPort { mock.federation }
     var peering: any PeeringPort { mock.peering }
     var moderation: any ModerationPort { mock.moderation }
@@ -114,6 +142,14 @@ struct AppEnvironment {
         thumbnails = PortBackedThumbnailProvider(renderer: mock.thumbnails)
         mediaLoader = ViewerMediaLoader()
         importer = Self.makeImporter()
+
+        serverDiscovery = PreviewServerDiscovery(environment: mock)
+        credentials = PreviewCredentials(environment: mock)
+        firstDeviceEnrollment = PreviewEnrollmentCeremony()
+
+        let records = InMemoryModerationRecords()
+        moderationRecords = records
+        untrustedOriginPolicy = records
 
         let consent = ConsentStore()
         consentStore = consent

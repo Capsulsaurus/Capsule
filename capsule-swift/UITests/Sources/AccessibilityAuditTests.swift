@@ -45,4 +45,54 @@ final class AccessibilityAuditTests: CapsuleUITestCase {
         launch(scenario: .degradedFederation)
         auditAccessibility()
     }
+
+    func testOfflineIsAccessible() {
+        launch(scenario: .offline)
+        auditAccessibility()
+    }
+
+    func testQuotaSoftWarningIsAccessible() {
+        launch(scenario: .quotaSoftWarning)
+        auditAccessibility()
+    }
+
+    /// Staged uploads leave originals on the device that took them, so the
+    /// gallery is full of assets that exist but cannot yet be opened at full
+    /// size. The badges that say so are easy to render at insufficient contrast.
+    func testAwaitingOriginalsIsAccessible() {
+        launch(scenario: .awaitingOriginals)
+        auditAccessibility()
+    }
+
+    /// Documents written by a newer client. The indicator has to read as
+    /// *informational* rather than as an error, and it must still describe
+    /// itself to VoiceOver — a glyph-only badge here is a dead end for a
+    /// screen-reader user.
+    func testNewerVersionStateIsAccessible() {
+        launch(scenario: .newerVersionState)
+        auditAccessibility()
+    }
+
+    func testUndecodableAssetsIsAccessible() {
+        launch(scenario: .undecodableAssets)
+        auditAccessibility()
+    }
+
+    func testRecoveryOverdueIsAccessible() {
+        launch(scenario: .recoveryOverdue)
+        auditAccessibility()
+    }
+
+    func testProtocolUpgradeRequiredIsAccessible() {
+        launch(scenario: .protocolUpgradeRequired)
+        auditAccessibility()
+    }
+
+    /// The stress case. A quarter-million-asset grid renders far more elements
+    /// than any other screen, and hit-region and description defects that a
+    /// four-thousand-asset library never surfaces do surface here.
+    func testHugeLibraryIsAccessible() {
+        launch(scenario: .hugeLibrary)
+        auditAccessibility()
+    }
 }

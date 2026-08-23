@@ -23,4 +23,28 @@ final class LaunchFlowTests: CapsuleUITestCase {
         let app = launch(scenario: .hugeLibrary)
         XCTAssertTrue(app.windows.firstMatch.waitForExistence(timeout: 20))
     }
+
+    /// Every scenario must produce a running app.
+    ///
+    /// Deliberately the weakest possible assertion, and deliberately exhaustive.
+    /// Most of these worlds exist to make an *error* surface reachable, which
+    /// means their composition roots are the least exercised code in the app —
+    /// a mock that traps or a force-unwrap on a state only this scenario
+    /// produces would otherwise be found by a reviewer, by hand, or not at all.
+    /// Driving the enum rather than a hand-written list is the point: a new
+    /// scenario is covered the moment it is added.
+    func testEveryScenarioLaunches() {
+        for scenario in MockScenarioName.allCases {
+            let app = launch(scenario: scenario)
+            XCTAssertTrue(
+                app.windows.firstMatch.waitForExistence(timeout: 20),
+                "scenario '\(scenario.rawValue)' never presented a window"
+            )
+            XCTAssertEqual(
+                app.state, .runningForeground,
+                "scenario '\(scenario.rawValue)' left the app in state \(app.state.rawValue)"
+            )
+            app.terminate()
+        }
+    }
 }

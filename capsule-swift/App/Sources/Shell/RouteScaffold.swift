@@ -26,7 +26,14 @@ struct RouteScaffold: View {
             Text("ios.scaffold.body")
         }
         .navigationTitle(LocalizedStringKey(titleKey))
+        // The UI-test sweep asserts a section presents its real screen rather
+        // than this one, so the placeholder has to be nameable from outside the
+        // process. An identifier is not user-facing text and is not translated.
+        .accessibilityIdentifier(Self.accessibilityIdentifier)
     }
+
+    /// How the UI tests recognise a not-yet-built destination.
+    static let accessibilityIdentifier = "route.scaffold"
 }
 
 #Preview("Scaffold") {

@@ -87,7 +87,7 @@ class CapsuleUITestCase: XCTestCase {
 /// because a UI-test bundle links the app as a *target*, not as a library, so it
 /// cannot import the app's modules — the raw values are the contract, and a
 /// mismatch fails loudly at launch rather than silently testing the wrong state.
-enum MockScenarioName: String {
+enum MockScenarioName: String, CaseIterable {
     case healthy
     case emptyLibrary = "empty-library"
     case neverSignedIn = "never-signed-in"
