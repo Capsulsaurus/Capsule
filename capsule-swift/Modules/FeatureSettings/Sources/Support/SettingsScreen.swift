@@ -25,8 +25,8 @@ public struct SettingsScreen<Content: View>: View {
     public init(
         titleKey: String,
         phase: SettingsPhase,
-        emptyTitleKey: String = "ios.settings.state.empty.title",
-        emptyDescriptionKey: String = "ios.settings.state.empty.description",
+        emptyTitleKey: String = "app.settings.state.empty.title",
+        emptyDescriptionKey: String = "app.settings.state.empty.description",
         retry: @escaping @MainActor () async -> Void,
         @ViewBuilder content: @escaping () -> Content
     ) {
@@ -47,9 +47,9 @@ public struct SettingsScreen<Content: View>: View {
     private var stateBody: some View {
         switch phase {
         case .loading:
-            ProgressView(LocalizedStringKey("ios.settings.state.loading"))
+            ProgressView(LocalizedStringKey("app.settings.state.loading"))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel(Text("ios.settings.state.loading"))
+                .accessibilityLabel(Text("app.settings.state.loading"))
         case .empty:
             unavailable(
                 titleKey: emptyTitleKey,
@@ -58,9 +58,9 @@ public struct SettingsScreen<Content: View>: View {
             )
         case .offline:
             unavailable(
-                titleKey: "ios.settings.state.offline.title",
+                titleKey: "app.settings.state.offline.title",
                 symbol: "wifi.slash",
-                descriptionKey: "ios.settings.state.offline.description"
+                descriptionKey: "app.settings.state.offline.description"
             )
         case let .failed(code):
             failure(code: code)
@@ -90,7 +90,7 @@ public struct SettingsScreen<Content: View>: View {
     /// bug rather than a helpful extra.
     private func failure(code: ErrorCode) -> some View {
         ContentUnavailableView {
-            Label("ios.settings.state.error.title", systemImage: "exclamationmark.triangle")
+            Label("app.settings.state.error.title", systemImage: "exclamationmark.triangle")
         } description: {
             Text(LocalizedStringKey(code.rawValue))
         } actions: {
@@ -99,9 +99,9 @@ public struct SettingsScreen<Content: View>: View {
     }
 
     private var retryButton: some View {
-        Button("ios.settings.state.retry") {
+        Button("app.settings.state.retry") {
             Task { await retry() }
         }
-        .accessibilityLabel(Text("ios.settings.state.retry"))
+        .accessibilityLabel(Text("app.settings.state.retry"))
     }
 }

@@ -145,10 +145,10 @@ public final class SyncSettingsModel {
 public extension SyncScope {
     var titleKey: String {
         switch self {
-        case .metadataOnly: "ios.settings.sync.scope.metadata_only"
-        case .metadataAndThumbnails: "ios.settings.sync.scope.metadata_thumbnails"
-        case .metadataThumbnailsAndOriginals: "ios.settings.sync.scope.metadata_thumbnails_originals"
-        case .unknown: "ios.settings.sync.scope.unknown"
+        case .metadataOnly: "app.settings.sync.scope.metadata_only"
+        case .metadataAndThumbnails: "app.settings.sync.scope.metadata_thumbnails"
+        case .metadataThumbnailsAndOriginals: "app.settings.sync.scope.metadata_thumbnails_originals"
+        case .unknown: "app.settings.sync.scope.unknown"
         }
     }
 }
@@ -156,9 +156,9 @@ public extension SyncScope {
 public extension UploadPolicy {
     var titleKey: String {
         switch self {
-        case .full: "ios.settings.sync.policy.full"
-        case .staged: "ios.settings.sync.policy.staged"
-        case .unknown: "ios.settings.sync.policy.unknown"
+        case .full: "app.settings.sync.policy.full"
+        case .staged: "app.settings.sync.policy.staged"
+        case .unknown: "app.settings.sync.policy.unknown"
         }
     }
 }
@@ -201,9 +201,9 @@ public struct SyncSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.sync.force.confirm.title",
-            messageKey: "ios.settings.sync.force.confirm.message",
-            confirmKey: "ios.settings.sync.force.confirm.action",
+            titleKey: "app.settings.sync.force.confirm.title",
+            messageKey: "app.settings.sync.force.confirm.message",
+            confirmKey: "app.settings.sync.force.confirm.action",
             isPresented: $isForcePresented
         ) {
             await model.forceSynchronize()
@@ -213,85 +213,85 @@ public struct SyncSettingsView: View {
     private var stalenessSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.sync.stale.threshold",
+                labelKey: "app.settings.sync.stale.threshold",
                 value: SettingsFormat.days(model.stalenessThresholdDays)
             )
-            Button("ios.settings.sync.force.action") { isForcePresented = true }
-            Button("ios.settings.sync.stale.snooze") {
+            Button("app.settings.sync.force.action") { isForcePresented = true }
+            Button("app.settings.sync.stale.snooze") {
                 Task { await model.snoozeStalenessWarning(days: 7) }
             }
         } header: {
-            Text("ios.settings.sync.stale.header")
+            Text("app.settings.sync.stale.header")
         } footer: {
-            Text("ios.settings.sync.stale.footer")
+            Text("app.settings.sync.stale.footer")
         }
     }
 
     private var statusSection: some View {
         Section {
             SettingsStatusRow(
-                labelKey: "ios.settings.sync.connection",
+                labelKey: "app.settings.sync.connection",
                 statusKey: ConnectionClassPresentation.titleKey(
                     model.status?.connectionClass ?? .unknown("")
                 ),
                 tone: (model.status?.connectionClass ?? .unknown("")).tone
             )
             SettingsValueRow(
-                labelKey: "ios.settings.sync.pending_uploads",
+                labelKey: "app.settings.sync.pending_uploads",
                 value: SettingsFormat.count(model.status?.pendingUploadCount ?? 0)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.sync.pending_downloads",
+                labelKey: "app.settings.sync.pending_downloads",
                 value: SettingsFormat.count(model.status?.pendingDownloadCount ?? 0)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.sync.last_completed",
+                labelKey: "app.settings.sync.last_completed",
                 value: SettingsFormat.timestamp(model.status?.lastCompletedSyncAt)
             )
             SettingsStatusRow(
-                labelKey: "ios.settings.sync.bulk",
+                labelKey: "app.settings.sync.bulk",
                 statusKey: model.canRunLargeReconciliation
-                    ? "ios.settings.sync.bulk.allowed"
-                    : "ios.settings.sync.bulk.deferred",
+                    ? "app.settings.sync.bulk.allowed"
+                    : "app.settings.sync.bulk.deferred",
                 tone: model.canRunLargeReconciliation ? .positive : .caution
             )
-            Button("ios.settings.sync.now") { Task { await model.synchronize() } }
+            Button("app.settings.sync.now") { Task { await model.synchronize() } }
                 .disabled(model.isWorking)
         } header: {
-            Text("ios.settings.sync.status.header")
+            Text("app.settings.sync.status.header")
         } footer: {
-            Text("ios.settings.sync.status.footer")
+            Text("app.settings.sync.status.footer")
         }
     }
 
     private var scopeSection: some View {
         Section {
-            Picker("ios.settings.sync.scope.label", selection: scopeBinding) {
+            Picker("app.settings.sync.scope.label", selection: scopeBinding) {
                 ForEach(model.scopeOptions, id: \.rawValue) { option in
                     Text(LocalizedStringKey(option.titleKey)).tag(option)
                 }
             }
             .pickerStyle(.inline)
-            Toggle("ios.settings.sync.auto.toggle", isOn: autoSyncBinding)
+            Toggle("app.settings.sync.auto.toggle", isOn: autoSyncBinding)
         } header: {
-            Text("ios.settings.sync.scope.header")
+            Text("app.settings.sync.scope.header")
         } footer: {
-            Text("ios.settings.sync.scope.footer")
+            Text("app.settings.sync.scope.footer")
         }
     }
 
     private var policySection: some View {
         Section {
-            Picker("ios.settings.sync.policy.label", selection: policyBinding) {
+            Picker("app.settings.sync.policy.label", selection: policyBinding) {
                 ForEach(model.policyOptions, id: \.rawValue) { option in
                     Text(LocalizedStringKey(option.titleKey)).tag(option)
                 }
             }
             .pickerStyle(.inline)
         } header: {
-            Text("ios.settings.sync.policy.header")
+            Text("app.settings.sync.policy.header")
         } footer: {
-            Text("ios.settings.sync.policy.footer")
+            Text("app.settings.sync.policy.footer")
         }
     }
 

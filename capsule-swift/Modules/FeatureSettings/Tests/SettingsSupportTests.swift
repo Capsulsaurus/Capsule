@@ -44,7 +44,7 @@ struct AtRestPostureTests {
 
         #expect(Set(keys).count == keys.count)
         for key in keys {
-            #expect(key.hasPrefix("ios.settings.security.atrest."))
+            #expect(key.hasPrefix("app.settings.security.atrest."))
             #expect(!key.contains(" "))
         }
     }
@@ -65,7 +65,7 @@ struct ConnectionClassPresentationTests {
     func knownClassesHaveTheirOwnKey(connection: ConnectionClass) {
         let key = ConnectionClassPresentation.titleKey(connection)
 
-        #expect(key == "ios.settings.connection.\(connection.rawValue)")
+        #expect(key == "app.settings.connection.\(connection.rawValue)")
         #expect(!key.contains(" "))
     }
 
@@ -75,7 +75,7 @@ struct ConnectionClassPresentationTests {
         let unknown = ConnectionClassPresentation.titleKey(ConnectionClass(rawValue: "starlink"))
 
         #expect(Set(known).count == known.count)
-        #expect(unknown == "ios.settings.connection.unknown")
+        #expect(unknown == "app.settings.connection.unknown")
     }
 
     @Test("tone escalates with how little the connection can do")

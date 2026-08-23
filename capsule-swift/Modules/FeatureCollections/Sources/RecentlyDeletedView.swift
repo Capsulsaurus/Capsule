@@ -24,15 +24,15 @@ public struct RecentlyDeletedView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if assets.isEmpty {
                 ContentUnavailableView(
-                    "ios.recently_deleted.empty.title",
+                    "app.recently_deleted.empty.title",
                     systemImage: "trash",
-                    description: Text("ios.recently_deleted.empty.description")
+                    description: Text("app.recently_deleted.empty.description")
                 )
             } else {
                 list
             }
         }
-        .navigationTitle("ios.recently_deleted.title")
+        .navigationTitle("app.recently_deleted.title")
         .capsuleNavigationBarInline()
         .task { await reload() }
     }
@@ -48,10 +48,10 @@ public struct RecentlyDeletedView: View {
                     Spacer()
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button("ios.common.delete", role: .destructive) {
+                    Button("app.common.delete", role: .destructive) {
                         Task { await purge(asset) }
                     }
-                    Button("ios.recently_deleted.recover") {
+                    Button("app.recently_deleted.recover") {
                         Task { await restore(asset) }
                     }
                     .tint(.blue)

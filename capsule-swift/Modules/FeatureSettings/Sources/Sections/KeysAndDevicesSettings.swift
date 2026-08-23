@@ -128,8 +128,8 @@ public struct KeysAndDevicesSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.keysAndDevices.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.keys.empty.title",
-            emptyDescriptionKey: "ios.settings.keys.empty.description",
+            emptyTitleKey: "app.settings.keys.empty.title",
+            emptyDescriptionKey: "app.settings.keys.empty.description",
             retry: { await model.load() },
             content: {
                 enrollmentSection
@@ -140,9 +140,9 @@ public struct KeysAndDevicesSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.keys.revoke.confirm.title",
-            messageKey: "ios.settings.keys.revoke.confirm.message",
-            confirmKey: "ios.settings.keys.revoke.confirm.action",
+            titleKey: "app.settings.keys.revoke.confirm.title",
+            messageKey: "app.settings.keys.revoke.confirm.message",
+            confirmKey: "app.settings.keys.revoke.confirm.action",
             isPresented: revocationPresented
         ) {
             if let identifier = devicePendingRevocation {
@@ -162,24 +162,24 @@ public struct KeysAndDevicesSettingsView: View {
     private var enrollmentSection: some View {
         Section {
             if let code = model.enrollmentCode {
-                SettingsValueRow(labelKey: "ios.settings.keys.enroll.code", value: code.code)
+                SettingsValueRow(labelKey: "app.settings.keys.enroll.code", value: code.code)
                 SettingsValueRow(
-                    labelKey: "ios.settings.keys.enroll.expires",
+                    labelKey: "app.settings.keys.enroll.expires",
                     value: SettingsFormat.timestamp(code.expiresAt)
                 )
-                Button("ios.settings.keys.enroll.cancel", role: .cancel) {
+                Button("app.settings.keys.enroll.cancel", role: .cancel) {
                     Task { await model.cancelEnrollment() }
                 }
             } else {
-                Button("ios.settings.keys.enroll.issue") {
+                Button("app.settings.keys.enroll.issue") {
                     Task { await model.issueEnrollmentCode() }
                 }
                 .disabled(model.isWorking)
             }
         } header: {
-            Text("ios.settings.keys.enroll.header")
+            Text("app.settings.keys.enroll.header")
         } footer: {
-            Text("ios.settings.keys.enroll.footer")
+            Text("app.settings.keys.enroll.footer")
         }
     }
 
@@ -189,9 +189,9 @@ public struct KeysAndDevicesSettingsView: View {
                 deviceRows(record)
             }
         } header: {
-            Text("ios.settings.keys.devices.header")
+            Text("app.settings.keys.devices.header")
         } footer: {
-            Text("ios.settings.keys.devices.footer")
+            Text("app.settings.keys.devices.footer")
         }
     }
 
@@ -199,29 +199,29 @@ public struct KeysAndDevicesSettingsView: View {
     private func deviceRows(_ record: DeviceRecord) -> some View {
         SettingsStatusRow(
             labelKey: record.isCurrent
-                ? "ios.settings.keys.devices.this_device"
-                : "ios.settings.keys.devices.device",
+                ? "app.settings.keys.devices.this_device"
+                : "app.settings.keys.devices.device",
             statusKey: record.isActive
-                ? "ios.settings.keys.devices.active"
-                : "ios.settings.keys.devices.revoked",
+                ? "app.settings.keys.devices.active"
+                : "app.settings.keys.devices.revoked",
             tone: record.isActive ? .positive : .neutral
         )
-        SettingsValueRow(labelKey: "ios.settings.keys.devices.model", value: record.model)
+        SettingsValueRow(labelKey: "app.settings.keys.devices.model", value: record.model)
         SettingsValueRow(
-            labelKey: "ios.settings.keys.devices.added",
+            labelKey: "app.settings.keys.devices.added",
             value: SettingsFormat.day(record.firstSeen)
         )
         SettingsValueRow(
-            labelKey: "ios.settings.keys.devices.last_seen",
+            labelKey: "app.settings.keys.devices.last_seen",
             value: SettingsFormat.timestamp(record.lastSeen)
         )
         if let revoked = record.revokedAt {
             SettingsValueRow(
-                labelKey: "ios.settings.keys.devices.revoked_at",
+                labelKey: "app.settings.keys.devices.revoked_at",
                 value: SettingsFormat.day(revoked)
             )
         } else if !record.isCurrent {
-            Button("ios.settings.keys.devices.revoke", role: .destructive) {
+            Button("app.settings.keys.devices.revoke", role: .destructive) {
                 devicePendingRevocation = record.id
             }
         }
@@ -230,39 +230,39 @@ public struct KeysAndDevicesSettingsView: View {
     private var cohortsSection: some View {
         Section {
             if model.cohorts.isEmpty {
-                SettingsNoteRow(textKey: "ios.settings.keys.cohorts.none")
+                SettingsNoteRow(textKey: "app.settings.keys.cohorts.none")
             }
             ForEach(model.cohorts) { cohort in
                 SettingsValueRow(
-                    labelKey: "ios.settings.keys.cohorts.hash",
+                    labelKey: "app.settings.keys.cohorts.hash",
                     value: SettingsFormat.shortIdentifier(cohort.cohortHash, length: 12)
                 )
                 SettingsStatusRow(
-                    labelKey: "ios.settings.keys.cohorts.seen_before",
+                    labelKey: "app.settings.keys.cohorts.seen_before",
                     statusKey: cohort.isPreviouslySeen
-                        ? "ios.settings.keys.cohorts.yes"
-                        : "ios.settings.keys.cohorts.no",
+                        ? "app.settings.keys.cohorts.yes"
+                        : "app.settings.keys.cohorts.no",
                     tone: .neutral
                 )
                 SettingsValueRow(
-                    labelKey: "ios.settings.keys.cohorts.last_seen",
+                    labelKey: "app.settings.keys.cohorts.last_seen",
                     value: SettingsFormat.timestamp(cohort.lastSeen)
                 )
             }
         } header: {
-            Text("ios.settings.keys.cohorts.header")
+            Text("app.settings.keys.cohorts.header")
         } footer: {
-            Text("ios.settings.keys.cohorts.footer")
+            Text("app.settings.keys.cohorts.footer")
         }
     }
 
     private var rotationSection: some View {
         Section {
-            SettingsNoteRow(textKey: "ios.settings.keys.rotation.body")
+            SettingsNoteRow(textKey: "app.settings.keys.rotation.body")
         } header: {
-            Text("ios.settings.keys.rotation.header")
+            Text("app.settings.keys.rotation.header")
         } footer: {
-            Text("ios.settings.keys.rotation.footer")
+            Text("app.settings.keys.rotation.footer")
         }
     }
 }

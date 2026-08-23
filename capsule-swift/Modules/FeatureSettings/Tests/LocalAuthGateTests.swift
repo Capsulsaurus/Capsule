@@ -25,7 +25,7 @@ struct LocalAuthGateTests {
     func onlyTwoViewsAreGated() {
         #expect(GatedLibraryView.allCases == [.recentlyDeleted, .hidden])
         for view in GatedLibraryView.allCases {
-            #expect(view.titleKey == "ios.settings.security.gate.\(view.rawValue)")
+            #expect(view.titleKey == "app.settings.security.gate.\(view.rawValue)")
             #expect(!view.titleKey.contains(" "))
         }
     }
@@ -136,7 +136,7 @@ struct LocalAuthGateTests {
         let keys = [LocalAuthMethod.biometric, .deviceCredential, .unavailable].map(\.descriptionKey)
         #expect(Set(keys).count == 3)
         for key in keys {
-            #expect(key.hasPrefix("ios.settings.security.method."))
+            #expect(key.hasPrefix("app.settings.security.method."))
         }
     }
 }

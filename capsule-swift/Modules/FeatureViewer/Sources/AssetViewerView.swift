@@ -49,7 +49,7 @@ public struct AssetViewerView: View {
             }
         }
         .confirmationDialog(
-            "ios.add_to_album.title",
+            "app.add_to_album.title",
             isPresented: $isAddToAlbumPresented,
             titleVisibility: .visible
         ) {
@@ -60,8 +60,8 @@ public struct AssetViewerView: View {
             }
         } message: {
             Text(model.userAlbums.isEmpty
-                ? LocalizedStringKey("ios.add_to_album.empty_albums")
-                : LocalizedStringKey("ios.add_to_album.choose"))
+                ? LocalizedStringKey("app.add_to_album.empty_albums")
+                : LocalizedStringKey("app.add_to_album.choose"))
         }
     }
 
@@ -108,7 +108,7 @@ public struct AssetViewerView: View {
                 .padding(10)
                 .capsuleGlass(in: Circle(), interactive: true)
         }
-        .accessibilityLabel("ios.common.done")
+        .accessibilityLabel("app.common.done")
     }
 
     @ViewBuilder
@@ -140,8 +140,8 @@ public struct AssetViewerView: View {
             } label: {
                 Label(
                     model.isPlayingSlideshow
-                        ? LocalizedStringKey("ios.viewer.pause_slideshow")
-                        : LocalizedStringKey("ios.viewer.play_slideshow"),
+                        ? LocalizedStringKey("app.viewer.pause_slideshow")
+                        : LocalizedStringKey("app.viewer.play_slideshow"),
                     systemImage: model.isPlayingSlideshow ? "pause" : "play"
                 )
             }
@@ -152,7 +152,7 @@ public struct AssetViewerView: View {
                         isAddToAlbumPresented = true
                     }
                 } label: {
-                    Label("ios.add_to_album.title", systemImage: "rectangle.stack.badge.plus")
+                    Label("app.add_to_album.title", systemImage: "rectangle.stack.badge.plus")
                 }
             }
         } label: {
@@ -162,7 +162,7 @@ public struct AssetViewerView: View {
                 .padding(10)
                 .capsuleGlass(in: Circle(), interactive: true)
         }
-        .accessibilityLabel("ios.viewer.more")
+        .accessibilityLabel("app.viewer.more")
         .accessibilityIdentifier("viewer.more")
     }
 
@@ -190,9 +190,9 @@ public struct AssetViewerView: View {
                     barButton(favoriteSymbol, tint: favoriteTint) {
                         Task { await model.toggleFavorite() }
                     }
-                    .accessibilityLabel("ios.viewer.favorite")
+                    .accessibilityLabel("app.viewer.favorite")
                     barButton("info.circle") { model.isInfoPanelPresented = true }
-                        .accessibilityLabel("ios.viewer.info")
+                        .accessibilityLabel("app.viewer.info")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, CapsuleTheme.Spacing.medium)
@@ -204,7 +204,7 @@ public struct AssetViewerView: View {
                         if await model.deleteCurrentAsset() { dismiss() }
                     }
                 }
-                .accessibilityLabel("ios.viewer.delete")
+                .accessibilityLabel("app.viewer.delete")
                 .accessibilityIdentifier("viewer.delete")
                 .fixedSize()
                 .padding(CapsuleTheme.Spacing.medium)

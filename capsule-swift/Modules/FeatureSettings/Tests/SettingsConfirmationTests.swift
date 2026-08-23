@@ -110,7 +110,7 @@ struct TypedPhraseGateTests {
     /// what the catalog resolved to at runtime rather than a hard-coded token.
     @Test("a gate built from a catalog key compares whatever that key resolved to")
     func catalogBackedGateComparesTheResolvedText() {
-        let key = "ios.settings.confirm.phrase.restore"
+        let key = "app.settings.confirm.phrase.restore"
         let resolved = SettingsPhrase.text(forKey: key)
         let gate = TypedPhraseGate(phraseKey: key)
 

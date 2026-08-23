@@ -129,10 +129,10 @@ public final class ImportHistoryModel {
 public extension ImportSessionRecord.Outcome {
     var titleKey: String {
         switch self {
-        case .running: "ios.import.history.outcome.running"
-        case .completed: "ios.import.history.outcome.completed"
-        case .completedWithFailures: "ios.import.history.outcome.completed_with_failures"
-        case .cancelled: "ios.import.history.outcome.cancelled"
+        case .running: "app.import.history.outcome.running"
+        case .completed: "app.import.history.outcome.completed"
+        case .completedWithFailures: "app.import.history.outcome.completed_with_failures"
+        case .cancelled: "app.import.history.outcome.cancelled"
         }
     }
 

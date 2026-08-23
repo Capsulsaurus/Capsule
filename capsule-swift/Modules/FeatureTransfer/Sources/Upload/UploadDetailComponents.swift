@@ -30,18 +30,18 @@ struct SessionStateTrack: View {
                 VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) { steps }
             }
             if state == .failedProcessing {
-                Label("ios.transfer.session.failed.description", systemImage: "xmark.octagon.fill")
+                Label("app.transfer.session.failed.description", systemImage: "xmark.octagon.fill")
                     .font(.caption)
                     .foregroundStyle(.red)
             }
             if state == .waitingForProcessing {
-                Label("ios.transfer.session.waiting.description", systemImage: "lock")
+                Label("app.transfer.session.waiting.description", systemImage: "lock")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("ios.transfer.session.track")
+        .accessibilityLabel("app.transfer.session.track")
     }
 
     @ViewBuilder
@@ -109,35 +109,35 @@ struct AdaptiveChunkDisclosure: View {
 
     var body: some View {
         DisclosureGroup {
-            LabeledContent("ios.transfer.chunk.current") {
+            LabeledContent("app.transfer.chunk.current") {
                 Text(verbatim: TransferFormat.bytes(plan.currentBytes))
             }
-            LabeledContent("ios.transfer.chunk.suggested") {
+            LabeledContent("app.transfer.chunk.suggested") {
                 Text(verbatim: TransferFormat.bytes(plan.suggestedBytes))
             }
-            LabeledContent("ios.transfer.chunk.bounds") {
+            LabeledContent("app.transfer.chunk.bounds") {
                 Text(verbatim: bounds)
             }
-            LabeledContent("ios.transfer.chunk.window") {
+            LabeledContent("app.transfer.chunk.window") {
                 Text(verbatim: TransferFormat.count(AdaptiveChunkPlan.windowSeconds))
             }
             Label(LocalizedStringKey(plan.adjustment.titleKey), systemImage: reasonSymbol)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if !plan.isAligned {
-                Label("ios.transfer.chunk.misaligned", systemImage: "exclamationmark.triangle")
+                Label("app.transfer.chunk.misaligned", systemImage: "exclamationmark.triangle")
                     .font(.footnote)
                     .foregroundStyle(.red)
             }
         } label: {
-            Label("ios.transfer.chunk.title", systemImage: "square.stack.3d.up")
+            Label("app.transfer.chunk.title", systemImage: "square.stack.3d.up")
         }
     }
 
     private var bounds: String {
         let low = TransferFormat.bytes(AdaptiveChunkPlan.minimumBytes)
         let high = TransferFormat.bytes(AdaptiveChunkPlan.maximumBytes)
-        return String(format: String(localized: "ios.transfer.chunk.bounds.range"), low, high)
+        return String(format: String(localized: "app.transfer.chunk.bounds.range"), low, high)
     }
 
     private var reasonSymbol: String {

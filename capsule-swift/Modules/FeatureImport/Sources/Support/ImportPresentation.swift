@@ -41,7 +41,7 @@ public enum ImportTone: Sendable, Equatable, CaseIterable {
 
 public extension SourceKind {
     /// The catalog key naming the kind.
-    var importTitleKey: String { "ios.import.kind.\(keySuffix)" }
+    var importTitleKey: String { "app.import.kind.\(keySuffix)" }
 
     /// The SF Symbol standing for it.
     var importSymbol: String {
@@ -82,11 +82,11 @@ public extension ImportPlan.DestinationRule {
     /// without one.
     var reasonKey: String {
         switch self {
-        case .explicitUserPick: "ios.import.plan.reason.explicit_pick"
-        case .scopeOverride: "ios.import.plan.reason.scope_override"
-        case .sourceKindDefault: "ios.import.plan.reason.source_kind_default"
-        case .ownerDefaultPointer: "ios.import.plan.reason.owner_pointer"
-        case .derivedDefaultAlbum: "ios.import.plan.reason.derived_default"
+        case .explicitUserPick: "app.import.plan.reason.explicit_pick"
+        case .scopeOverride: "app.import.plan.reason.scope_override"
+        case .sourceKindDefault: "app.import.plan.reason.source_kind_default"
+        case .ownerDefaultPointer: "app.import.plan.reason.owner_pointer"
+        case .derivedDefaultAlbum: "app.import.plan.reason.derived_default"
         }
     }
 }
@@ -96,9 +96,9 @@ public extension ImportPlan.DestinationRule {
 public extension ImportMode {
     var titleKey: String {
         switch self {
-        case .copy: "ios.import.plan.mode.copy"
-        case .move: "ios.import.plan.mode.move"
-        case .unknown: "ios.import.plan.mode.unknown"
+        case .copy: "app.import.plan.mode.copy"
+        case .move: "app.import.plan.mode.move"
+        case .unknown: "app.import.plan.mode.unknown"
         }
     }
 }
@@ -108,11 +108,11 @@ public extension ImportMode {
 public extension ImportConflictKind {
     var titleKey: String {
         switch self {
-        case .duplicateWithNewMetadata: "ios.import.conflict.kind.duplicate_with_new_metadata"
-        case .sameNameDifferentContent: "ios.import.conflict.kind.same_name_different_content"
-        case .existingIsEdited: "ios.import.conflict.kind.existing_is_edited"
-        case .destinationDiffers: "ios.import.conflict.kind.destination_differs"
-        case .unknown: "ios.import.conflict.kind.unknown"
+        case .duplicateWithNewMetadata: "app.import.conflict.kind.duplicate_with_new_metadata"
+        case .sameNameDifferentContent: "app.import.conflict.kind.same_name_different_content"
+        case .existingIsEdited: "app.import.conflict.kind.existing_is_edited"
+        case .destinationDiffers: "app.import.conflict.kind.destination_differs"
+        case .unknown: "app.import.conflict.kind.unknown"
         }
     }
 }
@@ -120,11 +120,11 @@ public extension ImportConflictKind {
 public extension ImportConflictResolution {
     var titleKey: String {
         switch self {
-        case .keepBoth: "ios.import.conflict.resolution.keep_both"
-        case .skipIncoming: "ios.import.conflict.resolution.skip_incoming"
-        case .mergeIntoExisting: "ios.import.conflict.resolution.merge_into_existing"
-        case .replaceExisting: "ios.import.conflict.resolution.replace_existing"
-        case .unknown: "ios.import.conflict.resolution.unknown"
+        case .keepBoth: "app.import.conflict.resolution.keep_both"
+        case .skipIncoming: "app.import.conflict.resolution.skip_incoming"
+        case .mergeIntoExisting: "app.import.conflict.resolution.merge_into_existing"
+        case .replaceExisting: "app.import.conflict.resolution.replace_existing"
+        case .unknown: "app.import.conflict.resolution.unknown"
         }
     }
 }
@@ -134,13 +134,13 @@ public extension ImportConflictResolution {
 public extension ImportItemStage {
     var titleKey: String {
         switch self {
-        case .queued: "ios.import.run.stage.queued"
-        case .processing: "ios.import.run.stage.processing"
-        case .encrypting: "ios.import.run.stage.encrypting"
-        case .uploading: "ios.import.run.stage.uploading"
-        case .done: "ios.import.run.stage.done"
-        case .failed: "ios.import.run.stage.failed"
-        case .unknown: "ios.import.run.stage.unknown"
+        case .queued: "app.import.run.stage.queued"
+        case .processing: "app.import.run.stage.processing"
+        case .encrypting: "app.import.run.stage.encrypting"
+        case .uploading: "app.import.run.stage.uploading"
+        case .done: "app.import.run.stage.done"
+        case .failed: "app.import.run.stage.failed"
+        case .unknown: "app.import.run.stage.unknown"
         }
     }
 
@@ -190,9 +190,9 @@ public extension ImportAction {
     var skipReasonKey: String? {
         switch self {
         case .importAsset, .importAsStackMember: nil
-        case .skipDuplicate: "ios.import.plan.skip.reason.duplicate"
-        case .skipUnsupported: "ios.import.plan.skip.reason.unsupported"
-        case .skipUnreadable: "ios.import.plan.skip.reason.unreadable"
+        case .skipDuplicate: "app.import.plan.skip.reason.duplicate"
+        case .skipUnsupported: "app.import.plan.skip.reason.unsupported"
+        case .skipUnreadable: "app.import.plan.skip.reason.unreadable"
         }
     }
 }

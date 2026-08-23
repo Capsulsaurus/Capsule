@@ -54,7 +54,7 @@ public final class ServerSettingsModel {
     /// The connection class, and how loudly to report it.
     public var connectionStatus: (key: String, tone: SettingsTone) {
         guard let connection = status?.connectionClass else {
-            return ("ios.settings.server.connection.unknown", .neutral)
+            return ("app.settings.server.connection.unknown", .neutral)
         }
         return (ConnectionClassPresentation.titleKey(connection), connection.tone)
     }
@@ -107,8 +107,8 @@ public struct ServerSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.server.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.server.empty.title",
-            emptyDescriptionKey: "ios.settings.server.empty.description",
+            emptyTitleKey: "app.settings.server.empty.title",
+            emptyDescriptionKey: "app.settings.server.empty.description",
             retry: { await model.load() },
             content: {
                 originSection
@@ -122,53 +122,53 @@ public struct ServerSettingsView: View {
     private var originSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.server.origin",
+                labelKey: "app.settings.server.origin",
                 value: model.account?.homeServer ?? SettingsFormat.unknown
             )
             SettingsStatusRow(
-                labelKey: "ios.settings.server.connection.label",
+                labelKey: "app.settings.server.connection.label",
                 statusKey: model.connectionStatus.key,
                 tone: model.connectionStatus.tone
             )
             SettingsValueRow(
-                labelKey: "ios.settings.server.last_sync",
+                labelKey: "app.settings.server.last_sync",
                 value: SettingsFormat.timestamp(model.status?.lastCompletedSyncAt)
             )
-            Button("ios.settings.server.sync_now") {
+            Button("app.settings.server.sync_now") {
                 Task { await model.synchronize() }
             }
             .disabled(model.isWorking)
         } header: {
-            Text("ios.settings.server.origin.header")
+            Text("app.settings.server.origin.header")
         } footer: {
-            Text("ios.settings.server.origin.footer")
+            Text("app.settings.server.origin.footer")
         }
     }
 
     private var versionSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.server.protocol_version",
+                labelKey: "app.settings.server.protocol_version",
                 value: model.buildInfo.protocolVersion
             )
             SettingsValueRow(
-                labelKey: "ios.settings.server.client_version",
+                labelKey: "app.settings.server.client_version",
                 value: model.buildInfo.clientVersion
             )
         } header: {
-            Text("ios.settings.server.version.header")
+            Text("app.settings.server.version.header")
         } footer: {
-            Text("ios.settings.server.version.footer")
+            Text("app.settings.server.version.footer")
         }
     }
 
     private var portabilitySection: some View {
         Section {
-            SettingsNoteRow(textKey: "ios.settings.server.portability.body")
+            SettingsNoteRow(textKey: "app.settings.server.portability.body")
         } header: {
-            Text("ios.settings.server.portability.header")
+            Text("app.settings.server.portability.header")
         } footer: {
-            Text("ios.settings.server.portability.footer")
+            Text("app.settings.server.portability.footer")
         }
     }
 }

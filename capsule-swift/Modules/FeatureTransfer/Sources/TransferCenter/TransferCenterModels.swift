@@ -19,9 +19,9 @@ public enum TransferSegment: String, Sendable, Equatable, CaseIterable, Identifi
 
     var titleKey: String {
         switch self {
-        case .uploads: "ios.transfer.segment.uploads"
-        case .downloads: "ios.transfer.segment.downloads"
-        case .activity: "ios.transfer.segment.activity"
+        case .uploads: "app.transfer.segment.uploads"
+        case .downloads: "app.transfer.segment.downloads"
+        case .activity: "app.transfer.segment.activity"
         }
     }
 }

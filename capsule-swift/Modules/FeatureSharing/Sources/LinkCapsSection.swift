@@ -19,7 +19,7 @@ struct LinkCapsSection: View {
             totalBytes
             fileCount
             fileSize
-            Toggle("ios.drops.caps.single_use", isOn: $draft.singleUse)
+            Toggle("app.drops.caps.single_use", isOn: $draft.singleUse)
             ForEach(issues) { issue in
                 Label(message(for: issue), systemImage: "exclamationmark.triangle")
                     .font(.footnote)
@@ -27,18 +27,18 @@ struct LinkCapsSection: View {
                     .accessibilityElement(children: .combine)
             }
         } header: {
-            Text("ios.drops.caps.header")
+            Text("app.drops.caps.header")
         } footer: {
-            Text("ios.drops.caps.footer")
+            Text("app.drops.caps.footer")
         }
     }
 
     @ViewBuilder
     private var expiry: some View {
-        Toggle("ios.drops.caps.expiry.toggle", isOn: $draft.expiryEnabled)
+        Toggle("app.drops.caps.expiry.toggle", isOn: $draft.expiryEnabled)
         if draft.expiryEnabled {
             DatePicker(
-                "ios.drops.caps.expiry.date",
+                "app.drops.caps.expiry.date",
                 selection: $draft.expiryDate,
                 displayedComponents: [.date, .hourAndMinute]
             )
@@ -47,13 +47,13 @@ struct LinkCapsSection: View {
 
     @ViewBuilder
     private var totalBytes: some View {
-        Toggle("ios.drops.caps.total_bytes.toggle", isOn: $draft.totalBytesEnabled)
+        Toggle("app.drops.caps.total_bytes.toggle", isOn: $draft.totalBytesEnabled)
         if draft.totalBytesEnabled {
             Stepper(value: $draft.totalGibibytes, in: 1 ... 512, step: 1) {
                 LabeledContent {
                     Text(byteCount(gibibytes: draft.totalGibibytes))
                 } label: {
-                    Text("ios.drops.caps.total_bytes.value")
+                    Text("app.drops.caps.total_bytes.value")
                 }
             }
         }
@@ -61,13 +61,13 @@ struct LinkCapsSection: View {
 
     @ViewBuilder
     private var fileCount: some View {
-        Toggle("ios.drops.caps.file_count.toggle", isOn: $draft.fileCountEnabled)
+        Toggle("app.drops.caps.file_count.toggle", isOn: $draft.fileCountEnabled)
         if draft.fileCountEnabled {
             Stepper(value: $draft.fileCount, in: 1 ... 1000) {
                 LabeledContent {
                     Text(draft.fileCount, format: .number)
                 } label: {
-                    Text("ios.drops.caps.file_count.value")
+                    Text("app.drops.caps.file_count.value")
                 }
             }
         }
@@ -75,13 +75,13 @@ struct LinkCapsSection: View {
 
     @ViewBuilder
     private var fileSize: some View {
-        Toggle("ios.drops.caps.file_size.toggle", isOn: $draft.fileSizeEnabled)
+        Toggle("app.drops.caps.file_size.toggle", isOn: $draft.fileSizeEnabled)
         if draft.fileSizeEnabled {
             Stepper(value: $draft.fileMebibytes, in: 1 ... 8192, step: 64) {
                 LabeledContent {
                     Text(byteCount(mebibytes: draft.fileMebibytes))
                 } label: {
-                    Text("ios.drops.caps.file_size.value")
+                    Text("app.drops.caps.file_size.value")
                 }
             }
         }
@@ -97,10 +97,10 @@ struct LinkCapsSection: View {
 
     private func message(for issue: LinkCapsIssue) -> LocalizedStringKey {
         switch issue {
-        case .expiryInPast: "ios.drops.caps.issue.expiry_past"
-        case .zeroCap: "ios.drops.caps.issue.zero"
-        case .fileSizeExceedsTotal: "ios.drops.caps.issue.file_over_total"
-        case .singleUseWithMultipleFiles: "ios.drops.caps.issue.single_use_conflict"
+        case .expiryInPast: "app.drops.caps.issue.expiry_past"
+        case .zeroCap: "app.drops.caps.issue.zero"
+        case .fileSizeExceedsTotal: "app.drops.caps.issue.file_over_total"
+        case .singleUseWithMultipleFiles: "app.drops.caps.issue.single_use_conflict"
         }
     }
 }

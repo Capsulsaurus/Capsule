@@ -21,18 +21,18 @@ public enum ImportPlanCategory: Sendable, Equatable, Hashable, CaseIterable, Ide
     /// The catalog key for the tile's label.
     public var titleKey: String {
         switch self {
-        case .add: "ios.import.plan.tile.add"
-        case .skip: "ios.import.plan.tile.skip"
-        case .conflicts: "ios.import.plan.tile.conflicts"
+        case .add: "app.import.plan.tile.add"
+        case .skip: "app.import.plan.tile.skip"
+        case .conflicts: "app.import.plan.tile.conflicts"
         }
     }
 
     /// The catalog key for the expanded list's header.
     public var listHeaderKey: String {
         switch self {
-        case .add: "ios.import.plan.list.add.header"
-        case .skip: "ios.import.plan.list.skip.header"
-        case .conflicts: "ios.import.plan.list.conflicts.header"
+        case .add: "app.import.plan.list.add.header"
+        case .skip: "app.import.plan.list.skip.header"
+        case .conflicts: "app.import.plan.list.conflicts.header"
         }
     }
 

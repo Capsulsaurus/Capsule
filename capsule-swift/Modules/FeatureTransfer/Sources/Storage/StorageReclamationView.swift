@@ -38,19 +38,19 @@ public struct StorageReclamationView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.storage.title")
+            .navigationTitle("app.storage.title")
             .task { await model.load() }
             .confirmationDialog(
-                "ios.storage.free_up.confirm.title",
+                "app.storage.free_up.confirm.title",
                 isPresented: $isConfirming,
                 titleVisibility: .visible
             ) {
-                Button("ios.storage.free_up.confirm.action", role: .destructive) {
+                Button("app.storage.free_up.confirm.action", role: .destructive) {
                     Task { await model.confirmEviction() }
                 }
-                Button("ios.common.cancel", role: .cancel) { model.discardPlan() }
+                Button("app.common.cancel", role: .cancel) { model.discardPlan() }
             } message: {
-                Text("ios.storage.free_up.confirm.message")
+                Text("app.storage.free_up.confirm.message")
             }
     }
 
@@ -68,8 +68,8 @@ public struct StorageReclamationView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.storage.empty.title",
-                emptyDescription: "ios.storage.empty.description",
+                emptyTitle: "app.storage.empty.title",
+                emptyDescription: "app.storage.empty.description",
                 emptySymbol: "internaldrive",
                 retry: { await model.reload() }
             )
@@ -89,9 +89,9 @@ public struct StorageReclamationView: View {
                 Task { await model.setCacheBudget(bytes) }
             }
         } header: {
-            Text("ios.storage.budget.section")
+            Text("app.storage.budget.section")
         } footer: {
-            Text("ios.storage.budget.footer")
+            Text("app.storage.budget.footer")
         }
     }
 
@@ -99,15 +99,15 @@ public struct StorageReclamationView: View {
         Section {
             ForEach(model.consumers) { consumer in StorageConsumerRow(consumer: consumer) }
             if let available = model.breakdown.availableDiskBytes {
-                LabeledContent("ios.storage.available") {
+                LabeledContent("app.storage.available") {
                     Text(verbatim: TransferFormat.bytes(available))
                 }
             }
         } header: {
-            Text("ios.storage.consumers.section")
+            Text("app.storage.consumers.section")
         } footer: {
             // Honest about the granularity this screen can offer.
-            Text("ios.storage.consumers.footer")
+            Text("app.storage.consumers.footer")
         }
     }
 
@@ -115,20 +115,20 @@ public struct StorageReclamationView: View {
     private var exemptSection: some View {
         if model.exemptBytes > 0 {
             Section {
-                LabeledContent("ios.storage.exempt.unreleased") {
+                LabeledContent("app.storage.exempt.unreleased") {
                     Text(verbatim: TransferFormat.bytes(model.exemptBytes))
                 }
             } header: {
-                Text("ios.storage.exempt.section")
+                Text("app.storage.exempt.section")
             } footer: {
-                Text("ios.storage.exempt.footer")
+                Text("app.storage.exempt.footer")
             }
         }
     }
 
     private var freeUpSection: some View {
         Section {
-            Button("ios.storage.free_up.preview") {
+            Button("app.storage.free_up.preview") {
                 model.previewEvictionToBudget()
             }
             .disabled(model.isBusy || model.breakdown.reclaimableBytes == 0)
@@ -137,28 +137,28 @@ public struct StorageReclamationView: View {
                 planActions(plan)
             }
             if let reclaimed = model.lastReclaimedBytes {
-                Label("ios.storage.free_up.done", systemImage: "checkmark.circle")
+                Label("app.storage.free_up.done", systemImage: "checkmark.circle")
                     .foregroundStyle(.green)
-                LabeledContent("ios.storage.free_up.reclaimed") {
+                LabeledContent("app.storage.free_up.reclaimed") {
                     Text(verbatim: TransferFormat.bytes(reclaimed))
                 }
             }
         } header: {
-            Text("ios.storage.free_up.section")
+            Text("app.storage.free_up.section")
         } footer: {
-            Text("ios.storage.free_up.footer")
+            Text("app.storage.free_up.footer")
         }
     }
 
     @ViewBuilder
     private func planActions(_ plan: EvictionPlan) -> some View {
         if plan.isEmpty {
-            Label("ios.storage.plan.nothing", systemImage: "checkmark.circle")
+            Label("app.storage.plan.nothing", systemImage: "checkmark.circle")
                 .foregroundStyle(.secondary)
         } else {
-            Button("ios.storage.free_up.apply", role: .destructive) { isConfirming = true }
+            Button("app.storage.free_up.apply", role: .destructive) { isConfirming = true }
                 .disabled(model.isBusy)
-            Button("ios.common.cancel") { model.discardPlan() }
+            Button("app.common.cancel") { model.discardPlan() }
         }
     }
 
@@ -167,11 +167,11 @@ public struct StorageReclamationView: View {
             Button {
                 onOpenQuota?()
             } label: {
-                Label("ios.storage.link.quota", systemImage: "externaldrive.badge.icloud")
+                Label("app.storage.link.quota", systemImage: "externaldrive.badge.icloud")
             }
             .disabled(onOpenQuota == nil)
         } footer: {
-            Text("ios.storage.link.quota.footer")
+            Text("app.storage.link.quota.footer")
         }
     }
 }

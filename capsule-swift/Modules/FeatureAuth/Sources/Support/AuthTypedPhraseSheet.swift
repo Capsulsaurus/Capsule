@@ -56,7 +56,7 @@ struct AuthTypedPhraseSheet: View {
 
     private var phraseCard: some View {
         AuthCodeValue(
-            labelKey: "ios.auth.confirm.phrase.required",
+            labelKey: "app.auth.confirm.phrase.required",
             code: requiredPhrase,
             font: .title3.monospaced()
         )
@@ -74,12 +74,12 @@ struct AuthTypedPhraseSheet: View {
                 .accessibilityLabel(fieldLabelKey)
             if !typedPhrase.isEmpty, !isSatisfied {
                 StatusChip(
-                    titleKey: "ios.auth.confirm.phrase.mismatch",
+                    titleKey: "app.auth.confirm.phrase.mismatch",
                     symbolName: "exclamationmark.triangle.fill",
                     tint: .orange
                 )
             }
-            Text("ios.auth.confirm.phrase.footer")
+            Text("app.auth.confirm.phrase.footer")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -98,9 +98,9 @@ struct AuthTypedPhraseSheet: View {
             .disabled(!isSatisfied)
             .accessibilityLabel(confirmKey)
 
-            Button("ios.common.cancel", role: .cancel) { dismiss() }
+            Button("app.common.cancel", role: .cancel) { dismiss() }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.common.cancel")
+                .accessibilityLabel("app.common.cancel")
         }
     }
 }

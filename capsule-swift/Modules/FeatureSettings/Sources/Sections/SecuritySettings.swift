@@ -85,7 +85,7 @@ public final class SecuritySettingsModel {
         lastChallengeCancelled = false
         do {
             let granted = try await authenticator.authenticate(
-                reasonKey: "ios.settings.security.gate.reason"
+                reasonKey: "app.settings.security.gate.reason"
             )
             if granted {
                 gate.grant(view, at: clock.now())
@@ -146,15 +146,15 @@ public struct SecuritySettingsView: View {
                 gateRow(view)
             }
             SettingsValueRow(
-                labelKey: "ios.settings.security.gate.window",
+                labelKey: "app.settings.security.gate.window",
                 value: SettingsFormat.minutes(seconds: model.graceWindowSeconds)
             )
-            Button("ios.settings.security.gate.lock_all") { model.lockAll() }
-                .accessibilityLabel(Text("ios.settings.security.gate.lock_all"))
+            Button("app.settings.security.gate.lock_all") { model.lockAll() }
+                .accessibilityLabel(Text("app.settings.security.gate.lock_all"))
         } header: {
-            Text("ios.settings.security.gate.header")
+            Text("app.settings.security.gate.header")
         } footer: {
-            Text("ios.settings.security.gate.footer")
+            Text("app.settings.security.gate.footer")
         }
     }
 
@@ -164,18 +164,18 @@ public struct SecuritySettingsView: View {
         SettingsStatusRow(
             labelKey: view.titleKey,
             statusKey: unlocked
-                ? "ios.settings.security.gate.state.unlocked"
-                : "ios.settings.security.gate.state.locked",
+                ? "app.settings.security.gate.state.unlocked"
+                : "app.settings.security.gate.state.locked",
             tone: unlocked ? .caution : .positive
         )
         if unlocked {
             SettingsValueRow(
-                labelKey: "ios.settings.security.gate.remaining",
+                labelKey: "app.settings.security.gate.remaining",
                 value: SettingsFormat.duration(seconds: model.remainingSeconds(view))
             )
-            Button("ios.settings.security.gate.lock") { model.lock(view) }
+            Button("app.settings.security.gate.lock") { model.lock(view) }
         } else {
-            Button("ios.settings.security.gate.unlock") {
+            Button("app.settings.security.gate.unlock") {
                 Task { await model.unlock(view) }
             }
         }
@@ -184,38 +184,38 @@ public struct SecuritySettingsView: View {
     private var methodSection: some View {
         Section {
             SettingsStatusRow(
-                labelKey: "ios.settings.security.method.label",
+                labelKey: "app.settings.security.method.label",
                 statusKey: model.method.descriptionKey,
                 tone: model.method.tone
             )
             if model.lastChallengeCancelled {
-                SettingsNoteRow(textKey: "ios.settings.security.gate.cancelled")
+                SettingsNoteRow(textKey: "app.settings.security.gate.cancelled")
             }
             SettingsStatusRow(
-                labelKey: "ios.settings.security.capture.label",
-                statusKey: "ios.settings.security.capture.status",
+                labelKey: "app.settings.security.capture.label",
+                statusKey: "app.settings.security.capture.status",
                 tone: .neutral
             )
         } header: {
-            Text("ios.settings.security.method.header")
+            Text("app.settings.security.method.header")
         } footer: {
-            Text("ios.settings.security.method.footer")
+            Text("app.settings.security.method.footer")
         }
     }
 
     private var atRestSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.security.atrest.store.label",
+                labelKey: "app.settings.security.atrest.store.label",
                 value: SettingsPhrase.text(forKey: model.posture.storeKey)
             )
             SettingsStatusRow(
-                labelKey: "ios.settings.security.atrest.protection.label",
+                labelKey: "app.settings.security.atrest.protection.label",
                 statusKey: model.posture.protectionKey,
                 tone: model.posture.tone
             )
         } header: {
-            Text("ios.settings.security.atrest.header")
+            Text("app.settings.security.atrest.header")
         } footer: {
             Text(LocalizedStringKey(model.posture.summaryKey))
         }
@@ -223,11 +223,11 @@ public struct SecuritySettingsView: View {
 
     private var plaintextSection: some View {
         Section {
-            SettingsNoteRow(textKey: "ios.settings.security.plaintext.body")
+            SettingsNoteRow(textKey: "app.settings.security.plaintext.body")
         } header: {
-            Text("ios.settings.security.plaintext.header")
+            Text("app.settings.security.plaintext.header")
         } footer: {
-            Text("ios.settings.security.plaintext.footer")
+            Text("app.settings.security.plaintext.footer")
         }
     }
 }

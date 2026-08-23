@@ -42,7 +42,7 @@ public struct QuotaStatusView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.quota.title")
+            .navigationTitle("app.quota.title")
             .task { await model.load() }
     }
 
@@ -52,9 +52,9 @@ public struct QuotaStatusView: View {
             List {
                 if !model.phase.permitsNetworkActions { staleNotice }
                 if model.warrants { Section { banner } }
-                Section("ios.quota.usage.title") {
+                Section("app.quota.usage.title") {
                     QuotaStackedBar(breakdown: model.breakdown)
-                    LabeledContent("ios.quota.usage.used") {
+                    LabeledContent("app.quota.usage.used") {
                         Text(verbatim: TransferFormat.bytes(model.quota.used))
                     }
                     limitRows
@@ -65,8 +65,8 @@ public struct QuotaStatusView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.quota.empty.title",
-                emptyDescription: "ios.quota.empty.description",
+                emptyTitle: "app.quota.empty.title",
+                emptyDescription: "app.quota.empty.description",
                 emptySymbol: "externaldrive",
                 retry: { await model.reload() }
             )
@@ -88,7 +88,7 @@ public struct QuotaStatusView: View {
     /// is cheaper than pretending it is live.
     private var staleNotice: some View {
         Section {
-            Label("ios.quota.offline.notice", systemImage: "wifi.slash")
+            Label("app.quota.offline.notice", systemImage: "wifi.slash")
                 .foregroundStyle(.secondary)
         }
     }
@@ -96,16 +96,16 @@ public struct QuotaStatusView: View {
     @ViewBuilder
     private var limitRows: some View {
         if model.quota.isUnlimited {
-            Label("ios.quota.limit.unlimited", systemImage: "infinity")
+            Label("app.quota.limit.unlimited", systemImage: "infinity")
                 .foregroundStyle(.secondary)
         } else {
-            LabeledContent("ios.quota.usage.soft_limit") {
+            LabeledContent("app.quota.usage.soft_limit") {
                 Text(verbatim: TransferFormat.bytes(model.quota.softLimit))
             }
-            LabeledContent("ios.quota.usage.hard_limit") {
+            LabeledContent("app.quota.usage.hard_limit") {
                 Text(verbatim: TransferFormat.bytes(model.quota.hardLimit))
             }
-            LabeledContent("ios.quota.usage.remaining") {
+            LabeledContent("app.quota.usage.remaining") {
                 Text(verbatim: TransferFormat.bytes(model.quota.remaining))
             }
         }
@@ -116,11 +116,11 @@ public struct QuotaStatusView: View {
             Button {
                 onReviewLargest?()
             } label: {
-                Label("ios.quota.link.local_storage", systemImage: "internaldrive")
+                Label("app.quota.link.local_storage", systemImage: "internaldrive")
             }
             .disabled(onReviewLargest == nil)
         } footer: {
-            Text("ios.quota.link.local_storage.footer")
+            Text("app.quota.link.local_storage.footer")
         }
     }
 

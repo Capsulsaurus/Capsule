@@ -17,7 +17,7 @@ struct ModerationAuditSection: View {
     var body: some View {
         Section {
             if model.auditEntries.isEmpty {
-                Text("ios.moderation.audit.none")
+                Text("app.moderation.audit.none")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.auditEntries) { entry in
@@ -30,9 +30,9 @@ struct ModerationAuditSection: View {
                 }
             }
         } header: {
-            Text("ios.moderation.section.audit")
+            Text("app.moderation.section.audit")
         } footer: {
-            Text("ios.moderation.section.audit_footer")
+            Text("app.moderation.section.audit_footer")
         }
     }
 }
@@ -56,7 +56,7 @@ struct AuditRowView: View {
             LabeledContent {
                 Text(entry.occurredAt.date, format: .dateTime.year().month().day().hour().minute())
             } label: {
-                Text("ios.moderation.audit.when")
+                Text("app.moderation.audit.when")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -74,7 +74,7 @@ struct AuditRowView: View {
             Text(verbatim: reason)
                 .font(.caption)
         } else {
-            Text("ios.moderation.audit.reason_withheld")
+            Text("app.moderation.audit.reason_withheld")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -85,7 +85,7 @@ struct AuditRowView: View {
         if let appeal {
             StatusBadge(title: appealTitle(appeal.state), symbol: appealSymbol(appeal.state), tint: appealTint(appeal.state))
         } else if canAppeal {
-            Button("ios.moderation.audit.appeal", action: submitAppeal)
+            Button("app.moderation.audit.appeal", action: submitAppeal)
                 .buttonStyle(.borderless)
                 .font(.caption)
         }
@@ -93,10 +93,10 @@ struct AuditRowView: View {
 
     private var actionTitle: LocalizedStringKey {
         switch entry.action {
-        case .takedown: "ios.moderation.action.takedown"
-        case .legalHold: "ios.moderation.action.legal_hold"
-        case .accountSuspension: "ios.moderation.action.suspension"
-        case .reinstatement: "ios.moderation.action.reinstatement"
+        case .takedown: "app.moderation.action.takedown"
+        case .legalHold: "app.moderation.action.legal_hold"
+        case .accountSuspension: "app.moderation.action.suspension"
+        case .reinstatement: "app.moderation.action.reinstatement"
         }
     }
 
@@ -111,10 +111,10 @@ struct AuditRowView: View {
 
     private func appealTitle(_ state: ModerationAppeal.State) -> LocalizedStringKey {
         switch state {
-        case .submitted: "ios.moderation.appeal.submitted"
-        case .underReview: "ios.moderation.appeal.under_review"
-        case .granted: "ios.moderation.appeal.granted"
-        case .declined: "ios.moderation.appeal.declined"
+        case .submitted: "app.moderation.appeal.submitted"
+        case .underReview: "app.moderation.appeal.under_review"
+        case .granted: "app.moderation.appeal.granted"
+        case .declined: "app.moderation.appeal.declined"
         }
     }
 

@@ -52,9 +52,9 @@ public struct AlbumDetailView: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.assets.isEmpty {
             ContentUnavailableView(
-                "ios.albums.detail.empty.title",
+                "app.albums.detail.empty.title",
                 systemImage: "photo.on.rectangle",
-                description: Text("ios.albums.detail.empty.description")
+                description: Text("app.albums.detail.empty.description")
             )
         } else {
             PhotoGridView(

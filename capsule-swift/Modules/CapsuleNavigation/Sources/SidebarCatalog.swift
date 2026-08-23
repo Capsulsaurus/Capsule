@@ -17,97 +17,97 @@ public extension SidebarItem {
         libraryDescriptor,
         SidebarItemDescriptor(
             item: .memories, rootRoute: .memories,
-            titleKey: "ios.sidebar.memories", systemImage: "sparkles.rectangle.stack",
+            titleKey: "app.sidebar.memories", systemImage: "sparkles.rectangle.stack",
             placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .duplicates, rootRoute: .duplicates,
-            titleKey: "ios.sidebar.duplicates", systemImage: "square.on.square",
+            titleKey: "app.sidebar.duplicates", systemImage: "square.on.square",
             placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .trash, rootRoute: .trash,
-            titleKey: "ios.sidebar.trash", systemImage: "trash",
+            titleKey: "app.sidebar.trash", systemImage: "trash",
             placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .hidden, rootRoute: .hidden,
-            titleKey: "ios.sidebar.hidden", systemImage: "eye.slash",
+            titleKey: "app.sidebar.hidden", systemImage: "eye.slash",
             placement: .sidebar, group: .library
         ),
         SidebarItemDescriptor(
             item: .browse, rootRoute: .browse,
-            titleKey: "ios.sidebar.browse", systemImage: "square.grid.2x2",
+            titleKey: "app.sidebar.browse", systemImage: "square.grid.2x2",
             placement: .phoneTab, group: .collections
         ),
         SidebarItemDescriptor(
             item: .albums, rootRoute: .albums,
-            titleKey: "ios.sidebar.albums", systemImage: "rectangle.stack",
+            titleKey: "app.sidebar.albums", systemImage: "rectangle.stack",
             placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .people, rootRoute: .people,
-            titleKey: "ios.sidebar.people", systemImage: "person.2",
+            titleKey: "app.sidebar.people", systemImage: "person.2",
             placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .places, rootRoute: .places,
-            titleKey: "ios.sidebar.places", systemImage: "map",
+            titleKey: "app.sidebar.places", systemImage: "map",
             placement: .sidebar, group: .collections
         ),
         SidebarItemDescriptor(
             item: .search, rootRoute: .search(.all, text: nil),
-            titleKey: "ios.sidebar.search", systemImage: "magnifyingglass",
+            titleKey: "app.sidebar.search", systemImage: "magnifyingglass",
             placement: .tab, group: .collections
         ),
         SidebarItemDescriptor(
             item: .transfers, rootRoute: .transferCenter,
-            titleKey: "ios.sidebar.transfers", systemImage: "arrow.up.arrow.down.circle",
+            titleKey: "app.sidebar.transfers", systemImage: "arrow.up.arrow.down.circle",
             placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .imports, rootRoute: .imports,
-            titleKey: "ios.sidebar.imports", systemImage: "square.and.arrow.down",
+            titleKey: "app.sidebar.imports", systemImage: "square.and.arrow.down",
             placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .shares, rootRoute: .shares,
-            titleKey: "ios.sidebar.shares", systemImage: "link",
+            titleKey: "app.sidebar.shares", systemImage: "link",
             placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .drops, rootRoute: .drops,
-            titleKey: "ios.sidebar.drops", systemImage: "tray.and.arrow.down",
+            titleKey: "app.sidebar.drops", systemImage: "tray.and.arrow.down",
             placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .quarantine, rootRoute: .quarantine,
-            titleKey: "ios.sidebar.quarantine", systemImage: "exclamationmark.shield",
+            titleKey: "app.sidebar.quarantine", systemImage: "exclamationmark.shield",
             placement: .sidebar, group: .activity
         ),
         SidebarItemDescriptor(
             item: .devices, rootRoute: .devices,
-            titleKey: "ios.sidebar.devices", systemImage: "laptopcomputer.and.iphone",
+            titleKey: "app.sidebar.devices", systemImage: "laptopcomputer.and.iphone",
             placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .peers, rootRoute: .peers,
-            titleKey: "ios.sidebar.peers", systemImage: "network",
+            titleKey: "app.sidebar.peers", systemImage: "network",
             placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .federation, rootRoute: .federation,
-            titleKey: "ios.sidebar.federation", systemImage: "globe",
+            titleKey: "app.sidebar.federation", systemImage: "globe",
             placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .storage, rootRoute: .storage,
-            titleKey: "ios.sidebar.storage", systemImage: "internaldrive",
+            titleKey: "app.sidebar.storage", systemImage: "internaldrive",
             placement: .sidebar, group: .system
         ),
         SidebarItemDescriptor(
             item: .settings, rootRoute: .settings(.default),
-            titleKey: "ios.sidebar.settings", systemImage: "gearshape",
+            titleKey: "app.sidebar.settings", systemImage: "gearshape",
             placement: .tab, group: .system
         ),
     ]
@@ -117,7 +117,7 @@ public extension SidebarItem {
     /// asserts the fallback is unreachable by checking every case has a row.
     static let libraryDescriptor = SidebarItemDescriptor(
         item: .library, rootRoute: .timeline(.all),
-        titleKey: "ios.sidebar.library", systemImage: "photo.on.rectangle.angled",
+        titleKey: "app.sidebar.library", systemImage: "photo.on.rectangle.angled",
         placement: .tab, group: .library
     )
 }

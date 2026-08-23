@@ -71,11 +71,11 @@ public enum DestinationResolution {
     /// The catalog key naming a rule.
     public static func titleKey(for rule: ImportPlan.DestinationRule) -> String {
         switch rule {
-        case .explicitUserPick: "ios.settings.import.rule.explicit_pick"
-        case .scopeOverride: "ios.settings.import.rule.scope_override"
-        case .sourceKindDefault: "ios.settings.import.rule.source_kind_default"
-        case .ownerDefaultPointer: "ios.settings.import.rule.owner_pointer"
-        case .derivedDefaultAlbum: "ios.settings.import.rule.derived_default"
+        case .explicitUserPick: "app.settings.import.rule.explicit_pick"
+        case .scopeOverride: "app.settings.import.rule.scope_override"
+        case .sourceKindDefault: "app.settings.import.rule.source_kind_default"
+        case .ownerDefaultPointer: "app.settings.import.rule.owner_pointer"
+        case .derivedDefaultAlbum: "app.settings.import.rule.derived_default"
         }
     }
 
@@ -83,14 +83,14 @@ public enum DestinationResolution {
     /// table.
     public static func titleKey(for kind: SourceKind) -> String {
         switch kind {
-        case .cameraRoll: "ios.settings.import.kind.camera_roll"
-        case .screenshots: "ios.settings.import.kind.screenshots"
-        case .appCollection: "ios.settings.import.kind.app_collection"
-        case .folder: "ios.settings.import.kind.folder"
-        case .watchedDirectory: "ios.settings.import.kind.watched_dir"
-        case .removableVolume: "ios.settings.import.kind.removable_volume"
-        case .takeoutArchive: "ios.settings.import.kind.takeout_archive"
-        case .unknown: "ios.settings.import.kind.unknown"
+        case .cameraRoll: "app.settings.import.kind.camera_roll"
+        case .screenshots: "app.settings.import.kind.screenshots"
+        case .appCollection: "app.settings.import.kind.app_collection"
+        case .folder: "app.settings.import.kind.folder"
+        case .watchedDirectory: "app.settings.import.kind.watched_dir"
+        case .removableVolume: "app.settings.import.kind.removable_volume"
+        case .takeoutArchive: "app.settings.import.kind.takeout_archive"
+        case .unknown: "app.settings.import.kind.unknown"
         }
     }
 }

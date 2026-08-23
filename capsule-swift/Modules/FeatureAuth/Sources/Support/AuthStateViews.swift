@@ -36,15 +36,15 @@ public struct AuthErrorBanner: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if error.isOffline {
-                Text("ios.auth.common.offline.message")
+                Text("app.auth.common.offline.message")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let retry, error.isRetryable {
-                Button("ios.auth.common.retry", action: retry)
+                Button("app.auth.common.retry", action: retry)
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("ios.auth.common.retry")
+                    .accessibilityLabel("app.auth.common.retry")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -55,10 +55,10 @@ public struct AuthErrorBanner: View {
 
     private var titleKey: LocalizedStringKey {
         switch error.kind {
-        case .temporarilyUnavailable: "ios.auth.common.offline.title"
-        case .actionable: "ios.auth.common.error.title"
-        case .upgradeRequired: "ios.auth.common.upgrade.title"
-        case .defect: "ios.auth.common.defect.title"
+        case .temporarilyUnavailable: "app.auth.common.offline.title"
+        case .actionable: "app.auth.common.error.title"
+        case .upgradeRequired: "app.auth.common.upgrade.title"
+        case .defect: "app.auth.common.defect.title"
         }
     }
 
@@ -83,7 +83,7 @@ public struct AuthErrorBanner: View {
 public struct AuthLoadingView: View {
     private let labelKey: LocalizedStringKey
 
-    public init(labelKey: LocalizedStringKey = "ios.auth.common.loading") {
+    public init(labelKey: LocalizedStringKey = "app.auth.common.loading") {
         self.labelKey = labelKey
     }
 

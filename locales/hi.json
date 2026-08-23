@@ -1,1780 +1,1780 @@
 {
-    "app_name": {
-        "message": "Capsule ऐप",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_title": {
-        "message": "शीर्षक",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_artist": {
-        "message": "कलाकार",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_date": {
-        "message": "तारीख़",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_dimensions": {
-        "message": "आयाम",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_medium": {
-        "message": "माध्यम",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_department": {
-        "message": "विभाग",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_repository": {
-        "message": "संग्रह",
-        "context": "Machine-translated seed pending human review."
-    },
-    "label_credits": {
-        "message": "श्रेय",
-        "context": "Machine-translated seed pending human review."
-    },
-    "back": {
-        "message": "वापस",
-        "context": "Machine-translated seed pending human review."
-    },
-    "no_data_available": {
-        "message": "कोई डेटा उपलब्ध नहीं",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.auth.user_already_exists": {
-        "message": "इन विवरणों वाला खाता पहले से मौजूद है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.auth.invalid_credentials": {
-        "message": "ईमेल या पासवर्ड ग़लत है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.auth.rate_limited": {
-        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.protocol.version_unsupported": {
-        "message": "Capsule का यह संस्करण अब समर्थित नहीं है। कृपया ऐप अपडेट करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.quota.exceeded": {
-        "message": "आपका स्टोरेज भर गया है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.quota.grace_locked": {
-        "message": "आपका स्टोरेज छूट अवधि के बाद भी भरा रहा है, इसलिए जब तक आप जगह ख़ाली नहीं करते तब तक संपादन रोक दिए गए हैं।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.quota.peer_budget_exceeded": {
-        "message": "इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.blob.pending_upload": {
-        "message": "मूल फ़ोटो अभी तक उसके डिवाइस से अपलोड नहीं हुई है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.directory.version_conflict": {
-        "message": "यह डिवाइस सूची पुरानी है। Capsule जारी रखने से पहले इसे रीफ़्रेश करेगा।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.directory.malformed": {
-        "message": "डिवाइस सूची पढ़ी नहीं जा सकी।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.escrow.malformed": {
-        "message": "रिकवरी बैकअप सहेजा नहीं जा सका।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.enrollment.local_auth_required": {
-        "message": "दूसरा डिवाइस जोड़ने के लिए इस डिवाइस पर पुष्टि करें कि यह आप ही हैं।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.enrollment.rate_limited": {
-        "message": "डिवाइस जोड़ने के बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.enrollment.code_refused": {
-        "message": "वह डिवाइस कोड काम नहीं आया। नया कोड बनाएँ और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.enrollment.channel_not_found": {
-        "message": "यह डिवाइस-जोड़ने का सत्र समाप्त हो गया है। फिर से शुरू करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.enrollment.relay_malformed": {
-        "message": "डिवाइस-जोड़ने का अनुरोध पढ़ा नहीं जा सका।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.moderation.account_suspended": {
-        "message": "आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.moderation.server_blocked": {
-        "message": "इस सर्वर को हमारे साथ फ़ेडरेट करने से रोका गया है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.moderation.report_unsigned": {
-        "message": "मॉडरेशन रिपोर्ट सत्यापित नहीं की जा सकी।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.moderation.report_rate_limited": {
-        "message": "इस स्रोत से बहुत अधिक रिपोर्ट। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.capability_invalid": {
-        "message": "इस साझा एल्बम की पहुँच सत्यापित नहीं की जा सकी।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.capability_expired": {
-        "message": "इस साझा एल्बम की पहुँच समाप्त हो गई है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.capability_revoked": {
-        "message": "इस साझा एल्बम की पहुँच रद्द कर दी गई है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.audience_mismatch": {
-        "message": "यह पहुँच अनुमति किसी अन्य एल्बम के लिए है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.scope_insufficient": {
-        "message": "यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.rate_budget_exceeded": {
-        "message": "इस स्रोत ने अपनी अनुरोध सीमा पूरी कर ली है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.federation.circuit_open": {
-        "message": "बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.storage.invalid_request": {
-        "message": "स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.storage.deep_rate_limited": {
-        "message": "बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.share.rate_limited": {
-        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.sync.cursor_invalid": {
-        "message": "सिंक सत्र पुराना है। Capsule शुरू से फिर से सिंक करेगा।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.sync.unauthenticated": {
-        "message": "सिंक जारी रखने के लिए कृपया फिर से साइन इन करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.malformed_request": {
-        "message": "अपलोड अनुरोध ग़लत रूप में है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.unknown_crypto_suite": {
-        "message": "ऐप का यह संस्करण एक ऐसा एन्क्रिप्शन सूट उपयोग करता है जिसे सर्वर नहीं पहचानता।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.invalid_hash": {
-        "message": "अपलोड का घोषित सामग्री हैश अमान्य है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.invalid_size": {
-        "message": "अपलोड का घोषित आकार अमान्य है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.file_too_large": {
-        "message": "यह फ़ाइल सर्वर की आकार सीमा से अधिक है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.unsupported_content_type": {
-        "message": "यह फ़ाइल प्रकार समर्थित नहीं है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.album_access_denied": {
-        "message": "आपके पास इस एल्बम में फ़ोटो जोड़ने की अनुमति नहीं है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.device_not_authorized": {
-        "message": "यह डिवाइस अपलोड के लिए अधिकृत नहीं है। इसे फिर से पंजीकृत करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.timestamp_out_of_range": {
-        "message": "आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.envelope_mismatch": {
-        "message": "अपलोड अनुरोध अपने हस्ताक्षरित मैनिफ़ेस्ट का खंडन करता है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.owner_not_permitted": {
-        "message": "आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.duplicate_blob": {
-        "message": "यह फ़ाइल पहले से संग्रहीत है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.unsupported_media_type": {
-        "message": "अपलोड डेटा असमर्थित प्रारूप में भेजा गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.empty_chunk": {
-        "message": "अपलोड खंड ख़ाली नहीं हो सकता।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.chunk_not_aligned": {
-        "message": "अपलोड खंड का आकार ग़लत था।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.chunk_too_large": {
-        "message": "अपलोड खंड अधिकतम खंड आकार से अधिक हो गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.missing_offset": {
-        "message": "अपलोड अनुरोध में इसका स्थिति चिह्न नहीं था।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.missing_checksum": {
-        "message": "अपलोड अनुरोध में इसकी अखंडता चेकसम नहीं थी।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.checksum_mismatch": {
-        "message": "अपलोड डेटा ट्रांज़िट में ख़राब हो गया। फिर से प्रयास किया जा रहा है…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.offset_mismatch": {
-        "message": "अपलोड सिंक से बाहर हो गया और फिर से संरेखित हो रहा है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.chunk_conflict": {
-        "message": "अपलोड ने परस्पर विरोधी डेटा भेजा और रोक दिया गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.size_exceeded": {
-        "message": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.session_not_found": {
-        "message": "अपलोड सत्र समाप्त हो गया। फिर से शुरू किया जा रहा है…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.session_not_active": {
-        "message": "यह अपलोड पहले ही पूरा हो चुका है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.finalize_in_progress": {
-        "message": "यह अपलोड पहले से ही अंतिम रूप दिया जा रहा है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.receipt_not_available": {
-        "message": "अपलोड पूरा नहीं हुआ है, इसलिए इसकी स्टोरेज रसीद अभी उपलब्ध नहीं है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.content_hash_mismatch": {
-        "message": "अपलोड अखंडता सत्यापन में विफल रहा और छोड़ दिया गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.envelope_rejected": {
-        "message": "अपलोड का हस्ताक्षरित मैनिफ़ेस्ट सत्यापन में विफल रहा।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.forbidden": {
-        "message": "आपके पास इस अपलोड तक पहुँच नहीं है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.storage_inconsistent": {
-        "message": "सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.invalid_action": {
-        "message": "यह परिवर्तन एक ऐसी क्रिया का उपयोग करता है जिसकी एल्बम अनुमति नहीं देता।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.stale_revival": {
-        "message": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.upload.amk_regressed": {
-        "message": "यह परिवर्तन सर्वर द्वारा दर्ज की गई एल्बम कुंजी से पुरानी कुंजी को संदर्भित करता है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.drop.cap_exceeded": {
-        "message": "यह अपलोड लिंक भर गया है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.drop.malformed_descriptor": {
-        "message": "यह अपलोड स्वीकार नहीं किया जा सका।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.drop.rate_limited": {
-        "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.drop.passphrase_required": {
-        "message": "इस अपलोड लिंक को इसका पासफ़्रेज़ चाहिए।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "error.drop.not_in_inbox": {
-        "message": "यह ड्रॉप अब अपनाने के लिए उपलब्ध नहीं है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.login.email_prompt": {
-        "message": "ईमेल",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.login.password_prompt": {
-        "message": "पासवर्ड",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.login.in_progress": {
-        "message": "Capsule में लॉग इन हो रहा है…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.login.success": {
-        "message": "{email} के रूप में लॉग इन किया गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.login.failed": {
-        "message": "लॉग इन विफल: {reason}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.logout.in_progress": {
-        "message": "Capsule से लॉग आउट हो रहा है…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.logout.success": {
-        "message": "लॉग आउट कर दिया गया।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.logout.not_logged_in": {
-        "message": "आप लॉग इन नहीं हैं।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.auth.not_authenticated": {
-        "message": "प्रमाणित नहीं। पहले 'capsule auth login' चलाएँ।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.sync.in_progress": {
-        "message": "{endpoint} से सिंक हो रहा है…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.sync.dry_run_notice": {
-        "message": "ड्राई रन: कोई परिवर्तन सहेजा नहीं जाएगा।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.sync.up_to_date": {
-        "message": "पहले से अद्यतित।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.sync.complete": {
-        "message": "सिंक पूर्ण: {pages} पृष्ठ(ों) में {albums} एल्बम(ों) पर {applied} परिवर्तन लागू किए गए।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.sync.failed": {
-        "message": "सिंक विफल: {reason}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.empty": {
-        "message": "अभी तक कोई एसेट सिंक नहीं हुई है।",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.header": {
-        "message": "सिंक की गई लाइब्रेरी ({count} एसेट):",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.row": {
-        "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.state.active": {
-        "message": "सक्रिय",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.state.awaiting_original": {
-        "message": "मूल की प्रतीक्षा में",
-        "context": "Machine-translated seed pending human review."
-    },
-    "cli.list.failed": {
-        "message": "लाइब्रेरी सूचीबद्ध करने में विफल: {reason}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "device.cohort.label.previously_used": {
-        "message": "एक डिवाइस जिसे आपने पहले उपयोग किया है (अंतिम बार देखा गया {last_seen})",
-        "context": "Machine-translated seed pending human review."
-    },
-    "device.cohort.label.this_device": {
-        "message": "यह डिवाइस",
-        "context": "Machine-translated seed pending human review."
-    },
-    "device.cohort.label.new_device": {
-        "message": "एक नया डिवाइस",
-        "context": "Machine-translated seed pending human review."
-    },
-    "device.cohort.support.report": {
-        "message": "इस डिवाइस समूह के साथ समस्या की रिपोर्ट करें",
-        "context": "Machine-translated seed pending human review."
-    },
-    "share.viewer.opening": {
-        "message": "Opening shared link…"
-    },
-    "share.viewer.readonly_badge": {
-        "message": "Read-only share"
-    },
-    "share.scope.album": {
-        "message": "Shared album"
-    },
-    "share.scope.asset": {
-        "message": "Shared item"
-    },
-    "share.items": {
-        "message": "{count, plural, one {# item} other {# items}}"
-    },
-    "share.expires": {
-        "message": "Expires {date}"
-    },
-    "share.asset.type": {
-        "message": "Type"
-    },
-    "share.asset.size": {
-        "message": "Size"
-    },
-    "share.unavailable.title": {
-        "message": "This link is unavailable"
-    },
-    "share.unavailable.body": {
-        "message": "It may have expired, been revoked, or never existed."
-    },
-    "share.incomplete.title": {
-        "message": "This link is incomplete"
-    },
-    "share.incomplete.body": {
-        "message": "The secret needed to open it is missing from the link."
-    },
-    "share.passphrase.title": {
-        "message": "Password required"
-    },
-    "share.passphrase.body": {
-        "message": "This shared link is protected with a password."
-    },
-    "share.passphrase.label": {
-        "message": "Password"
-    },
-    "share.passphrase.submit": {
-        "message": "Unlock"
-    },
-    "share.passphrase.wrong": {
-        "message": "That password didn't work. Try again."
-    },
-    "share.error.title": {
-        "message": "Couldn't open this link"
-    },
-    "share.error.body": {
-        "message": "Something went wrong. Please try again later."
-    },
-    "drop.title": {
-        "message": "Upload photos"
-    },
-    "drop.subtitle": {
-        "message": "You've been invited to contribute to a private album."
-    },
-    "drop.upload_only_badge": {
-        "message": "Upload only"
-    },
-    "drop.privacy_note": {
-        "message": "Your files are encrypted in your browser before they are uploaded. The server never sees your originals, and this page can't show you anything already in the album."
-    },
-    "drop.incomplete.title": {
-        "message": "This upload link is incomplete"
-    },
-    "drop.incomplete.body": {
-        "message": "The key needed to encrypt your upload is missing from the link."
-    },
-    "drop.passphrase.title": {
-        "message": "Password required"
-    },
-    "drop.passphrase.body": {
-        "message": "This upload link is protected with a password."
-    },
-    "drop.passphrase.label": {
-        "message": "Password"
-    },
-    "drop.passphrase.wrong": {
-        "message": "That password didn't work. Try again."
-    },
-    "drop.picker.label": {
-        "message": "Choose photos to upload"
-    },
-    "drop.picker.button": {
-        "message": "Choose files"
-    },
-    "drop.picker.empty": {
-        "message": "No files selected yet."
-    },
-    "drop.upload.button": {
-        "message": "{count, plural, one {Upload # file} other {Upload # files}}"
-    },
-    "drop.upload.busy": {
-        "message": "Uploading…"
-    },
-    "drop.file.pending": {
-        "message": "Waiting"
-    },
-    "drop.file.sealing": {
-        "message": "Encrypting…"
-    },
-    "drop.file.uploading": {
-        "message": "Uploading… {percent}%"
-    },
-    "drop.file.done": {
-        "message": "Uploaded"
-    },
-    "drop.file.failed": {
-        "message": "Failed"
-    },
-    "drop.file.retry": {
-        "message": "Retry"
-    },
-    "drop.summary": {
-        "message": "{done} of {total} uploaded"
-    },
-    "drop.done.title": {
-        "message": "Thanks for your upload"
-    },
-    "drop.done.body": {
-        "message": "Your files have been sent for the album owner to review. They won't appear until the owner adds them."
-    },
-    "drop.error.unavailable": {
-        "message": "This upload link is unavailable. It may have expired, been revoked, or never existed."
-    },
-    "drop.error.rate_limited": {
-        "message": "Too many attempts. Please wait a moment and try again."
-    },
-    "drop.error.too_large": {
-        "message": "This file is too large to upload here."
-    },
-    "drop.error.quota": {
-        "message": "There isn't enough space to accept this upload right now."
-    },
-    "drop.error.cap": {
-        "message": "This link has reached its upload limit."
-    },
-    "drop.error.unsupported_type": {
-        "message": "This file type can't be uploaded here."
-    },
-    "drop.error.generic": {
-        "message": "Something went wrong uploading this file. Please try again."
-    },
-    "common.email": {
-        "message": "Email",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.password": {
-        "message": "Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.username": {
-        "message": "Username",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.sign_in": {
-        "message": "Sign in",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.back": {
-        "message": "Back",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.cancel": {
-        "message": "Cancel",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.close": {
-        "message": "Close",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.share": {
-        "message": "Share",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.delete": {
-        "message": "Delete",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.upload": {
-        "message": "Upload",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.remove": {
-        "message": "Remove",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.refresh": {
-        "message": "Refresh",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.loading": {
-        "message": "Loading...",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.saving": {
-        "message": "Saving…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.save_changes": {
-        "message": "Save changes",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.email_placeholder": {
-        "message": "m@example.com",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.code_placeholder": {
-        "message": "123456",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.password_min": {
-        "message": "Password must be at least 8 characters.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.error.generic": {
-        "message": "Something went wrong. Please try again.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.item_count": {
-        "message": "{count, plural, one {# item} other {# items}}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "common.toggle_theme": {
-        "message": "Toggle theme",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mode.light": {
-        "message": "Light",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mode.dark": {
-        "message": "Dark",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mode.system": {
-        "message": "System",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.photos": {
-        "message": "Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.explore": {
-        "message": "Explore",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.sharing": {
-        "message": "Sharing",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.favorites": {
-        "message": "Favorites",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.albums": {
-        "message": "Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.archive": {
-        "message": "Archive",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.trash": {
-        "message": "Trash",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.library": {
-        "message": "Library",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.storage_usage": {
-        "message": "15 GB used of 2 TB",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.search_placeholder": {
-        "message": "Search your photos...",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.notifications": {
-        "message": "Notifications",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.profile": {
-        "message": "Profile",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.security": {
-        "message": "Security",
-        "context": "Machine-translated seed pending human review."
-    },
-    "nav.logout": {
-        "message": "Logout",
-        "context": "Machine-translated seed pending human review."
-    },
-    "home.title": {
-        "message": "Welcome to Capsule",
-        "context": "Machine-translated seed pending human review."
-    },
-    "home.subtitle": {
-        "message": "Your professional asset management solution.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "home.cta_dashboard": {
-        "message": "Go to Dashboard",
-        "context": "Machine-translated seed pending human review."
-    },
-    "home.cta_photos": {
-        "message": "View Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "upload.title": {
-        "message": "Upload Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "upload.description": {
-        "message": "Drag and drop photos here or click to browse.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "upload.uploading": {
-        "message": "Uploading...",
-        "context": "Machine-translated seed pending human review."
-    },
-    "upload.select_files": {
-        "message": "Click to select files",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.fetch_success": {
-        "message": "Data fetched successfully",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.title": {
-        "message": "Dashboard",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.storage_used": {
-        "message": "Storage Used",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.recent_activity": {
-        "message": "Recent Activity (Mock)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.col_timestamp": {
-        "message": "Timestamp",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.col_activity": {
-        "message": "Activity",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.just_now": {
-        "message": "Just now",
-        "context": "Machine-translated seed pending human review."
-    },
-    "dashboard.mock_log": {
-        "message": "Mock activity log...",
-        "context": "Machine-translated seed pending human review."
-    },
-    "explore.featured_albums": {
-        "message": "Featured Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "explore.view_all": {
-        "message": "View All",
-        "context": "Machine-translated seed pending human review."
-    },
-    "explore.trending_photos": {
-        "message": "Trending Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "album.not_found": {
-        "message": "Album not found",
-        "context": "Machine-translated seed pending human review."
-    },
-    "album.slideshow": {
-        "message": "Slideshow",
-        "context": "Machine-translated seed pending human review."
-    },
-    "assets.moved_to_album": {
-        "message": "Moved {count} items to {album}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "assets.deleted": {
-        "message": "Deleted {count} items",
-        "context": "Machine-translated seed pending human review."
-    },
-    "assets.empty": {
-        "message": "No photos found",
-        "context": "Machine-translated seed pending human review."
-    },
-    "assets.move_to_album": {
-        "message": "Move to Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "assets.alt": {
-        "message": "Asset",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.archive.description": {
-        "message": "Archived photos are hidden from your main photos view.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.archive.empty": {
-        "message": "No archived photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.trash.description": {
-        "message": "Items in trash will be permanently deleted after 30 days.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.trash.empty_button": {
-        "message": "Empty Trash",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.trash.empty": {
-        "message": "Trash is empty",
-        "context": "Machine-translated seed pending human review."
-    },
-    "library.favorites.placeholder": {
-        "message": "Hello \"/library/favorites\"!",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.error.unexpected": {
-        "message": "An unexpected error occurred.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.passkey.cancelled": {
-        "message": "Passkey authentication was cancelled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.passkey.failed": {
-        "message": "Passkey authentication failed.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.login.title": {
-        "message": "Login",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.login.description": {
-        "message": "Enter your email below to login to your account.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.signing_in": {
-        "message": "Signing in…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.or": {
-        "message": "or",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.sign_in_passkey": {
-        "message": "Sign in with Passkey",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.no_account": {
-        "message": "Don't have an account?",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.sign_up": {
-        "message": "Sign up",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot_password_link": {
-        "message": "Forgot password?",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.totp.title": {
-        "message": "Two-Factor Auth",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.totp.description": {
-        "message": "Enter the 6-digit code from your authenticator app.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.totp.code_label": {
-        "message": "Authenticator Code",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.verifying": {
-        "message": "Verifying…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.verify": {
-        "message": "Verify",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.title": {
-        "message": "Forgot Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.description_sent": {
-        "message": "Check your email for instructions.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.description": {
-        "message": "Enter your email and we'll send you a reset link.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.sending": {
-        "message": "Sending…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.send": {
-        "message": "Send reset link",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.back_to_login": {
-        "message": "Back to login",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot.confirmation": {
-        "message": "If an account with that email exists, you'll receive a reset link shortly.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.mismatch": {
-        "message": "Passwords do not match.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.invalid_title": {
-        "message": "Invalid Link",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.invalid_body": {
-        "message": "This password reset link is invalid or has expired.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.request_new": {
-        "message": "Request a new reset link",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.title": {
-        "message": "Reset Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.success_desc": {
-        "message": "Your password has been reset.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.description": {
-        "message": "Enter your new password.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.new_password": {
-        "message": "New Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.confirm_password": {
-        "message": "Confirm Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.resetting": {
-        "message": "Resetting…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.submit": {
-        "message": "Reset password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.profile_updated": {
-        "message": "Profile updated.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.profile_update_failed": {
-        "message": "Failed to update profile.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.password_mismatch": {
-        "message": "New passwords do not match.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.password_updated": {
-        "message": "Password updated.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.password_update_failed": {
-        "message": "Failed to update password.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.title": {
-        "message": "Profile Settings",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.security_link": {
-        "message": "Security settings →",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.profile.title": {
-        "message": "Profile Information",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.profile.description": {
-        "message": "Update your username and email address.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.password.title": {
-        "message": "Change Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.password.description": {
-        "message": "Enter your current password to set a new one.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.current_password": {
-        "message": "Current Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.confirm_new_password": {
-        "message": "Confirm New Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.updating": {
-        "message": "Updating…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "settings.update_password": {
-        "message": "Update password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.unknown_device": {
-        "message": "Unknown device",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.this_device": {
-        "message": "(This device)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.last_active": {
-        "message": "Last active: {date}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.delete_passkey_confirm": {
-        "message": "Delete passkey \"{name}\"?",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.delete_passkey_failed": {
-        "message": "Failed to delete passkey.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.added": {
-        "message": "Added: {date}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.deleting": {
-        "message": "Deleting…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp_disabled": {
-        "message": "TOTP disabled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp_disable_failed": {
-        "message": "Failed to disable TOTP.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.title": {
-        "message": "Security Settings",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.profile_link": {
-        "message": "← Profile settings",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.sessions.title": {
-        "message": "Active Sessions",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.sessions.description": {
-        "message": "Devices currently logged in to your account.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.sessions.loading": {
-        "message": "Loading sessions…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.sessions.empty": {
-        "message": "No active sessions found.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.title": {
-        "message": "Authenticator App (TOTP)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.description": {
-        "message": "Use an authenticator app to generate one-time codes for login.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.enabled": {
-        "message": "Authenticator app enabled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.setup_button": {
-        "message": "Set up authenticator app",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.disable_prompt": {
-        "message": "If TOTP is currently enabled, enter a code to disable it:",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.code_label": {
-        "message": "TOTP Code",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.code_placeholder": {
-        "message": "6-digit code",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.disabling": {
-        "message": "Disabling…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.totp.disable_button": {
-        "message": "Disable TOTP",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.title": {
-        "message": "Passkeys",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.description": {
-        "message": "Sign in using your device's biometrics or PIN.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.loading": {
-        "message": "Loading passkeys…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.empty": {
-        "message": "No passkeys registered.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.add_button": {
-        "message": "Add passkey",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.reg_cancelled": {
-        "message": "Passkey registration was cancelled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.already_registered": {
-        "message": "A passkey for this device is already registered.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.reg_failed": {
-        "message": "Passkey registration failed.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.description": {
-        "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.name_label": {
-        "message": "Passkey Name (optional)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.name_placeholder": {
-        "message": "My MacBook",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.registering": {
-        "message": "Registering…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.create": {
-        "message": "Create Passkey",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.start_failed": {
-        "message": "Failed to start enrollment.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.invalid_code": {
-        "message": "Invalid code. Please try again.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.start_description": {
-        "message": "Use an authenticator app (e.g. Google Authenticator, Authy) to scan a QR code and generate one-time codes.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.starting": {
-        "message": "Starting…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.setup": {
-        "message": "Set up authenticator",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.scan_description": {
-        "message": "Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.show_key": {
-        "message": "Can't scan? Show setup key",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.scanned": {
-        "message": "I've scanned the code",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.verify_description": {
-        "message": "Enter the 6-digit code from your authenticator app to complete setup.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.code_label": {
-        "message": "Verification Code",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.totp.confirm": {
-        "message": "Confirm",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.description": {
-        "message": "Share your photos and albums with friends and family. Shared content will appear here.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.created": {
-        "message": "Shared album \"{title}\" created!",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.create_button": {
-        "message": "Create Shared Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.dialog_description": {
-        "message": "Create a new album to share with friends and family.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.album_title": {
-        "message": "Album Title",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.album_title_placeholder": {
-        "message": "e.g., Summer Vacation 2024",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.link_sharing": {
-        "message": "Link Sharing",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.link_sharing_hint": {
-        "message": "Anyone with the link can view",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.collaborative": {
-        "message": "Collaborative",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.collaborative_hint": {
-        "message": "Allow others to add photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "sharing.create_album": {
-        "message": "Create Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.title": {
-        "message": "Manage Storage",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.error": {
-        "message": "Error",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.no_data": {
-        "message": "No data",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.usage_summary": {
-        "message": "{percent}% of storage used ({used} of {total})",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.cleanup_hint": {
-        "message": "Make room for your photos, files, and more by cleaning up space",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.category.photos": {
-        "message": "Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.category.videos": {
-        "message": "Videos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.category.sidecar": {
-        "message": "Sidecar",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.category_legend": {
-        "message": "{name} ({size})",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.free_space": {
-        "message": "Free Space ({size})",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.cleanup_title": {
-        "message": "Clean up suggested items",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.suggestion.trash": {
-        "message": "Files in trash",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.suggestion.similar": {
-        "message": "Similar assets",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.suggestion.large": {
-        "message": "Large files",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.error_mock": {
-        "message": "Error (Mock)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.preview": {
-        "message": "Preview",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.col_filename": {
-        "message": "File Name",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.col_path": {
-        "message": "Path",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.col_size": {
-        "message": "Size",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.col_date": {
-        "message": "Date",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.empty_list": {
-        "message": "Empty asset list",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.thumbnail_alt": {
-        "message": "Thumbnail for {fileName}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.image_file_alt": {
-        "message": "Image file: {fileName}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.video_file_alt": {
-        "message": "Video file: {fileName}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "storage.sidecar_file_alt": {
-        "message": "Sidecar file: {fileName}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.cancel": {
-        "message": "Cancel",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.create": {
-        "message": "Create",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.delete": {
-        "message": "Delete",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.ok": {
-        "message": "OK",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.done": {
-        "message": "Done",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.not_now": {
-        "message": "Not Now",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.common.location": {
-        "message": "Location",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.tab.library": {
-        "message": "Library",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.tab.collections": {
-        "message": "Collections",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.tab.search": {
-        "message": "Search",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.tab.settings": {
-        "message": "Settings",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.diagnostics.crash_alert.title": {
-        "message": "Capsule quit unexpectedly last time",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.diagnostics.crash_alert.send": {
-        "message": "Send Report",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.diagnostics.crash_alert.body": {
-        "message": "A redacted diagnostic report can help us fix the crash. It contains no photos or album contents.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.diagnostics.toggle": {
-        "message": "Share On-Device Diagnostics",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.diagnostics.header": {
-        "message": "Diagnostics",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.diagnostics.footer": {
-        "message": "Collects crash and performance diagnostics on this device using Apple's MetricKit. Nothing leaves your device unless you turn on uploads below.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.upload.toggle": {
-        "message": "Upload Reports",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.upload.header": {
-        "message": "Self-Hosted Upload",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.upload.footer": {
-        "message": "Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.report.button": {
-        "message": "Report a Problem…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.report.footer": {
-        "message": "Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.settings.version": {
-        "message": "Version",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.recently_deleted.title": {
-        "message": "Recently Deleted",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.recently_deleted.empty.title": {
-        "message": "No Recently Deleted",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.recently_deleted.empty.description": {
-        "message": "Deleted Capsule photos appear here for recovery.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.recently_deleted.recover": {
-        "message": "Recover",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.title": {
-        "message": "Hidden",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.empty.title": {
-        "message": "Nothing Hidden",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.empty.description": {
-        "message": "Hide photos from the Library with Select → Hide.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.confirm.title": {
-        "message": "Hidden Photo",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.unhide": {
-        "message": "Unhide",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.locked.description": {
-        "message": "Authenticate to view your hidden photos.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.hidden.unlock": {
-        "message": "Unlock",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.imports.title": {
-        "message": "Imports",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.imports.empty.title": {
-        "message": "No Imports",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.imports.empty.description": {
-        "message": "Photos imported into Capsule appear here.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.places.title": {
-        "message": "Places",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.places.empty.title": {
-        "message": "No Places",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.places.empty.description": {
-        "message": "Photos with location data will appear here.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.collections.section.media_types": {
-        "message": "Media Types",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.collections.section.utilities": {
-        "message": "Utilities",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.collections.section.more": {
-        "message": "More",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.title": {
-        "message": "Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.new_album.title": {
-        "message": "New Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.new_album.name_field": {
-        "message": "Album Name",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.new_album.message": {
-        "message": "Name your new Capsule album.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.section.my_albums": {
-        "message": "My Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.section.smart_albums": {
-        "message": "Smart Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.empty.title": {
-        "message": "No Albums",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.empty.description": {
-        "message": "Create a Capsule album with the + button.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.detail.empty.title": {
-        "message": "Empty Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.albums.detail.empty.description": {
-        "message": "Add photos using a viewer's Add to Album action.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.prompt": {
-        "message": "Photos, Videos, Moments",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.section.recent": {
-        "message": "Recent",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.section.categories": {
-        "message": "Categories",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.clear_recents": {
-        "message": "Clear",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.empty.title": {
-        "message": "No Matches",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.search.empty.description": {
-        "message": "No photos match these filters.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.import_complete.title": {
-        "message": "Import Complete",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.empty.title": {
-        "message": "No Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.empty.description": {
-        "message": "Tap the import button to add photos to Capsule.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.load_failed.title": {
-        "message": "Couldn't Load Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.import.accessibility": {
-        "message": "Import Photos",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.view_picker": {
-        "message": "View",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.level.years": {
-        "message": "Years",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.level.months": {
-        "message": "Months",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.level.all": {
-        "message": "All",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.grid_size": {
-        "message": "Grid Size",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.grid.large": {
-        "message": "Large",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.grid.medium": {
-        "message": "Medium",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.grid.small": {
-        "message": "Small",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.permission.title": {
-        "message": "Photo Access Needed",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.permission.description": {
-        "message": "Grant photo access to see your library, or import photos directly into Capsule.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.permission.open_settings": {
-        "message": "Open Settings",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.importing": {
-        "message": "Importing…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.timeline.select": {
-        "message": "Select",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.add_to_album.title": {
-        "message": "Add to Album",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.add_to_album.choose": {
-        "message": "Choose a Capsule album.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.add_to_album.empty_collections": {
-        "message": "Create an album in Collections first.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.add_to_album.empty_albums": {
-        "message": "Create an album in the Albums tab first.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.title": {
-        "message": "Info",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.capture": {
-        "message": "Capture",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.camera": {
-        "message": "Camera",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.type": {
-        "message": "Type",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.date": {
-        "message": "Date",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.dimensions": {
-        "message": "Dimensions",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.resolution": {
-        "message": "Resolution",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.duration": {
-        "message": "Duration",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.make": {
-        "message": "Make",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.model": {
-        "message": "Model",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.lens": {
-        "message": "Lens",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.iso": {
-        "message": "ISO",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.aperture": {
-        "message": "Aperture",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.shutter": {
-        "message": "Shutter",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.info.focal_length": {
-        "message": "Focal Length",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.play_slideshow": {
-        "message": "Play Slideshow",
-        "context": "Machine-translated seed pending human review."
-    },
-    "ios.viewer.pause_slideshow": {
-        "message": "Pause Slideshow",
-        "context": "Machine-translated seed pending human review."
-    },
-    "drop.error.passphrase": {
-        "message": "This upload needs the link's password. Unlock the page and try again.",
-        "context": "Machine-translated seed pending human review."
-    }
+  "album.not_found": {
+    "message": "Album not found",
+    "context": "Machine-translated seed pending human review."
+  },
+  "album.slideshow": {
+    "message": "Slideshow",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.add_to_album.choose": {
+    "message": "Choose a Capsule album.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.add_to_album.empty_albums": {
+    "message": "Create an album in the Albums tab first.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.add_to_album.empty_collections": {
+    "message": "Create an album in Collections first.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.add_to_album.title": {
+    "message": "Add to Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.detail.empty.description": {
+    "message": "Add photos using a viewer's Add to Album action.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.detail.empty.title": {
+    "message": "Empty Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.empty.description": {
+    "message": "Create a Capsule album with the + button.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.empty.title": {
+    "message": "No Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.new_album.message": {
+    "message": "Name your new Capsule album.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.new_album.name_field": {
+    "message": "Album Name",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.new_album.title": {
+    "message": "New Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.section.my_albums": {
+    "message": "My Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.section.smart_albums": {
+    "message": "Smart Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.title": {
+    "message": "Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.collections.section.media_types": {
+    "message": "Media Types",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.collections.section.more": {
+    "message": "More",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.collections.section.utilities": {
+    "message": "Utilities",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.cancel": {
+    "message": "Cancel",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.create": {
+    "message": "Create",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.delete": {
+    "message": "Delete",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.done": {
+    "message": "Done",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.location": {
+    "message": "Location",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.not_now": {
+    "message": "Not Now",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.common.ok": {
+    "message": "OK",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.diagnostics.crash_alert.body": {
+    "message": "A redacted diagnostic report can help us fix the crash. It contains no photos or album contents.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.diagnostics.crash_alert.send": {
+    "message": "Send Report",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.diagnostics.crash_alert.title": {
+    "message": "Capsule quit unexpectedly last time",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.confirm.title": {
+    "message": "Hidden Photo",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.empty.description": {
+    "message": "Hide photos from the Library with Select → Hide.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.empty.title": {
+    "message": "Nothing Hidden",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.locked.description": {
+    "message": "Authenticate to view your hidden photos.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.title": {
+    "message": "Hidden",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.unhide": {
+    "message": "Unhide",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.hidden.unlock": {
+    "message": "Unlock",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.imports.empty.description": {
+    "message": "Photos imported into Capsule appear here.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.imports.empty.title": {
+    "message": "No Imports",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.imports.title": {
+    "message": "Imports",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.places.empty.description": {
+    "message": "Photos with location data will appear here.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.places.empty.title": {
+    "message": "No Places",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.places.title": {
+    "message": "Places",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.recently_deleted.empty.description": {
+    "message": "Deleted Capsule photos appear here for recovery.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.recently_deleted.empty.title": {
+    "message": "No Recently Deleted",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.recently_deleted.recover": {
+    "message": "Recover",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.recently_deleted.title": {
+    "message": "Recently Deleted",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.clear_recents": {
+    "message": "Clear",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.empty.description": {
+    "message": "No photos match these filters.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.empty.title": {
+    "message": "No Matches",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.prompt": {
+    "message": "Photos, Videos, Moments",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.section.categories": {
+    "message": "Categories",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.section.recent": {
+    "message": "Recent",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.diagnostics.footer": {
+    "message": "Collects crash and performance diagnostics on this device using Apple's MetricKit. Nothing leaves your device unless you turn on uploads below.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.diagnostics.header": {
+    "message": "Diagnostics",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.diagnostics.toggle": {
+    "message": "Share On-Device Diagnostics",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.report.button": {
+    "message": "Report a Problem…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.report.footer": {
+    "message": "Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.upload.footer": {
+    "message": "Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.upload.header": {
+    "message": "Self-Hosted Upload",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.upload.toggle": {
+    "message": "Upload Reports",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.version": {
+    "message": "Version",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.tab.collections": {
+    "message": "Collections",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.tab.library": {
+    "message": "Library",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.tab.search": {
+    "message": "Search",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.tab.settings": {
+    "message": "Settings",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.empty.description": {
+    "message": "Tap the import button to add photos to Capsule.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.empty.title": {
+    "message": "No Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.grid.large": {
+    "message": "Large",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.grid.medium": {
+    "message": "Medium",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.grid.small": {
+    "message": "Small",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.grid_size": {
+    "message": "Grid Size",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.import.accessibility": {
+    "message": "Import Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.import_complete.title": {
+    "message": "Import Complete",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.importing": {
+    "message": "Importing…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.level.all": {
+    "message": "All",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.level.months": {
+    "message": "Months",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.level.years": {
+    "message": "Years",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.load_failed.title": {
+    "message": "Couldn't Load Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.permission.description": {
+    "message": "Grant photo access to see your library, or import photos directly into Capsule.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.permission.open_settings": {
+    "message": "Open Settings",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.permission.title": {
+    "message": "Photo Access Needed",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.select": {
+    "message": "Select",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.view_picker": {
+    "message": "View",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.aperture": {
+    "message": "Aperture",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.camera": {
+    "message": "Camera",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.capture": {
+    "message": "Capture",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.date": {
+    "message": "Date",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.dimensions": {
+    "message": "Dimensions",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.duration": {
+    "message": "Duration",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.focal_length": {
+    "message": "Focal Length",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.iso": {
+    "message": "ISO",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.lens": {
+    "message": "Lens",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.make": {
+    "message": "Make",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.model": {
+    "message": "Model",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.resolution": {
+    "message": "Resolution",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.shutter": {
+    "message": "Shutter",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.title": {
+    "message": "Info",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.type": {
+    "message": "Type",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.pause_slideshow": {
+    "message": "Pause Slideshow",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.play_slideshow": {
+    "message": "Play Slideshow",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app_name": {
+    "message": "Capsule ऐप",
+    "context": "Machine-translated seed pending human review."
+  },
+  "assets.alt": {
+    "message": "Asset",
+    "context": "Machine-translated seed pending human review."
+  },
+  "assets.deleted": {
+    "message": "Deleted {count} items",
+    "context": "Machine-translated seed pending human review."
+  },
+  "assets.empty": {
+    "message": "No photos found",
+    "context": "Machine-translated seed pending human review."
+  },
+  "assets.move_to_album": {
+    "message": "Move to Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "assets.moved_to_album": {
+    "message": "Moved {count} items to {album}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.back_to_login": {
+    "message": "Back to login",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.confirm_password": {
+    "message": "Confirm Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.error.unexpected": {
+    "message": "An unexpected error occurred.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.confirmation": {
+    "message": "If an account with that email exists, you'll receive a reset link shortly.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.description": {
+    "message": "Enter your email and we'll send you a reset link.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.description_sent": {
+    "message": "Check your email for instructions.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.send": {
+    "message": "Send reset link",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.sending": {
+    "message": "Sending…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot.title": {
+    "message": "Forgot Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.forgot_password_link": {
+    "message": "Forgot password?",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.login.description": {
+    "message": "Enter your email below to login to your account.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.login.title": {
+    "message": "Login",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.new_password": {
+    "message": "New Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.no_account": {
+    "message": "Don't have an account?",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.or": {
+    "message": "or",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.passkey.cancelled": {
+    "message": "Passkey authentication was cancelled.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.passkey.failed": {
+    "message": "Passkey authentication failed.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.description": {
+    "message": "Enter your new password.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.invalid_body": {
+    "message": "This password reset link is invalid or has expired.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.invalid_title": {
+    "message": "Invalid Link",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.mismatch": {
+    "message": "Passwords do not match.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.request_new": {
+    "message": "Request a new reset link",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.resetting": {
+    "message": "Resetting…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.submit": {
+    "message": "Reset password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.success_desc": {
+    "message": "Your password has been reset.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.reset.title": {
+    "message": "Reset Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.sign_in_passkey": {
+    "message": "Sign in with Passkey",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.sign_up": {
+    "message": "Sign up",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.signing_in": {
+    "message": "Signing in…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.totp.code_label": {
+    "message": "Authenticator Code",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.totp.description": {
+    "message": "Enter the 6-digit code from your authenticator app.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.totp.title": {
+    "message": "Two-Factor Auth",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.verify": {
+    "message": "Verify",
+    "context": "Machine-translated seed pending human review."
+  },
+  "auth.verifying": {
+    "message": "Verifying…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "back": {
+    "message": "वापस",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.email_prompt": {
+    "message": "ईमेल",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.failed": {
+    "message": "लॉग इन विफल: {reason}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.in_progress": {
+    "message": "Capsule में लॉग इन हो रहा है…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.password_prompt": {
+    "message": "पासवर्ड",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.success": {
+    "message": "{email} के रूप में लॉग इन किया गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.logout.in_progress": {
+    "message": "Capsule से लॉग आउट हो रहा है…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.logout.not_logged_in": {
+    "message": "आप लॉग इन नहीं हैं।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.logout.success": {
+    "message": "लॉग आउट कर दिया गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.not_authenticated": {
+    "message": "प्रमाणित नहीं। पहले 'capsule auth login' चलाएँ।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.empty": {
+    "message": "अभी तक कोई एसेट सिंक नहीं हुई है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.failed": {
+    "message": "लाइब्रेरी सूचीबद्ध करने में विफल: {reason}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.header": {
+    "message": "सिंक की गई लाइब्रेरी ({count} एसेट):",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.row": {
+    "message": "{asset_id}  album={album_id}  seq={seq}  {state}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.state.active": {
+    "message": "सक्रिय",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.list.state.awaiting_original": {
+    "message": "मूल की प्रतीक्षा में",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.sync.complete": {
+    "message": "सिंक पूर्ण: {pages} पृष्ठ(ों) में {albums} एल्बम(ों) पर {applied} परिवर्तन लागू किए गए।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.sync.dry_run_notice": {
+    "message": "ड्राई रन: कोई परिवर्तन सहेजा नहीं जाएगा।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.sync.failed": {
+    "message": "सिंक विफल: {reason}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.sync.in_progress": {
+    "message": "{endpoint} से सिंक हो रहा है…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "cli.sync.up_to_date": {
+    "message": "पहले से अद्यतित।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.back": {
+    "message": "Back",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.cancel": {
+    "message": "Cancel",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.close": {
+    "message": "Close",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.code_placeholder": {
+    "message": "123456",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.delete": {
+    "message": "Delete",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.email": {
+    "message": "Email",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.email_placeholder": {
+    "message": "m@example.com",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.error.generic": {
+    "message": "Something went wrong. Please try again.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.item_count": {
+    "message": "{count, plural, one {# item} other {# items}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.loading": {
+    "message": "Loading...",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.password": {
+    "message": "Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.password_min": {
+    "message": "Password must be at least 8 characters.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.refresh": {
+    "message": "Refresh",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.remove": {
+    "message": "Remove",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.save_changes": {
+    "message": "Save changes",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.saving": {
+    "message": "Saving…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.share": {
+    "message": "Share",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.sign_in": {
+    "message": "Sign in",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.toggle_theme": {
+    "message": "Toggle theme",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.upload": {
+    "message": "Upload",
+    "context": "Machine-translated seed pending human review."
+  },
+  "common.username": {
+    "message": "Username",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.col_activity": {
+    "message": "Activity",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.col_timestamp": {
+    "message": "Timestamp",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.fetch_success": {
+    "message": "Data fetched successfully",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.just_now": {
+    "message": "Just now",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.mock_log": {
+    "message": "Mock activity log...",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.recent_activity": {
+    "message": "Recent Activity (Mock)",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.storage_used": {
+    "message": "Storage Used",
+    "context": "Machine-translated seed pending human review."
+  },
+  "dashboard.title": {
+    "message": "Dashboard",
+    "context": "Machine-translated seed pending human review."
+  },
+  "device.cohort.label.new_device": {
+    "message": "एक नया डिवाइस",
+    "context": "Machine-translated seed pending human review."
+  },
+  "device.cohort.label.previously_used": {
+    "message": "एक डिवाइस जिसे आपने पहले उपयोग किया है (अंतिम बार देखा गया {last_seen})",
+    "context": "Machine-translated seed pending human review."
+  },
+  "device.cohort.label.this_device": {
+    "message": "यह डिवाइस",
+    "context": "Machine-translated seed pending human review."
+  },
+  "device.cohort.support.report": {
+    "message": "इस डिवाइस समूह के साथ समस्या की रिपोर्ट करें",
+    "context": "Machine-translated seed pending human review."
+  },
+  "drop.done.body": {
+    "message": "Your files have been sent for the album owner to review. They won't appear until the owner adds them."
+  },
+  "drop.done.title": {
+    "message": "Thanks for your upload"
+  },
+  "drop.error.cap": {
+    "message": "This link has reached its upload limit."
+  },
+  "drop.error.generic": {
+    "message": "Something went wrong uploading this file. Please try again."
+  },
+  "drop.error.passphrase": {
+    "message": "This upload needs the link's password. Unlock the page and try again.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "drop.error.quota": {
+    "message": "There isn't enough space to accept this upload right now."
+  },
+  "drop.error.rate_limited": {
+    "message": "Too many attempts. Please wait a moment and try again."
+  },
+  "drop.error.too_large": {
+    "message": "This file is too large to upload here."
+  },
+  "drop.error.unavailable": {
+    "message": "This upload link is unavailable. It may have expired, been revoked, or never existed."
+  },
+  "drop.error.unsupported_type": {
+    "message": "This file type can't be uploaded here."
+  },
+  "drop.file.done": {
+    "message": "Uploaded"
+  },
+  "drop.file.failed": {
+    "message": "Failed"
+  },
+  "drop.file.pending": {
+    "message": "Waiting"
+  },
+  "drop.file.retry": {
+    "message": "Retry"
+  },
+  "drop.file.sealing": {
+    "message": "Encrypting…"
+  },
+  "drop.file.uploading": {
+    "message": "Uploading… {percent}%"
+  },
+  "drop.incomplete.body": {
+    "message": "The key needed to encrypt your upload is missing from the link."
+  },
+  "drop.incomplete.title": {
+    "message": "This upload link is incomplete"
+  },
+  "drop.passphrase.body": {
+    "message": "This upload link is protected with a password."
+  },
+  "drop.passphrase.label": {
+    "message": "Password"
+  },
+  "drop.passphrase.title": {
+    "message": "Password required"
+  },
+  "drop.passphrase.wrong": {
+    "message": "That password didn't work. Try again."
+  },
+  "drop.picker.button": {
+    "message": "Choose files"
+  },
+  "drop.picker.empty": {
+    "message": "No files selected yet."
+  },
+  "drop.picker.label": {
+    "message": "Choose photos to upload"
+  },
+  "drop.privacy_note": {
+    "message": "Your files are encrypted in your browser before they are uploaded. The server never sees your originals, and this page can't show you anything already in the album."
+  },
+  "drop.subtitle": {
+    "message": "You've been invited to contribute to a private album."
+  },
+  "drop.summary": {
+    "message": "{done} of {total} uploaded"
+  },
+  "drop.title": {
+    "message": "Upload photos"
+  },
+  "drop.upload.busy": {
+    "message": "Uploading…"
+  },
+  "drop.upload.button": {
+    "message": "{count, plural, one {Upload # file} other {Upload # files}}"
+  },
+  "drop.upload_only_badge": {
+    "message": "Upload only"
+  },
+  "error.auth.invalid_credentials": {
+    "message": "ईमेल या पासवर्ड ग़लत है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.auth.rate_limited": {
+    "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.auth.user_already_exists": {
+    "message": "इन विवरणों वाला खाता पहले से मौजूद है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.blob.pending_upload": {
+    "message": "मूल फ़ोटो अभी तक उसके डिवाइस से अपलोड नहीं हुई है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.directory.malformed": {
+    "message": "डिवाइस सूची पढ़ी नहीं जा सकी।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.directory.version_conflict": {
+    "message": "यह डिवाइस सूची पुरानी है। Capsule जारी रखने से पहले इसे रीफ़्रेश करेगा।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.drop.cap_exceeded": {
+    "message": "यह अपलोड लिंक भर गया है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.drop.malformed_descriptor": {
+    "message": "यह अपलोड स्वीकार नहीं किया जा सका।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.drop.not_in_inbox": {
+    "message": "यह ड्रॉप अब अपनाने के लिए उपलब्ध नहीं है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.drop.passphrase_required": {
+    "message": "इस अपलोड लिंक को इसका पासफ़्रेज़ चाहिए।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.drop.rate_limited": {
+    "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.enrollment.channel_not_found": {
+    "message": "यह डिवाइस-जोड़ने का सत्र समाप्त हो गया है। फिर से शुरू करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.enrollment.code_refused": {
+    "message": "वह डिवाइस कोड काम नहीं आया। नया कोड बनाएँ और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.enrollment.local_auth_required": {
+    "message": "दूसरा डिवाइस जोड़ने के लिए इस डिवाइस पर पुष्टि करें कि यह आप ही हैं।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.enrollment.rate_limited": {
+    "message": "डिवाइस जोड़ने के बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.enrollment.relay_malformed": {
+    "message": "डिवाइस-जोड़ने का अनुरोध पढ़ा नहीं जा सका।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.escrow.malformed": {
+    "message": "रिकवरी बैकअप सहेजा नहीं जा सका।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.audience_mismatch": {
+    "message": "यह पहुँच अनुमति किसी अन्य एल्बम के लिए है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.capability_expired": {
+    "message": "इस साझा एल्बम की पहुँच समाप्त हो गई है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.capability_invalid": {
+    "message": "इस साझा एल्बम की पहुँच सत्यापित नहीं की जा सकी।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.capability_revoked": {
+    "message": "इस साझा एल्बम की पहुँच रद्द कर दी गई है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.circuit_open": {
+    "message": "बार-बार त्रुटियों के बाद इस स्रोत को अस्थायी रूप से रोक दिया गया है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.rate_budget_exceeded": {
+    "message": "इस स्रोत ने अपनी अनुरोध सीमा पूरी कर ली है। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.federation.scope_insufficient": {
+    "message": "यह पहुँच अनुमति अनुरोधित सामग्री को कवर नहीं करती।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.moderation.account_suspended": {
+    "message": "आपका खाता निलंबित है। बहाल होने तक आप अपलोड या साझा नहीं कर सकते।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.moderation.report_rate_limited": {
+    "message": "इस स्रोत से बहुत अधिक रिपोर्ट। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.moderation.report_unsigned": {
+    "message": "मॉडरेशन रिपोर्ट सत्यापित नहीं की जा सकी।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.moderation.server_blocked": {
+    "message": "इस सर्वर को हमारे साथ फ़ेडरेट करने से रोका गया है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.protocol.version_unsupported": {
+    "message": "Capsule का यह संस्करण अब समर्थित नहीं है। कृपया ऐप अपडेट करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.quota.exceeded": {
+    "message": "आपका स्टोरेज भर गया है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.quota.grace_locked": {
+    "message": "आपका स्टोरेज छूट अवधि के बाद भी भरा रहा है, इसलिए जब तक आप जगह ख़ाली नहीं करते तब तक संपादन रोक दिए गए हैं।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.quota.peer_budget_exceeded": {
+    "message": "इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.share.rate_limited": {
+    "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.storage.deep_rate_limited": {
+    "message": "बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.storage.invalid_request": {
+    "message": "स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.sync.cursor_invalid": {
+    "message": "सिंक सत्र पुराना है। Capsule शुरू से फिर से सिंक करेगा।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.sync.unauthenticated": {
+    "message": "सिंक जारी रखने के लिए कृपया फिर से साइन इन करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.album_access_denied": {
+    "message": "आपके पास इस एल्बम में फ़ोटो जोड़ने की अनुमति नहीं है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.amk_regressed": {
+    "message": "यह परिवर्तन सर्वर द्वारा दर्ज की गई एल्बम कुंजी से पुरानी कुंजी को संदर्भित करता है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.checksum_mismatch": {
+    "message": "अपलोड डेटा ट्रांज़िट में ख़राब हो गया। फिर से प्रयास किया जा रहा है…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.chunk_conflict": {
+    "message": "अपलोड ने परस्पर विरोधी डेटा भेजा और रोक दिया गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.chunk_not_aligned": {
+    "message": "अपलोड खंड का आकार ग़लत था।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.chunk_too_large": {
+    "message": "अपलोड खंड अधिकतम खंड आकार से अधिक हो गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.content_hash_mismatch": {
+    "message": "अपलोड अखंडता सत्यापन में विफल रहा और छोड़ दिया गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.device_not_authorized": {
+    "message": "यह डिवाइस अपलोड के लिए अधिकृत नहीं है। इसे फिर से पंजीकृत करें और फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.duplicate_blob": {
+    "message": "यह फ़ाइल पहले से संग्रहीत है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.empty_chunk": {
+    "message": "अपलोड खंड ख़ाली नहीं हो सकता।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.envelope_mismatch": {
+    "message": "अपलोड अनुरोध अपने हस्ताक्षरित मैनिफ़ेस्ट का खंडन करता है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.envelope_rejected": {
+    "message": "अपलोड का हस्ताक्षरित मैनिफ़ेस्ट सत्यापन में विफल रहा।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.file_too_large": {
+    "message": "यह फ़ाइल सर्वर की आकार सीमा से अधिक है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.finalize_in_progress": {
+    "message": "यह अपलोड पहले से ही अंतिम रूप दिया जा रहा है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.forbidden": {
+    "message": "आपके पास इस अपलोड तक पहुँच नहीं है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.invalid_action": {
+    "message": "यह परिवर्तन एक ऐसी क्रिया का उपयोग करता है जिसकी एल्बम अनुमति नहीं देता।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.invalid_hash": {
+    "message": "अपलोड का घोषित सामग्री हैश अमान्य है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.invalid_size": {
+    "message": "अपलोड का घोषित आकार अमान्य है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.malformed_request": {
+    "message": "अपलोड अनुरोध ग़लत रूप में है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.missing_checksum": {
+    "message": "अपलोड अनुरोध में इसकी अखंडता चेकसम नहीं थी।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.missing_offset": {
+    "message": "अपलोड अनुरोध में इसका स्थिति चिह्न नहीं था।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.offset_mismatch": {
+    "message": "अपलोड सिंक से बाहर हो गया और फिर से संरेखित हो रहा है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.owner_not_permitted": {
+    "message": "आप इस उपयोगकर्ता की ओर से अपलोड नहीं कर सकते।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.receipt_not_available": {
+    "message": "अपलोड पूरा नहीं हुआ है, इसलिए इसकी स्टोरेज रसीद अभी उपलब्ध नहीं है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.session_not_active": {
+    "message": "यह अपलोड पहले ही पूरा हो चुका है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.session_not_found": {
+    "message": "अपलोड सत्र समाप्त हो गया। फिर से शुरू किया जा रहा है…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.size_exceeded": {
+    "message": "अपलोड ने अपने घोषित आकार से अधिक डेटा भेजा।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.stale_revival": {
+    "message": "यह परिवर्तन आइटम के पुराने संस्करण पर आधारित है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.storage_inconsistent": {
+    "message": "सर्वर को स्टोरेज समस्या आई। कृपया फिर से प्रयास करें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.timestamp_out_of_range": {
+    "message": "आपके डिवाइस की घड़ी ग़लत लगती है। इसकी तारीख़ और समय जाँचें।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.unknown_crypto_suite": {
+    "message": "ऐप का यह संस्करण एक ऐसा एन्क्रिप्शन सूट उपयोग करता है जिसे सर्वर नहीं पहचानता।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.unsupported_content_type": {
+    "message": "यह फ़ाइल प्रकार समर्थित नहीं है।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.unsupported_media_type": {
+    "message": "अपलोड डेटा असमर्थित प्रारूप में भेजा गया।",
+    "context": "Machine-translated seed pending human review."
+  },
+  "explore.featured_albums": {
+    "message": "Featured Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "explore.trending_photos": {
+    "message": "Trending Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "explore.view_all": {
+    "message": "View All",
+    "context": "Machine-translated seed pending human review."
+  },
+  "home.cta_dashboard": {
+    "message": "Go to Dashboard",
+    "context": "Machine-translated seed pending human review."
+  },
+  "home.cta_photos": {
+    "message": "View Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "home.subtitle": {
+    "message": "Your professional asset management solution.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "home.title": {
+    "message": "Welcome to Capsule",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_artist": {
+    "message": "कलाकार",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_credits": {
+    "message": "श्रेय",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_date": {
+    "message": "तारीख़",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_department": {
+    "message": "विभाग",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_dimensions": {
+    "message": "आयाम",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_medium": {
+    "message": "माध्यम",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_repository": {
+    "message": "संग्रह",
+    "context": "Machine-translated seed pending human review."
+  },
+  "label_title": {
+    "message": "शीर्षक",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.archive.description": {
+    "message": "Archived photos are hidden from your main photos view.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.archive.empty": {
+    "message": "No archived photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.favorites.placeholder": {
+    "message": "Hello \"/library/favorites\"!",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.trash.description": {
+    "message": "Items in trash will be permanently deleted after 30 days.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.trash.empty": {
+    "message": "Trash is empty",
+    "context": "Machine-translated seed pending human review."
+  },
+  "library.trash.empty_button": {
+    "message": "Empty Trash",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.already_registered": {
+    "message": "A passkey for this device is already registered.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.create": {
+    "message": "Create Passkey",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.description": {
+    "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.name_label": {
+    "message": "Passkey Name (optional)",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.name_placeholder": {
+    "message": "My MacBook",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.reg_cancelled": {
+    "message": "Passkey registration was cancelled.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.reg_failed": {
+    "message": "Passkey registration failed.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.passkey.registering": {
+    "message": "Registering…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.code_label": {
+    "message": "Verification Code",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.confirm": {
+    "message": "Confirm",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.invalid_code": {
+    "message": "Invalid code. Please try again.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.scan_description": {
+    "message": "Scan this QR code with your authenticator app, then enter the 6-digit code to confirm.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.scanned": {
+    "message": "I've scanned the code",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.setup": {
+    "message": "Set up authenticator",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.show_key": {
+    "message": "Can't scan? Show setup key",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.start_description": {
+    "message": "Use an authenticator app (e.g. Google Authenticator, Authy) to scan a QR code and generate one-time codes.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.start_failed": {
+    "message": "Failed to start enrollment.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.starting": {
+    "message": "Starting…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mfa.totp.verify_description": {
+    "message": "Enter the 6-digit code from your authenticator app to complete setup.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mode.dark": {
+    "message": "Dark",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mode.light": {
+    "message": "Light",
+    "context": "Machine-translated seed pending human review."
+  },
+  "mode.system": {
+    "message": "System",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.albums": {
+    "message": "Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.archive": {
+    "message": "Archive",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.explore": {
+    "message": "Explore",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.favorites": {
+    "message": "Favorites",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.library": {
+    "message": "Library",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.logout": {
+    "message": "Logout",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.notifications": {
+    "message": "Notifications",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.photos": {
+    "message": "Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.profile": {
+    "message": "Profile",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.search_placeholder": {
+    "message": "Search your photos...",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.security": {
+    "message": "Security",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.sharing": {
+    "message": "Sharing",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.storage_usage": {
+    "message": "15 GB used of 2 TB",
+    "context": "Machine-translated seed pending human review."
+  },
+  "nav.trash": {
+    "message": "Trash",
+    "context": "Machine-translated seed pending human review."
+  },
+  "no_data_available": {
+    "message": "कोई डेटा उपलब्ध नहीं",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.added": {
+    "message": "Added: {date}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.delete_passkey_confirm": {
+    "message": "Delete passkey \"{name}\"?",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.delete_passkey_failed": {
+    "message": "Failed to delete passkey.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.deleting": {
+    "message": "Deleting…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.last_active": {
+    "message": "Last active: {date}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.passkeys.add_button": {
+    "message": "Add passkey",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.passkeys.description": {
+    "message": "Sign in using your device's biometrics or PIN.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.passkeys.empty": {
+    "message": "No passkeys registered.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.passkeys.loading": {
+    "message": "Loading passkeys…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.passkeys.title": {
+    "message": "Passkeys",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.profile_link": {
+    "message": "← Profile settings",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.sessions.description": {
+    "message": "Devices currently logged in to your account.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.sessions.empty": {
+    "message": "No active sessions found.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.sessions.loading": {
+    "message": "Loading sessions…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.sessions.title": {
+    "message": "Active Sessions",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.this_device": {
+    "message": "(This device)",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.title": {
+    "message": "Security Settings",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.code_label": {
+    "message": "TOTP Code",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.code_placeholder": {
+    "message": "6-digit code",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.description": {
+    "message": "Use an authenticator app to generate one-time codes for login.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.disable_button": {
+    "message": "Disable TOTP",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.disable_prompt": {
+    "message": "If TOTP is currently enabled, enter a code to disable it:",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.disabling": {
+    "message": "Disabling…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.enabled": {
+    "message": "Authenticator app enabled.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.setup_button": {
+    "message": "Set up authenticator app",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp.title": {
+    "message": "Authenticator App (TOTP)",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp_disable_failed": {
+    "message": "Failed to disable TOTP.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.totp_disabled": {
+    "message": "TOTP disabled.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "security.unknown_device": {
+    "message": "Unknown device",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.confirm_new_password": {
+    "message": "Confirm New Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.current_password": {
+    "message": "Current Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.password.description": {
+    "message": "Enter your current password to set a new one.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.password.title": {
+    "message": "Change Password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.password_mismatch": {
+    "message": "New passwords do not match.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.password_update_failed": {
+    "message": "Failed to update password.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.password_updated": {
+    "message": "Password updated.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.profile.description": {
+    "message": "Update your username and email address.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.profile.title": {
+    "message": "Profile Information",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.profile_update_failed": {
+    "message": "Failed to update profile.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.profile_updated": {
+    "message": "Profile updated.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.security_link": {
+    "message": "Security settings →",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.title": {
+    "message": "Profile Settings",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.update_password": {
+    "message": "Update password",
+    "context": "Machine-translated seed pending human review."
+  },
+  "settings.updating": {
+    "message": "Updating…",
+    "context": "Machine-translated seed pending human review."
+  },
+  "share.asset.size": {
+    "message": "Size"
+  },
+  "share.asset.type": {
+    "message": "Type"
+  },
+  "share.error.body": {
+    "message": "Something went wrong. Please try again later."
+  },
+  "share.error.title": {
+    "message": "Couldn't open this link"
+  },
+  "share.expires": {
+    "message": "Expires {date}"
+  },
+  "share.incomplete.body": {
+    "message": "The secret needed to open it is missing from the link."
+  },
+  "share.incomplete.title": {
+    "message": "This link is incomplete"
+  },
+  "share.items": {
+    "message": "{count, plural, one {# item} other {# items}}"
+  },
+  "share.passphrase.body": {
+    "message": "This shared link is protected with a password."
+  },
+  "share.passphrase.label": {
+    "message": "Password"
+  },
+  "share.passphrase.submit": {
+    "message": "Unlock"
+  },
+  "share.passphrase.title": {
+    "message": "Password required"
+  },
+  "share.passphrase.wrong": {
+    "message": "That password didn't work. Try again."
+  },
+  "share.scope.album": {
+    "message": "Shared album"
+  },
+  "share.scope.asset": {
+    "message": "Shared item"
+  },
+  "share.unavailable.body": {
+    "message": "It may have expired, been revoked, or never existed."
+  },
+  "share.unavailable.title": {
+    "message": "This link is unavailable"
+  },
+  "share.viewer.opening": {
+    "message": "Opening shared link…"
+  },
+  "share.viewer.readonly_badge": {
+    "message": "Read-only share"
+  },
+  "sharing.album_title": {
+    "message": "Album Title",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.album_title_placeholder": {
+    "message": "e.g., Summer Vacation 2024",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.collaborative": {
+    "message": "Collaborative",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.collaborative_hint": {
+    "message": "Allow others to add photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.create_album": {
+    "message": "Create Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.create_button": {
+    "message": "Create Shared Album",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.created": {
+    "message": "Shared album \"{title}\" created!",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.description": {
+    "message": "Share your photos and albums with friends and family. Shared content will appear here.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.dialog_description": {
+    "message": "Create a new album to share with friends and family.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.link_sharing": {
+    "message": "Link Sharing",
+    "context": "Machine-translated seed pending human review."
+  },
+  "sharing.link_sharing_hint": {
+    "message": "Anyone with the link can view",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.category.photos": {
+    "message": "Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.category.sidecar": {
+    "message": "Sidecar",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.category.videos": {
+    "message": "Videos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.category_legend": {
+    "message": "{name} ({size})",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.cleanup_hint": {
+    "message": "Make room for your photos, files, and more by cleaning up space",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.cleanup_title": {
+    "message": "Clean up suggested items",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.col_date": {
+    "message": "Date",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.col_filename": {
+    "message": "File Name",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.col_path": {
+    "message": "Path",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.col_size": {
+    "message": "Size",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.empty_list": {
+    "message": "Empty asset list",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.error": {
+    "message": "Error",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.error_mock": {
+    "message": "Error (Mock)",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.free_space": {
+    "message": "Free Space ({size})",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.image_file_alt": {
+    "message": "Image file: {fileName}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.no_data": {
+    "message": "No data",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.preview": {
+    "message": "Preview",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.sidecar_file_alt": {
+    "message": "Sidecar file: {fileName}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.suggestion.large": {
+    "message": "Large files",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.suggestion.similar": {
+    "message": "Similar assets",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.suggestion.trash": {
+    "message": "Files in trash",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.thumbnail_alt": {
+    "message": "Thumbnail for {fileName}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.title": {
+    "message": "Manage Storage",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.usage_summary": {
+    "message": "{percent}% of storage used ({used} of {total})",
+    "context": "Machine-translated seed pending human review."
+  },
+  "storage.video_file_alt": {
+    "message": "Video file: {fileName}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "upload.description": {
+    "message": "Drag and drop photos here or click to browse.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "upload.select_files": {
+    "message": "Click to select files",
+    "context": "Machine-translated seed pending human review."
+  },
+  "upload.title": {
+    "message": "Upload Photos",
+    "context": "Machine-translated seed pending human review."
+  },
+  "upload.uploading": {
+    "message": "Uploading...",
+    "context": "Machine-translated seed pending human review."
+  }
 }

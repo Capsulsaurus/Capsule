@@ -36,8 +36,8 @@ public struct DevicesAndSessionsView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.devices.title",
-                    subtitleKey: "ios.devices.subtitle",
+                    titleKey: "app.devices.title",
+                    subtitleKey: "app.devices.subtitle",
                     symbolName: "laptopcomputer.and.iphone"
                 )
                 content
@@ -45,16 +45,16 @@ public struct DevicesAndSessionsView: View {
         }
         .task { await model.load() }
         .confirmationDialog(
-            "ios.devices.revoke_all.confirm.title",
+            "app.devices.revoke_all.confirm.title",
             isPresented: $isConfirmingRevokeAll,
             titleVisibility: .visible
         ) {
-            Button("ios.devices.revoke_all.confirm.action", role: .destructive) {
+            Button("app.devices.revoke_all.confirm.action", role: .destructive) {
                 Task { await model.revokeAllSessions() }
             }
-            Button("ios.common.cancel", role: .cancel) {}
+            Button("app.common.cancel", role: .cancel) {}
         } message: {
-            Text("ios.devices.revoke_all.confirm.message")
+            Text("app.devices.revoke_all.confirm.message")
         }
     }
 
@@ -62,14 +62,14 @@ public struct DevicesAndSessionsView: View {
     private var content: some View {
         switch model.state {
         case .idle, .loading:
-            AuthLoadingView(labelKey: "ios.devices.loading")
+            AuthLoadingView(labelKey: "app.devices.loading")
         case let .failed(error):
             failure(error)
         case .empty:
             ContentUnavailableView(
-                "ios.devices.empty.title",
+                "app.devices.empty.title",
                 systemImage: "laptopcomputer.slash",
-                description: Text("ios.devices.empty.description")
+                description: Text("app.devices.empty.description")
             )
         case .ready:
             ledger
@@ -83,7 +83,7 @@ public struct DevicesAndSessionsView: View {
     private func failure(_ error: AuthPresentableError) -> some View {
         if model.needsMasterKeyProof {
             StatusChip(
-                titleKey: "ios.devices.proof_required",
+                titleKey: "app.devices.proof_required",
                 symbolName: "key.slash.fill",
                 tint: .orange
             )
@@ -94,7 +94,7 @@ public struct DevicesAndSessionsView: View {
     private var ledger: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
             if model.isRevoking {
-                AuthLoadingView(labelKey: "ios.devices.revoking")
+                AuthLoadingView(labelKey: "app.devices.revoking")
             }
             ForEach(model.groups) { group in
                 cohortCard(group)
@@ -120,21 +120,21 @@ public struct DevicesAndSessionsView: View {
         if let bundle = model.supportBundle {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
                 AuthSectionHeader(
-                    titleKey: "ios.devices.support_bundle.ready.title",
-                    descriptionKey: "ios.devices.support_bundle.ready.description",
+                    titleKey: "app.devices.support_bundle.ready.title",
+                    descriptionKey: "app.devices.support_bundle.ready.description",
                     symbolName: "doc.badge.gearshape"
                 )
                 AuthCodeValue(
-                    labelKey: "ios.devices.support_bundle.hash",
+                    labelKey: "app.devices.support_bundle.hash",
                     code: ChunkedCodeFormatter.chunked(bundle.cohortHash)
                 )
                 AuthLabeledDate(
-                    labelKey: "ios.devices.support_bundle.first_seen",
+                    labelKey: "app.devices.support_bundle.first_seen",
                     date: bundle.firstSeen.date
                 )
-                Button("ios.devices.support_bundle.dismiss") { model.dismissSupportBundle() }
+                Button("app.devices.support_bundle.dismiss") { model.dismissSupportBundle() }
                     .buttonStyle(.bordered)
-                    .accessibilityLabel("ios.devices.support_bundle.dismiss")
+                    .accessibilityLabel("app.devices.support_bundle.dismiss")
             }
             .authCard()
         }
@@ -148,12 +148,12 @@ public struct DevicesAndSessionsView: View {
     /// master key, and a user who cannot should learn it before they try.
     private var revokeAll: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Button("ios.devices.revoke_all", role: .destructive) { isConfirmingRevokeAll = true }
+            Button("app.devices.revoke_all", role: .destructive) { isConfirmingRevokeAll = true }
                 .buttonStyle(.bordered)
                 .disabled(model.isRevoking)
-                .accessibilityLabel("ios.devices.revoke_all")
+                .accessibilityLabel("app.devices.revoke_all")
             if model.revokeAllRequiresMasterKeyProof {
-                Text("ios.devices.revoke_all.proof_note")
+                Text("app.devices.revoke_all.proof_note")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

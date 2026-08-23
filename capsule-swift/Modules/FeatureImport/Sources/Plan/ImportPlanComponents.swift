@@ -18,14 +18,14 @@ struct ImportSummaryCard: View {
             Text(verbatim: headline)
                 .font(.title2.weight(.semibold))
                 .monospacedDigit()
-            Text("ios.import.plan.summary.caption")
+            Text("app.import.plan.summary.caption")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, CapsuleTheme.Spacing.small)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text("ios.import.plan.summary.caption"))
+        .accessibilityLabel(Text("app.import.plan.summary.caption"))
         .accessibilityValue(Text(verbatim: headline))
     }
 
@@ -34,7 +34,7 @@ struct ImportSummaryCard: View {
     /// and punctuation is a translator's business.
     private var headline: String {
         String(
-            format: String(localized: "ios.import.plan.summary.headline"),
+            format: String(localized: "app.import.plan.summary.headline"),
             ImportFormat.count(itemCount),
             ImportFormat.bytes(byteCount)
         )
@@ -116,18 +116,18 @@ struct ImportSpaceMeter: View {
     private var bar: some View {
         ProgressView(value: outlook.fractionOfAvailable)
             .tint(outlook.state.tone.tint)
-            .accessibilityLabel(Text("ios.import.plan.space.header"))
+            .accessibilityLabel(Text("app.import.plan.space.header"))
             .accessibilityValue(Text(verbatim: ImportFormat.percent(outlook.fractionOfAvailable)))
     }
 
     private var figures: some View {
         VStack(spacing: CapsuleTheme.Spacing.xxSmall) {
             ImportValueRow(
-                labelKey: "ios.import.plan.space.required",
+                labelKey: "app.import.plan.space.required",
                 value: ImportFormat.bytes(outlook.requiredBytes)
             )
             ImportValueRow(
-                labelKey: "ios.import.plan.space.available",
+                labelKey: "app.import.plan.space.available",
                 value: ImportFormat.bytes(outlook.availableBytes)
             )
         }
@@ -149,12 +149,12 @@ struct ImportSpaceMeter: View {
     private var sentence: String {
         switch outlook.state {
         case .comfortable:
-            String(localized: "ios.import.plan.space.comfortable")
+            String(localized: "app.import.plan.space.comfortable")
         case .streamingRecommended:
-            String(localized: "ios.import.plan.space.streaming")
+            String(localized: "app.import.plan.space.streaming")
         case .insufficient:
             String(
-                format: String(localized: "ios.import.plan.space.insufficient"),
+                format: String(localized: "app.import.plan.space.insufficient"),
                 ImportFormat.count(itemCount),
                 ImportFormat.bytes(outlook.shortfallBytes)
             )
@@ -167,11 +167,11 @@ struct ImportSpaceMeter: View {
         case .comfortable:
             EmptyView()
         case .streamingRecommended:
-            Button("ios.import.plan.space.enable_streaming") { onEnableStreaming?() }
+            Button("app.import.plan.space.enable_streaming") { onEnableStreaming?() }
                 .buttonStyle(.bordered)
                 .disabled(onEnableStreaming == nil)
         case .insufficient:
-            Button("ios.import.plan.space.free_up") { onFreeUpSpace?() }
+            Button("app.import.plan.space.free_up") { onFreeUpSpace?() }
                 .buttonStyle(.borderedProminent)
                 .disabled(onFreeUpSpace == nil)
         }
@@ -200,7 +200,7 @@ struct ImportDestinationRow: View {
 
     private var destination: some View {
         HStack(alignment: .firstTextBaseline, spacing: CapsuleTheme.Spacing.xSmall) {
-            Text("ios.import.plan.destination.title")
+            Text("app.import.plan.destination.title")
                 .foregroundStyle(.secondary)
             albumLabel
                 .fontWeight(.semibold)
@@ -212,12 +212,12 @@ struct ImportDestinationRow: View {
         if let albumName, !albumName.isEmpty {
             Text(verbatim: albumName)
         } else {
-            Text("ios.import.plan.destination.unnamed")
+            Text("app.import.plan.destination.unnamed")
         }
     }
 
     private var reason: some View {
-        Text(String(format: String(localized: "ios.import.plan.destination.reason"), String(localized: String.LocalizationValue(rule.reasonKey))))
+        Text(String(format: String(localized: "app.import.plan.destination.reason"), String(localized: String.LocalizationValue(rule.reasonKey))))
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -286,10 +286,10 @@ struct ImportConflictRow: View {
                 Text(LocalizedStringKey(resolution.titleKey)).tag(resolution)
             }
         } label: {
-            Text("ios.import.plan.conflict.resolution.header")
+            Text("app.import.plan.conflict.resolution.header")
         }
         .pickerStyle(.menu)
-        .accessibilityLabel(Text("ios.import.plan.conflict.resolution.header"))
+        .accessibilityLabel(Text("app.import.plan.conflict.resolution.header"))
     }
 
     private var selection: Binding<ImportConflictResolution> {
@@ -299,7 +299,7 @@ struct ImportConflictRow: View {
     @ViewBuilder
     private var destructiveNote: some View {
         if conflict.resolution.isDestructive {
-            ImportStatusLabel(titleKey: "ios.import.conflict.destructive.note", tone: .critical)
+            ImportStatusLabel(titleKey: "app.import.conflict.destructive.note", tone: .critical)
                 .font(.caption)
         }
     }

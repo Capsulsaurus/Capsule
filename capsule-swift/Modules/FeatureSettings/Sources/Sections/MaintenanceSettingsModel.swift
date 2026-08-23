@@ -131,10 +131,10 @@ public final class MaintenanceSettingsModel {
 
 public extension MaintenanceTaskKind {
     /// The catalog key naming this job.
-    var titleKey: String { "ios.settings.maintenance.job.\(rawValueKeySuffix)" }
+    var titleKey: String { "app.settings.maintenance.job.\(rawValueKeySuffix)" }
 
     /// The catalog key explaining what it does and what it costs.
-    var detailKey: String { "ios.settings.maintenance.detail.\(rawValueKeySuffix)" }
+    var detailKey: String { "app.settings.maintenance.detail.\(rawValueKeySuffix)" }
 
     private var rawValueKeySuffix: String {
         switch self {
@@ -153,11 +153,11 @@ public extension MaintenanceTask.State {
     /// The catalog key for the status word.
     var statusKey: String {
         switch self {
-        case .idle: "ios.settings.maintenance.state.idle"
-        case .running: "ios.settings.maintenance.state.running"
-        case .completed: "ios.settings.maintenance.state.completed"
-        case .failed: "ios.settings.maintenance.state.failed"
-        case .waitingForConditions: "ios.settings.maintenance.state.waiting"
+        case .idle: "app.settings.maintenance.state.idle"
+        case .running: "app.settings.maintenance.state.running"
+        case .completed: "app.settings.maintenance.state.completed"
+        case .failed: "app.settings.maintenance.state.failed"
+        case .waitingForConditions: "app.settings.maintenance.state.waiting"
         }
     }
 

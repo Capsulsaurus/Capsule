@@ -28,21 +28,21 @@ public struct AuthPathChooserView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
                 CeremonyHeader(
-                    titleKey: "ios.auth.path.title",
-                    subtitleKey: "ios.auth.path.subtitle",
+                    titleKey: "app.auth.path.title",
+                    subtitleKey: "app.auth.path.subtitle",
                     symbolName: "person.badge.key"
                 )
                 if model.methods.isEmpty {
                     ContentUnavailableView(
-                        "ios.auth.path.unsupported.title",
+                        "app.auth.path.unsupported.title",
                         systemImage: "questionmark.circle",
-                        description: Text("ios.auth.path.unsupported.description")
+                        description: Text("app.auth.path.unsupported.description")
                     )
                 } else {
                     ForEach(model.methods, id: \.rawValue) { method in
                         methodCard(method)
                     }
-                    Text("ios.auth.path.footer")
+                    Text("app.auth.path.footer")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -72,15 +72,15 @@ public struct AuthPathChooserView: View {
     }
 
     private func titleKey(for method: ServerAuthMethod) -> LocalizedStringKey {
-        method == .oidc ? "ios.auth.path.oidc.title" : "ios.auth.path.local.title"
+        method == .oidc ? "app.auth.path.oidc.title" : "app.auth.path.local.title"
     }
 
     private func descriptionKey(for method: ServerAuthMethod) -> LocalizedStringKey {
-        method == .oidc ? "ios.auth.path.oidc.description" : "ios.auth.path.local.description"
+        method == .oidc ? "app.auth.path.oidc.description" : "app.auth.path.local.description"
     }
 
     private func actionKey(for method: ServerAuthMethod) -> LocalizedStringKey {
-        method == .oidc ? "ios.auth.path.oidc.action" : "ios.auth.path.local.action"
+        method == .oidc ? "app.auth.path.oidc.action" : "app.auth.path.local.action"
     }
 
     private func symbolName(for method: ServerAuthMethod) -> String {

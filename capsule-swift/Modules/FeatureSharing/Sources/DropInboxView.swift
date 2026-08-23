@@ -32,7 +32,7 @@ public struct DropInboxView: View {
     public var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationTitle("ios.drops.inbox.title")
+                .navigationTitle("app.drops.inbox.title")
                 .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         } detail: {
             detail
@@ -44,8 +44,8 @@ public struct DropInboxView: View {
         SharingStateView(
             phase: model.phase,
             empty: .init(
-                title: "ios.drops.inbox.empty.title",
-                message: "ios.drops.inbox.empty.description",
+                title: "app.drops.inbox.empty.title",
+                message: "app.drops.inbox.empty.description",
                 symbol: "tray"
             ),
             retry: { Task { await model.reload() } },
@@ -72,9 +72,9 @@ public struct DropInboxView: View {
             .id(drop.id)
         } else {
             ContentUnavailableView(
-                "ios.drops.detail.none.title",
+                "app.drops.detail.none.title",
                 systemImage: "hand.tap",
-                description: Text("ios.drops.detail.none.description")
+                description: Text("app.drops.detail.none.description")
             )
         }
     }
@@ -97,14 +97,14 @@ struct DropCardView: View {
             HStack(spacing: CapsuleTheme.Spacing.small) {
                 Image(systemName: symbol)
                     .foregroundStyle(.secondary)
-                Text("ios.drops.card.awaiting_review")
+                Text("app.drops.card.awaiting_review")
                     .font(.headline)
                 Spacer(minLength: CapsuleTheme.Spacing.small)
             }
             LabeledContent {
                 Text(drop.receivedAt.date, format: .dateTime.year().month().day().hour().minute())
             } label: {
-                Text("ios.drops.card.received")
+                Text("app.drops.card.received")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -112,7 +112,7 @@ struct DropCardView: View {
                 Text(verbatim: shortLinkID)
                     .monospaced()
             } label: {
-                Text("ios.drops.card.via_link")
+                Text("app.drops.card.via_link")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -146,7 +146,7 @@ struct UnverifiedClaimView: View {
     var body: some View {
         if let claim {
             HStack(alignment: .firstTextBaseline, spacing: CapsuleTheme.Spacing.xSmall) {
-                Label("ios.drops.claim.unverified", systemImage: "questionmark.circle")
+                Label("app.drops.claim.unverified", systemImage: "questionmark.circle")
                     .font(.caption2)
                     .foregroundStyle(.orange)
                 Text(verbatim: claim)
@@ -156,7 +156,7 @@ struct UnverifiedClaimView: View {
             }
             .accessibilityElement(children: .combine)
         } else {
-            Label("ios.drops.claim.none", systemImage: "questionmark.circle")
+            Label("app.drops.claim.none", systemImage: "questionmark.circle")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

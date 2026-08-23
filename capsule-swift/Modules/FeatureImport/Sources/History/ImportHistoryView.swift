@@ -26,10 +26,10 @@ public struct ImportHistoryView: View {
 
     public var body: some View {
         ImportScreen(
-            titleKey: "ios.import.history.title",
+            titleKey: "app.import.history.title",
             phase: model.phase,
-            emptyTitleKey: "ios.import.history.empty.title",
-            emptyDescriptionKey: "ios.import.history.empty.description",
+            emptyTitleKey: "app.import.history.empty.title",
+            emptyDescriptionKey: "app.import.history.empty.description",
             emptySymbol: "clock.arrow.circlepath",
             retry: { await model.load() },
             content: { historyList }
@@ -62,12 +62,12 @@ public struct ImportHistoryView: View {
 
     @ViewBuilder
     private func actionRows(_ session: ImportSessionRecord) -> some View {
-        Button("ios.import.history.rerun") {
+        Button("app.import.history.rerun") {
             Task {
                 if let plan = await model.rerun(session.id) { onRerun?(plan) }
             }
         }
-        Button("ios.import.history.dismiss", role: .destructive) {
+        Button("app.import.history.dismiss", role: .destructive) {
             Task { await model.dismiss(session.id) }
         }
     }
@@ -126,12 +126,12 @@ private struct ImportHistoryOutcomeRows: View {
     var body: some View {
         Group {
             destinationRow
-            ImportValueRow(labelKey: "ios.import.history.imported", value: ImportFormat.count(session.summary.importedCount))
-            ImportValueRow(labelKey: "ios.import.history.skipped", value: ImportFormat.count(session.summary.skippedCount))
+            ImportValueRow(labelKey: "app.import.history.imported", value: ImportFormat.count(session.summary.importedCount))
+            ImportValueRow(labelKey: "app.import.history.skipped", value: ImportFormat.count(session.summary.skippedCount))
             deferredRow
             failedRow
-            ImportValueRow(labelKey: "ios.import.history.mode", value: String(localized: String.LocalizationValue(session.mode.titleKey)))
-            ImportValueRow(labelKey: "ios.import.history.elapsed", value: ImportFormat.elapsed(from: session.startedAt, to: session.finishedAt))
+            ImportValueRow(labelKey: "app.import.history.mode", value: String(localized: String.LocalizationValue(session.mode.titleKey)))
+            ImportValueRow(labelKey: "app.import.history.elapsed", value: ImportFormat.elapsed(from: session.startedAt, to: session.finishedAt))
         }
     }
 
@@ -143,7 +143,7 @@ private struct ImportHistoryOutcomeRows: View {
     private var deferredRow: some View {
         if session.summary.deferredDerivativeCount > 0 {
             ImportValueRow(
-                labelKey: "ios.import.history.deferred",
+                labelKey: "app.import.history.deferred",
                 value: ImportFormat.count(session.summary.deferredDerivativeCount)
             )
         }
@@ -153,7 +153,7 @@ private struct ImportHistoryOutcomeRows: View {
     private var failedRow: some View {
         if !session.retryableLocators.isEmpty {
             ImportValueRow(
-                labelKey: "ios.import.history.failed",
+                labelKey: "app.import.history.failed",
                 value: ImportFormat.count(session.retryableLocators.count)
             )
         }

@@ -16,7 +16,7 @@ public enum AppearanceTheme: String, Sendable, Hashable, CaseIterable {
     case light
     case dark
 
-    public var titleKey: String { "ios.settings.appearance.theme.\(rawValue)" }
+    public var titleKey: String { "app.settings.appearance.theme.\(rawValue)" }
 
     /// The SwiftUI scheme to force, or `nil` to follow the system.
     public var colorScheme: ColorScheme? {
@@ -36,7 +36,7 @@ public enum GridDensity: String, Sendable, Hashable, CaseIterable {
     case regular
     case spacious
 
-    public var titleKey: String { "ios.settings.appearance.density.\(rawValue)" }
+    public var titleKey: String { "app.settings.appearance.density.\(rawValue)" }
 }
 
 // MARK: - AppearancePreferences
@@ -136,42 +136,42 @@ public struct AppearanceSettingsView: View {
 
     private var themeSection: some View {
         Section {
-            Picker("ios.settings.appearance.theme.label", selection: themeBinding) {
+            Picker("app.settings.appearance.theme.label", selection: themeBinding) {
                 ForEach(model.themes, id: \.self) { theme in
                     Text(LocalizedStringKey(theme.titleKey)).tag(theme)
                 }
             }
             .pickerStyle(.inline)
         } header: {
-            Text("ios.settings.appearance.theme.header")
+            Text("app.settings.appearance.theme.header")
         } footer: {
-            Text("ios.settings.appearance.theme.footer")
+            Text("app.settings.appearance.theme.footer")
         }
     }
 
     private var gridSection: some View {
         Section {
-            Picker("ios.settings.appearance.density.label", selection: densityBinding) {
+            Picker("app.settings.appearance.density.label", selection: densityBinding) {
                 ForEach(model.densities, id: \.self) { density in
                     Text(LocalizedStringKey(density.titleKey)).tag(density)
                 }
             }
             .pickerStyle(.inline)
-            Toggle("ios.settings.appearance.autoplay.toggle", isOn: autoplayBinding)
+            Toggle("app.settings.appearance.autoplay.toggle", isOn: autoplayBinding)
         } header: {
-            Text("ios.settings.appearance.density.header")
+            Text("app.settings.appearance.density.header")
         } footer: {
-            Text("ios.settings.appearance.density.footer")
+            Text("app.settings.appearance.density.footer")
         }
     }
 
     private var materialSection: some View {
         Section {
-            Toggle("ios.settings.appearance.glass.toggle", isOn: glassBinding)
+            Toggle("app.settings.appearance.glass.toggle", isOn: glassBinding)
         } header: {
-            Text("ios.settings.appearance.glass.header")
+            Text("app.settings.appearance.glass.header")
         } footer: {
-            Text("ios.settings.appearance.glass.footer")
+            Text("app.settings.appearance.glass.footer")
         }
     }
 

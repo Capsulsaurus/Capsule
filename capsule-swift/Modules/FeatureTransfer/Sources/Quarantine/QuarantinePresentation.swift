@@ -10,38 +10,38 @@ public extension QuarantineSurface {
     var badge: TransferBadge {
         switch self {
         case .verifyAssetReject:
-            TransferBadge(titleKey: "ios.quarantine.surface.verify_reject", systemImage: "seal.slash", tint: .red)
+            TransferBadge(titleKey: "app.quarantine.surface.verify_reject", systemImage: "seal.slash", tint: .red)
         case .federationSoftFail:
-            TransferBadge(titleKey: "ios.quarantine.surface.federation", systemImage: "network.slash", tint: .orange)
+            TransferBadge(titleKey: "app.quarantine.surface.federation", systemImage: "network.slash", tint: .orange)
         case .orphanedOriginal:
-            TransferBadge(titleKey: "ios.quarantine.surface.orphan", systemImage: "doc.badge.ellipsis", tint: .orange)
+            TransferBadge(titleKey: "app.quarantine.surface.orphan", systemImage: "doc.badge.ellipsis", tint: .orange)
         case .malformedSidecar:
-            TransferBadge(titleKey: "ios.quarantine.surface.sidecar", systemImage: "doc.badge.gearshape", tint: .orange)
+            TransferBadge(titleKey: "app.quarantine.surface.sidecar", systemImage: "doc.badge.gearshape", tint: .orange)
         case .staleRevival:
-            TransferBadge(titleKey: "ios.quarantine.surface.stale_revival", systemImage: "clock.arrow.circlepath", tint: .red)
+            TransferBadge(titleKey: "app.quarantine.surface.stale_revival", systemImage: "clock.arrow.circlepath", tint: .red)
         case .albumUpgradeStrandedWrite:
-            TransferBadge(titleKey: "ios.quarantine.surface.album_upgrade", systemImage: "arrow.up.doc", tint: .blue)
+            TransferBadge(titleKey: "app.quarantine.surface.album_upgrade", systemImage: "arrow.up.doc", tint: .blue)
         case .backupRestoreChainConflict:
-            TransferBadge(titleKey: "ios.quarantine.surface.restore_conflict", systemImage: "arrow.triangle.branch", tint: .orange)
+            TransferBadge(titleKey: "app.quarantine.surface.restore_conflict", systemImage: "arrow.triangle.branch", tint: .orange)
         case .pendingDropAwaitingAdoption:
-            TransferBadge(titleKey: "ios.quarantine.surface.pending_drop", systemImage: "tray.and.arrow.down", tint: .teal)
+            TransferBadge(titleKey: "app.quarantine.surface.pending_drop", systemImage: "tray.and.arrow.down", tint: .teal)
         case .unknown:
-            TransferBadge(titleKey: "ios.quarantine.surface.unknown", systemImage: "questionmark.folder", tint: .secondary)
+            TransferBadge(titleKey: "app.quarantine.surface.unknown", systemImage: "questionmark.folder", tint: .secondary)
         }
     }
 
     /// Plain language: what happened, with no jargon and no blame.
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .verifyAssetReject: "ios.quarantine.surface.verify_reject.description"
-        case .federationSoftFail: "ios.quarantine.surface.federation.description"
-        case .orphanedOriginal: "ios.quarantine.surface.orphan.description"
-        case .malformedSidecar: "ios.quarantine.surface.sidecar.description"
-        case .staleRevival: "ios.quarantine.surface.stale_revival.description"
-        case .albumUpgradeStrandedWrite: "ios.quarantine.surface.album_upgrade.description"
-        case .backupRestoreChainConflict: "ios.quarantine.surface.restore_conflict.description"
-        case .pendingDropAwaitingAdoption: "ios.quarantine.surface.pending_drop.description"
-        case .unknown: "ios.quarantine.surface.unknown.description"
+        case .verifyAssetReject: "app.quarantine.surface.verify_reject.description"
+        case .federationSoftFail: "app.quarantine.surface.federation.description"
+        case .orphanedOriginal: "app.quarantine.surface.orphan.description"
+        case .malformedSidecar: "app.quarantine.surface.sidecar.description"
+        case .staleRevival: "app.quarantine.surface.stale_revival.description"
+        case .albumUpgradeStrandedWrite: "app.quarantine.surface.album_upgrade.description"
+        case .backupRestoreChainConflict: "app.quarantine.surface.restore_conflict.description"
+        case .pendingDropAwaitingAdoption: "app.quarantine.surface.pending_drop.description"
+        case .unknown: "app.quarantine.surface.unknown.description"
         }
     }
 }
@@ -52,11 +52,11 @@ public extension QuarantineStorage {
     /// Where the bytes are — the question a user asks first.
     var titleKey: LocalizedStringKey {
         switch self {
-        case .quarantineDirectory: "ios.quarantine.storage.directory"
-        case .rejectedHashTable: "ios.quarantine.storage.hash_table"
-        case .auditLog: "ios.quarantine.storage.audit_log"
-        case .pendingUntilUpgradeQueue: "ios.quarantine.storage.upgrade_queue"
-        case .serverInbox: "ios.quarantine.storage.server_inbox"
+        case .quarantineDirectory: "app.quarantine.storage.directory"
+        case .rejectedHashTable: "app.quarantine.storage.hash_table"
+        case .auditLog: "app.quarantine.storage.audit_log"
+        case .pendingUntilUpgradeQueue: "app.quarantine.storage.upgrade_queue"
+        case .serverInbox: "app.quarantine.storage.server_inbox"
         }
     }
 
@@ -65,8 +65,8 @@ public extension QuarantineStorage {
     /// it happened".
     var preservationKey: LocalizedStringKey {
         preservesOriginalBytes
-            ? "ios.quarantine.storage.preserved"
-            : "ios.quarantine.storage.recorded_only"
+            ? "app.quarantine.storage.preserved"
+            : "app.quarantine.storage.recorded_only"
     }
 }
 
@@ -93,13 +93,13 @@ public extension QuarantineReason {
     /// Plain language for the detail screen.
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .verifyRejected: "ios.quarantine.reason.verify_rejected"
-        case .serverRejected: "ios.quarantine.reason.server_rejected"
-        case .malformedEncoding: "ios.quarantine.reason.malformed"
-        case .staleProvenanceChain: "ios.quarantine.reason.stale_chain"
-        case .schemaAhead: "ios.quarantine.reason.schema_ahead"
-        case .awaitingAlbumUpgrade: "ios.quarantine.reason.awaiting_upgrade"
-        case .awaitingReview: "ios.quarantine.reason.awaiting_review"
+        case .verifyRejected: "app.quarantine.reason.verify_rejected"
+        case .serverRejected: "app.quarantine.reason.server_rejected"
+        case .malformedEncoding: "app.quarantine.reason.malformed"
+        case .staleProvenanceChain: "app.quarantine.reason.stale_chain"
+        case .schemaAhead: "app.quarantine.reason.schema_ahead"
+        case .awaitingAlbumUpgrade: "app.quarantine.reason.awaiting_upgrade"
+        case .awaitingReview: "app.quarantine.reason.awaiting_review"
         }
     }
 }
@@ -145,17 +145,17 @@ public extension SchemaAhead.Surface {
 public extension QuarantineResolution {
     var titleKey: LocalizedStringKey {
         switch self {
-        case .inspect: "ios.quarantine.action.inspect"
-        case .repair: "ios.quarantine.action.repair"
-        case .discard: "ios.quarantine.action.discard"
+        case .inspect: "app.quarantine.action.inspect"
+        case .repair: "app.quarantine.action.repair"
+        case .discard: "app.quarantine.action.discard"
         }
     }
 
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .inspect: "ios.quarantine.action.inspect.description"
-        case .repair: "ios.quarantine.action.repair.description"
-        case .discard: "ios.quarantine.action.discard.description"
+        case .inspect: "app.quarantine.action.inspect.description"
+        case .repair: "app.quarantine.action.repair.description"
+        case .discard: "app.quarantine.action.discard.description"
         }
     }
 

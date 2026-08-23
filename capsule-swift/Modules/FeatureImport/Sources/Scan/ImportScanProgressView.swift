@@ -40,10 +40,10 @@ public struct ImportScanProgressView: View {
 
     public var body: some View {
         ImportScreen(
-            titleKey: "ios.import.scan.title",
+            titleKey: "app.import.scan.title",
             phase: model.phase,
-            emptyTitleKey: "ios.import.scan.empty.title",
-            emptyDescriptionKey: "ios.import.scan.empty.description",
+            emptyTitleKey: "app.import.scan.empty.title",
+            emptyDescriptionKey: "app.import.scan.empty.description",
             emptySymbol: "magnifyingglass",
             retry: { await model.start() },
             content: { scanList }
@@ -65,28 +65,28 @@ public struct ImportScanProgressView: View {
     private var progressSection: some View {
         Section {
             ImportScanIndicator(progress: model.progress, state: model.state)
-            ImportValueRow(labelKey: "ios.import.scan.found", value: ImportFormat.count(model.progress.itemsFound))
-            ImportValueRow(labelKey: "ios.import.scan.bytes", value: ImportFormat.bytes(model.progress.bytesFound))
+            ImportValueRow(labelKey: "app.import.scan.found", value: ImportFormat.count(model.progress.itemsFound))
+            ImportValueRow(labelKey: "app.import.scan.bytes", value: ImportFormat.bytes(model.progress.bytesFound))
             currentLocatorRow
         } header: {
-            Text("ios.import.scan.header")
+            Text("app.import.scan.header")
         }
     }
 
     @ViewBuilder
     private var currentLocatorRow: some View {
         if let locator = model.progress.currentLocator, model.state == .scanning {
-            ImportValueRow(labelKey: "ios.import.scan.current", value: ImportFormat.leaf(locator))
+            ImportValueRow(labelKey: "app.import.scan.current", value: ImportFormat.leaf(locator))
         }
     }
 
     private var sourceSection: some View {
         Section {
             ImportValueRow(
-                labelKey: "ios.import.scan.source",
+                labelKey: "app.import.scan.source",
                 value: String(localized: String.LocalizationValue(model.source.sourceKind.importTitleKey))
             )
-            ImportValueRow(labelKey: "ios.import.scan.location", value: ImportFormat.leaf(model.source.locator))
+            ImportValueRow(labelKey: "app.import.scan.location", value: ImportFormat.leaf(model.source.locator))
         }
     }
 
@@ -103,9 +103,9 @@ public struct ImportScanProgressView: View {
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                Text("ios.import.scan.unreadable")
+                Text("app.import.scan.unreadable")
             } footer: {
-                Text("ios.import.scan.unreadable.footer")
+                Text("app.import.scan.unreadable.footer")
             }
         }
     }
@@ -113,7 +113,7 @@ public struct ImportScanProgressView: View {
     private var actionSection: some View {
         Section {
             if model.isCancellable {
-                Button("ios.import.scan.cancel", role: .cancel) {
+                Button("app.import.scan.cancel", role: .cancel) {
                     model.cancel()
                     onCancelled?()
                 }
@@ -126,7 +126,7 @@ public struct ImportScanProgressView: View {
     @ViewBuilder
     private var continueButton: some View {
         if let scan = model.scan, model.canContinue {
-            Button("ios.import.scan.continue") { onScanned?(scan) }
+            Button("app.import.scan.continue") { onScanned?(scan) }
                 .buttonStyle(.borderedProminent)
         }
     }
@@ -134,7 +134,7 @@ public struct ImportScanProgressView: View {
     @ViewBuilder
     private var cancelledNote: some View {
         if model.state == .cancelled {
-            ImportNote(textKey: "ios.import.scan.cancelled.description")
+            ImportNote(textKey: "app.import.scan.cancelled.description")
         }
     }
 }
@@ -148,23 +148,23 @@ private struct ImportScanIndicator: View {
 
     var body: some View {
         indicator
-            .accessibilityLabel(Text("ios.import.scan.header"))
+            .accessibilityLabel(Text("app.import.scan.header"))
             .accessibilityValue(Text(verbatim: ImportFormat.count(progress.itemsFound)))
     }
 
     @ViewBuilder
     private var indicator: some View {
         if state == .finished {
-            ImportStatusLabel(titleKey: "ios.import.scan.complete", tone: .positive)
+            ImportStatusLabel(titleKey: "app.import.scan.complete", tone: .positive)
         } else if state == .cancelled {
-            ImportStatusLabel(titleKey: "ios.import.scan.cancelled.title", tone: .caution)
+            ImportStatusLabel(titleKey: "app.import.scan.cancelled.title", tone: .caution)
         } else if let fraction = progress.fraction {
             ProgressView(value: fraction) {
-                Text("ios.import.scan.scanning")
+                Text("app.import.scan.scanning")
             }
         } else {
             ProgressView {
-                Text("ios.import.scan.scanning")
+                Text("app.import.scan.scanning")
             }
             .progressViewStyle(.linear)
         }

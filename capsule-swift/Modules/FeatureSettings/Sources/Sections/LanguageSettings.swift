@@ -108,24 +108,24 @@ public struct LanguageSettingsView: View {
     private var resolvedSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.language.resolved",
+                labelKey: "app.settings.language.resolved",
                 value: model.displayName(for: model.resolvedLocalization)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.language.region",
+                labelKey: "app.settings.language.region",
                 value: model.regionIdentifier
             )
             SettingsStatusRow(
-                labelKey: "ios.settings.language.direction",
+                labelKey: "app.settings.language.direction",
                 statusKey: model.isRightToLeft
-                    ? "ios.settings.language.direction.rtl"
-                    : "ios.settings.language.direction.ltr",
+                    ? "app.settings.language.direction.rtl"
+                    : "app.settings.language.direction.ltr",
                 tone: .neutral
             )
         } header: {
-            Text("ios.settings.language.resolved.header")
+            Text("app.settings.language.resolved.header")
         } footer: {
-            Text("ios.settings.language.resolved.footer")
+            Text("app.settings.language.resolved.footer")
         }
     }
 
@@ -133,14 +133,14 @@ public struct LanguageSettingsView: View {
         Section {
             ForEach(model.preferredLanguages, id: \.self) { identifier in
                 SettingsValueRow(
-                    labelKey: "ios.settings.language.preferred.entry",
+                    labelKey: "app.settings.language.preferred.entry",
                     value: model.displayName(for: identifier)
                 )
             }
         } header: {
-            Text("ios.settings.language.preferred.header")
+            Text("app.settings.language.preferred.header")
         } footer: {
-            Text("ios.settings.language.preferred.footer")
+            Text("app.settings.language.preferred.footer")
         }
     }
 
@@ -148,21 +148,21 @@ public struct LanguageSettingsView: View {
         Section {
             ForEach(LanguageSettingsModel.catalogLocaleIdentifiers, id: \.self) { identifier in
                 SettingsStatusRow(
-                    labelKey: "ios.settings.language.catalog.entry",
+                    labelKey: "app.settings.language.catalog.entry",
                     statusKey: model.isShipping(identifier)
-                        ? "ios.settings.language.catalog.shipping"
-                        : "ios.settings.language.catalog.pending",
+                        ? "app.settings.language.catalog.shipping"
+                        : "app.settings.language.catalog.pending",
                     tone: model.isShipping(identifier) ? .positive : .neutral
                 )
                 SettingsValueRow(
-                    labelKey: "ios.settings.language.catalog.locale",
+                    labelKey: "app.settings.language.catalog.locale",
                     value: model.displayName(for: identifier)
                 )
             }
         } header: {
-            Text("ios.settings.language.catalog.header")
+            Text("app.settings.language.catalog.header")
         } footer: {
-            Text("ios.settings.language.catalog.footer")
+            Text("app.settings.language.catalog.footer")
         }
     }
 }

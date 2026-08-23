@@ -22,13 +22,13 @@ struct ServerIdentityCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
-            Text("ios.auth.server.identity.header")
+            Text("app.auth.server.identity.header")
                 .font(.headline)
-            field(labelKey: "ios.auth.server.identity.origin", value: server.origin)
-            field(labelKey: "ios.auth.server.identity.api", value: server.apiBaseURL.absoluteString)
+            field(labelKey: "app.auth.server.identity.origin", value: server.origin)
+            field(labelKey: "app.auth.server.identity.api", value: server.apiBaseURL.absoluteString)
             signingKey
             protocolRow
-            Text("ios.auth.server.identity.footer")
+            Text("app.auth.server.identity.footer")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -40,14 +40,14 @@ struct ServerIdentityCard: View {
 
     private var signingKey: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
-            Text("ios.auth.server.identity.signing_key")
+            Text("app.auth.server.identity.signing_key")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(verbatim: signingKeyDisplay)
                 .font(.body.monospaced())
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel("ios.auth.server.identity.signing_key")
+                .accessibilityLabel("app.auth.server.identity.signing_key")
                 .accessibilityValue(Text(verbatim: signingKeyDisplay))
         }
     }
@@ -56,12 +56,12 @@ struct ServerIdentityCard: View {
     private var protocolRow: some View {
         let range = server.supportedProtocolVersions
         field(
-            labelKey: "ios.auth.server.protocol.supported",
+            labelKey: "app.auth.server.protocol.supported",
             value: "\(range.lowerBound)–\(range.upperBound)"
         )
         if !isCompatible {
             Label {
-                Text("ios.auth.server.protocol.incompatible")
+                Text("app.auth.server.protocol.incompatible")
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
                 Image(systemName: "exclamationmark.triangle.fill")

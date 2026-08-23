@@ -39,9 +39,9 @@ public struct StorageSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.storage.evict.confirm.title",
-            messageKey: "ios.settings.storage.evict.confirm.message",
-            confirmKey: "ios.settings.storage.evict.confirm.action",
+            titleKey: "app.settings.storage.evict.confirm.title",
+            messageKey: "app.settings.storage.evict.confirm.message",
+            confirmKey: "app.settings.storage.evict.confirm.action",
             isPresented: $isEvictPresented
         ) {
             await model.evictCache(targetBytes: model.reclaimableBytes)
@@ -53,30 +53,30 @@ public struct StorageSettingsView: View {
     private var quotaSection: some View {
         Section {
             SettingsStatusRow(
-                labelKey: "ios.settings.storage.quota.label",
+                labelKey: "app.settings.storage.quota.label",
                 statusKey: (model.quota?.state ?? .unknown("")).titleKey,
                 tone: (model.quota?.state ?? .unknown("")).tone
             )
             SettingsValueRow(
-                labelKey: "ios.settings.storage.quota.used",
+                labelKey: "app.settings.storage.quota.used",
                 value: SettingsFormat.bytes(model.quota?.used)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.storage.quota.hard_limit",
+                labelKey: "app.settings.storage.quota.hard_limit",
                 value: SettingsFormat.bytes(model.quota?.hardLimit)
             )
             if let fraction = model.quota?.fractionUsed {
                 SettingsValueRow(
-                    labelKey: "ios.settings.storage.quota.fraction",
+                    labelKey: "app.settings.storage.quota.fraction",
                     value: SettingsFormat.percent(fraction)
                 )
                 ProgressView(value: min(1, fraction))
-                    .accessibilityLabel(Text("ios.settings.storage.quota.fraction"))
+                    .accessibilityLabel(Text("app.settings.storage.quota.fraction"))
             }
         } header: {
-            Text("ios.settings.storage.quota.header")
+            Text("app.settings.storage.quota.header")
         } footer: {
-            Text("ios.settings.storage.quota.footer")
+            Text("app.settings.storage.quota.footer")
         }
     }
 
@@ -91,25 +91,25 @@ public struct StorageSettingsView: View {
                 )
             }
             SettingsValueRow(
-                labelKey: "ios.settings.storage.local.trash",
+                labelKey: "app.settings.storage.local.trash",
                 value: SettingsFormat.bytes(model.breakdown?.trashBytes)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.storage.local.unreleased",
+                labelKey: "app.settings.storage.local.unreleased",
                 value: SettingsFormat.bytes(model.unreleasedOriginalBytes)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.storage.local.total",
+                labelKey: "app.settings.storage.local.total",
                 value: SettingsFormat.bytes(model.breakdown?.totalBytes)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.storage.local.available",
+                labelKey: "app.settings.storage.local.available",
                 value: SettingsFormat.bytes(model.breakdown?.availableDiskBytes)
             )
         } header: {
-            Text("ios.settings.storage.local.header")
+            Text("app.settings.storage.local.header")
         } footer: {
-            Text("ios.settings.storage.local.footer")
+            Text("app.settings.storage.local.footer")
         }
     }
 
@@ -117,17 +117,17 @@ public struct StorageSettingsView: View {
 
     private var budgetSection: some View {
         Section {
-            Picker("ios.settings.storage.budget.label", selection: budgetBinding) {
-                Text("ios.settings.storage.budget.unset").tag(UInt64?.none)
+            Picker("app.settings.storage.budget.label", selection: budgetBinding) {
+                Text("app.settings.storage.budget.unset").tag(UInt64?.none)
                 ForEach(StorageSettingsModel.budgetOptions, id: \.self) { option in
                     Text(verbatim: SettingsFormat.bytes(option)).tag(UInt64?.some(option))
                 }
             }
             .pickerStyle(.menu)
         } header: {
-            Text("ios.settings.storage.budget.header")
+            Text("app.settings.storage.budget.header")
         } footer: {
-            Text("ios.settings.storage.budget.footer")
+            Text("app.settings.storage.budget.footer")
         }
     }
 
@@ -143,23 +143,23 @@ public struct StorageSettingsView: View {
     private var reclaimSection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.storage.reclaim.available",
+                labelKey: "app.settings.storage.reclaim.available",
                 value: SettingsFormat.bytes(model.reclaimableBytes)
             )
             if let reclaimed = model.lastReclaimedBytes {
                 SettingsValueRow(
-                    labelKey: "ios.settings.storage.reclaim.last",
+                    labelKey: "app.settings.storage.reclaim.last",
                     value: SettingsFormat.bytes(reclaimed)
                 )
             }
-            Button("ios.settings.storage.evict.action", role: .destructive) {
+            Button("app.settings.storage.evict.action", role: .destructive) {
                 isEvictPresented = true
             }
             .disabled(model.isWorking || model.reclaimableBytes == 0)
         } header: {
-            Text("ios.settings.storage.reclaim.header")
+            Text("app.settings.storage.reclaim.header")
         } footer: {
-            Text("ios.settings.storage.reclaim.footer")
+            Text("app.settings.storage.reclaim.footer")
         }
     }
 }

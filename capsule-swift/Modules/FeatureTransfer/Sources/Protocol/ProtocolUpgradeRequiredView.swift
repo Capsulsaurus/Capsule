@@ -48,7 +48,7 @@ public struct ProtocolUpgradeRequiredView: View {
                 .font(.system(size: heroSize))
                 .foregroundStyle(.red)
                 .accessibilityHidden(true)
-            Text("ios.transfer.upgrade.title")
+            Text("app.transfer.upgrade.title")
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
             // The server's own code, localized by the catalog. The English
@@ -57,30 +57,30 @@ public struct ProtocolUpgradeRequiredView: View {
                 .font(.body)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-            Text("ios.transfer.upgrade.explanation")
+            Text("app.transfer.upgrade.explanation")
                 .font(.footnote)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             reassurance
             if let updateAction {
-                Button("ios.transfer.recovery.update_app", action: updateAction)
+                Button("app.transfer.recovery.update_app", action: updateAction)
                     .buttonStyle(.borderedProminent)
             } else {
-                Text("ios.transfer.upgrade.no_channel")
+                Text("app.transfer.upgrade.no_channel")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
         }
         .padding(CapsuleTheme.Spacing.xLarge)
         .frame(maxWidth: 480)
-        .navigationTitle("ios.transfer.upgrade.title")
+        .navigationTitle("app.transfer.upgrade.title")
     }
 
     /// The screen has to be honest that nothing was lost. A hard stop on the
     /// upload path leaves the library readable and every local copy intact —
     /// saying so is what stops a version mismatch reading as data loss.
     private var reassurance: some View {
-        Label("ios.transfer.upgrade.data_safe", systemImage: "lock.shield")
+        Label("app.transfer.upgrade.data_safe", systemImage: "lock.shield")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .multilineTextAlignment(.leading)

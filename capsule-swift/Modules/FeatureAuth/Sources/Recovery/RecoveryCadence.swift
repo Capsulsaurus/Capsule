@@ -16,7 +16,7 @@ public enum RecoverySnooze: String, Sendable, Hashable, CaseIterable {
     }
 
     /// The catalog key for this option's button.
-    public var titleKey: String { "ios.recovery.verify.snooze.\(rawValue)" }
+    public var titleKey: String { "app.recovery.verify.snooze.\(rawValue)" }
 }
 
 // MARK: - RecoveryCadence

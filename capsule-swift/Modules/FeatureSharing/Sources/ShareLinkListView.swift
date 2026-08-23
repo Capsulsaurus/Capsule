@@ -21,8 +21,8 @@ public struct ShareLinkListView: View {
         SharingStateView(
             phase: model.phase,
             empty: .init(
-                title: "ios.share.list.empty.title",
-                message: "ios.share.list.empty.description",
+                title: "app.share.list.empty.title",
+                message: "app.share.list.empty.description",
                 symbol: "link"
             ),
             retry: { Task { await model.load() } },
@@ -30,31 +30,31 @@ public struct ShareLinkListView: View {
                 list
             }
         )
-        .navigationTitle("ios.share.list.title")
+        .navigationTitle("app.share.list.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         .confirmationDialog(
-            "ios.share.list.revoke.confirm_title",
+            "app.share.list.revoke.confirm_title",
             isPresented: Binding(
                 get: { model.pendingRevocation != nil },
                 set: { if !$0 { model.pendingRevocation = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("ios.share.list.revoke.confirm", role: .destructive) {
+            Button("app.share.list.revoke.confirm", role: .destructive) {
                 guard let row = model.pendingRevocation else { return }
                 Task { await model.revoke(row) }
             }
-            Button("ios.common.cancel", role: .cancel) { model.pendingRevocation = nil }
+            Button("app.common.cancel", role: .cancel) { model.pendingRevocation = nil }
         } message: {
-            Text("ios.share.list.revoke.confirm_message")
+            Text("app.share.list.revoke.confirm_message")
         }
     }
 
     private var list: some View {
         List {
             if !model.active.isEmpty {
-                Section("ios.share.list.section.active") {
+                Section("app.share.list.section.active") {
                     ForEach(model.active) { row in
                         ShareLinkRowView(row: row) { model.pendingRevocation = row }
                     }
@@ -66,9 +66,9 @@ public struct ShareLinkListView: View {
                         ShareLinkRowView(row: row, revoke: nil)
                     }
                 } header: {
-                    Text("ios.share.list.section.record")
+                    Text("app.share.list.section.record")
                 } footer: {
-                    Text("ios.share.list.section.record_footer")
+                    Text("app.share.list.section.record_footer")
                 }
             }
         }
@@ -100,12 +100,12 @@ struct ShareLinkRowView: View {
         .accessibilityElement(children: .combine)
         .swipeActions(edge: .trailing) {
             if let revoke {
-                Button("ios.share.list.revoke", role: .destructive, action: revoke)
+                Button("app.share.list.revoke", role: .destructive, action: revoke)
             }
         }
         .contextMenu {
             if let revoke {
-                Button("ios.share.list.revoke", role: .destructive, action: revoke)
+                Button("app.share.list.revoke", role: .destructive, action: revoke)
             }
         }
     }
@@ -113,20 +113,20 @@ struct ShareLinkRowView: View {
     @ViewBuilder
     private var detailRows: some View {
         if let expiresAt = row.expiresAt {
-            timestampRow("ios.share.list.expires", expiresAt)
+            timestampRow("app.share.list.expires", expiresAt)
         }
         if let createdAt = row.createdAt {
-            timestampRow("ios.share.list.created", createdAt)
+            timestampRow("app.share.list.created", createdAt)
         } else {
-            unavailableRow("ios.share.list.created", "ios.share.list.created.unknown")
+            unavailableRow("app.share.list.created", "app.share.list.created.unknown")
         }
         if let lastUsedAt = row.lastUsedAt {
-            timestampRow("ios.share.list.last_used", lastUsedAt)
+            timestampRow("app.share.list.last_used", lastUsedAt)
         } else {
-            unavailableRow("ios.share.list.last_used", "ios.share.list.last_used.unrecorded")
+            unavailableRow("app.share.list.last_used", "app.share.list.last_used.unrecorded")
         }
         if row.hasPassphrase {
-            StatusBadge(title: "ios.share.list.passphrase", symbol: "key", tint: .secondary)
+            StatusBadge(title: "app.share.list.passphrase", symbol: "key", tint: .secondary)
         }
     }
 
@@ -153,14 +153,14 @@ struct ShareLinkRowView: View {
     @ViewBuilder
     private var statusBadge: some View {
         switch row.lapse {
-        case .revoked: StatusBadge(title: "ios.share.list.status.revoked", symbol: "xmark.seal", tint: .red)
-        case .expired: StatusBadge(title: "ios.share.list.status.expired", symbol: "clock.badge.xmark", tint: .orange)
-        case nil: StatusBadge(title: "ios.share.list.status.live", symbol: "checkmark.seal", tint: .green)
+        case .revoked: StatusBadge(title: "app.share.list.status.revoked", symbol: "xmark.seal", tint: .red)
+        case .expired: StatusBadge(title: "app.share.list.status.expired", symbol: "clock.badge.xmark", tint: .orange)
+        case nil: StatusBadge(title: "app.share.list.status.live", symbol: "checkmark.seal", tint: .green)
         }
     }
 
     private var scopeTitle: LocalizedStringKey {
-        row.scope.isAlbumWide ? "ios.share.scope.album" : "ios.share.scope.asset"
+        row.scope.isAlbumWide ? "app.share.scope.album" : "app.share.scope.asset"
     }
 }
 

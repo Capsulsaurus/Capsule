@@ -26,13 +26,13 @@ struct RestoreShamirSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.restore.shamir.title",
-                descriptionKey: "ios.restore.shamir.description",
+                titleKey: "app.restore.shamir.title",
+                descriptionKey: "app.restore.shamir.description",
                 symbolName: "person.3.sequence.fill"
             )
             thresholdLine
             if shares.isEmpty {
-                Text("ios.restore.shamir.empty")
+                Text("app.restore.shamir.empty")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -48,7 +48,7 @@ struct RestoreShamirSection: View {
 
     private var thresholdLine: some View {
         HStack(spacing: CapsuleTheme.Spacing.xSmall) {
-            Text("ios.restore.shamir.threshold")
+            Text("app.restore.shamir.threshold")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Text(verbatim: "\(threshold)")
@@ -69,14 +69,14 @@ struct RestoreShamirSection: View {
             .disabled(share.isInvalidated)
             .accessibilityLabel(Text(verbatim: share.label))
 
-            AuthLabeledDate(labelKey: "ios.restore.shamir.issued", date: share.issuedAt.date)
+            AuthLabeledDate(labelKey: "app.restore.shamir.issued", date: share.issuedAt.date)
             if share.isInvalidated {
                 StatusChip(
-                    titleKey: "ios.restore.shamir.invalidated",
+                    titleKey: "app.restore.shamir.invalidated",
                     symbolName: "xmark.seal.fill",
                     tint: .orange
                 )
-                Text("ios.restore.shamir.invalidated_note")
+                Text("app.restore.shamir.invalidated_note")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -88,12 +88,12 @@ struct RestoreShamirSection: View {
     private var actions: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             if isWorking {
-                AuthLoadingView(labelKey: "ios.restore.shamir.reconstructing")
+                AuthLoadingView(labelKey: "app.restore.shamir.reconstructing")
             }
-            Button("ios.restore.shamir.reconstruct", action: reconstruct)
+            Button("app.restore.shamir.reconstruct", action: reconstruct)
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(!canReconstruct || isWorking)
-                .accessibilityLabel("ios.restore.shamir.reconstruct")
+                .accessibilityLabel("app.restore.shamir.reconstruct")
         }
     }
 

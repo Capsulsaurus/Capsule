@@ -27,8 +27,8 @@ public struct MaintenanceSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.maintenance.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.maintenance.empty.title",
-            emptyDescriptionKey: "ios.settings.maintenance.empty.description",
+            emptyTitleKey: "app.settings.maintenance.empty.title",
+            emptyDescriptionKey: "app.settings.maintenance.empty.description",
             retry: { await model.load() },
             content: {
                 scrubSection
@@ -38,9 +38,9 @@ public struct MaintenanceSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.maintenance.confirm.title",
-            messageKey: "ios.settings.maintenance.confirm.message",
-            confirmKey: "ios.settings.maintenance.confirm.action",
+            titleKey: "app.settings.maintenance.confirm.title",
+            messageKey: "app.settings.maintenance.confirm.message",
+            confirmKey: "app.settings.maintenance.confirm.action",
             isPresented: confirmationPresented
         ) {
             if let kind = kindPendingConfirmation {
@@ -65,11 +65,11 @@ public struct MaintenanceSettingsView: View {
     /// what touches their library.
     private var scrubSection: some View {
         Section {
-            SettingsNoteRow(textKey: "ios.settings.maintenance.scrub.body")
+            SettingsNoteRow(textKey: "app.settings.maintenance.scrub.body")
         } header: {
-            Text("ios.settings.maintenance.scrub.header")
+            Text("app.settings.maintenance.scrub.header")
         } footer: {
-            Text("ios.settings.maintenance.scrub.footer")
+            Text("app.settings.maintenance.scrub.footer")
         }
     }
 
@@ -79,18 +79,18 @@ public struct MaintenanceSettingsView: View {
         Section {
             if let count = model.pendingDuplicateSetCount {
                 SettingsValueRow(
-                    labelKey: "ios.settings.maintenance.dedupe.found",
+                    labelKey: "app.settings.maintenance.dedupe.found",
                     value: SettingsFormat.count(count)
                 )
             }
-            Button("ios.settings.maintenance.dedupe.run") {
+            Button("app.settings.maintenance.dedupe.run") {
                 kindPendingConfirmation = .intraLibraryDeduplication
             }
             .disabled(model.task(.intraLibraryDeduplication)?.state.isRunning == true)
         } header: {
-            Text("ios.settings.maintenance.dedupe.header")
+            Text("app.settings.maintenance.dedupe.header")
         } footer: {
-            Text("ios.settings.maintenance.dedupe.footer")
+            Text("app.settings.maintenance.dedupe.footer")
         }
     }
 
@@ -102,9 +102,9 @@ public struct MaintenanceSettingsView: View {
                 jobRows(task)
             }
         } header: {
-            Text("ios.settings.maintenance.jobs.header")
+            Text("app.settings.maintenance.jobs.header")
         } footer: {
-            Text("ios.settings.maintenance.jobs.footer")
+            Text("app.settings.maintenance.jobs.footer")
         }
     }
 
@@ -117,7 +117,7 @@ public struct MaintenanceSettingsView: View {
         )
         SettingsNoteRow(textKey: task.kind.detailKey)
         SettingsValueRow(
-            labelKey: "ios.settings.maintenance.last_run",
+            labelKey: "app.settings.maintenance.last_run",
             value: SettingsFormat.timestamp(task.lastRunAt)
         )
         jobStateDetail(task)
@@ -132,12 +132,12 @@ public struct MaintenanceSettingsView: View {
                 .accessibilityLabel(Text(task.kind.titleKey))
         case let .completed(_, findingCount):
             SettingsValueRow(
-                labelKey: "ios.settings.maintenance.findings",
+                labelKey: "app.settings.maintenance.findings",
                 value: SettingsFormat.count(findingCount)
             )
         case let .failed(_, code):
             SettingsStatusRow(
-                labelKey: "ios.settings.maintenance.failure",
+                labelKey: "app.settings.maintenance.failure",
                 statusKey: code.rawValue,
                 tone: .critical
             )
@@ -154,15 +154,15 @@ public struct MaintenanceSettingsView: View {
     @ViewBuilder
     private func jobAction(_ task: MaintenanceTask) -> some View {
         if task.state.isRunning {
-            Button("ios.settings.maintenance.cancel", role: .cancel) {
+            Button("app.settings.maintenance.cancel", role: .cancel) {
                 Task { await model.cancel(task.kind) }
             }
         } else if task.kind.isDestructive || task.kind.requiresIdleAndPower {
-            Button("ios.settings.maintenance.run") {
+            Button("app.settings.maintenance.run") {
                 kindPendingConfirmation = task.kind
             }
         } else {
-            Button("ios.settings.maintenance.run") {
+            Button("app.settings.maintenance.run") {
                 Task { await model.run(task.kind, userInitiated: true) }
             }
         }

@@ -84,8 +84,8 @@ struct RootShell: View {
                 crashReportOffered = true
             }
         }
-        .alert("ios.diagnostics.crash_alert.title", isPresented: $crashReportOffered) {
-            Button("ios.diagnostics.crash_alert.send") {
+        .alert("app.diagnostics.crash_alert.title", isPresented: $crashReportOffered) {
+            Button("app.diagnostics.crash_alert.send") {
                 Task {
                     let bundle = await environment.diagnostics.makeReportBundle()
                     await environment.diagnostics.acknowledgeCrashReport()
@@ -94,11 +94,11 @@ struct RootShell: View {
                     }
                 }
             }
-            Button("ios.common.not_now", role: .cancel) {
+            Button("app.common.not_now", role: .cancel) {
                 Task { await environment.diagnostics.acknowledgeCrashReport() }
             }
         } message: {
-            Text("ios.diagnostics.crash_alert.body")
+            Text("app.diagnostics.crash_alert.body")
         }
         .sheet(item: $crashReport) { DiagnosticsReportView(report: $0) }
     }

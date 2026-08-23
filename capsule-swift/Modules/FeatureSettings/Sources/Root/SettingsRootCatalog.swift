@@ -37,23 +37,23 @@ public enum SettingsRootCatalog {
     /// are about what leaves the device.
     public static let groups: [SettingsRootGroup] = [
         SettingsRootGroup(
-            titleKey: "ios.settings.group.account",
+            titleKey: "app.settings.group.account",
             sections: [.account, .server, .keysAndDevices, .backupAndRecovery],
         ),
         SettingsRootGroup(
-            titleKey: "ios.settings.group.library",
+            titleKey: "app.settings.group.library",
             sections: [.importAndScopes, .aiAndModels, .appearance, .language, .notifications],
         ),
         SettingsRootGroup(
-            titleKey: "ios.settings.group.sync_storage",
+            titleKey: "app.settings.group.sync_storage",
             sections: [.sync, .storage, .maintenance],
         ),
         SettingsRootGroup(
-            titleKey: "ios.settings.group.privacy",
+            titleKey: "app.settings.group.privacy",
             sections: [.security, .moderation, .diagnostics],
         ),
         SettingsRootGroup(
-            titleKey: "ios.settings.group.advanced",
+            titleKey: "app.settings.group.advanced",
             sections: [.federation, .advanced, .about],
         ),
     ]
@@ -103,7 +103,7 @@ public enum SettingsRootCatalog {
     /// SettingsSection/titleKey`` is: eighteen hand-maintained rows silently
     /// lose one, a derived key cannot.
     public static func subtitleKey(for section: SettingsSection) -> String {
-        "ios.settings.subtitle.\(section.rawValue)"
+        "app.settings.subtitle.\(section.rawValue)"
     }
 
     /// Whether every screen in ``SettingsSection`` is filed somewhere.

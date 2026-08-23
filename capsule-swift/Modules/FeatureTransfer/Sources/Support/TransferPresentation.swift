@@ -33,21 +33,21 @@ public extension ConnectionClass {
     var badge: TransferBadge {
         switch self {
         case .unmetered:
-            TransferBadge(titleKey: "ios.transfer.connection.unmetered", systemImage: "wifi", tint: .green)
+            TransferBadge(titleKey: "app.transfer.connection.unmetered", systemImage: "wifi", tint: .green)
         case .metered:
             TransferBadge(
-                titleKey: "ios.transfer.connection.metered",
+                titleKey: "app.transfer.connection.metered",
                 systemImage: "antenna.radiowaves.left.and.right",
                 tint: .orange
             )
         case .constrained:
-            TransferBadge(titleKey: "ios.transfer.connection.constrained", systemImage: "tortoise", tint: .orange)
+            TransferBadge(titleKey: "app.transfer.connection.constrained", systemImage: "tortoise", tint: .orange)
         case .adverse:
-            TransferBadge(titleKey: "ios.transfer.connection.adverse", systemImage: "wifi.exclamationmark", tint: .orange)
+            TransferBadge(titleKey: "app.transfer.connection.adverse", systemImage: "wifi.exclamationmark", tint: .orange)
         case .offline:
-            TransferBadge(titleKey: "ios.transfer.connection.offline", systemImage: "wifi.slash", tint: .secondary)
+            TransferBadge(titleKey: "app.transfer.connection.offline", systemImage: "wifi.slash", tint: .secondary)
         case .unknown:
-            TransferBadge(titleKey: "ios.transfer.connection.unknown", systemImage: "questionmark.circle", tint: .secondary)
+            TransferBadge(titleKey: "app.transfer.connection.unknown", systemImage: "questionmark.circle", tint: .secondary)
         }
     }
 
@@ -59,12 +59,12 @@ public extension ConnectionClass {
     /// Tiering*).
     var policyKey: LocalizedStringKey {
         switch self {
-        case .unmetered: "ios.transfer.connection.policy.unmetered"
-        case .metered: "ios.transfer.connection.policy.metered"
-        case .constrained: "ios.transfer.connection.policy.constrained"
-        case .adverse: "ios.transfer.connection.policy.adverse"
-        case .offline: "ios.transfer.connection.policy.offline"
-        case .unknown: "ios.transfer.connection.policy.unknown"
+        case .unmetered: "app.transfer.connection.policy.unmetered"
+        case .metered: "app.transfer.connection.policy.metered"
+        case .constrained: "app.transfer.connection.policy.constrained"
+        case .adverse: "app.transfer.connection.policy.adverse"
+        case .offline: "app.transfer.connection.policy.offline"
+        case .unknown: "app.transfer.connection.policy.unknown"
         }
     }
 }
@@ -76,20 +76,20 @@ public extension UploadTier {
     var badge: TransferBadge {
         switch self {
         case .index:
-            TransferBadge(titleKey: "ios.transfer.tier.index", systemImage: "list.bullet.rectangle", tint: .teal)
+            TransferBadge(titleKey: "app.transfer.tier.index", systemImage: "list.bullet.rectangle", tint: .teal)
         case .preview:
-            TransferBadge(titleKey: "ios.transfer.tier.preview", systemImage: "photo", tint: .blue)
+            TransferBadge(titleKey: "app.transfer.tier.preview", systemImage: "photo", tint: .blue)
         case .original:
-            TransferBadge(titleKey: "ios.transfer.tier.original", systemImage: "photo.on.rectangle.angled", tint: .indigo)
+            TransferBadge(titleKey: "app.transfer.tier.original", systemImage: "photo.on.rectangle.angled", tint: .indigo)
         }
     }
 
     /// What the tier carries and when it opens.
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .index: "ios.transfer.tier.index.description"
-        case .preview: "ios.transfer.tier.preview.description"
-        case .original: "ios.transfer.tier.original.description"
+        case .index: "app.transfer.tier.index.description"
+        case .preview: "app.transfer.tier.preview.description"
+        case .original: "app.transfer.tier.original.description"
         }
     }
 }
@@ -100,17 +100,17 @@ public extension UploadSessionState {
     var badge: TransferBadge {
         switch self {
         case .pending:
-            TransferBadge(titleKey: "ios.transfer.session.pending", systemImage: "clock", tint: .secondary)
+            TransferBadge(titleKey: "app.transfer.session.pending", systemImage: "clock", tint: .secondary)
         case .uploading:
-            TransferBadge(titleKey: "ios.transfer.session.uploading", systemImage: "arrow.up.circle", tint: .blue)
+            TransferBadge(titleKey: "app.transfer.session.uploading", systemImage: "arrow.up.circle", tint: .blue)
         case .waitingForProcessing:
-            TransferBadge(titleKey: "ios.transfer.session.waiting", systemImage: "hourglass", tint: .purple)
+            TransferBadge(titleKey: "app.transfer.session.waiting", systemImage: "hourglass", tint: .purple)
         case .completed:
-            TransferBadge(titleKey: "ios.transfer.session.completed", systemImage: "checkmark.circle.fill", tint: .green)
+            TransferBadge(titleKey: "app.transfer.session.completed", systemImage: "checkmark.circle.fill", tint: .green)
         case .failedProcessing:
-            TransferBadge(titleKey: "ios.transfer.session.failed", systemImage: "xmark.octagon.fill", tint: .red)
+            TransferBadge(titleKey: "app.transfer.session.failed", systemImage: "xmark.octagon.fill", tint: .red)
         case .unknown:
-            TransferBadge(titleKey: "ios.transfer.session.unknown", systemImage: "questionmark.circle", tint: .secondary)
+            TransferBadge(titleKey: "app.transfer.session.unknown", systemImage: "questionmark.circle", tint: .secondary)
         }
     }
 }
@@ -128,30 +128,30 @@ public extension RecoveryAction {
     /// is what makes the taxonomy visible to the person who has to act on it.
     var buttonTitleKey: LocalizedStringKey {
         switch self {
-        case .realignViaHead: "ios.transfer.recovery.realign"
-        case .recreateSession: "ios.transfer.recovery.restart_session"
-        case .mergeExistingBlob: "ios.transfer.recovery.merge"
-        case .abortWithUpgrade: "ios.transfer.recovery.update_app"
-        case .resendChunk: "ios.transfer.recovery.resend_chunk"
-        case .retryWithBackoff: "ios.transfer.recovery.retry"
-        case .refreshAndRetry: "ios.transfer.recovery.refresh"
-        case .surfaceToUser: "ios.transfer.recovery.review"
-        case .reportAsDefect: "ios.transfer.recovery.report"
+        case .realignViaHead: "app.transfer.recovery.realign"
+        case .recreateSession: "app.transfer.recovery.restart_session"
+        case .mergeExistingBlob: "app.transfer.recovery.merge"
+        case .abortWithUpgrade: "app.transfer.recovery.update_app"
+        case .resendChunk: "app.transfer.recovery.resend_chunk"
+        case .retryWithBackoff: "app.transfer.recovery.retry"
+        case .refreshAndRetry: "app.transfer.recovery.refresh"
+        case .surfaceToUser: "app.transfer.recovery.review"
+        case .reportAsDefect: "app.transfer.recovery.report"
         }
     }
 
     /// A one-line explanation of what pressing the button will do.
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .realignViaHead: "ios.transfer.recovery.realign.description"
-        case .recreateSession: "ios.transfer.recovery.restart_session.description"
-        case .mergeExistingBlob: "ios.transfer.recovery.merge.description"
-        case .abortWithUpgrade: "ios.transfer.recovery.update_app.description"
-        case .resendChunk: "ios.transfer.recovery.resend_chunk.description"
-        case .retryWithBackoff: "ios.transfer.recovery.retry.description"
-        case .refreshAndRetry: "ios.transfer.recovery.refresh.description"
-        case .surfaceToUser: "ios.transfer.recovery.review.description"
-        case .reportAsDefect: "ios.transfer.recovery.report.description"
+        case .realignViaHead: "app.transfer.recovery.realign.description"
+        case .recreateSession: "app.transfer.recovery.restart_session.description"
+        case .mergeExistingBlob: "app.transfer.recovery.merge.description"
+        case .abortWithUpgrade: "app.transfer.recovery.update_app.description"
+        case .resendChunk: "app.transfer.recovery.resend_chunk.description"
+        case .retryWithBackoff: "app.transfer.recovery.retry.description"
+        case .refreshAndRetry: "app.transfer.recovery.refresh.description"
+        case .surfaceToUser: "app.transfer.recovery.review.description"
+        case .reportAsDefect: "app.transfer.recovery.report.description"
         }
     }
 
@@ -175,15 +175,15 @@ public extension RepresentationTier {
     var badge: TransferBadge {
         switch self {
         case .dominantColour:
-            TransferBadge(titleKey: "ios.storage.tier.dominant_colour", systemImage: "paintpalette", tint: .gray)
+            TransferBadge(titleKey: "app.storage.tier.dominant_colour", systemImage: "paintpalette", tint: .gray)
         case .lqip:
-            TransferBadge(titleKey: "ios.storage.tier.lqip", systemImage: "square.dashed", tint: .gray)
+            TransferBadge(titleKey: "app.storage.tier.lqip", systemImage: "square.dashed", tint: .gray)
         case .thumbnail:
-            TransferBadge(titleKey: "ios.storage.tier.thumbnail", systemImage: "square.grid.2x2", tint: .teal)
+            TransferBadge(titleKey: "app.storage.tier.thumbnail", systemImage: "square.grid.2x2", tint: .teal)
         case .preview:
-            TransferBadge(titleKey: "ios.storage.tier.preview", systemImage: "photo", tint: .blue)
+            TransferBadge(titleKey: "app.storage.tier.preview", systemImage: "photo", tint: .blue)
         case .original:
-            TransferBadge(titleKey: "ios.storage.tier.original", systemImage: "photo.on.rectangle.angled", tint: .indigo)
+            TransferBadge(titleKey: "app.storage.tier.original", systemImage: "photo.on.rectangle.angled", tint: .indigo)
         }
     }
 
@@ -204,33 +204,33 @@ public extension QuotaState {
     var badge: TransferBadge {
         switch self {
         case .withinQuota:
-            TransferBadge(titleKey: "ios.quota.state.ok", systemImage: "checkmark.circle", tint: .green)
+            TransferBadge(titleKey: "app.quota.state.ok", systemImage: "checkmark.circle", tint: .green)
         case .softWarning:
-            TransferBadge(titleKey: "ios.quota.state.soft_warning", systemImage: "exclamationmark.triangle", tint: .orange)
+            TransferBadge(titleKey: "app.quota.state.soft_warning", systemImage: "exclamationmark.triangle", tint: .orange)
         case .hardExceeded:
-            TransferBadge(titleKey: "ios.quota.state.hard_exceeded", systemImage: "exclamationmark.octagon", tint: .red)
+            TransferBadge(titleKey: "app.quota.state.hard_exceeded", systemImage: "exclamationmark.octagon", tint: .red)
         case .graceExpired:
             TransferBadge(
-                titleKey: "ios.quota.state.grace_expired",
+                titleKey: "app.quota.state.grace_expired",
                 systemImage: "clock.badge.exclamationmark",
                 tint: .red
             )
         case .suspended:
-            TransferBadge(titleKey: "ios.quota.state.suspended", systemImage: "nosign", tint: .red)
+            TransferBadge(titleKey: "app.quota.state.suspended", systemImage: "nosign", tint: .red)
         case .unknown:
-            TransferBadge(titleKey: "ios.quota.state.unknown", systemImage: "questionmark.circle", tint: .secondary)
+            TransferBadge(titleKey: "app.quota.state.unknown", systemImage: "questionmark.circle", tint: .secondary)
         }
     }
 
     /// What is still possible in this state, in the user's terms.
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .withinQuota: "ios.quota.state.ok.description"
-        case .softWarning: "ios.quota.state.soft_warning.description"
-        case .hardExceeded: "ios.quota.state.hard_exceeded.description"
-        case .graceExpired: "ios.quota.state.grace_expired.description"
-        case .suspended: "ios.quota.state.suspended.description"
-        case .unknown: "ios.quota.state.unknown.description"
+        case .withinQuota: "app.quota.state.ok.description"
+        case .softWarning: "app.quota.state.soft_warning.description"
+        case .hardExceeded: "app.quota.state.hard_exceeded.description"
+        case .graceExpired: "app.quota.state.grace_expired.description"
+        case .suspended: "app.quota.state.suspended.description"
+        case .unknown: "app.quota.state.unknown.description"
         }
     }
 }
@@ -241,26 +241,26 @@ public extension SyncScope {
     var badge: TransferBadge {
         switch self {
         case .metadataOnly:
-            TransferBadge(titleKey: "ios.sync.scope.metadata_only", systemImage: "text.alignleft", tint: .teal)
+            TransferBadge(titleKey: "app.sync.scope.metadata_only", systemImage: "text.alignleft", tint: .teal)
         case .metadataAndThumbnails:
-            TransferBadge(titleKey: "ios.sync.scope.thumbnails", systemImage: "square.grid.2x2", tint: .blue)
+            TransferBadge(titleKey: "app.sync.scope.thumbnails", systemImage: "square.grid.2x2", tint: .blue)
         case .metadataThumbnailsAndOriginals:
             TransferBadge(
-                titleKey: "ios.sync.scope.originals",
+                titleKey: "app.sync.scope.originals",
                 systemImage: "photo.on.rectangle.angled",
                 tint: .indigo
             )
         case .unknown:
-            TransferBadge(titleKey: "ios.sync.scope.unknown", systemImage: "questionmark.circle", tint: .secondary)
+            TransferBadge(titleKey: "app.sync.scope.unknown", systemImage: "questionmark.circle", tint: .secondary)
         }
     }
 
     var explanationKey: LocalizedStringKey {
         switch self {
-        case .metadataOnly: "ios.sync.scope.metadata_only.description"
-        case .metadataAndThumbnails: "ios.sync.scope.thumbnails.description"
-        case .metadataThumbnailsAndOriginals: "ios.sync.scope.originals.description"
-        case .unknown: "ios.sync.scope.unknown.description"
+        case .metadataOnly: "app.sync.scope.metadata_only.description"
+        case .metadataAndThumbnails: "app.sync.scope.thumbnails.description"
+        case .metadataThumbnailsAndOriginals: "app.sync.scope.originals.description"
+        case .unknown: "app.sync.scope.unknown.description"
         }
     }
 }

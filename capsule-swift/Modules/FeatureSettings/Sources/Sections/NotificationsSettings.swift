@@ -25,8 +25,8 @@ public enum NotificationCategory: String, Sendable, Hashable, CaseIterable {
     /// The recovery-verification cadence came due.
     case recovery
 
-    public var titleKey: String { "ios.settings.notifications.category.\(rawValue)" }
-    public var detailKey: String { "ios.settings.notifications.detail.\(rawValue)" }
+    public var titleKey: String { "app.settings.notifications.category.\(rawValue)" }
+    public var detailKey: String { "app.settings.notifications.detail.\(rawValue)" }
 
     /// Whether the user can turn this category off entirely.
     public var isSwitchable: Bool { self == .staleness }
@@ -123,7 +123,7 @@ public struct NotificationsSettingsView: View {
             } else {
                 SettingsStatusRow(
                     labelKey: category.titleKey,
-                    statusKey: "ios.settings.notifications.always_on",
+                    statusKey: "app.settings.notifications.always_on",
                     tone: .neutral
                 )
             }

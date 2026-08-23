@@ -20,7 +20,7 @@ public struct SyncStatusView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.sync.title")
+            .navigationTitle("app.sync.title")
             .task { await model.load() }
     }
 
@@ -42,8 +42,8 @@ public struct SyncStatusView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.sync.empty.title",
-                emptyDescription: "ios.sync.empty.description",
+                emptyTitle: "app.sync.empty.title",
+                emptyDescription: "app.sync.empty.description",
                 emptySymbol: "arrow.triangle.2.circlepath",
                 retry: { await model.reload() }
             )
@@ -54,19 +54,19 @@ public struct SyncStatusView: View {
 
     private var statusSection: some View {
         Section {
-            LabeledContent("ios.sync.last_completed") {
+            LabeledContent("app.sync.last_completed") {
                 if let cursor = model.cursorPosition {
                     Text(verbatim: TransferFormat.relative(cursor, now: model.now))
                 } else {
-                    Text("ios.sync.last_completed.never")
+                    Text("app.sync.last_completed.never")
                 }
             }
-            LabeledContent("ios.sync.cursor") {
+            LabeledContent("app.sync.cursor") {
                 if let cursor = model.cursorPosition {
                     Text(verbatim: TransferFormat.captureDate(cursor))
                         .font(.footnote.monospacedDigit())
                 } else {
-                    Text("ios.sync.cursor.unset")
+                    Text("app.sync.cursor.unset")
                 }
             }
             BadgeChip(model.connection.badge)
@@ -74,56 +74,56 @@ public struct SyncStatusView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
-            Text("ios.sync.status.section")
+            Text("app.sync.status.section")
         } footer: {
-            Text("ios.sync.cursor.footer")
+            Text("app.sync.cursor.footer")
         }
     }
 
     private var pendingSection: some View {
         Section {
-            LabeledContent("ios.sync.pending.uploads") {
+            LabeledContent("app.sync.pending.uploads") {
                 Text(verbatim: TransferFormat.count(model.status.pendingUploadCount))
             }
-            LabeledContent("ios.sync.pending.downloads") {
+            LabeledContent("app.sync.pending.downloads") {
                 Text(verbatim: TransferFormat.count(model.status.pendingDownloadCount))
             }
             if !model.hasPendingWork {
-                Label("ios.sync.pending.none", systemImage: "checkmark.circle")
+                Label("app.sync.pending.none", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
             }
         } header: {
-            Text("ios.sync.pending.section")
+            Text("app.sync.pending.section")
         }
     }
 
     private var actionsSection: some View {
         Section {
-            Button("ios.sync.action.sync_now") {
+            Button("app.sync.action.sync_now") {
                 Task { await model.synchronizeNow() }
             }
             .disabled(model.isSyncing || !model.phase.permitsNetworkActions)
-            Button("ios.sync.action.force_now") {
+            Button("app.sync.action.force_now") {
                 Task { await model.forceSynchronizeNow() }
             }
             .disabled(model.isSyncing || !model.phase.permitsNetworkActions)
             if model.isSyncing {
                 ProgressView()
-                    .accessibilityLabel("ios.sync.state.running")
+                    .accessibilityLabel("app.sync.state.running")
             }
         } footer: {
             Text(model.canRunLargeReconciliation
-                ? "ios.sync.action.footer.unmetered"
-                : "ios.sync.action.footer.deferred")
+                ? "app.sync.action.footer.unmetered"
+                : "app.sync.action.footer.deferred")
         }
     }
 
     private var snoozeSection: some View {
         Section {
-            Label("ios.sync.snooze.active", systemImage: "bell.slash")
+            Label("app.sync.snooze.active", systemImage: "bell.slash")
                 .foregroundStyle(.secondary)
         } footer: {
-            Text("ios.sync.snooze.footer")
+            Text("app.sync.snooze.footer")
         }
     }
 
@@ -151,27 +151,27 @@ struct StalenessPrompt: View {
 
     var body: some View {
         Section {
-            Label("ios.sync.stale.title", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+            Label("app.sync.stale.title", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
                 .font(.headline)
                 .foregroundStyle(.orange)
-            Text("ios.sync.stale.description")
+            Text("app.sync.stale.description")
                 .font(.footnote)
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: CapsuleTheme.Spacing.small) { actions }
                 VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) { actions }
             }
         } footer: {
-            Text("ios.sync.stale.footer")
+            Text("app.sync.stale.footer")
         }
     }
 
     @ViewBuilder
     private var actions: some View {
-        Button("ios.sync.action.force_now") {
+        Button("app.sync.action.force_now") {
             Task { await model.forceSynchronizeNow() }
         }
         .buttonStyle(.borderedProminent)
-        Button("ios.sync.action.snooze") {
+        Button("app.sync.action.snooze") {
             Task { await model.snoozeStalenessPrompt() }
         }
         .buttonStyle(.bordered)

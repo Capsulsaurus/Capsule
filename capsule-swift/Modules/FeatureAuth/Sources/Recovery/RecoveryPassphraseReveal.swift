@@ -34,7 +34,7 @@ struct RecoveryWordGrid: View {
                 .strokeBorder(.separator, lineWidth: 1)
         )
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("ios.recovery.passphrase.grid.header")
+        .accessibilityLabel("app.recovery.passphrase.grid.header")
     }
 
     private func cell(position: Int, word: String) -> some View {
@@ -50,7 +50,7 @@ struct RecoveryWordGrid: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("ios.recovery.passphrase.word_position")
+        .accessibilityLabel("app.recovery.passphrase.word_position")
         .accessibilityValue(Text(verbatim: "\(position), \(word)"))
     }
 }
@@ -74,26 +74,26 @@ struct RecoveryEntropyMeter: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Text("ios.recovery.passphrase.entropy.label")
+            Text("app.recovery.passphrase.entropy.label")
                 .font(.headline)
             ProgressView(value: estimate.fraction)
                 .tint(estimate.meetsFloor ? .green : .red)
-                .accessibilityLabel("ios.recovery.passphrase.entropy.label")
+                .accessibilityLabel("app.recovery.passphrase.entropy.label")
                 .accessibilityValue(Text(verbatim: measurement))
             Text(verbatim: measurement)
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
             StatusChip(
                 titleKey: estimate.meetsFloor
-                    ? "ios.recovery.passphrase.entropy.meets_floor"
-                    : "ios.recovery.passphrase.entropy.below_floor",
+                    ? "app.recovery.passphrase.entropy.meets_floor"
+                    : "app.recovery.passphrase.entropy.below_floor",
                 symbolName: estimate.meetsFloor ? "checkmark.seal.fill" : "exclamationmark.octagon.fill",
                 tint: estimate.meetsFloor ? .green : .red
             )
             Text(
                 estimate.meetsFloor
-                    ? "ios.recovery.passphrase.entropy.footnote"
-                    : "ios.recovery.passphrase.entropy.defect"
+                    ? "app.recovery.passphrase.entropy.footnote"
+                    : "app.recovery.passphrase.entropy.defect"
             )
             .font(.footnote)
             .foregroundStyle(.secondary)

@@ -18,8 +18,8 @@ public struct UploadLinkComposerView: View {
         SharingStateView(
             phase: model.phase,
             empty: .init(
-                title: "ios.drops.compose.no_albums.title",
-                message: "ios.drops.compose.no_albums.description",
+                title: "app.drops.compose.no_albums.title",
+                message: "app.drops.compose.no_albums.description",
                 symbol: "rectangle.stack.badge.plus"
             ),
             retry: { Task { await model.load() } },
@@ -27,13 +27,13 @@ public struct UploadLinkComposerView: View {
                 form
             }
         )
-        .navigationTitle("ios.drops.compose.title")
+        .navigationTitle("app.drops.compose.title")
         .task { await model.load() }
         .onDisappear { model.reset() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("ios.drops.compose.create") {
+                Button("app.drops.compose.create") {
                     Task { await model.createLink() }
                 }
                 .disabled(!model.canSubmit)
@@ -60,15 +60,15 @@ public struct UploadLinkComposerView: View {
 
     private var destinationSection: some View {
         Section {
-            Picker("ios.drops.compose.destination", selection: $model.destination) {
+            Picker("app.drops.compose.destination", selection: $model.destination) {
                 ForEach(model.albums) { album in
                     albumLabel(album).tag(AlbumID?.some(album.id))
                 }
             }
         } header: {
-            Text("ios.drops.compose.destination.header")
+            Text("app.drops.compose.destination.header")
         } footer: {
-            Text("ios.drops.compose.destination.footer")
+            Text("app.drops.compose.destination.footer")
         }
     }
 
@@ -77,31 +77,31 @@ public struct UploadLinkComposerView: View {
         if let name = album.name {
             Text(name)
         } else {
-            Text("ios.drops.compose.default_album")
+            Text("app.drops.compose.default_album")
         }
     }
 
     private var passphraseSection: some View {
         Section {
-            Toggle("ios.drops.compose.passphrase.toggle", isOn: $model.passphraseEnabled)
+            Toggle("app.drops.compose.passphrase.toggle", isOn: $model.passphraseEnabled)
             if model.passphraseEnabled {
-                SecureField("ios.drops.compose.passphrase.field", text: $model.passphrase)
+                SecureField("app.drops.compose.passphrase.field", text: $model.passphrase)
                     .textContentType(.password)
             }
         } header: {
-            Text("ios.drops.compose.passphrase.header")
+            Text("app.drops.compose.passphrase.header")
         } footer: {
             // Named for what it is: an abuse gate on the owner's quota, not
             // confidentiality. Calling it "encryption" here would be false.
-            Text("ios.drops.compose.passphrase.footer")
+            Text("app.drops.compose.passphrase.footer")
         }
     }
 
     private var scopeSection: some View {
-        Section("ios.drops.compose.scope.header") {
-            ScopeNote(message: "ios.drops.compose.scope.write_only")
-            ScopeNote(message: "ios.drops.compose.scope.review_required")
-            ScopeNote(message: "ios.drops.compose.scope.quota")
+        Section("app.drops.compose.scope.header") {
+            ScopeNote(message: "app.drops.compose.scope.write_only")
+            ScopeNote(message: "app.drops.compose.scope.review_required")
+            ScopeNote(message: "app.drops.compose.scope.quota")
         }
     }
 
@@ -115,14 +115,14 @@ public struct UploadLinkComposerView: View {
                     .lineLimit(3)
                     .accessibilityHidden(true)
                 SwiftUI.ShareLink(item: url) {
-                    Label("ios.drops.compose.issued.share", systemImage: "square.and.arrow.up")
+                    Label("app.drops.compose.issued.share", systemImage: "square.and.arrow.up")
                 }
-                .accessibilityLabel("ios.drops.compose.issued.share")
-                Button("ios.drops.compose.issued.done") { model.reset() }
+                .accessibilityLabel("app.drops.compose.issued.share")
+                Button("app.drops.compose.issued.done") { model.reset() }
             } header: {
-                Text("ios.drops.compose.issued.header")
+                Text("app.drops.compose.issued.header")
             } footer: {
-                Text("ios.drops.compose.issued.footer")
+                Text("app.drops.compose.issued.footer")
             }
         }
         .formStyle(.grouped)

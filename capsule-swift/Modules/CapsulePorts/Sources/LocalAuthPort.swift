@@ -22,9 +22,9 @@ public enum LocalAuthMethod: Sendable, Equatable, Hashable {
     /// The catalog key describing this method.
     public var descriptionKey: String {
         switch self {
-        case .biometric: "ios.settings.security.method.biometric"
-        case .deviceCredential: "ios.settings.security.method.credential"
-        case .unavailable: "ios.settings.security.method.unavailable"
+        case .biometric: "app.settings.security.method.biometric"
+        case .deviceCredential: "app.settings.security.method.credential"
+        case .unavailable: "app.settings.security.method.unavailable"
         }
     }
 }

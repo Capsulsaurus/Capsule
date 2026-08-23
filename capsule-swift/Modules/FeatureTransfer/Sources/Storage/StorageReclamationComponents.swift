@@ -27,7 +27,7 @@ struct CacheBudgetControl: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            LabeledContent("ios.storage.budget.title") {
+            LabeledContent("app.storage.budget.title") {
                 Text(verbatim: TransferFormat.bytes(UInt64(draft)))
                     .monospacedDigit()
             }
@@ -36,7 +36,7 @@ struct CacheBudgetControl: View {
                 in: Double(Self.floorBytes) ... Double(max(ceiling, Self.floorBytes * 2)),
                 step: Double(Self.floorBytes / 2)
             ) {
-                Text("ios.storage.budget.title")
+                Text("app.storage.budget.title")
             } minimumValueLabel: {
                 Text(verbatim: TransferFormat.bytes(Self.floorBytes))
             } maximumValueLabel: {
@@ -44,15 +44,15 @@ struct CacheBudgetControl: View {
             } onEditingChanged: { isEditing in
                 if !isEditing { commit(UInt64(draft)) }
             }
-            .accessibilityLabel("ios.storage.budget.title")
+            .accessibilityLabel("app.storage.budget.title")
             .accessibilityValue(Text(verbatim: TransferFormat.bytes(UInt64(draft))))
             if !hasExplicitBudget {
-                Text("ios.storage.budget.unset")
+                Text("app.storage.budget.unset")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if overBudgetBytes > 0 {
-                Label("ios.storage.budget.over", systemImage: "exclamationmark.triangle")
+                Label("app.storage.budget.over", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
@@ -81,12 +81,12 @@ struct StorageConsumerRow: View {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) {
                 Text(titleKey)
                 if consumer.isExempt {
-                    Label("ios.storage.consumer.exempt", systemImage: "pin.fill")
+                    Label("app.storage.consumer.exempt", systemImage: "pin.fill")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if consumer.kind == .trash {
-                    Text("ios.storage.consumer.trash.note")
+                    Text("app.storage.consumer.trash.note")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -101,9 +101,9 @@ struct StorageConsumerRow: View {
 
     private var titleKey: LocalizedStringKey {
         switch consumer.kind {
-        case .tier: consumer.tier.map { LocalizedStringKey($0.badge.titleKey) } ?? "ios.storage.consumer.unknown"
-        case .trash: "ios.storage.consumer.trash"
-        case .unreleasedOriginals: "ios.storage.consumer.unreleased"
+        case .tier: consumer.tier.map { LocalizedStringKey($0.badge.titleKey) } ?? "app.storage.consumer.unknown"
+        case .trash: "app.storage.consumer.trash"
+        case .unreleasedOriginals: "app.storage.consumer.unreleased"
         }
     }
 
@@ -150,20 +150,20 @@ struct EvictionPreviewList: View {
                 }
                 .accessibilityElement(children: .combine)
             }
-            LabeledContent("ios.storage.plan.total") {
+            LabeledContent("app.storage.plan.total") {
                 Text(verbatim: TransferFormat.bytes(plan.reclaimedBytes))
             }
             if plan.exemptBytes > 0 {
-                Label("ios.storage.plan.exempt", systemImage: "lock.fill")
+                Label("app.storage.plan.exempt", systemImage: "lock.fill")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             if plan.shortfallBytes > 0 {
-                Label("ios.storage.plan.shortfall", systemImage: "exclamationmark.triangle")
+                Label("app.storage.plan.shortfall", systemImage: "exclamationmark.triangle")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }
-            Text("ios.storage.plan.refetch_note")
+            Text("app.storage.plan.refetch_note")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

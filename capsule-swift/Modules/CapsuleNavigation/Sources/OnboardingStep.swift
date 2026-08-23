@@ -32,7 +32,7 @@ public enum OnboardingStep: String, Sendable, Hashable, Codable, CaseIterable {
 public extension OnboardingStep {
     /// The catalog key for this step's title. Derived, for the same reason as
     /// ``SettingsSection/titleKey``.
-    var titleKey: String { "ios.onboarding.step.\(rawValue)" }
+    var titleKey: String { "app.onboarding.step.\(rawValue)" }
 
     /// Zero-based position, for "step N of M" progress.
     var index: Int { Self.allCases.firstIndex(of: self) ?? 0 }

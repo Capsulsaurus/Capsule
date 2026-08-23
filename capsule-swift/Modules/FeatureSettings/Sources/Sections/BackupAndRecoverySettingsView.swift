@@ -9,7 +9,7 @@ import SwiftUI
 public struct BackupAndRecoverySettingsView: View {
     @State private var model: BackupAndRecoverySettingsModel
     @State private var restoreGate = TypedPhraseGate(
-        phraseKey: "ios.settings.recovery.restore.phrase"
+        phraseKey: "app.settings.recovery.restore.phrase"
     )
     @State private var isRestoreSheetPresented = false
 
@@ -43,10 +43,10 @@ public struct BackupAndRecoverySettingsView: View {
         .task { await model.load() }
         .sheet(isPresented: $isRestoreSheetPresented) {
             TypedPhraseConfirmationSheet(
-                titleKey: "ios.settings.recovery.restore.confirm.title",
-                messageKey: "ios.settings.recovery.restore.confirm.message",
-                fieldLabelKey: "ios.settings.confirm.phrase.field",
-                confirmKey: "ios.settings.recovery.restore.confirm.action",
+                titleKey: "app.settings.recovery.restore.confirm.title",
+                messageKey: "app.settings.recovery.restore.confirm.message",
+                fieldLabelKey: "app.settings.confirm.phrase.field",
+                confirmKey: "app.settings.recovery.restore.confirm.action",
                 gate: restoreGate
             ) {
                 await model.commitRestore(gate: restoreGate)
@@ -59,31 +59,31 @@ public struct BackupAndRecoverySettingsView: View {
     private var escrowSection: some View {
         Section {
             SettingsStatusRow(
-                labelKey: "ios.settings.recovery.escrow.label",
+                labelKey: "app.settings.recovery.escrow.label",
                 statusKey: model.isConfigured
-                    ? "ios.settings.recovery.escrow.configured"
-                    : "ios.settings.recovery.escrow.missing",
+                    ? "app.settings.recovery.escrow.configured"
+                    : "app.settings.recovery.escrow.missing",
                 tone: model.isConfigured ? .positive : .critical
             )
             SettingsValueRow(
-                labelKey: "ios.settings.recovery.escrow.updated",
+                labelKey: "app.settings.recovery.escrow.updated",
                 value: SettingsFormat.day(model.summary?.escrowUpdatedAt)
             )
             shamirRows
             if !model.isConfigured {
-                Button("ios.settings.recovery.setup") {
+                Button("app.settings.recovery.setup") {
                     Task { await model.setUpRecovery() }
                 }
                 .disabled(model.isWorking)
             }
-            Button("ios.settings.recovery.rotate") {
+            Button("app.settings.recovery.rotate") {
                 Task { await model.rotateSecret() }
             }
             .disabled(model.isWorking || !model.isConfigured)
         } header: {
-            Text("ios.settings.recovery.escrow.header")
+            Text("app.settings.recovery.escrow.header")
         } footer: {
-            Text("ios.settings.recovery.escrow.footer")
+            Text("app.settings.recovery.escrow.footer")
         }
     }
 
@@ -92,11 +92,11 @@ public struct BackupAndRecoverySettingsView: View {
         if let shares = model.summary?.shamirShareCount,
            let threshold = model.summary?.shamirThreshold {
             SettingsValueRow(
-                labelKey: "ios.settings.recovery.shamir.shares",
+                labelKey: "app.settings.recovery.shamir.shares",
                 value: SettingsFormat.count(shares)
             )
             SettingsValueRow(
-                labelKey: "ios.settings.recovery.shamir.threshold",
+                labelKey: "app.settings.recovery.shamir.threshold",
                 value: SettingsFormat.count(threshold)
             )
         }
@@ -113,12 +113,12 @@ public struct BackupAndRecoverySettingsView: View {
                 .font(.body.monospaced())
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
-                .accessibilityLabel(Text("ios.settings.recovery.minted.label"))
-            Button("ios.settings.recovery.minted.dismiss") { model.dismissMintedSecret() }
+                .accessibilityLabel(Text("app.settings.recovery.minted.label"))
+            Button("app.settings.recovery.minted.dismiss") { model.dismissMintedSecret() }
         } header: {
-            Text("ios.settings.recovery.minted.header")
+            Text("app.settings.recovery.minted.header")
         } footer: {
-            Text("ios.settings.recovery.minted.footer")
+            Text("app.settings.recovery.minted.footer")
         }
     }
 
@@ -127,34 +127,34 @@ public struct BackupAndRecoverySettingsView: View {
     private var verificationSection: some View {
         Section {
             SettingsStatusRow(
-                labelKey: "ios.settings.recovery.verify.state",
+                labelKey: "app.settings.recovery.verify.state",
                 statusKey: model.isVerificationDue
-                    ? "ios.settings.recovery.verify.due"
-                    : "ios.settings.recovery.verify.not_due",
+                    ? "app.settings.recovery.verify.due"
+                    : "app.settings.recovery.verify.not_due",
                 tone: model.isVerificationDue ? .caution : .positive
             )
             SettingsValueRow(
-                labelKey: "ios.settings.recovery.verify.next",
+                labelKey: "app.settings.recovery.verify.next",
                 value: SettingsFormat.day(model.summary?.verification.nextDueAt)
             )
             SecureField(
-                "ios.settings.recovery.verify.field",
+                "app.settings.recovery.verify.field",
                 text: $model.passphraseInput
             )
-            .accessibilityLabel(Text("ios.settings.recovery.verify.field"))
-            Button("ios.settings.recovery.verify.action") {
+            .accessibilityLabel(Text("app.settings.recovery.verify.field"))
+            Button("app.settings.recovery.verify.action") {
                 Task { await model.verify() }
             }
             .disabled(model.isWorking || model.passphraseInput.isEmpty)
             verificationOutcomeRow
-            Button("ios.settings.recovery.verify.snooze") {
+            Button("app.settings.recovery.verify.snooze") {
                 Task { await model.snooze(days: 7) }
             }
             .disabled(!model.canSnooze)
         } header: {
-            Text("ios.settings.recovery.verify.header")
+            Text("app.settings.recovery.verify.header")
         } footer: {
-            Text("ios.settings.recovery.verify.footer")
+            Text("app.settings.recovery.verify.footer")
         }
     }
 
@@ -163,19 +163,19 @@ public struct BackupAndRecoverySettingsView: View {
         switch model.lastVerification {
         case .verified:
             SettingsStatusRow(
-                labelKey: "ios.settings.recovery.verify.result",
-                statusKey: "ios.settings.recovery.verify.verified",
+                labelKey: "app.settings.recovery.verify.result",
+                statusKey: "app.settings.recovery.verify.verified",
                 tone: .positive
             )
         case .mismatch:
             SettingsStatusRow(
-                labelKey: "ios.settings.recovery.verify.result",
-                statusKey: "ios.settings.recovery.verify.mismatch",
+                labelKey: "app.settings.recovery.verify.result",
+                statusKey: "app.settings.recovery.verify.mismatch",
                 tone: .caution
             )
         case let .inconclusive(code):
             SettingsStatusRow(
-                labelKey: "ios.settings.recovery.verify.result",
+                labelKey: "app.settings.recovery.verify.result",
                 statusKey: code.rawValue,
                 tone: .neutral
             )
@@ -183,7 +183,7 @@ public struct BackupAndRecoverySettingsView: View {
             EmptyView()
         }
         if model.shouldOfferGuidedRewrap {
-            SettingsNoteRow(textKey: "ios.settings.recovery.verify.rewrap_offer")
+            SettingsNoteRow(textKey: "app.settings.recovery.verify.rewrap_offer")
         }
     }
 
@@ -202,25 +202,25 @@ public struct BackupAndRecoverySettingsView: View {
                 )
             }
             SecureField(
-                "ios.settings.recovery.restore.field",
+                "app.settings.recovery.restore.field",
                 text: $model.restoreSecretInput
             )
-            .accessibilityLabel(Text("ios.settings.recovery.restore.field"))
-            Button("ios.settings.recovery.restore.action", role: .destructive) {
+            .accessibilityLabel(Text("app.settings.recovery.restore.field"))
+            Button("app.settings.recovery.restore.action", role: .destructive) {
                 restoreGate.reset()
                 isRestoreSheetPresented = true
             }
             .disabled(model.restoreSecretInput.isEmpty)
             if let account = model.restoredAccount {
                 SettingsValueRow(
-                    labelKey: "ios.settings.recovery.restore.restored",
+                    labelKey: "app.settings.recovery.restore.restored",
                     value: account.handle
                 )
             }
         } header: {
-            Text("ios.settings.recovery.restore.header")
+            Text("app.settings.recovery.restore.header")
         } footer: {
-            Text("ios.settings.recovery.restore.footer")
+            Text("app.settings.recovery.restore.footer")
         }
     }
 }

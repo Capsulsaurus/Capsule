@@ -33,9 +33,9 @@ public struct SearchRootView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.tab.search")
+            .navigationTitle("app.tab.search")
             .capsuleNavigationBarInline()
-            .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "ios.search.prompt")
+            .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "app.search.prompt")
             .searchSuggestions { suggestionList }
             .task { await model.load() }
             .capsuleFullScreenCover(item: $viewerSelection) { selection in
@@ -65,17 +65,17 @@ public struct SearchRootView: View {
     private var browseView: some View {
         List {
             if !model.recentSearches.isEmpty {
-                Section("ios.search.section.recent") {
+                Section("app.search.section.recent") {
                     ForEach(model.recentSearches, id: \.self) { term in
                         Button { model.applyRecent(term) } label: {
                             Label(term, systemImage: "clock.arrow.circlepath")
                         }
                     }
-                    Button("ios.search.clear_recents", role: .destructive) { model.clearRecents() }
+                    Button("app.search.clear_recents", role: .destructive) { model.clearRecents() }
                         .font(.footnote)
                 }
             }
-            Section("ios.search.section.categories") {
+            Section("app.search.section.categories") {
                 ForEach(model.allSuggestions) { suggestion in
                     Button { model.apply(suggestion) } label: {
                         Label(suggestion.title, systemImage: suggestion.systemImage)
@@ -102,9 +102,9 @@ public struct SearchRootView: View {
             Divider()
             if model.results.isEmpty {
                 ContentUnavailableView(
-                    "ios.search.empty.title",
+                    "app.search.empty.title",
                     systemImage: "magnifyingglass",
-                    description: Text("ios.search.empty.description")
+                    description: Text("app.search.empty.description")
                 )
             } else {
                 PhotoGridView(

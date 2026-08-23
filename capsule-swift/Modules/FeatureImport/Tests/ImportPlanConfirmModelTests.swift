@@ -59,7 +59,7 @@ struct ImportPlanConfirmModelTests {
         await confirm.load()
 
         #expect(confirm.destinationRule == .scopeOverride)
-        #expect(confirm.destinationRule?.reasonKey == "ios.import.plan.reason.scope_override")
+        #expect(confirm.destinationRule?.reasonKey == "app.import.plan.reason.scope_override")
     }
 
     @Test("every resolution rule has a reason sentence")
@@ -69,7 +69,7 @@ struct ImportPlanConfirmModelTests {
         ]
 
         #expect(Set(rules.map(\.reasonKey)).count == rules.count)
-        #expect(rules.allSatisfy { $0.reasonKey.hasPrefix("ios.import.plan.reason.") })
+        #expect(rules.allSatisfy { $0.reasonKey.hasPrefix("app.import.plan.reason.") })
     }
 
     /// A conflict is a decision, not a dead end: answering it must unlock the

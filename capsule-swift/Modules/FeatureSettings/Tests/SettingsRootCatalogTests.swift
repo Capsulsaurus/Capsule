@@ -38,7 +38,7 @@ struct SettingsRootCatalogTests {
         for group in groups {
             #expect(!group.sections.isEmpty, "\(group.titleKey) has no screens")
             #expect(group.id == group.titleKey)
-            #expect(group.titleKey.hasPrefix("ios.settings.group."))
+            #expect(group.titleKey.hasPrefix("app.settings.group."))
             #expect(!group.titleKey.contains(" "), "a heading is a catalog key, not display text")
         }
     }
@@ -73,9 +73,9 @@ struct SettingsRootCatalogTests {
     func everySectionHasASubtitleKey(section: SettingsSection) {
         let key = SettingsRootCatalog.subtitleKey(for: section)
 
-        #expect(key == "ios.settings.subtitle.\(section.rawValue)")
+        #expect(key == "app.settings.subtitle.\(section.rawValue)")
         #expect(!key.contains(" "))
-        #expect(key.hasPrefix("ios.settings.subtitle."))
+        #expect(key.hasPrefix("app.settings.subtitle."))
     }
 
     @Test("subtitle keys are unique, because the raw values are")

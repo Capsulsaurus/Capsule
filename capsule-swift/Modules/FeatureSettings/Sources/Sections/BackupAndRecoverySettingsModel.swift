@@ -24,8 +24,8 @@ public enum RestoreReconciliationRule: String, Sendable, Hashable, CaseIterable 
     /// Present in the backup, absent locally: applied.
     case absentLocally = "absent_locally"
 
-    public var titleKey: String { "ios.settings.recovery.restore.rule.\(rawValue)" }
-    public var detailKey: String { "ios.settings.recovery.restore.outcome.\(rawValue)" }
+    public var titleKey: String { "app.settings.recovery.restore.rule.\(rawValue)" }
+    public var detailKey: String { "app.settings.recovery.restore.outcome.\(rawValue)" }
 }
 
 // MARK: - BackupAndRecoverySettingsModel

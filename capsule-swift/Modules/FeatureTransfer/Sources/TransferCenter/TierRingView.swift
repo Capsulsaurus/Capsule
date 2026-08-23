@@ -111,20 +111,20 @@ struct TierLegendRow: View {
     private var standingLine: some View {
         switch progress.standing {
         case .idle:
-            Text("ios.transfer.tier.standing.idle")
+            Text("app.transfer.tier.standing.idle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .settled:
-            Text("ios.transfer.tier.standing.settled")
+            Text("app.transfer.tier.standing.settled")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         case .inFlight:
             if isGated {
-                Label("ios.transfer.tier.standing.waiting", systemImage: "pause.circle")
+                Label("app.transfer.tier.standing.waiting", systemImage: "pause.circle")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                Text("ios.transfer.tier.standing.in_flight")
+                Text("app.transfer.tier.standing.in_flight")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

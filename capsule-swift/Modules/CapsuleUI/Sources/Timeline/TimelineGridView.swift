@@ -156,9 +156,9 @@ public struct TimelineGridView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label("ios.timeline.empty.title", systemImage: "photo.on.rectangle")
+            Label("app.timeline.empty.title", systemImage: "photo.on.rectangle")
         } description: {
-            Text("ios.timeline.empty.description")
+            Text("app.timeline.empty.description")
         }
     }
 

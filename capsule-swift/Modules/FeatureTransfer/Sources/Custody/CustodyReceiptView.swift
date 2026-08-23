@@ -38,19 +38,19 @@ public struct CustodyReceiptView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.custody.title")
+            .navigationTitle("app.custody.title")
             .task { await model.load() }
             .confirmationDialog(
-                "ios.custody.release.confirm.title",
+                "app.custody.release.confirm.title",
                 isPresented: $isConfirmingRelease,
                 titleVisibility: .visible
             ) {
-                Button("ios.custody.release.confirm.action", role: .destructive) {
+                Button("app.custody.release.confirm.action", role: .destructive) {
                     Task { await model.releaseLocalCopy() }
                 }
-                Button("ios.common.cancel", role: .cancel) {}
+                Button("app.common.cancel", role: .cancel) {}
             } message: {
-                Text("ios.custody.release.confirm.message")
+                Text("app.custody.release.confirm.message")
             }
     }
 
@@ -67,8 +67,8 @@ public struct CustodyReceiptView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.custody.empty.title",
-                emptyDescription: "ios.custody.empty.description",
+                emptyTitle: "app.custody.empty.title",
+                emptyDescription: "app.custody.empty.description",
                 emptySymbol: "doc.questionmark",
                 retry: { await model.reload() }
             )
@@ -80,36 +80,36 @@ public struct CustodyReceiptView: View {
     @ViewBuilder
     private var verdictActions: some View {
         Section {
-            Button("ios.custody.action.verify") {
+            Button("app.custody.action.verify") {
                 Task { await model.verify(deep: false) }
             }
             .disabled(model.isBusy || !model.phase.permitsNetworkActions)
-            Button("ios.custody.action.verify_deep") {
+            Button("app.custody.action.verify_deep") {
                 Task { await model.verify(deep: true) }
             }
             .disabled(model.isBusy || !model.phase.permitsNetworkActions)
             if model.verdict.permitsRelease {
-                Button("ios.custody.action.release", role: .destructive) {
+                Button("app.custody.action.release", role: .destructive) {
                     isConfirmingRelease = true
                 }
                 .disabled(model.isBusy)
             }
         } footer: {
             Text(model.verdict.permitsRelease
-                ? "ios.custody.action.release.footer"
-                : "ios.custody.action.blocked.footer")
+                ? "app.custody.action.release.footer"
+                : "app.custody.action.blocked.footer")
         }
     }
 
     private var logSection: some View {
-        Section("ios.custody.log.title") {
+        Section("app.custody.log.title") {
             if let sequence = model.highestReceiptSequence {
-                LabeledContent("ios.custody.log.sequence") {
+                LabeledContent("app.custody.log.sequence") {
                     Text(verbatim: TransferFormat.count(Int(clamping: sequence)))
                 }
             }
             Label(
-                model.isChained ? "ios.custody.log.chained" : "ios.custody.log.unchained",
+                model.isChained ? "app.custody.log.chained" : "app.custody.log.unchained",
                 systemImage: model.isChained ? "link" : "link.badge.plus"
             )
             .foregroundStyle(model.isChained ? Color.secondary : Color.orange)
@@ -136,28 +136,28 @@ struct CustodyVerdictSection: View {
                 ForEach(missing) { blob in MissingBlobRow(blob: blob) }
             }
         } footer: {
-            Text(String(format: String(localized: "ios.custody.verdict.freshness"),
+            Text(String(format: String(localized: "app.custody.verdict.freshness"),
                         TransferFormat.count(Int(freshnessSeconds))))
         }
     }
 
     private var titleKey: LocalizedStringKey {
         switch verdict {
-        case .unchecked: "ios.custody.verdict.unchecked"
-        case .notYetConfirmed: "ios.custody.verdict.not_confirmed"
-        case .receiptMissing: "ios.custody.verdict.receipt_missing"
-        case .confirmedButStale: "ios.custody.verdict.stale"
-        case .releasable: "ios.custody.verdict.durable"
+        case .unchecked: "app.custody.verdict.unchecked"
+        case .notYetConfirmed: "app.custody.verdict.not_confirmed"
+        case .receiptMissing: "app.custody.verdict.receipt_missing"
+        case .confirmedButStale: "app.custody.verdict.stale"
+        case .releasable: "app.custody.verdict.durable"
         }
     }
 
     private var descriptionKey: LocalizedStringKey {
         switch verdict {
-        case .unchecked: "ios.custody.verdict.unchecked.description"
-        case .notYetConfirmed: "ios.custody.verdict.not_confirmed.description"
-        case .receiptMissing: "ios.custody.verdict.receipt_missing.description"
-        case .confirmedButStale: "ios.custody.verdict.stale.description"
-        case .releasable: "ios.custody.verdict.durable.description"
+        case .unchecked: "app.custody.verdict.unchecked.description"
+        case .notYetConfirmed: "app.custody.verdict.not_confirmed.description"
+        case .receiptMissing: "app.custody.verdict.receipt_missing.description"
+        case .confirmedButStale: "app.custody.verdict.stale.description"
+        case .releasable: "app.custody.verdict.durable.description"
         }
     }
 
@@ -204,9 +204,9 @@ struct MissingBlobRow: View {
 
     @ViewBuilder
     private var flags: some View {
-        factLabel("ios.custody.blob.stored", isSatisfied: blob.stored)
-        factLabel("ios.custody.blob.indexed", isSatisfied: blob.indexed)
-        factLabel("ios.custody.blob.retrievable", isSatisfied: blob.retrievable)
+        factLabel("app.custody.blob.stored", isSatisfied: blob.stored)
+        factLabel("app.custody.blob.indexed", isSatisfied: blob.indexed)
+        factLabel("app.custody.blob.retrievable", isSatisfied: blob.retrievable)
     }
 
     private func factLabel(_ key: LocalizedStringKey, isSatisfied: Bool) -> some View {

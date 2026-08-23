@@ -33,13 +33,13 @@ struct DiagnosticsReportView: View {
                         ProgressView()
                     }
                 } footer: {
-                    Text("ios.settings.report.footer")
+                    Text("app.settings.report.footer")
                 }
             }
-            .navigationTitle("ios.diagnostics.report.title")
+            .navigationTitle("app.diagnostics.report.title")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("ios.common.done") { dismiss() }
+                    Button("app.common.done") { dismiss() }
                 }
             }
         }

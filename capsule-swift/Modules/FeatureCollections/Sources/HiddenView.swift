@@ -40,24 +40,24 @@ public struct HiddenView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if assets.isEmpty {
                 ContentUnavailableView(
-                    "ios.hidden.empty.title",
+                    "app.hidden.empty.title",
                     systemImage: "eye.slash",
-                    description: Text("ios.hidden.empty.description")
+                    description: Text("app.hidden.empty.description")
                 )
             } else {
                 grid
             }
         }
-        .navigationTitle("ios.hidden.title")
+        .navigationTitle("app.hidden.title")
         .capsuleNavigationBarInline()
         .task { await authenticate() }
         .confirmationDialog(
-            "ios.hidden.confirm.title",
+            "app.hidden.confirm.title",
             isPresented: unhidePresented,
             titleVisibility: .visible,
             presenting: unhideTarget
         ) { asset in
-            Button("ios.hidden.unhide") { Task { await unhide(asset) } }
+            Button("app.hidden.unhide") { Task { await unhide(asset) } }
         }
     }
 
@@ -74,11 +74,11 @@ public struct HiddenView: View {
 
     private var lockedView: some View {
         ContentUnavailableView {
-            Label("ios.hidden.title", systemImage: "lock.fill")
+            Label("app.hidden.title", systemImage: "lock.fill")
         } description: {
-            Text("ios.hidden.locked.description")
+            Text("app.hidden.locked.description")
         } actions: {
-            Button("ios.hidden.unlock") { Task { await authenticate() } }
+            Button("app.hidden.unlock") { Task { await authenticate() } }
         }
     }
 
@@ -104,7 +104,7 @@ public struct HiddenView: View {
             return
         }
         let success = await (try? authenticator.authenticate(
-            reasonKey: "ios.hidden.auth.reason"
+            reasonKey: "app.hidden.auth.reason"
         )) ?? false
         unlocked = success
         if success { await loadHidden() }

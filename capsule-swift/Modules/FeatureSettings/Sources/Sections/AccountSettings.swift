@@ -66,10 +66,10 @@ public final class AccountSettingsModel {
     /// The catalog key for the session's standing, and how loudly to say it.
     public var sessionStatus: (key: String, tone: SettingsTone) {
         switch state {
-        case .signedOut: ("ios.settings.account.state.signed_out", .caution)
-        case .signedIn: ("ios.settings.account.state.signed_in", .positive)
-        case .requiresLocalAuth: ("ios.settings.account.state.requires_local_auth", .caution)
-        case .expired: ("ios.settings.account.state.expired", .critical)
+        case .signedOut: ("app.settings.account.state.signed_out", .caution)
+        case .signedIn: ("app.settings.account.state.signed_in", .positive)
+        case .requiresLocalAuth: ("app.settings.account.state.requires_local_auth", .caution)
+        case .expired: ("app.settings.account.state.expired", .critical)
         }
     }
 
@@ -157,8 +157,8 @@ public struct AccountSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.account.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.account.empty.title",
-            emptyDescriptionKey: "ios.settings.account.empty.description",
+            emptyTitleKey: "app.settings.account.empty.title",
+            emptyDescriptionKey: "app.settings.account.empty.description",
             retry: { await model.load() },
             content: {
                 identitySection
@@ -168,17 +168,17 @@ public struct AccountSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.account.signout.confirm.title",
-            messageKey: "ios.settings.account.signout.confirm.message",
-            confirmKey: "ios.settings.account.signout.confirm.action",
+            titleKey: "app.settings.account.signout.confirm.title",
+            messageKey: "app.settings.account.signout.confirm.message",
+            confirmKey: "app.settings.account.signout.confirm.action",
             isPresented: $isSignOutPresented
         ) {
             await model.signOut()
         }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.account.revoke_all.confirm.title",
-            messageKey: "ios.settings.account.revoke_all.confirm.message",
-            confirmKey: "ios.settings.account.revoke_all.confirm.action",
+            titleKey: "app.settings.account.revoke_all.confirm.title",
+            messageKey: "app.settings.account.revoke_all.confirm.message",
+            confirmKey: "app.settings.account.revoke_all.confirm.action",
             isPresented: $isRevokeAllPresented
         ) {
             await model.revokeAllSessions()
@@ -188,27 +188,27 @@ public struct AccountSettingsView: View {
     private var identitySection: some View {
         Section {
             SettingsValueRow(
-                labelKey: "ios.settings.account.handle",
+                labelKey: "app.settings.account.handle",
                 value: model.account?.handle ?? SettingsFormat.unknown
             )
             SettingsValueRow(
-                labelKey: "ios.settings.account.display_name",
+                labelKey: "app.settings.account.display_name",
                 value: model.account?.displayName ?? SettingsFormat.unknown
             )
             SettingsValueRow(
-                labelKey: "ios.settings.account.home_server",
+                labelKey: "app.settings.account.home_server",
                 value: model.account?.homeServer ?? SettingsFormat.unknown
             )
             SettingsStatusRow(
-                labelKey: "ios.settings.account.state.label",
+                labelKey: "app.settings.account.state.label",
                 statusKey: model.sessionStatus.key,
                 tone: model.sessionStatus.tone
             )
             accountTypeRow
         } header: {
-            Text("ios.settings.account.identity.header")
+            Text("app.settings.account.identity.header")
         } footer: {
-            Text("ios.settings.account.identity.footer")
+            Text("app.settings.account.identity.footer")
         }
     }
 
@@ -216,10 +216,10 @@ public struct AccountSettingsView: View {
     private var accountTypeRow: some View {
         if let type = model.account?.accountType {
             SettingsStatusRow(
-                labelKey: "ios.settings.account.type.label",
+                labelKey: "app.settings.account.type.label",
                 statusKey: type == .sponsored
-                    ? "ios.settings.account.type.sponsored"
-                    : "ios.settings.account.type.registered",
+                    ? "app.settings.account.type.sponsored"
+                    : "app.settings.account.type.registered",
                 tone: .neutral
             )
         }
@@ -228,37 +228,37 @@ public struct AccountSettingsView: View {
     private var sessionsSection: some View {
         Section {
             if model.liveSessions.isEmpty {
-                SettingsNoteRow(textKey: "ios.settings.account.sessions.none")
+                SettingsNoteRow(textKey: "app.settings.account.sessions.none")
             }
             ForEach(model.liveSessions) { session in
                 sessionRows(session)
             }
         } header: {
-            Text("ios.settings.account.sessions.header")
+            Text("app.settings.account.sessions.header")
         } footer: {
-            Text("ios.settings.account.sessions.footer")
+            Text("app.settings.account.sessions.footer")
         }
     }
 
     @ViewBuilder
     private func sessionRows(_ session: SessionRecord) -> some View {
         SettingsStatusRow(
-            labelKey: "ios.settings.account.sessions.session",
+            labelKey: "app.settings.account.sessions.session",
             statusKey: session.isCurrent
-                ? "ios.settings.account.sessions.current"
-                : "ios.settings.account.sessions.other",
+                ? "app.settings.account.sessions.current"
+                : "app.settings.account.sessions.other",
             tone: session.isCurrent ? .positive : .neutral
         )
         SettingsValueRow(
-            labelKey: "ios.settings.account.sessions.last_used",
+            labelKey: "app.settings.account.sessions.last_used",
             value: SettingsFormat.timestamp(session.lastUsedAt)
         )
         SettingsValueRow(
-            labelKey: "ios.settings.account.sessions.expires",
+            labelKey: "app.settings.account.sessions.expires",
             value: SettingsFormat.day(session.effectiveExpiry)
         )
         if !session.isCurrent {
-            Button("ios.settings.account.sessions.revoke", role: .destructive) {
+            Button("app.settings.account.sessions.revoke", role: .destructive) {
                 Task { await model.revoke(session.id) }
             }
         }
@@ -267,23 +267,23 @@ public struct AccountSettingsView: View {
     private var actionsSection: some View {
         Section {
             if case .requiresLocalAuth = model.state {
-                Button("ios.settings.account.confirm_local_auth") {
+                Button("app.settings.account.confirm_local_auth") {
                     Task { await model.confirmLocalAuthentication() }
                 }
             }
-            Button("ios.settings.account.revoke_all", role: .destructive) {
+            Button("app.settings.account.revoke_all", role: .destructive) {
                 isRevokeAllPresented = true
             }
             .disabled(model.isWorking)
-            Button("ios.settings.account.signout", role: .destructive) {
+            Button("app.settings.account.signout", role: .destructive) {
                 isSignOutPresented = true
             }
             .disabled(model.isWorking)
-            SettingsNoteRow(textKey: "ios.settings.account.portability.body")
+            SettingsNoteRow(textKey: "app.settings.account.portability.body")
         } header: {
-            Text("ios.settings.account.actions.header")
+            Text("app.settings.account.actions.header")
         } footer: {
-            Text("ios.settings.account.actions.footer")
+            Text("app.settings.account.actions.footer")
         }
     }
 }

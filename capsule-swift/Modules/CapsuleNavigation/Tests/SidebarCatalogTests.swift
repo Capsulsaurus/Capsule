@@ -29,11 +29,11 @@ struct SidebarCatalogTests {
     @Test("every title key is a catalog key, never display text")
     func titlesAreCatalogKeys() {
         for descriptor in SidebarItem.descriptors {
-            #expect(descriptor.titleKey.hasPrefix("ios.sidebar."), "\(descriptor.titleKey)")
+            #expect(descriptor.titleKey.hasPrefix("app.sidebar."), "\(descriptor.titleKey)")
             #expect(!descriptor.titleKey.contains(" "), "\(descriptor.titleKey)")
         }
         for group in SidebarGroup.allCases {
-            #expect(group.titleKey.hasPrefix("ios.sidebar.group."))
+            #expect(group.titleKey.hasPrefix("app.sidebar.group."))
         }
     }
 
@@ -114,11 +114,11 @@ struct RouteOwnershipTests {
     @Test("settings and onboarding sections carry catalog keys, not text")
     func closedEnumsCarryCatalogKeys() {
         for section in SettingsSection.allCases {
-            #expect(section.titleKey == "ios.settings.section.\(section.rawValue)")
+            #expect(section.titleKey == "app.settings.section.\(section.rawValue)")
             #expect(!section.titleKey.contains(" "))
         }
         for step in OnboardingStep.allCases {
-            #expect(step.titleKey == "ios.onboarding.step.\(step.rawValue)")
+            #expect(step.titleKey == "app.onboarding.step.\(step.rawValue)")
         }
     }
 

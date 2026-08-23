@@ -156,8 +156,8 @@ struct MaintenanceSettingsTests {
 
     @Test("every job kind is named and explained by its own catalog keys", arguments: MaintenanceTaskKind.knownCases)
     func everyJobIsNamed(kind: MaintenanceTaskKind) {
-        #expect(kind.titleKey.hasPrefix("ios.settings.maintenance.job."))
-        #expect(kind.detailKey.hasPrefix("ios.settings.maintenance.detail."))
+        #expect(kind.titleKey.hasPrefix("app.settings.maintenance.job."))
+        #expect(kind.detailKey.hasPrefix("app.settings.maintenance.detail."))
         #expect(!kind.titleKey.contains(" "))
         #expect(kind.titleKey != MaintenanceTaskKind.unknown("x").titleKey)
     }

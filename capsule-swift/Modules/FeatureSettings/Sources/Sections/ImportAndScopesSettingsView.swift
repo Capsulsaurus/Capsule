@@ -29,8 +29,8 @@ public struct ImportAndScopesSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.importAndScopes.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.import.empty.title",
-            emptyDescriptionKey: "ios.settings.import.empty.description",
+            emptyTitleKey: "app.settings.import.empty.title",
+            emptyDescriptionKey: "app.settings.import.empty.description",
             retry: { await model.load() },
             content: {
                 defaultAlbumSection
@@ -47,7 +47,7 @@ public struct ImportAndScopesSettingsView: View {
     private var defaultAlbumSection: some View {
         Section {
             Picker(
-                "ios.settings.import.default.label",
+                "app.settings.import.default.label",
                 selection: ownerDefaultBinding
             ) {
                 ForEach(model.albums) { album in
@@ -56,9 +56,9 @@ public struct ImportAndScopesSettingsView: View {
             }
             .pickerStyle(.menu)
         } header: {
-            Text("ios.settings.import.default.header")
+            Text("app.settings.import.default.header")
         } footer: {
-            Text("ios.settings.import.default.footer")
+            Text("app.settings.import.default.footer")
         }
     }
 
@@ -88,9 +88,9 @@ public struct ImportAndScopesSettingsView: View {
                 )
             }
         } header: {
-            Text("ios.settings.import.order.header")
+            Text("app.settings.import.order.header")
         } footer: {
-            Text("ios.settings.import.order.footer")
+            Text("app.settings.import.order.footer")
         }
     }
 
@@ -99,15 +99,15 @@ public struct ImportAndScopesSettingsView: View {
     private var scopeSection: some View {
         Section {
             if model.resolutions.isEmpty {
-                SettingsNoteRow(textKey: "ios.settings.import.sources.none")
+                SettingsNoteRow(textKey: "app.settings.import.sources.none")
             }
             ForEach(model.resolutions) { row in
                 scopeRows(row)
             }
         } header: {
-            Text("ios.settings.import.sources.header")
+            Text("app.settings.import.sources.header")
         } footer: {
-            Text("ios.settings.import.sources.footer")
+            Text("app.settings.import.sources.footer")
         }
     }
 
@@ -118,15 +118,15 @@ public struct ImportAndScopesSettingsView: View {
             value: SettingsFormat.shortIdentifier(row.scope.locator, length: 28)
         )
         SettingsStatusRow(
-            labelKey: "ios.settings.import.sources.rule",
+            labelKey: "app.settings.import.sources.rule",
             statusKey: DestinationResolution.titleKey(for: row.rule),
             tone: row.rule == .scopeOverride ? .positive : .neutral
         )
         Picker(
-            "ios.settings.import.sources.destination",
+            "app.settings.import.sources.destination",
             selection: overrideBinding(for: row.scope)
         ) {
-            Text("ios.settings.import.sources.unset").tag(AlbumID?.none)
+            Text("app.settings.import.sources.unset").tag(AlbumID?.none)
             ForEach(model.albums) { album in
                 albumLabel(album.id).tag(AlbumID?.some(album.id))
             }
@@ -152,18 +152,18 @@ public struct ImportAndScopesSettingsView: View {
                 )
             }
         } header: {
-            Text("ios.settings.import.kinds.header")
+            Text("app.settings.import.kinds.header")
         } footer: {
-            Text("ios.settings.import.kinds.footer")
+            Text("app.settings.import.kinds.footer")
         }
     }
 
     private func sourceKindValue(_ kind: SourceKind) -> String {
         guard let albumID = model.sourceKindDefaults[kind] else {
-            return SettingsPhrase.text(forKey: "ios.settings.import.sources.unset")
+            return SettingsPhrase.text(forKey: "app.settings.import.sources.unset")
         }
         return model.albumName(albumID)
-            ?? SettingsPhrase.text(forKey: "ios.settings.import.album.unnamed_default")
+            ?? SettingsPhrase.text(forKey: "app.settings.import.album.unnamed_default")
     }
 
     // MARK: Shared
@@ -173,7 +173,7 @@ public struct ImportAndScopesSettingsView: View {
         if let albumID, let name = model.albumName(albumID) {
             Text(verbatim: name)
         } else {
-            Text("ios.settings.import.album.unnamed_default")
+            Text("app.settings.import.album.unnamed_default")
         }
     }
 }

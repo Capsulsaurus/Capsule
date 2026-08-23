@@ -58,12 +58,12 @@ public struct AdaptiveChunkPlan: Sendable, Equatable {
 
         var titleKey: String {
             switch self {
-            case .warmingUp: "ios.transfer.chunk.reason.warming_up"
-            case .raised: "ios.transfer.chunk.reason.raised"
-            case .lowered: "ios.transfer.chunk.reason.lowered"
-            case .held: "ios.transfer.chunk.reason.held"
-            case .conservativeForAdverseLink: "ios.transfer.chunk.reason.adverse"
-            case .unmeasured: "ios.transfer.chunk.reason.unmeasured"
+            case .warmingUp: "app.transfer.chunk.reason.warming_up"
+            case .raised: "app.transfer.chunk.reason.raised"
+            case .lowered: "app.transfer.chunk.reason.lowered"
+            case .held: "app.transfer.chunk.reason.held"
+            case .conservativeForAdverseLink: "app.transfer.chunk.reason.adverse"
+            case .unmeasured: "app.transfer.chunk.reason.unmeasured"
             }
         }
     }

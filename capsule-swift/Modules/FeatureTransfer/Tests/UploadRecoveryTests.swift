@@ -16,7 +16,7 @@ struct UploadRecoveryTests {
         let option = UploadRecoveryOption(code: .uploadOffsetMismatch)
 
         #expect(option.action == .realignViaHead)
-        #expect(option.buttonTitleKey == "ios.transfer.recovery.realign")
+        #expect(option.buttonTitleKey == "app.transfer.recovery.realign")
         #expect(option.isAutomatable)
     }
 
@@ -25,7 +25,7 @@ struct UploadRecoveryTests {
         let option = UploadRecoveryOption(code: .uploadSessionNotFound)
 
         #expect(option.action == .recreateSession)
-        #expect(option.buttonTitleKey == "ios.transfer.recovery.restart_session")
+        #expect(option.buttonTitleKey == "app.transfer.recovery.restart_session")
     }
 
     @Test("duplicate_blob merges rather than transferring again")
@@ -33,7 +33,7 @@ struct UploadRecoveryTests {
         let option = UploadRecoveryOption(code: .uploadDuplicateBlob)
 
         #expect(option.action == .mergeExistingBlob)
-        #expect(option.buttonTitleKey == "ios.transfer.recovery.merge")
+        #expect(option.buttonTitleKey == "app.transfer.recovery.merge")
     }
 
     @Test("a 426 aborts with an upgrade and never negotiates")
@@ -41,7 +41,7 @@ struct UploadRecoveryTests {
         let option = UploadRecoveryOption(code: .protocolVersionUnsupported)
 
         #expect(option.action == .abortWithUpgrade)
-        #expect(option.buttonTitleKey == "ios.transfer.recovery.update_app")
+        #expect(option.buttonTitleKey == "app.transfer.recovery.update_app")
         #expect(option.requiresProtocolUpgrade)
         // Nothing the app can do on its own — offering a retry button would
         // loop forever against a server that will never accept this build.
@@ -53,7 +53,7 @@ struct UploadRecoveryTests {
         let option = UploadRecoveryOption(code: .uploadChecksumMismatch)
 
         #expect(option.action == .resendChunk)
-        #expect(option.buttonTitleKey == "ios.transfer.recovery.resend_chunk")
+        #expect(option.buttonTitleKey == "app.transfer.recovery.resend_chunk")
     }
 
     @Test("the message is looked up by the stable code, which is the catalog key")

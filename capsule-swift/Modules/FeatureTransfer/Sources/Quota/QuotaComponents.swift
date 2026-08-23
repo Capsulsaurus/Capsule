@@ -19,7 +19,7 @@ struct QuotaStackedBar: View {
             bar
             legend
             if breakdown.isEstimated {
-                Text("ios.quota.categories.estimated")
+                Text("app.quota.categories.estimated")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -72,7 +72,7 @@ struct QuotaStackedBar: View {
                 }
                 .accessibilityElement(children: .combine)
                 if segment.category == .trash {
-                    Text("ios.quota.category.trash.note")
+                    Text("app.quota.category.trash.note")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -124,7 +124,7 @@ struct QuotaStateBanner: View {
     private var deadline: some View {
         if let graceDeadline {
             Label(
-                LocalizedStringKey("ios.quota.grace.deadline"),
+                LocalizedStringKey("app.quota.grace.deadline"),
                 systemImage: "calendar.badge.exclamationmark"
             )
             .font(.footnote)
@@ -139,9 +139,9 @@ struct QuotaStateBanner: View {
     /// account and a broken one.
     private var permissionRows: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) {
-            permissionRow("ios.quota.permission.uploads", isAllowed: permissions.newUploads)
-            permissionRow("ios.quota.permission.metadata", isAllowed: permissions.metadataGrowth)
-            permissionRow("ios.quota.permission.deletes", isAllowed: permissions.reclaimingWrites)
+            permissionRow("app.quota.permission.uploads", isAllowed: permissions.newUploads)
+            permissionRow("app.quota.permission.metadata", isAllowed: permissions.metadataGrowth)
+            permissionRow("app.quota.permission.deletes", isAllowed: permissions.reclaimingWrites)
         }
     }
 

@@ -32,13 +32,13 @@ public struct ShareLinkComposerView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 640)
         .frame(maxWidth: .infinity)
-        .navigationTitle("ios.share.composer.title")
+        .navigationTitle("app.share.composer.title")
         .task { await model.load() }
         .onDisappear { model.reset() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("ios.share.composer.create") {
+                Button("app.share.composer.create") {
                     Task { await model.createLink() }
                 }
                 .disabled(!model.canSubmit)
@@ -63,7 +63,7 @@ public struct ShareLinkComposerView: View {
             .font(.footnote)
             .accessibilityElement(children: .combine)
         case .offline:
-            Label("ios.share.state.offline.description", systemImage: "wifi.slash")
+            Label("app.share.state.offline.description", systemImage: "wifi.slash")
                 .font(.footnote)
                 .accessibilityElement(children: .combine)
         case .loading, .ready, .empty:
@@ -73,23 +73,23 @@ public struct ShareLinkComposerView: View {
 
     private var optionsSection: some View {
         Section {
-            Toggle("ios.share.composer.expiry.toggle", isOn: $model.expiryEnabled)
+            Toggle("app.share.composer.expiry.toggle", isOn: $model.expiryEnabled)
             if model.expiryEnabled {
                 DatePicker(
-                    "ios.share.composer.expiry.date",
+                    "app.share.composer.expiry.date",
                     selection: $model.expiryDate,
                     displayedComponents: [.date, .hourAndMinute]
                 )
             }
-            Toggle("ios.share.composer.passphrase.toggle", isOn: $model.passphraseEnabled)
+            Toggle("app.share.composer.passphrase.toggle", isOn: $model.passphraseEnabled)
             if model.passphraseEnabled {
-                SecureField("ios.share.composer.passphrase.field", text: $model.passphrase)
+                SecureField("app.share.composer.passphrase.field", text: $model.passphrase)
                     .textContentType(.password)
             }
         } header: {
-            Text("ios.share.composer.options")
+            Text("app.share.composer.options")
         } footer: {
-            Text("ios.share.composer.passphrase.footer")
+            Text("app.share.composer.passphrase.footer")
         }
     }
 
@@ -99,23 +99,23 @@ public struct ShareLinkComposerView: View {
         Section {
             PrivacyStripView(policy: model.privacyPolicy, setRetention: nil)
         } header: {
-            Text("ios.share.privacy.header")
+            Text("app.share.privacy.header")
         } footer: {
-            Text("ios.share.privacy.footer")
+            Text("app.share.privacy.footer")
         }
     }
 
     /// What v1 links are and are not. Stated rather than implied, so nobody
     /// goes looking for a write switch or a per-recipient view log.
     private var scopeSection: some View {
-        Section("ios.share.scope.header") {
+        Section("app.share.scope.header") {
             if model.isAlbumWide {
-                Label("ios.share.scope.album_wide", systemImage: "exclamationmark.shield")
+                Label("app.share.scope.album_wide", systemImage: "exclamationmark.shield")
                     .accessibilityElement(children: .combine)
             }
-            ScopeNote(message: "ios.share.scope.read_only")
-            ScopeNote(message: "ios.share.scope.no_analytics")
-            ScopeNote(message: "ios.share.scope.revocation_delay")
+            ScopeNote(message: "app.share.scope.read_only")
+            ScopeNote(message: "app.share.scope.no_analytics")
+            ScopeNote(message: "app.share.scope.revocation_delay")
         }
     }
 
@@ -132,14 +132,14 @@ public struct ShareLinkComposerView: View {
                 .lineLimit(3)
                 .accessibilityHidden(true)
             SwiftUI.ShareLink(item: url) {
-                Label("ios.share.issued.share", systemImage: "square.and.arrow.up")
+                Label("app.share.issued.share", systemImage: "square.and.arrow.up")
             }
-            .accessibilityLabel("ios.share.issued.share")
-            Button("ios.share.issued.done") { model.reset() }
+            .accessibilityLabel("app.share.issued.share")
+            Button("app.share.issued.done") { model.reset() }
         } header: {
-            Text("ios.share.issued.header")
+            Text("app.share.issued.header")
         } footer: {
-            Text("ios.share.issued.footer")
+            Text("app.share.issued.footer")
         }
     }
 }

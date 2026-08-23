@@ -38,8 +38,8 @@ public struct RestoreFlowView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
                 CeremonyHeader(
-                    titleKey: "ios.restore.title",
-                    subtitleKey: "ios.restore.subtitle",
+                    titleKey: "app.restore.title",
+                    subtitleKey: "app.restore.subtitle",
                     symbolName: "arrow.clockwise.icloud"
                 )
                 banner
@@ -59,7 +59,7 @@ public struct RestoreFlowView: View {
             AuthErrorBanner(error: failure) { Task { await model.runDryRun() } }
         }
         if model.isWorking {
-            AuthLoadingView(labelKey: "ios.restore.working")
+            AuthLoadingView(labelKey: "app.restore.working")
         }
     }
 
@@ -68,17 +68,17 @@ public struct RestoreFlowView: View {
     private var previewStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.restore.preview.title",
-                descriptionKey: "ios.restore.preview.description",
+                titleKey: "app.restore.preview.title",
+                descriptionKey: "app.restore.preview.description",
                 symbolName: "doc.text.magnifyingglass"
             )
             if let preview = model.preview {
                 previewFacts(preview)
             }
-            Button("ios.restore.preview.run") { Task { await model.runPreview() } }
+            Button("app.restore.preview.run") { Task { await model.runPreview() } }
                 .capsuleGlassButtonStyle(prominent: model.preview == nil)
                 .disabled(model.isWorking)
-                .accessibilityLabel("ios.restore.preview.run")
+                .accessibilityLabel("app.restore.preview.run")
         }
         .authCard()
     }
@@ -86,20 +86,20 @@ public struct RestoreFlowView: View {
     private func previewFacts(_ preview: RestorePreview) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             AuthLabeledValue(
-                labelKey: "ios.restore.preview.assets",
+                labelKey: "app.restore.preview.assets",
                 value: "\(preview.assetCount)"
             )
             LabeledContent {
                 Text(preview.totalBytes, format: .byteCount(style: .file))
                     .foregroundStyle(.secondary)
             } label: {
-                Text("ios.restore.preview.size")
+                Text("app.restore.preview.size")
             }
             .accessibilityElement(children: .combine)
-            AuthLabeledDate(labelKey: "ios.restore.preview.exported", date: preview.exportedAt.date)
-            AuthLabeledValue(labelKey: "ios.restore.preview.exporter", value: preview.exporterModel)
+            AuthLabeledDate(labelKey: "app.restore.preview.exported", date: preview.exportedAt.date)
+            AuthLabeledValue(labelKey: "app.restore.preview.exporter", value: preview.exporterModel)
             AuthLabeledValue(
-                labelKey: "ios.restore.preview.artifact_version",
+                labelKey: "app.restore.preview.artifact_version",
                 value: "\(preview.artifactVersion)"
             )
         }
@@ -110,41 +110,41 @@ public struct RestoreFlowView: View {
     private var dryRunStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.restore.dry_run.title",
-                descriptionKey: "ios.restore.dry_run.description",
+                titleKey: "app.restore.dry_run.title",
+                descriptionKey: "app.restore.dry_run.description",
                 symbolName: "checklist"
             )
             if let diff = model.diff {
                 diffFacts(diff)
                 verificationFacts(diff)
             }
-            Button("ios.restore.dry_run.run") { Task { await model.runDryRun() } }
+            Button("app.restore.dry_run.run") { Task { await model.runDryRun() } }
                 .capsuleGlassButtonStyle(prominent: model.preview != nil && model.diff == nil)
                 .disabled(model.isWorking || model.preview == nil)
-                .accessibilityLabel("ios.restore.dry_run.run")
+                .accessibilityLabel("app.restore.dry_run.run")
         }
         .authCard()
     }
 
     private func diffFacts(_ diff: RestoreDiff) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            AuthLabeledValue(labelKey: "ios.restore.diff.added", value: "\(diff.addedCount)")
+            AuthLabeledValue(labelKey: "app.restore.diff.added", value: "\(diff.addedCount)")
             AuthLabeledValue(
-                labelKey: "ios.restore.diff.already_present",
+                labelKey: "app.restore.diff.already_present",
                 value: "\(diff.alreadyPresentCount)"
             )
             AuthLabeledValue(
-                labelKey: "ios.restore.diff.conflicting",
+                labelKey: "app.restore.diff.conflicting",
                 value: "\(diff.conflictingCount)"
             )
             AuthLabeledValue(
-                labelKey: "ios.restore.diff.superseded",
+                labelKey: "app.restore.diff.superseded",
                 value: "\(diff.supersededByLocalCount)"
             )
             // Conflicts are quarantined for explicit merge, never applied: a
             // six-month-old backup must not resurrect an asset the user later
             // deleted.
-            Text("ios.restore.diff.reconciliation_note")
+            Text("app.restore.diff.reconciliation_note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -156,20 +156,20 @@ public struct RestoreFlowView: View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             StatusChip(
                 titleKey: diff.amkLedgerIsComplete
-                    ? "ios.restore.verify.ledger_complete"
-                    : "ios.restore.verify.ledger_incomplete",
+                    ? "app.restore.verify.ledger_complete"
+                    : "app.restore.verify.ledger_incomplete",
                 symbolName: diff.amkLedgerIsComplete ? "checkmark.seal.fill" : "xmark.octagon.fill",
                 tint: diff.amkLedgerIsComplete ? .green : .red
             )
             StatusChip(
                 titleKey: diff.signatureChainIsIntact
-                    ? "ios.restore.verify.signatures_intact"
-                    : "ios.restore.verify.signatures_broken",
+                    ? "app.restore.verify.signatures_intact"
+                    : "app.restore.verify.signatures_broken",
                 symbolName: diff.signatureChainIsIntact ? "checkmark.seal.fill" : "xmark.octagon.fill",
                 tint: diff.signatureChainIsIntact ? .green : .red
             )
             if !diff.isCommittable {
-                Text("ios.restore.verify.refused")
+                Text("app.restore.verify.refused")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -182,22 +182,22 @@ public struct RestoreFlowView: View {
     private var commitStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.restore.commit.title",
-                descriptionKey: "ios.restore.commit.description",
+                titleKey: "app.restore.commit.title",
+                descriptionKey: "app.restore.commit.description",
                 symbolName: "square.and.arrow.down.on.square"
             )
             if model.committedDiff != nil {
                 StatusChip(
-                    titleKey: "ios.restore.commit.done",
+                    titleKey: "app.restore.commit.done",
                     symbolName: "checkmark.seal.fill",
                     tint: .green
                 )
             }
-            Button("ios.restore.commit.open", role: .destructive) { isConfirmingCommit = true }
+            Button("app.restore.commit.open", role: .destructive) { isConfirmingCommit = true }
                 .buttonStyle(.bordered)
                 .disabled(!model.hasCommittableDiff || model.isWorking)
-                .accessibilityLabel("ios.restore.commit.open")
-            Text("ios.restore.commit.note")
+                .accessibilityLabel("app.restore.commit.open")
+            Text("app.restore.commit.note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -207,10 +207,10 @@ public struct RestoreFlowView: View {
 
     private var commitSheet: some View {
         AuthTypedPhraseSheet(
-            titleKey: "ios.restore.commit.confirm.title",
-            messageKey: "ios.restore.commit.confirm.message",
-            fieldLabelKey: "ios.restore.commit.confirm.field",
-            confirmKey: "ios.restore.commit.confirm.action",
+            titleKey: "app.restore.commit.confirm.title",
+            messageKey: "app.restore.commit.confirm.message",
+            fieldLabelKey: "app.restore.commit.confirm.field",
+            confirmKey: "app.restore.commit.confirm.action",
             requiredPhrase: model.requiredPhrase,
             typedPhrase: $model.confirmationInput,
             isSatisfied: model.confirmationMatches,
@@ -232,7 +232,7 @@ public struct RestoreFlowView: View {
                 reconstruct: { Task { restoredAccount = await model.restoreFromSelectedShares() } }
             )
             if let account = restoredAccount {
-                AuthLabeledValue(labelKey: "ios.restore.shamir.restored", value: account.handle)
+                AuthLabeledValue(labelKey: "app.restore.shamir.restored", value: account.handle)
             }
         }
     }

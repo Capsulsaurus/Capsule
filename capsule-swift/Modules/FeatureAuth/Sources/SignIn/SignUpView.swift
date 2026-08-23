@@ -25,8 +25,8 @@ public struct SignUpView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.auth.signup.title",
-                    subtitleKey: "ios.auth.signup.subtitle",
+                    titleKey: "app.auth.signup.title",
+                    subtitleKey: "app.auth.signup.subtitle",
                     symbolName: "person.crop.circle.badge.plus"
                 )
                 fields
@@ -36,16 +36,16 @@ public struct SignUpView: View {
                     }
                 }
                 if model.isSubmitting {
-                    AuthLoadingView(labelKey: "ios.auth.signup.submitting")
+                    AuthLoadingView(labelKey: "app.auth.signup.submitting")
                 }
-                Button("ios.auth.signup.submit") {
+                Button("app.auth.signup.submit") {
                     Task { await model.createAccount() }
                 }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(!model.canSubmit)
-                .accessibilityLabel("ios.auth.signup.submit")
+                .accessibilityLabel("app.auth.signup.submit")
 
-                Text("ios.auth.signup.scope_note")
+                Text("app.auth.signup.scope_note")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -55,38 +55,38 @@ public struct SignUpView: View {
 
     private var fields: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
-            LabeledField(labelKey: "ios.auth.signup.handle.label") {
-                TextField("ios.auth.signup.handle.prompt", text: $model.handleInput)
+            LabeledField(labelKey: "app.auth.signup.handle.label") {
+                TextField("app.auth.signup.handle.prompt", text: $model.handleInput)
                     .textContentType(.username)
                     .autocorrectionDisabled()
-                    .accessibilityLabel("ios.auth.signup.handle.label")
+                    .accessibilityLabel("app.auth.signup.handle.label")
             }
             if model.handleIsTaken {
                 StatusChip(
-                    titleKey: "ios.auth.signup.handle.taken",
+                    titleKey: "app.auth.signup.handle.taken",
                     symbolName: "exclamationmark.circle.fill",
                     tint: .orange
                 )
             }
             LabeledField(
-                labelKey: "ios.auth.signup.password.label",
-                footerKey: "ios.auth.signup.password.requirement"
+                labelKey: "app.auth.signup.password.label",
+                footerKey: "app.auth.signup.password.requirement"
             ) {
-                SecureField("ios.auth.signup.password.label", text: $model.passwordInput)
+                SecureField("app.auth.signup.password.label", text: $model.passwordInput)
                     .textContentType(.newPassword)
-                    .accessibilityLabel("ios.auth.signup.password.label")
+                    .accessibilityLabel("app.auth.signup.password.label")
             }
-            LabeledField(labelKey: "ios.auth.signup.password.confirm") {
+            LabeledField(labelKey: "app.auth.signup.password.confirm") {
                 SecureField(
-                    "ios.auth.signup.password.confirm",
+                    "app.auth.signup.password.confirm",
                     text: $model.passwordConfirmationInput
                 )
                 .textContentType(.newPassword)
-                .accessibilityLabel("ios.auth.signup.password.confirm")
+                .accessibilityLabel("app.auth.signup.password.confirm")
             }
             if !model.passwordConfirmationInput.isEmpty, !model.passwordsMatch {
                 StatusChip(
-                    titleKey: "ios.auth.signup.password.mismatch",
+                    titleKey: "app.auth.signup.password.mismatch",
                     symbolName: "exclamationmark.circle.fill",
                     tint: .orange
                 )

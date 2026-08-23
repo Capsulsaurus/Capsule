@@ -30,23 +30,23 @@ public struct DropDetailView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 640)
         .frame(maxWidth: .infinity)
-        .navigationTitle("ios.drops.detail.title")
+        .navigationTitle("app.drops.detail.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         .confirmationDialog(
-            "ios.drops.detail.discard.confirm_title",
+            "app.drops.detail.discard.confirm_title",
             isPresented: $model.isConfirmingDiscard,
             titleVisibility: .visible
         ) {
-            Button("ios.drops.detail.discard.confirm", role: .destructive) {
+            Button("app.drops.detail.discard.confirm", role: .destructive) {
                 Task {
                     await model.discard()
                     onFinish()
                 }
             }
-            Button("ios.common.cancel", role: .cancel) { model.cancelDiscard() }
+            Button("app.common.cancel", role: .cancel) { model.cancelDiscard() }
         } message: {
-            Text("ios.drops.detail.discard.confirm_message")
+            Text("app.drops.detail.discard.confirm_message")
         }
     }
 
@@ -64,18 +64,18 @@ public struct DropDetailView: View {
             case .pending, .decoding:
                 ProgressView()
                     .frame(maxWidth: .infinity)
-                    .accessibilityLabel("ios.drops.detail.preview.decoding")
+                    .accessibilityLabel("app.drops.detail.preview.decoding")
             case .unavailable:
                 ContentUnavailableView(
-                    "ios.drops.detail.preview.unavailable.title",
+                    "app.drops.detail.preview.unavailable.title",
                     systemImage: "eye.slash",
-                    description: Text("ios.drops.detail.preview.unavailable.description")
+                    description: Text("app.drops.detail.preview.unavailable.description")
                 )
             }
         } header: {
-            Text("ios.drops.detail.preview.header")
+            Text("app.drops.detail.preview.header")
         } footer: {
-            Text("ios.drops.detail.preview.footer")
+            Text("app.drops.detail.preview.footer")
         }
     }
 
@@ -91,36 +91,36 @@ public struct DropDetailView: View {
                 Text(verbatim: model.drop.descriptor.contentType.rawValue)
                     .monospaced()
             } label: {
-                Text("ios.drops.detail.claim.content_type")
+                Text("app.drops.detail.claim.content_type")
             }
             LabeledContent {
                 Text(Int64(model.drop.descriptor.plaintextSize), format: .byteCount(style: .file))
             } label: {
-                Text("ios.drops.detail.claim.size")
+                Text("app.drops.detail.claim.size")
             }
             LabeledContent {
                 Text(model.drop.receivedAt.date, format: .dateTime.year().month().day().hour().minute())
             } label: {
-                Text("ios.drops.detail.received")
+                Text("app.drops.detail.received")
             }
         } header: {
-            Text("ios.drops.detail.claims.header")
+            Text("app.drops.detail.claims.header")
         } footer: {
-            Text("ios.drops.detail.claims.footer")
+            Text("app.drops.detail.claims.footer")
         }
     }
 
     private var destinationSection: some View {
         Section {
-            Picker("ios.drops.detail.destination", selection: $model.destination) {
+            Picker("app.drops.detail.destination", selection: $model.destination) {
                 ForEach(model.albums) { album in
                     albumLabel(album).tag(AlbumID?.some(album.id))
                 }
             }
         } header: {
-            Text("ios.drops.detail.destination.header")
+            Text("app.drops.detail.destination.header")
         } footer: {
-            Text("ios.drops.detail.destination.footer")
+            Text("app.drops.detail.destination.footer")
         }
     }
 
@@ -129,20 +129,20 @@ public struct DropDetailView: View {
         if let name = album.name {
             Text(name)
         } else {
-            Text("ios.drops.compose.default_album")
+            Text("app.drops.compose.default_album")
         }
     }
 
     private var actionsSection: some View {
         Section {
-            Button("ios.drops.detail.adopt") {
+            Button("app.drops.detail.adopt") {
                 Task {
                     await model.adopt()
                     onFinish()
                 }
             }
             .disabled(!model.canAdopt)
-            Button("ios.drops.detail.discard", role: .destructive) {
+            Button("app.drops.detail.discard", role: .destructive) {
                 model.requestDiscard()
             }
             .disabled(model.isWorking)
@@ -154,10 +154,10 @@ public struct DropDetailView: View {
         Section {
             switch model.outcome {
             case .adopted:
-                Label("ios.drops.detail.outcome.adopted", systemImage: "checkmark.circle")
+                Label("app.drops.detail.outcome.adopted", systemImage: "checkmark.circle")
                     .accessibilityElement(children: .combine)
             case .discarded:
-                Label("ios.drops.detail.outcome.discarded", systemImage: "trash")
+                Label("app.drops.detail.outcome.discarded", systemImage: "trash")
                     .accessibilityElement(children: .combine)
             case nil:
                 EmptyView()

@@ -55,7 +55,7 @@ public struct FannedAssetStack: View {
         }
         // The fan is one preview, not three photos to sweep through.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("ios.places.preview.accessibility \(cardCount)"))
+        .accessibilityLabel(Text("app.places.preview.accessibility \(cardCount)"))
     }
 
     @ViewBuilder

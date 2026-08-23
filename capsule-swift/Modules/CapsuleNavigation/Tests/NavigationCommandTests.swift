@@ -22,15 +22,15 @@ struct NavigationCommandTests {
     @Test("every title is a catalog key, never display text")
     func titlesAreCatalogKeys() {
         for command in NavigationCommand.all {
-            #expect(command.titleKey.hasPrefix("ios.menu."), "\(command.titleKey)")
+            #expect(command.titleKey.hasPrefix("apple.menu."), "\(command.titleKey)")
             #expect(!command.titleKey.contains(" "), "\(command.titleKey)")
         }
     }
 
     @Test("the two commands that already exist keep their catalog keys")
     func existingKeysAreNotRetranslated() {
-        #expect(NavigationCommand.command(for: .importMedia)?.titleKey == "ios.menu.import")
-        #expect(NavigationCommand.command(for: .cullingReview)?.titleKey == "ios.menu.culling_review")
+        #expect(NavigationCommand.command(for: .importMedia)?.titleKey == "apple.menu.import")
+        #expect(NavigationCommand.command(for: .cullingReview)?.titleKey == "apple.menu.culling_review")
     }
 
     @Test("every zoom level is reachable, on the shortcut the platform expects")

@@ -37,10 +37,10 @@ public struct ImportSourcePickerView: View {
 
     public var body: some View {
         ImportScreen(
-            titleKey: "ios.import.source.title",
+            titleKey: "app.import.source.title",
             phase: model.phase,
-            emptyTitleKey: "ios.import.source.empty.title",
-            emptyDescriptionKey: "ios.import.source.empty.description",
+            emptyTitleKey: "app.import.source.empty.title",
+            emptyDescriptionKey: "app.import.source.empty.description",
             emptySymbol: "square.and.arrow.down",
             retry: { await model.load() },
             content: { sourceList }
@@ -61,9 +61,9 @@ public struct ImportSourcePickerView: View {
                     sourceButton(row)
                 }
             } header: {
-                Text("ios.import.source.header")
+                Text("app.import.source.header")
             } footer: {
-                Text("ios.import.source.footer")
+                Text("app.import.source.footer")
             }
         }
     }
@@ -151,10 +151,10 @@ private struct ImportSourceRowLabel: View {
     @ViewBuilder
     private var status: some View {
         if row.scansImmediately {
-            ImportStatusLabel(titleKey: "ios.import.source.ready", tone: .positive)
+            ImportStatusLabel(titleKey: "app.import.source.ready", tone: .positive)
                 .font(.caption)
         } else {
-            ImportStatusLabel(titleKey: "ios.import.source.choose", tone: .neutral, symbol: "hand.tap")
+            ImportStatusLabel(titleKey: "app.import.source.choose", tone: .neutral, symbol: "hand.tap")
                 .font(.caption)
         }
     }

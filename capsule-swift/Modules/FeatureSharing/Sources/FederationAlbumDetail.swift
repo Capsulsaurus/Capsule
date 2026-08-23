@@ -20,7 +20,7 @@ struct FederationAlbumDetail: View {
         .formStyle(.grouped)
         .frame(maxWidth: 720)
         .frame(maxWidth: .infinity)
-        .navigationTitle("ios.federation.detail.title")
+        .navigationTitle("app.federation.detail.title")
     }
 
     // MARK: Sections
@@ -34,17 +34,17 @@ struct FederationAlbumDetail: View {
             LabeledContent {
                 Text(model.renderedAssetCount(in: album), format: .number)
             } label: {
-                Text("ios.federation.album.rendered_count")
+                Text("app.federation.album.rendered_count")
             }
             if model.hasUnreachableOwner(album) {
-                Label("ios.federation.state.unreachable_owner", systemImage: "externaldrive.badge.xmark")
+                Label("app.federation.state.unreachable_owner", systemImage: "externaldrive.badge.xmark")
                     .foregroundStyle(.orange)
                     .accessibilityElement(children: .combine)
             }
         } footer: {
             Text(model.isDegraded(album)
-                ? "ios.federation.summary.partial_footer"
-                : "ios.federation.summary.complete_footer")
+                ? "app.federation.summary.partial_footer"
+                : "app.federation.summary.complete_footer")
         }
     }
 
@@ -52,9 +52,9 @@ struct FederationAlbumDetail: View {
         Section {
             ForEach(album.constituents) { ConstituentRow(constituent: $0) }
         } header: {
-            Text("ios.federation.section.constituents")
+            Text("app.federation.section.constituents")
         } footer: {
-            Text("ios.federation.section.constituents_footer")
+            Text("app.federation.section.constituents_footer")
         }
     }
 
@@ -64,7 +64,7 @@ struct FederationAlbumDetail: View {
             album.constituents.contains { $0.peerID == peer.id }
         }
         if !relevant.isEmpty {
-            Section("ios.federation.section.peers") {
+            Section("app.federation.section.peers") {
                 ForEach(relevant) { peer in
                     FederationPeerRow(
                         peer: peer,
@@ -80,10 +80,10 @@ struct FederationAlbumDetail: View {
     /// removes their photographs from other people's copies, and that there is
     /// some way to remove somebody else's.
     private var scopeSection: some View {
-        Section("ios.federation.section.how") {
-            ScopeNote(message: "ios.federation.note.no_kick")
-            ScopeNote(message: "ios.federation.note.never_removed")
-            ScopeNote(message: "ios.federation.note.auto_recovery")
+        Section("app.federation.section.how") {
+            ScopeNote(message: "app.federation.note.no_kick")
+            ScopeNote(message: "app.federation.note.never_removed")
+            ScopeNote(message: "app.federation.note.auto_recovery")
         }
     }
 }
@@ -107,7 +107,7 @@ struct ConstituentRow: View {
             LabeledContent {
                 Text(constituent.assetCount, format: .number)
             } label: {
-                Text("ios.federation.constituent.count")
+                Text("app.federation.constituent.count")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -120,21 +120,21 @@ struct ConstituentRow: View {
     private var statusLabel: some View {
         switch constituent.availability {
         case .available:
-            StatusBadge(title: "ios.federation.origin.available", symbol: "checkmark.icloud", tint: .green)
+            StatusBadge(title: "app.federation.origin.available", symbol: "checkmark.icloud", tint: .green)
         case .temporarilyUnreachable:
             StatusBadge(
-                title: "ios.federation.origin.unavailable",
+                title: "app.federation.origin.unavailable",
                 symbol: "exclamationmark.icloud",
                 tint: .orange
             )
         case .ownedByUnreachableServer:
             StatusBadge(
-                title: "ios.federation.origin.unreachable_owner",
+                title: "app.federation.origin.unreachable_owner",
                 symbol: "externaldrive.badge.xmark",
                 tint: .orange
             )
         case .blocked:
-            StatusBadge(title: "ios.federation.origin.blocked", symbol: "hand.raised", tint: .red)
+            StatusBadge(title: "app.federation.origin.blocked", symbol: "hand.raised", tint: .red)
         }
     }
 }
@@ -160,7 +160,7 @@ struct FederationPeerRow: View {
                 LabeledContent {
                     Text(lastPull.date, format: .relative(presentation: .named))
                 } label: {
-                    Text("ios.federation.peer.last_pull")
+                    Text("app.federation.peer.last_pull")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -177,17 +177,17 @@ struct FederationPeerRow: View {
     private var availabilityBadge: some View {
         switch availability {
         case .reachable:
-            StatusBadge(title: "ios.federation.peer.reachable", symbol: "checkmark.icloud", tint: .green)
+            StatusBadge(title: "app.federation.peer.reachable", symbol: "checkmark.icloud", tint: .green)
         case .transientOutage:
-            StatusBadge(title: "ios.federation.peer.transient", symbol: "exclamationmark.icloud", tint: .orange)
+            StatusBadge(title: "app.federation.peer.transient", symbol: "exclamationmark.icloud", tint: .orange)
         case .backingOff:
-            StatusBadge(title: "ios.federation.peer.backing_off", symbol: "clock.arrow.circlepath", tint: .orange)
+            StatusBadge(title: "app.federation.peer.backing_off", symbol: "clock.arrow.circlepath", tint: .orange)
         case .unreachableServer:
-            StatusBadge(title: "ios.federation.peer.unreachable", symbol: "externaldrive.badge.xmark", tint: .orange)
+            StatusBadge(title: "app.federation.peer.unreachable", symbol: "externaldrive.badge.xmark", tint: .orange)
         case .blocked:
-            StatusBadge(title: "ios.federation.peer.blocked", symbol: "hand.raised", tint: .red)
+            StatusBadge(title: "app.federation.peer.blocked", symbol: "hand.raised", tint: .red)
         case .unknown:
-            StatusBadge(title: "ios.federation.peer.unknown", symbol: "questionmark.circle", tint: .secondary)
+            StatusBadge(title: "app.federation.peer.unknown", symbol: "questionmark.circle", tint: .secondary)
         }
     }
 }
@@ -203,11 +203,11 @@ struct CompartmentSummary: View {
             LabeledContent {
                 Text(Int64(compartment.cachedBytes), format: .byteCount(style: .file))
             } label: {
-                Text("ios.federation.compartment.cached")
+                Text("app.federation.compartment.cached")
             }
             if compartment.isCacheBudgetExhausted {
                 StatusBadge(
-                    title: "ios.federation.compartment.exhausted",
+                    title: "app.federation.compartment.exhausted",
                     symbol: "externaldrive.badge.exclamationmark",
                     tint: .orange
                 )

@@ -32,8 +32,8 @@ struct SafetyCodeCheckView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
             AuthSectionHeader(
-                titleKey: "ios.crossdevice.safety.title",
-                descriptionKey: "ios.crossdevice.safety.description",
+                titleKey: "app.crossdevice.safety.title",
+                descriptionKey: "app.crossdevice.safety.description",
                 symbolName: "checkmark.shield.fill"
             )
             code
@@ -45,7 +45,7 @@ struct SafetyCodeCheckView: View {
 
     private var code: some View {
         AuthCodeValue(
-            labelKey: "ios.crossdevice.safety.code",
+            labelKey: "app.crossdevice.safety.code",
             code: safetyCodeDisplay,
             font: .title2.monospaced().weight(.semibold)
         )
@@ -55,11 +55,11 @@ struct SafetyCodeCheckView: View {
     private var devices: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             deviceCard(
-                titleKey: "ios.crossdevice.safety.this_device",
+                titleKey: "app.crossdevice.safety.this_device",
                 identity: safetyCheck.localDevice
             )
             deviceCard(
-                titleKey: "ios.crossdevice.safety.new_device",
+                titleKey: "app.crossdevice.safety.new_device",
                 identity: safetyCheck.remoteDevice
             )
         }
@@ -76,7 +76,7 @@ struct SafetyCodeCheckView: View {
                 Image(systemName: identity.platform.symbolName)
             }
             AuthCodeValue(
-                labelKey: "ios.crossdevice.safety.fingerprint",
+                labelKey: "app.crossdevice.safety.fingerprint",
                 code: ChunkedCodeFormatter.chunked(identity.keyFingerprint),
                 font: .callout.monospaced()
             )
@@ -86,22 +86,22 @@ struct SafetyCodeCheckView: View {
 
     /// One acknowledgement covering both halves, because they fail together.
     private var acknowledgement: some View {
-        Toggle("ios.crossdevice.safety.acknowledge", isOn: $hasAcknowledged)
-            .accessibilityLabel("ios.crossdevice.safety.acknowledge")
+        Toggle("app.crossdevice.safety.acknowledge", isOn: $hasAcknowledged)
+            .accessibilityLabel("app.crossdevice.safety.acknowledge")
     }
 
     private var actions: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Button("ios.crossdevice.safety.confirm", action: confirm)
+            Button("app.crossdevice.safety.confirm", action: confirm)
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(!canConfirm)
-                .accessibilityLabel("ios.crossdevice.safety.confirm")
+                .accessibilityLabel("app.crossdevice.safety.confirm")
 
-            Button("ios.crossdevice.safety.mismatch", role: .destructive, action: abort)
+            Button("app.crossdevice.safety.mismatch", role: .destructive, action: abort)
                 .buttonStyle(.bordered)
-                .accessibilityLabel("ios.crossdevice.safety.mismatch")
+                .accessibilityLabel("app.crossdevice.safety.mismatch")
 
-            Text("ios.crossdevice.safety.mismatch_note")
+            Text("app.crossdevice.safety.mismatch_note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

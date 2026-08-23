@@ -12,12 +12,12 @@ import Foundation
 public enum ConnectionClassPresentation {
     public static func titleKey(_ connection: ConnectionClass) -> String {
         switch connection {
-        case .unmetered: "ios.settings.connection.unmetered"
-        case .metered: "ios.settings.connection.metered"
-        case .constrained: "ios.settings.connection.constrained"
-        case .adverse: "ios.settings.connection.adverse"
-        case .offline: "ios.settings.connection.offline"
-        case .unknown: "ios.settings.connection.unknown"
+        case .unmetered: "app.settings.connection.unmetered"
+        case .metered: "app.settings.connection.metered"
+        case .constrained: "app.settings.connection.constrained"
+        case .adverse: "app.settings.connection.adverse"
+        case .offline: "app.settings.connection.offline"
+        case .unknown: "app.settings.connection.unknown"
         }
     }
 }

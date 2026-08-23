@@ -98,9 +98,9 @@ public actor PreviewEnrollmentCeremony: FirstDeviceEnrollmentPort {
         case .deviceKeys where behaviour.hardwareKeysFail && !allowingSoftwareKeys:
             .failed(.hardwareKeyUnavailable)
         case .publishDirectory where behaviour.directoryUploadDefers:
-            .deferred(reasonKey: "ios.enrollment.deferred.directory")
+            .deferred(reasonKey: "app.enrollment.deferred.directory")
         case .defaultAlbum where behaviour.defaultAlbumDefers:
-            .deferred(reasonKey: "ios.enrollment.deferred.default_album")
+            .deferred(reasonKey: "app.enrollment.deferred.default_album")
         default:
             .done
         }

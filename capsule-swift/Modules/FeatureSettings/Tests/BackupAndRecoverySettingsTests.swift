@@ -17,8 +17,8 @@ struct RestoreReconciliationRuleTests {
         #expect(Set(rules.map(\.titleKey)).count == 4)
         #expect(Set(rules.map(\.detailKey)).count == 4)
         for rule in rules {
-            #expect(rule.titleKey == "ios.settings.recovery.restore.rule.\(rule.rawValue)")
-            #expect(rule.detailKey == "ios.settings.recovery.restore.outcome.\(rule.rawValue)")
+            #expect(rule.titleKey == "app.settings.recovery.restore.rule.\(rule.rawValue)")
+            #expect(rule.detailKey == "app.settings.recovery.restore.outcome.\(rule.rawValue)")
             #expect(!rule.titleKey.contains(" "))
         }
     }

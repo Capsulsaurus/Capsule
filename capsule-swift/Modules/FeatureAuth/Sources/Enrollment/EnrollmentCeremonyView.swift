@@ -32,8 +32,8 @@ public struct EnrollmentCeremonyView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.enrollment.title",
-                    subtitleKey: "ios.enrollment.subtitle",
+                    titleKey: "app.enrollment.title",
+                    subtitleKey: "app.enrollment.subtitle",
                     symbolName: "key.horizontal.fill"
                 )
                 custody
@@ -43,16 +43,16 @@ public struct EnrollmentCeremonyView: View {
         .interactiveDismissDisabled()
         .task { await start() }
         .confirmationDialog(
-            "ios.enrollment.cancel.confirm.title",
+            "app.enrollment.cancel.confirm.title",
             isPresented: $isConfirmingCancel,
             titleVisibility: .visible
         ) {
-            Button("ios.enrollment.cancel.confirm.action", role: .destructive) {
+            Button("app.enrollment.cancel.confirm.action", role: .destructive) {
                 Task { await model.cancel() }
             }
-            Button("ios.common.cancel", role: .cancel) {}
+            Button("app.common.cancel", role: .cancel) {}
         } message: {
-            Text("ios.enrollment.cancel.confirm.message")
+            Text("app.enrollment.cancel.confirm.message")
         }
     }
 
@@ -85,18 +85,18 @@ public struct EnrollmentCeremonyView: View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             StatusChip(
                 titleKey: model.usesSecureElement
-                    ? "ios.enrollment.custody.secure_element"
-                    : "ios.enrollment.custody.software",
+                    ? "app.enrollment.custody.secure_element"
+                    : "app.enrollment.custody.software",
                 symbolName: model.usesSecureElement ? "lock.shield.fill" : "lock.slash.fill",
                 tint: model.usesSecureElement ? .green : .orange
             )
-            Text("ios.enrollment.custody.footnote")
+            Text("app.enrollment.custody.footnote")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if model.acceptedSoftwareKeyDeviation {
                 StatusChip(
-                    titleKey: "ios.enrollment.deviation.accepted",
+                    titleKey: "app.enrollment.deviation.accepted",
                     symbolName: "exclamationmark.triangle.fill",
                     tint: .orange
                 )
@@ -107,7 +107,7 @@ public struct EnrollmentCeremonyView: View {
 
     private var rail: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Text("ios.enrollment.rail.header")
+            Text("app.enrollment.rail.header")
                 .font(.headline)
             ForEach(model.rows) { row in
                 EnrollmentStageRailRow(row: row)
@@ -119,9 +119,9 @@ public struct EnrollmentCeremonyView: View {
     private var deferredNote: some View {
         if !model.deferredStages.isEmpty {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
-                Text("ios.enrollment.deferred.header")
+                Text("app.enrollment.deferred.header")
                     .font(.headline)
-                Text("ios.enrollment.deferred.description")
+                Text("app.enrollment.deferred.description")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -146,7 +146,7 @@ public struct EnrollmentCeremonyView: View {
             AuthErrorBanner(error: error) { Task { await model.retry() } }
         case .cancelled:
             StatusChip(
-                titleKey: "ios.enrollment.failure.cancelled",
+                titleKey: "app.enrollment.failure.cancelled",
                 symbolName: "hand.raised.fill",
                 tint: .orange
             )
@@ -163,25 +163,25 @@ public struct EnrollmentCeremonyView: View {
     private var hardwareKeyRecovery: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.enrollment.failure.hardware.title",
-                descriptionKey: "ios.enrollment.failure.hardware.description",
+                titleKey: "app.enrollment.failure.hardware.title",
+                descriptionKey: "app.enrollment.failure.hardware.description",
                 symbolName: "exclamationmark.shield.fill"
             )
-            Button("ios.enrollment.failure.hardware.retry") {
+            Button("app.enrollment.failure.hardware.retry") {
                 Task { await model.retry() }
             }
             .capsuleGlassButtonStyle(prominent: true)
             .disabled(model.isRunning)
-            .accessibilityLabel("ios.enrollment.failure.hardware.retry")
+            .accessibilityLabel("app.enrollment.failure.hardware.retry")
 
-            Button("ios.enrollment.failure.hardware.software_keys") {
+            Button("app.enrollment.failure.hardware.software_keys") {
                 Task { await model.continueWithSoftwareKeys() }
             }
             .buttonStyle(.bordered)
             .disabled(model.isRunning)
-            .accessibilityLabel("ios.enrollment.failure.hardware.software_keys")
+            .accessibilityLabel("app.enrollment.failure.hardware.software_keys")
 
-            Text("ios.enrollment.failure.hardware.deviation_note")
+            Text("app.enrollment.failure.hardware.deviation_note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -192,30 +192,30 @@ public struct EnrollmentCeremonyView: View {
     @ViewBuilder
     private var actions: some View {
         if model.isRunning {
-            AuthLoadingView(labelKey: "ios.enrollment.running")
+            AuthLoadingView(labelKey: "app.enrollment.running")
         }
         if model.isComplete {
             completion
         } else if !model.isRunning, model.failure == nil {
-            Button("ios.enrollment.start") { Task { await model.start() } }
+            Button("app.enrollment.start") { Task { await model.start() } }
                 .capsuleGlassButtonStyle(prominent: true)
-                .accessibilityLabel("ios.enrollment.start")
+                .accessibilityLabel("app.enrollment.start")
         }
-        Button("ios.enrollment.cancel") { isConfirmingCancel = true }
+        Button("app.enrollment.cancel") { isConfirmingCancel = true }
             .buttonStyle(.borderless)
-            .accessibilityLabel("ios.enrollment.cancel")
+            .accessibilityLabel("app.enrollment.cancel")
     }
 
     private var completion: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.enrollment.complete.title",
-                descriptionKey: "ios.enrollment.complete.description",
+                titleKey: "app.enrollment.complete.title",
+                descriptionKey: "app.enrollment.complete.description",
                 symbolName: "checkmark.seal.fill"
             )
-            Button("ios.enrollment.complete.action", action: onComplete)
+            Button("app.enrollment.complete.action", action: onComplete)
                 .capsuleGlassButtonStyle(prominent: true)
-                .accessibilityLabel("ios.enrollment.complete.action")
+                .accessibilityLabel("app.enrollment.complete.action")
         }
         .authCard()
     }

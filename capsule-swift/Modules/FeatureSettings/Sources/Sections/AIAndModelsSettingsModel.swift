@@ -27,11 +27,11 @@ public enum AISlotReport: Sendable, Equatable, Hashable {
     /// The catalog key for the status word.
     public var statusKey: String {
         switch self {
-        case .ready: "ios.settings.ai.state.ready"
-        case .notDownloaded: "ios.settings.ai.state.not_downloaded"
-        case .downloading: "ios.settings.ai.state.downloading"
-        case .staleExcluded: "ios.settings.ai.state.stale_excluded"
-        case .unsupportedOnThisDevice: "ios.settings.ai.state.unsupported"
+        case .ready: "app.settings.ai.state.ready"
+        case .notDownloaded: "app.settings.ai.state.not_downloaded"
+        case .downloading: "app.settings.ai.state.downloading"
+        case .staleExcluded: "app.settings.ai.state.stale_excluded"
+        case .unsupportedOnThisDevice: "app.settings.ai.state.unsupported"
         }
     }
 

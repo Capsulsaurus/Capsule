@@ -23,7 +23,7 @@ struct RouteScaffold: View {
         ContentUnavailableView {
             Label(LocalizedStringKey(titleKey), systemImage: systemImage)
         } description: {
-            Text("ios.scaffold.body")
+            Text("app.scaffold.body")
         }
         .navigationTitle(LocalizedStringKey(titleKey))
         // The UI-test sweep asserts a section presents its real screen rather
@@ -38,6 +38,6 @@ struct RouteScaffold: View {
 
 #Preview("Scaffold") {
     NavigationStack {
-        RouteScaffold(titleKey: "ios.sidebar.quarantine", systemImage: "exclamationmark.shield")
+        RouteScaffold(titleKey: "app.sidebar.quarantine", systemImage: "exclamationmark.shield")
     }
 }

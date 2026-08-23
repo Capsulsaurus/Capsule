@@ -58,9 +58,9 @@ public struct ImportScreen<Content: View>: View {
     }
 
     private var loadingBody: some View {
-        ProgressView(LocalizedStringKey("ios.import.state.loading"))
+        ProgressView(LocalizedStringKey("app.import.state.loading"))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .accessibilityLabel(Text("ios.import.state.loading"))
+            .accessibilityLabel(Text("app.import.state.loading"))
     }
 
     private var emptyBody: some View {
@@ -75,9 +75,9 @@ public struct ImportScreen<Content: View>: View {
 
     private var offlineBody: some View {
         ContentUnavailableView {
-            Label("ios.import.state.offline.title", systemImage: "wifi.slash")
+            Label("app.import.state.offline.title", systemImage: "wifi.slash")
         } description: {
-            Text("ios.import.state.offline.description")
+            Text("app.import.state.offline.description")
         } actions: {
             retryButton
         }
@@ -89,7 +89,7 @@ public struct ImportScreen<Content: View>: View {
     /// helpful extra.
     private func failureBody(_ code: ErrorCode) -> some View {
         ContentUnavailableView {
-            Label("ios.import.state.error.title", systemImage: "exclamationmark.triangle")
+            Label("app.import.state.error.title", systemImage: "exclamationmark.triangle")
         } description: {
             Text(LocalizedStringKey(code.rawValue))
         } actions: {
@@ -98,7 +98,7 @@ public struct ImportScreen<Content: View>: View {
     }
 
     private var retryButton: some View {
-        Button("ios.import.state.retry") {
+        Button("app.import.state.retry") {
             Task { await retry() }
         }
         .buttonStyle(.borderedProminent)

@@ -22,11 +22,11 @@ struct AssetInfoPanel: View {
                     locationSection(coordinate)
                 }
             }
-            .navigationTitle("ios.viewer.info.title")
+            .navigationTitle("app.viewer.info.title")
             .capsuleNavigationBarInline()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("ios.common.done") { dismiss() }
+                    Button("app.common.done") { dismiss() }
                 }
             }
         }
@@ -37,39 +37,39 @@ struct AssetInfoPanel: View {
     }
 
     private var captureSection: some View {
-        Section("ios.viewer.info.capture") {
-            row("ios.viewer.info.type", asset.mediaType.displayName)
-            row("ios.viewer.info.date", asset.captureDate.formatted(date: .long, time: .shortened))
+        Section("app.viewer.info.capture") {
+            row("app.viewer.info.type", asset.mediaType.displayName)
+            row("app.viewer.info.date", asset.captureDate.formatted(date: .long, time: .shortened))
             if asset.pixelWidth > 0, asset.pixelHeight > 0 {
-                row("ios.viewer.info.dimensions", "\(asset.pixelWidth) × \(asset.pixelHeight)")
-                row("ios.viewer.info.resolution", megapixels)
+                row("app.viewer.info.dimensions", "\(asset.pixelWidth) × \(asset.pixelHeight)")
+                row("app.viewer.info.resolution", megapixels)
             }
             if asset.mediaType != .photo, asset.duration > 0 {
-                row("ios.viewer.info.duration", durationText)
+                row("app.viewer.info.duration", durationText)
             }
         }
     }
 
     private var cameraSection: some View {
-        Section("ios.viewer.info.camera") {
-            if let make = metadata.cameraMake { row("ios.viewer.info.make", make) }
-            if let model = metadata.cameraModel { row("ios.viewer.info.model", model) }
-            if let lens = metadata.lensModel { row("ios.viewer.info.lens", lens) }
-            if let iso = metadata.isoSpeed { row("ios.viewer.info.iso", "\(iso)") }
+        Section("app.viewer.info.camera") {
+            if let make = metadata.cameraMake { row("app.viewer.info.make", make) }
+            if let model = metadata.cameraModel { row("app.viewer.info.model", model) }
+            if let lens = metadata.lensModel { row("app.viewer.info.lens", lens) }
+            if let iso = metadata.isoSpeed { row("app.viewer.info.iso", "\(iso)") }
             if let aperture = metadata.aperture {
-                row("ios.viewer.info.aperture", String(format: "ƒ/%.1f", aperture))
+                row("app.viewer.info.aperture", String(format: "ƒ/%.1f", aperture))
             }
             if let shutter = metadata.shutterSpeed {
-                row("ios.viewer.info.shutter", shutterText(shutter))
+                row("app.viewer.info.shutter", shutterText(shutter))
             }
             if let focal = metadata.focalLength {
-                row("ios.viewer.info.focal_length", String(format: "%.0f mm", focal))
+                row("app.viewer.info.focal_length", String(format: "%.0f mm", focal))
             }
         }
     }
 
     private func locationSection(_ coordinate: CLLocationCoordinate2D) -> some View {
-        Section("ios.common.location") {
+        Section("app.common.location") {
             Map(initialPosition: .region(MKCoordinateRegion(
                 center: coordinate,
                 latitudinalMeters: 800,

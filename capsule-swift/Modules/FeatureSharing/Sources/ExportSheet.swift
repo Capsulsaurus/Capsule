@@ -31,14 +31,14 @@ public struct ExportSheet: View {
             .formStyle(.grouped)
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
-            .navigationTitle("ios.export.title")
+            .navigationTitle("app.export.title")
             .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("ios.common.cancel") { dismiss() }
+                    Button("app.common.cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("ios.export.action") {
+                    Button("app.export.action") {
                         Task { await model.export() }
                     }
                     .disabled(model.isExporting || model.assetIDs.isEmpty)
@@ -55,14 +55,14 @@ public struct ExportSheet: View {
             LabeledContent {
                 Text(model.assetIDs.count, format: .number)
             } label: {
-                Text("ios.export.summary.count")
+                Text("app.export.summary.count")
             }
             if model.isExporting {
                 ProgressView()
-                    .accessibilityLabel("ios.export.progress")
+                    .accessibilityLabel("app.export.progress")
             }
         } footer: {
-            Text("ios.export.summary.footer")
+            Text("app.export.summary.footer")
         }
     }
 
@@ -72,9 +72,9 @@ public struct ExportSheet: View {
         Section {
             PrivacyStripView(policy: model.policy, setRetention: model.setRetention)
         } header: {
-            Text("ios.export.strip.header")
+            Text("app.export.strip.header")
         } footer: {
-            Text("ios.export.strip.footer")
+            Text("app.export.strip.footer")
         }
     }
 
@@ -83,15 +83,15 @@ public struct ExportSheet: View {
         Section {
             switch outcome {
             case .prepared:
-                Label("ios.export.outcome.prepared", systemImage: "checkmark.circle")
+                Label("app.export.outcome.prepared", systemImage: "checkmark.circle")
                     .accessibilityElement(children: .combine)
             case let .partial(_, unavailable):
                 VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) {
-                    Label("ios.export.outcome.partial", systemImage: "exclamationmark.circle")
+                    Label("app.export.outcome.partial", systemImage: "exclamationmark.circle")
                     LabeledContent {
                         Text(unavailable, format: .number)
                     } label: {
-                        Text("ios.export.outcome.unavailable_count")
+                        Text("app.export.outcome.unavailable_count")
                     }
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -100,7 +100,7 @@ public struct ExportSheet: View {
             }
         } footer: {
             // Says out loud that the opt-in has already gone back off.
-            Text("ios.export.outcome.footer")
+            Text("app.export.outcome.footer")
         }
     }
 }

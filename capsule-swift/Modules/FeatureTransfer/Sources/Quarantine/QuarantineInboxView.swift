@@ -32,7 +32,7 @@ public struct QuarantineInboxView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.quarantine.title")
+            .navigationTitle("app.quarantine.title")
             .task { await model.load() }
             .inspector(isPresented: .constant(inspected != nil)) { inspector }
     }
@@ -71,8 +71,8 @@ public struct QuarantineInboxView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.quarantine.empty.title",
-                emptyDescription: "ios.quarantine.empty.description",
+                emptyTitle: "app.quarantine.empty.title",
+                emptyDescription: "app.quarantine.empty.description",
                 emptySymbol: "checkmark.shield",
                 retry: { await model.reload() }
             )
@@ -104,7 +104,7 @@ struct QuarantineRowView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if item.surface.storage.preservesOriginalBytes {
-                    Label("ios.quarantine.row.preserved", systemImage: "archivebox")
+                    Label("app.quarantine.row.preserved", systemImage: "archivebox")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

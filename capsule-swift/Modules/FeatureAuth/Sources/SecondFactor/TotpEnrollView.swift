@@ -29,8 +29,8 @@ public struct TotpEnrollView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.totp.title",
-                    subtitleKey: "ios.totp.subtitle",
+                    titleKey: "app.totp.title",
+                    subtitleKey: "app.totp.subtitle",
                     symbolName: "123.rectangle.fill"
                 )
                 content
@@ -52,12 +52,12 @@ public struct TotpEnrollView: View {
     private var enrolment: some View {
         switch model.state {
         case .idle, .loading:
-            AuthLoadingView(labelKey: "ios.totp.loading")
+            AuthLoadingView(labelKey: "app.totp.loading")
         case .empty:
             ContentUnavailableView(
-                "ios.totp.unavailable.title",
+                "app.totp.unavailable.title",
                 systemImage: "tray",
-                description: Text("ios.totp.unavailable.description")
+                description: Text("app.totp.unavailable.description")
             )
         case .ready, .failed:
             seedSection
@@ -72,8 +72,8 @@ public struct TotpEnrollView: View {
         if let uri = model.provisioningURIForQRCode() {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
                 SecretQRCodeView(payload: uri)
-                AuthLabeledValue(labelKey: "ios.totp.account", value: model.accountLabel)
-                AuthLabeledValue(labelKey: "ios.totp.issuer", value: model.issuer)
+                AuthLabeledValue(labelKey: "app.totp.account", value: model.accountLabel)
+                AuthLabeledValue(labelKey: "app.totp.issuer", value: model.issuer)
                 manualEntry
             }
             .authCard()
@@ -83,21 +83,21 @@ public struct TotpEnrollView: View {
     private var manualEntry: some View {
         DisclosureGroup(isExpanded: $isManualEntryExpanded) {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-                AuthCodeValue(labelKey: "ios.totp.manual.seed", code: model.seedDisplay)
-                Text("ios.totp.manual.note")
+                AuthCodeValue(labelKey: "app.totp.manual.seed", code: model.seedDisplay)
+                Text("app.totp.manual.note")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .padding(.top, CapsuleTheme.Spacing.small)
         } label: {
-            Text("ios.totp.manual.title")
+            Text("app.totp.manual.title")
                 .font(.headline)
         }
         .onChange(of: isManualEntryExpanded) { _, expanded in
             if expanded { model.revealSeed() }
         }
-        .accessibilityLabel("ios.totp.manual.title")
+        .accessibilityLabel("app.totp.manual.title")
     }
 
     // MARK: Confirm
@@ -105,30 +105,30 @@ public struct TotpEnrollView: View {
     private var confirmSection: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.totp.confirm.title",
-                descriptionKey: "ios.totp.confirm.description",
+                titleKey: "app.totp.confirm.title",
+                descriptionKey: "app.totp.confirm.description",
                 symbolName: "checkmark.rectangle"
             )
             codeField
             refusals
             if model.isConfirming {
-                AuthLoadingView(labelKey: "ios.totp.confirming")
+                AuthLoadingView(labelKey: "app.totp.confirming")
             }
-            Button("ios.totp.confirm.action") { Task { await model.confirm() } }
+            Button("app.totp.confirm.action") { Task { await model.confirm() } }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(!model.canConfirm)
-                .accessibilityLabel("ios.totp.confirm.action")
+                .accessibilityLabel("app.totp.confirm.action")
         }
         .authCard()
     }
 
     private var codeField: some View {
-        LabeledField(labelKey: "ios.totp.code.label", footerKey: "ios.totp.code.footer") {
-            TextField("ios.totp.code.label", text: codeBinding)
+        LabeledField(labelKey: "app.totp.code.label", footerKey: "app.totp.code.footer") {
+            TextField("app.totp.code.label", text: codeBinding)
                 .font(.title3.monospacedDigit())
                 .textContentType(.oneTimeCode)
                 .authNumericField()
-                .accessibilityLabel("ios.totp.code.label")
+                .accessibilityLabel("app.totp.code.label")
         }
     }
 
@@ -151,14 +151,14 @@ public struct TotpEnrollView: View {
     private var refusals: some View {
         if model.isCodeRejected {
             StatusChip(
-                titleKey: "ios.totp.code.rejected",
+                titleKey: "app.totp.code.rejected",
                 symbolName: "xmark.circle.fill",
                 tint: .red
             )
         }
         if model.isRateLimited {
             StatusChip(
-                titleKey: "ios.totp.code.rate_limited",
+                titleKey: "app.totp.code.rate_limited",
                 symbolName: "clock.badge.exclamationmark.fill",
                 tint: .orange
             )
@@ -173,8 +173,8 @@ public struct TotpEnrollView: View {
     private var confirmed: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.totp.done.title",
-                descriptionKey: "ios.totp.done.description",
+                titleKey: "app.totp.done.title",
+                descriptionKey: "app.totp.done.description",
                 symbolName: "checkmark.seal.fill"
             )
         }

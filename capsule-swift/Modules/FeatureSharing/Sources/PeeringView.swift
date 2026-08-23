@@ -34,7 +34,7 @@ public struct PeeringView: View {
         .formStyle(.grouped)
         .frame(maxWidth: 720)
         .frame(maxWidth: .infinity)
-        .navigationTitle("ios.peering.title")
+        .navigationTitle("app.peering.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
     }
@@ -43,12 +43,12 @@ public struct PeeringView: View {
 
     private var enableSection: some View {
         Section {
-            Toggle("ios.peering.enable", isOn: Binding(
+            Toggle("app.peering.enable", isOn: Binding(
                 get: { model.isEnabled },
                 set: { enabled in Task { await model.setEnabled(enabled) } }
             ))
         } footer: {
-            Text("ios.peering.enable.footer")
+            Text("app.peering.enable.footer")
         }
     }
 
@@ -56,9 +56,9 @@ public struct PeeringView: View {
     private var idleSection: some View {
         Section {
             ContentUnavailableView(
-                "ios.peering.idle.title",
+                "app.peering.idle.title",
                 systemImage: "wifi",
-                description: Text("ios.peering.idle.description")
+                description: Text("app.peering.idle.description")
             )
         }
     }
@@ -66,7 +66,7 @@ public struct PeeringView: View {
     @ViewBuilder
     private var peerSections: some View {
         if !model.pairedPeers.isEmpty {
-            Section("ios.peering.section.paired") {
+            Section("app.peering.section.paired") {
                 ForEach(model.pairedPeers) { PeerRowView(peer: $0) }
             }
         }
@@ -74,9 +74,9 @@ public struct PeeringView: View {
             Section {
                 ForEach(model.unpairedPeers) { PeerRowView(peer: $0) }
             } header: {
-                Text("ios.peering.section.unpaired")
+                Text("app.peering.section.unpaired")
             } footer: {
-                Text("ios.peering.section.unpaired_footer")
+                Text("app.peering.section.unpaired_footer")
             }
         }
     }
@@ -84,12 +84,12 @@ public struct PeeringView: View {
     @ViewBuilder
     private var transferSection: some View {
         if model.transfers.isEmpty {
-            Section("ios.peering.section.transfers") {
-                Text("ios.peering.transfers.none")
+            Section("app.peering.section.transfers") {
+                Text("app.peering.transfers.none")
                     .foregroundStyle(.secondary)
             }
         } else {
-            Section("ios.peering.section.transfers") {
+            Section("app.peering.section.transfers") {
                 ForEach(model.transfers) { TransferRowView(transfer: $0) }
             }
         }
@@ -99,11 +99,11 @@ public struct PeeringView: View {
     /// and no peering-specific sync scope — peering honours the library's
     /// existing scope and there is deliberately no second knob.
     private var scopeSection: some View {
-        Section("ios.peering.section.how") {
-            ScopeNote(message: "ios.peering.note.lan_only")
-            ScopeNote(message: "ios.peering.note.pull_only")
-            ScopeNote(message: "ios.peering.note.same_account")
-            ScopeNote(message: "ios.peering.note.no_scope_knob")
+        Section("app.peering.section.how") {
+            ScopeNote(message: "app.peering.note.lan_only")
+            ScopeNote(message: "app.peering.note.pull_only")
+            ScopeNote(message: "app.peering.note.same_account")
+            ScopeNote(message: "app.peering.note.no_scope_knob")
         }
     }
 }
@@ -128,7 +128,7 @@ struct PeerRowView: View {
             LabeledContent {
                 Text(peer.lastSeenAt.date, format: .relative(presentation: .named))
             } label: {
-                Text("ios.peering.peer.last_seen")
+                Text("app.peering.peer.last_seen")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -140,11 +140,11 @@ struct PeerRowView: View {
     private var trustBadge: some View {
         switch peer.trust {
         case .paired:
-            StatusBadge(title: "ios.peering.trust.paired", symbol: "checkmark.shield", tint: .green)
+            StatusBadge(title: "app.peering.trust.paired", symbol: "checkmark.shield", tint: .green)
         case .discovered:
-            StatusBadge(title: "ios.peering.trust.discovered", symbol: "questionmark.circle", tint: .secondary)
+            StatusBadge(title: "app.peering.trust.discovered", symbol: "questionmark.circle", tint: .secondary)
         case .revoked:
-            StatusBadge(title: "ios.peering.trust.revoked", symbol: "xmark.shield", tint: .red)
+            StatusBadge(title: "app.peering.trust.revoked", symbol: "xmark.shield", tint: .red)
         }
     }
 
@@ -187,7 +187,7 @@ struct TransferRowView: View {
     }
 
     private var directionTitle: LocalizedStringKey {
-        transfer.direction == .receiving ? "ios.peering.transfer.receiving" : "ios.peering.transfer.sending"
+        transfer.direction == .receiving ? "app.peering.transfer.receiving" : "app.peering.transfer.sending"
     }
 
     private var directionSymbol: String {

@@ -119,11 +119,11 @@ public final class StorageSettingsModel {
 public extension RepresentationTier {
     var titleKey: String {
         switch self {
-        case .dominantColour: "ios.settings.storage.tier.dominant_colour"
-        case .lqip: "ios.settings.storage.tier.lqip"
-        case .thumbnail: "ios.settings.storage.tier.thumbnail"
-        case .preview: "ios.settings.storage.tier.preview"
-        case .original: "ios.settings.storage.tier.original"
+        case .dominantColour: "app.settings.storage.tier.dominant_colour"
+        case .lqip: "app.settings.storage.tier.lqip"
+        case .thumbnail: "app.settings.storage.tier.thumbnail"
+        case .preview: "app.settings.storage.tier.preview"
+        case .original: "app.settings.storage.tier.original"
         }
     }
 }
@@ -131,12 +131,12 @@ public extension RepresentationTier {
 public extension QuotaState {
     var titleKey: String {
         switch self {
-        case .withinQuota: "ios.settings.storage.quota.within"
-        case .softWarning: "ios.settings.storage.quota.soft_warning"
-        case .hardExceeded: "ios.settings.storage.quota.hard_exceeded"
-        case .graceExpired: "ios.settings.storage.quota.grace_expired"
-        case .suspended: "ios.settings.storage.quota.suspended"
-        case .unknown: "ios.settings.storage.quota.unknown"
+        case .withinQuota: "app.settings.storage.quota.within"
+        case .softWarning: "app.settings.storage.quota.soft_warning"
+        case .hardExceeded: "app.settings.storage.quota.hard_exceeded"
+        case .graceExpired: "app.settings.storage.quota.grace_expired"
+        case .suspended: "app.settings.storage.quota.suspended"
+        case .unknown: "app.settings.storage.quota.unknown"
         }
     }
 

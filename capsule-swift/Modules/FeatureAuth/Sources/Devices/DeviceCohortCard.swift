@@ -21,12 +21,12 @@ extension PlatformTag {
     /// The catalog key naming this platform.
     var nameKey: String {
         switch self {
-        case .ios: "ios.devices.platform.ios"
-        case .android: "ios.devices.platform.android"
-        case .macos: "ios.devices.platform.macos"
-        case .windows: "ios.devices.platform.windows"
-        case .linux: "ios.devices.platform.linux"
-        case .unknown: "ios.devices.platform.unknown"
+        case .ios: "app.devices.platform.ios"
+        case .android: "app.devices.platform.android"
+        case .macos: "app.devices.platform.macos"
+        case .windows: "app.devices.platform.windows"
+        case .linux: "app.devices.platform.linux"
+        case .unknown: "app.devices.platform.unknown"
         }
     }
 }
@@ -74,26 +74,26 @@ struct DeviceCohortCard: View {
                     .font(.title3)
             }
             if group.cohortHash == nil {
-                Text("ios.devices.cohort.ungrouped")
+                Text("app.devices.cohort.ungrouped")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if group.containsCurrentDevice {
                 StatusChip(
-                    titleKey: "ios.devices.device.current",
+                    titleKey: "app.devices.device.current",
                     symbolName: "checkmark.circle.fill",
                     tint: .green
                 )
             }
             if group.isPreviouslySeen {
                 StatusChip(
-                    titleKey: "ios.devices.cohort.assertion",
+                    titleKey: "app.devices.cohort.assertion",
                     symbolName: "clock.arrow.circlepath",
                     tint: .secondary
                 )
             }
-            Text("ios.devices.cohort.explanation")
+            Text("app.devices.cohort.explanation")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -102,7 +102,7 @@ struct DeviceCohortCard: View {
 
     private var devices: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Text("ios.devices.device.header")
+            Text("app.devices.device.header")
                 .font(.headline)
             ForEach(group.devices) { device in
                 deviceRow(device)
@@ -118,16 +118,16 @@ struct DeviceCohortCard: View {
             } icon: {
                 Image(systemName: device.platform.symbolName)
             }
-            AuthLabeledDate(labelKey: "ios.devices.device.first_seen", date: device.firstSeen.date)
-            AuthLabeledDate(labelKey: "ios.devices.device.last_seen", date: device.lastSeen.date)
+            AuthLabeledDate(labelKey: "app.devices.device.first_seen", date: device.firstSeen.date)
+            AuthLabeledDate(labelKey: "app.devices.device.last_seen", date: device.lastSeen.date)
             if device.isActive {
-                Button("ios.devices.device.revoke", role: .destructive) { revokeDevice(device.id) }
+                Button("app.devices.device.revoke", role: .destructive) { revokeDevice(device.id) }
                     .buttonStyle(.bordered)
                     .disabled(isRevoking)
-                    .accessibilityLabel("ios.devices.device.revoke")
+                    .accessibilityLabel("app.devices.device.revoke")
             } else {
                 StatusChip(
-                    titleKey: "ios.devices.device.revoked",
+                    titleKey: "app.devices.device.revoked",
                     symbolName: "nosign",
                     tint: .secondary
                 )
@@ -139,10 +139,10 @@ struct DeviceCohortCard: View {
     @ViewBuilder
     private var sessions: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Text("ios.devices.session.header")
+            Text("app.devices.session.header")
                 .font(.headline)
             if group.sessions.isEmpty {
-                Text("ios.devices.session.empty")
+                Text("app.devices.session.empty")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -157,17 +157,17 @@ struct DeviceCohortCard: View {
     private func sessionRow(_ session: SessionRecord) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             sessionStatus(session)
-            AuthLabeledDate(labelKey: "ios.devices.session.created", date: session.createdAt.date)
-            AuthLabeledDate(labelKey: "ios.devices.session.last_used", date: session.lastUsedAt.date)
+            AuthLabeledDate(labelKey: "app.devices.session.created", date: session.createdAt.date)
+            AuthLabeledDate(labelKey: "app.devices.session.last_used", date: session.lastUsedAt.date)
             // Whichever expiry bites first. The sliding window refreshes on use;
             // the hard ceiling does not, because its job is to bound an
             // exfiltrated token's life regardless of how busy the thief is.
-            AuthLabeledDate(labelKey: "ios.devices.session.expires", date: session.effectiveExpiry.date)
+            AuthLabeledDate(labelKey: "app.devices.session.expires", date: session.effectiveExpiry.date)
             if session.isLive(at: now) {
-                Button("ios.devices.session.revoke", role: .destructive) { revokeSession(session.id) }
+                Button("app.devices.session.revoke", role: .destructive) { revokeSession(session.id) }
                     .buttonStyle(.bordered)
                     .disabled(isRevoking)
-                    .accessibilityLabel("ios.devices.session.revoke")
+                    .accessibilityLabel("app.devices.session.revoke")
             }
         }
         .authInnerCard()
@@ -176,32 +176,32 @@ struct DeviceCohortCard: View {
     @ViewBuilder
     private func sessionStatus(_ session: SessionRecord) -> some View {
         if session.revokedAt != nil {
-            StatusChip(titleKey: "ios.devices.session.revoked", symbolName: "nosign", tint: .secondary)
+            StatusChip(titleKey: "app.devices.session.revoked", symbolName: "nosign", tint: .secondary)
         } else if !session.isLive(at: now) {
             StatusChip(
-                titleKey: "ios.devices.session.expired",
+                titleKey: "app.devices.session.expired",
                 symbolName: "clock.badge.xmark.fill",
                 tint: .orange
             )
         } else if session.isCurrent {
             StatusChip(
-                titleKey: "ios.devices.session.current",
+                titleKey: "app.devices.session.current",
                 symbolName: "checkmark.circle.fill",
                 tint: .green
             )
         } else {
-            StatusChip(titleKey: "ios.devices.session.live", symbolName: "circle.fill", tint: .green)
+            StatusChip(titleKey: "app.devices.session.live", symbolName: "circle.fill", tint: .green)
         }
     }
 
     @ViewBuilder
     private var supportBundleButton: some View {
         if let hash = group.cohortHash {
-            Button("ios.devices.support_bundle", systemImage: "doc.badge.gearshape") {
+            Button("app.devices.support_bundle", systemImage: "doc.badge.gearshape") {
                 buildSupportBundle(hash)
             }
             .buttonStyle(.bordered)
-            .accessibilityLabel("ios.devices.support_bundle")
+            .accessibilityLabel("app.devices.support_bundle")
         }
     }
 }

@@ -170,7 +170,7 @@ struct DestinationResolutionTests {
 
         #expect(Set(keys).count == keys.count)
         for key in keys {
-            #expect(key.hasPrefix("ios.settings.import.rule."))
+            #expect(key.hasPrefix("app.settings.import.rule."))
             #expect(!key.contains(" "))
         }
     }
@@ -179,7 +179,7 @@ struct DestinationResolutionTests {
     func everySourceKindHasACatalogKey(kind: SourceKind) {
         let key = DestinationResolution.titleKey(for: kind)
 
-        #expect(key.hasPrefix("ios.settings.import.kind."))
+        #expect(key.hasPrefix("app.settings.import.kind."))
         #expect(!key.contains(" "))
     }
 
@@ -188,7 +188,7 @@ struct DestinationResolutionTests {
         let known = SourceKind.knownCases.map(DestinationResolution.titleKey(for:))
         let unknown = DestinationResolution.titleKey(for: SourceKind(rawValue: "holo_camera"))
 
-        #expect(unknown == "ios.settings.import.kind.unknown")
+        #expect(unknown == "app.settings.import.kind.unknown")
         #expect(Set(known).count == SourceKind.knownCases.count)
     }
 }

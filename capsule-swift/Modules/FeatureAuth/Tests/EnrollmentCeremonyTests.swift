@@ -84,8 +84,8 @@ struct EnrollmentRailTests {
     @Test("every stage carries a catalog key and a symbol, never display text")
     func stagesCarryCatalogKeys() {
         for stage in EnrollmentStage.allCases {
-            #expect(stage.titleKey == "ios.enrollment.stage.\(stage.rawValue).title")
-            #expect(stage.explanationKey == "ios.enrollment.stage.\(stage.rawValue).explanation")
+            #expect(stage.titleKey == "app.enrollment.stage.\(stage.rawValue).title")
+            #expect(stage.explanationKey == "app.enrollment.stage.\(stage.rawValue).explanation")
             #expect(!stage.titleKey.contains(" "))
             #expect(!stage.symbolName.isEmpty)
         }
@@ -190,7 +190,7 @@ struct EnrollmentFailureTests {
         await model.start()
 
         let deferred = model.rows.first { $0.stage == .publishDirectory }
-        #expect(deferred?.status == .deferred(reasonKey: "ios.enrollment.deferred.directory"))
+        #expect(deferred?.status == .deferred(reasonKey: "app.enrollment.deferred.directory"))
         #expect(deferred?.status.isTerminal == true)
         #expect(EnrollmentStageStatus.pending.isTerminal == false)
         #expect(EnrollmentStageStatus.running.isTerminal == false)

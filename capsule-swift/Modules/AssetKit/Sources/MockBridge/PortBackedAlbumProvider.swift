@@ -54,7 +54,7 @@ public struct PortBackedAlbumProvider: AlbumProvider {
     /// name would make it look renameable. `AlbumSummary.title` is a plain
     /// `String` rendered with `Text(_: String)`, so the localized value has to
     /// be resolved here rather than deferred to a `LocalizedStringKey`.
-    public static let defaultAlbumTitleKey = "ios.albums.default.name"
+    public static let defaultAlbumTitleKey = "app.albums.default.name"
 
     private let albums: any AlbumPort
     private let library: any LibraryPort
@@ -108,7 +108,7 @@ public struct PortBackedAlbumProvider: AlbumProvider {
     private static func summary(of album: ContainerAlbum) -> AlbumSummary {
         AlbumSummary(
             id: album.id,
-            title: album.name ?? String(localized: "ios.albums.default.name", bundle: .main),
+            title: album.name ?? String(localized: "app.albums.default.name", bundle: .main),
             count: album.count,
             coverAssetID: album.coverAssetID
         )

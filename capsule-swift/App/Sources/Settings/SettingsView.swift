@@ -20,40 +20,40 @@ struct SettingsView: View {
     var body: some View {
         Form {
             Section {
-                Toggle("ios.settings.diagnostics.toggle", isOn: diagnosticsBinding)
+                Toggle("app.settings.diagnostics.toggle", isOn: diagnosticsBinding)
             } header: {
-                Text("ios.settings.diagnostics.header")
+                Text("app.settings.diagnostics.header")
             } footer: {
-                Text("ios.settings.diagnostics.footer")
+                Text("app.settings.diagnostics.footer")
             }
 
             Section {
-                Toggle("ios.settings.upload.toggle", isOn: uploadBinding)
+                Toggle("app.settings.upload.toggle", isOn: uploadBinding)
                 if consent.remoteUploadEnabled {
                     TextField("https://your-server/v1/telemetry", text: $endpointText)
                         .capsuleURLFieldStyle()
                         .onSubmit(saveEndpoint)
                 }
             } header: {
-                Text("ios.settings.upload.header")
+                Text("app.settings.upload.header")
             } footer: {
-                Text("ios.settings.upload.footer")
+                Text("app.settings.upload.footer")
             }
 
             Section {
-                Button("ios.settings.report.button") {
+                Button("app.settings.report.button") {
                     Task { await buildReport() }
                 }
                 .disabled(isBuildingReport)
             } footer: {
-                Text("ios.settings.report.footer")
+                Text("app.settings.report.footer")
             }
 
             Section {
-                LabeledContent("ios.settings.version", value: appVersion)
+                LabeledContent("app.settings.version", value: appVersion)
             }
         }
-        .navigationTitle("ios.tab.settings")
+        .navigationTitle("app.tab.settings")
         .task { await load() }
         .sheet(item: $report) { DiagnosticsReportView(report: $0) }
     }

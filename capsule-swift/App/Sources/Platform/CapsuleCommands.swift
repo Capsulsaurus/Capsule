@@ -57,7 +57,7 @@ struct CapsuleCommands: Commands {
 
         CommandGroup(replacing: .help) {
             if let docs = URL(string: Self.documentationURL) {
-                Link("ios.menu.help", destination: docs)
+                Link("apple.menu.help", destination: docs)
             }
         }
 

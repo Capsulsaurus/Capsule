@@ -21,7 +21,7 @@ public struct FederationView: View {
     public var body: some View {
         NavigationSplitView {
             sidebar
-                .navigationTitle("ios.federation.title")
+                .navigationTitle("app.federation.title")
                 .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         } detail: {
             detail
@@ -33,8 +33,8 @@ public struct FederationView: View {
         SharingStateView(
             phase: model.phase,
             empty: .init(
-                title: "ios.federation.empty.title",
-                message: "ios.federation.empty.description",
+                title: "app.federation.empty.title",
+                message: "app.federation.empty.description",
                 symbol: "square.stack.3d.up"
             ),
             retry: { Task { await model.reload() } },
@@ -57,9 +57,9 @@ public struct FederationView: View {
             FederationAlbumDetail(album: album, model: model)
         } else {
             ContentUnavailableView(
-                "ios.federation.detail.none.title",
+                "app.federation.detail.none.title",
                 systemImage: "square.stack.3d.up",
-                description: Text("ios.federation.detail.none.description")
+                description: Text("app.federation.detail.none.description")
             )
         }
     }
@@ -86,18 +86,18 @@ struct AggregatedAlbumRow: View {
             LabeledContent {
                 Text(renderedCount, format: .number)
             } label: {
-                Text("ios.federation.album.rendered_count")
+                Text("app.federation.album.rendered_count")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             if hasUnreachableOwner {
                 StatusBadge(
-                    title: "ios.federation.album.unreachable_owner",
+                    title: "app.federation.album.unreachable_owner",
                     symbol: "externaldrive.badge.xmark",
                     tint: .orange
                 )
             } else if isDegraded {
-                StatusBadge(title: "ios.federation.album.partial", symbol: "exclamationmark.icloud", tint: .orange)
+                StatusBadge(title: "app.federation.album.partial", symbol: "exclamationmark.icloud", tint: .orange)
             }
         }
         .padding(.vertical, CapsuleTheme.Spacing.xxSmall)
@@ -117,7 +117,7 @@ struct GroupNameText: View {
         if let name, !name.isEmpty {
             Text(verbatim: name)
         } else {
-            Text("ios.federation.album.untitled")
+            Text("app.federation.album.untitled")
         }
     }
 }

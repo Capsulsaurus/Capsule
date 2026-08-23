@@ -28,8 +28,8 @@ public struct ServerConnectView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
                 CeremonyHeader(
-                    titleKey: "ios.auth.server.title",
-                    subtitleKey: "ios.auth.server.subtitle",
+                    titleKey: "app.auth.server.title",
+                    subtitleKey: "app.auth.server.subtitle",
                     symbolName: "server.rack"
                 )
                 domainField
@@ -39,7 +39,7 @@ public struct ServerConnectView: View {
                     }
                 }
                 if model.state.isLoading {
-                    AuthLoadingView(labelKey: "ios.auth.server.discovering")
+                    AuthLoadingView(labelKey: "app.auth.server.discovering")
                 }
                 if let server = model.server {
                     ServerIdentityCard(
@@ -50,9 +50,9 @@ public struct ServerConnectView: View {
                     pinControls
                 } else if model.state == .empty {
                     ContentUnavailableView(
-                        "ios.auth.server.empty.title",
+                        "app.auth.server.empty.title",
                         systemImage: "network.slash",
-                        description: Text("ios.auth.server.empty.description")
+                        description: Text("app.auth.server.empty.description")
                     )
                 }
             }
@@ -62,24 +62,24 @@ public struct ServerConnectView: View {
 
     private var domainField: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Text("ios.auth.server.domain.label")
+            Text("app.auth.server.domain.label")
                 .font(.headline)
-            TextField("ios.auth.server.domain.prompt", text: $model.domainInput)
+            TextField("app.auth.server.domain.prompt", text: $model.domainInput)
                 .textFieldStyle(.roundedBorder)
                 .textContentType(.URL)
                 .autocorrectionDisabled()
-                .accessibilityLabel("ios.auth.server.domain.label")
+                .accessibilityLabel("app.auth.server.domain.label")
                 .onSubmit { Task { await model.discover() } }
-            Text("ios.auth.server.domain.footer")
+            Text("app.auth.server.domain.footer")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("ios.auth.server.discover") {
+            Button("app.auth.server.discover") {
                 Task { await model.discover() }
             }
             .capsuleGlassButtonStyle(prominent: true)
             .disabled(!model.canDiscover || model.state.isLoading)
-            .accessibilityLabel("ios.auth.server.discover")
+            .accessibilityLabel("app.auth.server.discover")
         }
     }
 
@@ -88,21 +88,21 @@ public struct ServerConnectView: View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             if model.isPinned {
                 StatusChip(
-                    titleKey: "ios.auth.server.pinned",
+                    titleKey: "app.auth.server.pinned",
                     symbolName: "checkmark.seal.fill",
                     tint: .green
                 )
             }
-            Button("ios.auth.server.pin") {
+            Button("app.auth.server.pin") {
                 Task { await model.pin() }
             }
             .capsuleGlassButtonStyle(prominent: true)
             .disabled(model.isPinned || !model.isProtocolCompatible)
-            .accessibilityLabel("ios.auth.server.pin")
+            .accessibilityLabel("app.auth.server.pin")
 
-            Button("ios.auth.server.change") { model.reset() }
+            Button("app.auth.server.change") { model.reset() }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.auth.server.change")
+                .accessibilityLabel("app.auth.server.change")
         }
     }
 }

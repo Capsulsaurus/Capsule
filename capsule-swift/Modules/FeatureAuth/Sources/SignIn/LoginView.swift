@@ -31,8 +31,8 @@ public struct LoginView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.auth.login.title",
-                    subtitleKey: "ios.auth.login.subtitle",
+                    titleKey: "app.auth.login.title",
+                    subtitleKey: "app.auth.login.subtitle",
                     symbolName: "person.badge.key.fill"
                 )
                 credentialFields
@@ -42,7 +42,7 @@ public struct LoginView: View {
                     }
                 }
                 if model.isSubmitting {
-                    AuthLoadingView(labelKey: "ios.auth.login.submitting")
+                    AuthLoadingView(labelKey: "app.auth.login.submitting")
                 }
                 actions
             }
@@ -52,35 +52,35 @@ public struct LoginView: View {
 
     private var credentialFields: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
-            LabeledField(labelKey: "ios.auth.login.handle.label") {
-                TextField("ios.auth.login.handle.prompt", text: $model.handleInput)
+            LabeledField(labelKey: "app.auth.login.handle.label") {
+                TextField("app.auth.login.handle.prompt", text: $model.handleInput)
                     .textContentType(.username)
                     .autocorrectionDisabled()
-                    .accessibilityLabel("ios.auth.login.handle.label")
+                    .accessibilityLabel("app.auth.login.handle.label")
             }
-            LabeledField(labelKey: "ios.auth.login.password.label") {
-                SecureField("ios.auth.login.password.label", text: $model.passwordInput)
+            LabeledField(labelKey: "app.auth.login.password.label") {
+                SecureField("app.auth.login.password.label", text: $model.passwordInput)
                     .textContentType(.password)
-                    .accessibilityLabel("ios.auth.login.password.label")
+                    .accessibilityLabel("app.auth.login.password.label")
             }
             LabeledField(
-                labelKey: "ios.auth.login.totp.label",
-                footerKey: "ios.auth.login.totp.footer"
+                labelKey: "app.auth.login.totp.label",
+                footerKey: "app.auth.login.totp.footer"
             ) {
-                TextField("ios.auth.login.totp.label", text: $model.totpInput)
+                TextField("app.auth.login.totp.label", text: $model.totpInput)
                     .textContentType(.oneTimeCode)
-                    .accessibilityLabel("ios.auth.login.totp.label")
+                    .accessibilityLabel("app.auth.login.totp.label")
             }
             if model.showsCredentialFailure {
                 StatusChip(
-                    titleKey: "ios.auth.login.credentials_rejected",
+                    titleKey: "app.auth.login.credentials_rejected",
                     symbolName: "xmark.circle.fill",
                     tint: .red
                 )
             }
             if model.isRateLimited {
                 StatusChip(
-                    titleKey: "ios.auth.login.rate_limited.hint",
+                    titleKey: "app.auth.login.rate_limited.hint",
                     symbolName: "clock.badge.exclamationmark.fill",
                     tint: .orange
                 )
@@ -90,25 +90,25 @@ public struct LoginView: View {
 
     @ViewBuilder
     private var actions: some View {
-        Button("ios.auth.login.submit") {
+        Button("app.auth.login.submit") {
             Task { await model.signIn() }
         }
         .capsuleGlassButtonStyle(prominent: true)
         .disabled(!model.canSubmit)
-        .accessibilityLabel("ios.auth.login.submit")
+        .accessibilityLabel("app.auth.login.submit")
 
         if model.supportsPasskeys {
-            Button("ios.auth.login.passkey") {
+            Button("app.auth.login.passkey") {
                 Task { await model.signInWithPasskey() }
             }
             .buttonStyle(.bordered)
-            .accessibilityLabel("ios.auth.login.passkey")
+            .accessibilityLabel("app.auth.login.passkey")
         }
-        Button("ios.auth.login.oidc") {
+        Button("app.auth.login.oidc") {
             Task { await model.signInWithIdentityProvider() }
         }
         .buttonStyle(.borderless)
-        .accessibilityLabel("ios.auth.login.oidc")
+        .accessibilityLabel("app.auth.login.oidc")
     }
 }
 

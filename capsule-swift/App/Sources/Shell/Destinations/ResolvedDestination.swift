@@ -51,7 +51,7 @@ struct ResolvedDestination<Value: Sendable, Content: View>: View {
         ContentUnavailableView {
             Label(LocalizedStringKey(titleKey), systemImage: systemImage)
         } description: {
-            Text("ios.destination.missing.body")
+            Text("app.destination.missing.body")
         }
         .navigationTitle(LocalizedStringKey(titleKey))
     }

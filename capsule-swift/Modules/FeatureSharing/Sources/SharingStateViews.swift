@@ -24,16 +24,16 @@ struct SharingStateView<Content: View>: View {
             ProgressView()
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("ios.share.state.loading")
+                .accessibilityLabel("app.share.state.loading")
         case .ready:
             content()
         case .empty:
             ContentUnavailableView(empty.title, systemImage: empty.symbol, description: Text(empty.message))
         case .offline:
             ContentUnavailableView(
-                "ios.share.state.offline.title",
+                "app.share.state.offline.title",
                 systemImage: "wifi.slash",
-                description: Text("ios.share.state.offline.description")
+                description: Text("app.share.state.offline.description")
             )
         case let .failed(code):
             failure(code)
@@ -45,12 +45,12 @@ struct SharingStateView<Content: View>: View {
     /// and support reports, and showing it to a user is a localisation bug.
     private func failure(_ code: ErrorCode) -> some View {
         ContentUnavailableView {
-            Label("ios.share.state.error.title", systemImage: "exclamationmark.triangle")
+            Label("app.share.state.error.title", systemImage: "exclamationmark.triangle")
         } description: {
             Text(LocalizedStringKey(code.rawValue))
         } actions: {
             if let retry {
-                Button("ios.share.action.retry", action: retry)
+                Button("app.share.action.retry", action: retry)
                     .capsuleGlassButtonStyle(prominent: true)
             }
         }
@@ -106,7 +106,7 @@ struct OfflineNotice: View {
 
     var body: some View {
         if let connection, !connection.isUsable {
-            Label("ios.share.offline_notice", systemImage: "wifi.slash")
+            Label("app.share.offline_notice", systemImage: "wifi.slash")
                 .font(.footnote)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(CapsuleTheme.Spacing.small)

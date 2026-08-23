@@ -28,8 +28,8 @@ public struct AIAndModelsSettingsView: View {
         SettingsScreen(
             titleKey: SettingsSection.aiAndModels.titleKey,
             phase: model.phase,
-            emptyTitleKey: "ios.settings.ai.empty.title",
-            emptyDescriptionKey: "ios.settings.ai.empty.description",
+            emptyTitleKey: "app.settings.ai.empty.title",
+            emptyDescriptionKey: "app.settings.ai.empty.description",
             retry: { await model.load() },
             content: {
                 processingSection
@@ -42,9 +42,9 @@ public struct AIAndModelsSettingsView: View {
         )
         .task { await model.load() }
         .settingsDestructiveConfirmation(
-            titleKey: "ios.settings.ai.remove.confirm.title",
-            messageKey: "ios.settings.ai.remove.confirm.message",
-            confirmKey: "ios.settings.ai.remove.confirm.action",
+            titleKey: "app.settings.ai.remove.confirm.title",
+            messageKey: "app.settings.ai.remove.confirm.message",
+            confirmKey: "app.settings.ai.remove.confirm.action",
             isPresented: removalPresented
         ) {
             if let slot = slotPendingRemoval {
@@ -65,17 +65,17 @@ public struct AIAndModelsSettingsView: View {
 
     private var processingSection: some View {
         Section {
-            Toggle("ios.settings.ai.processing.toggle", isOn: processingBinding)
-            Toggle("ios.settings.ai.power.toggle", isOn: powerBinding)
+            Toggle("app.settings.ai.processing.toggle", isOn: processingBinding)
+            Toggle("app.settings.ai.power.toggle", isOn: powerBinding)
                 .disabled(!model.isProcessingEnabled)
             SettingsValueRow(
-                labelKey: "ios.settings.ai.pending.label",
+                labelKey: "app.settings.ai.pending.label",
                 value: SettingsFormat.count(model.pendingAssetCount)
             )
         } header: {
-            Text("ios.settings.ai.processing.header")
+            Text("app.settings.ai.processing.header")
         } footer: {
-            Text("ios.settings.ai.processing.footer")
+            Text("app.settings.ai.processing.footer")
         }
     }
 
@@ -100,23 +100,23 @@ public struct AIAndModelsSettingsView: View {
         Section {
             ForEach(model.excludedSlots, id: \.self) { slot in
                 SettingsStatusRow(
-                    labelKey: "ios.settings.ai.stale.slot",
-                    statusKey: "ios.settings.ai.state.stale_excluded",
+                    labelKey: "app.settings.ai.stale.slot",
+                    statusKey: "app.settings.ai.state.stale_excluded",
                     tone: .caution
                 )
                 SettingsValueRow(
-                    labelKey: "ios.settings.ai.slot.label",
+                    labelKey: "app.settings.ai.slot.label",
                     value: SettingsFormat.modelSlot(slot)
                 )
-                Button("ios.settings.ai.regenerate") {
+                Button("app.settings.ai.regenerate") {
                     Task { await model.regenerate(slot) }
                 }
                 .disabled(model.busySlot != nil)
             }
         } header: {
-            Text("ios.settings.ai.stale.header")
+            Text("app.settings.ai.stale.header")
         } footer: {
-            Text("ios.settings.ai.stale.footer")
+            Text("app.settings.ai.stale.footer")
         }
     }
 
@@ -128,9 +128,9 @@ public struct AIAndModelsSettingsView: View {
                 slotRows(status)
             }
         } header: {
-            Text("ios.settings.ai.slots.header")
+            Text("app.settings.ai.slots.header")
         } footer: {
-            Text("ios.settings.ai.slots.footer")
+            Text("app.settings.ai.slots.footer")
         }
     }
 
@@ -143,12 +143,12 @@ public struct AIAndModelsSettingsView: View {
             tone: report.tone
         )
         SettingsValueRow(
-            labelKey: "ios.settings.ai.slot.label",
+            labelKey: "app.settings.ai.slot.label",
             value: SettingsFormat.modelSlot(status.slot)
         )
         if case let .downloading(fraction) = report {
             ProgressView(value: fraction)
-                .accessibilityLabel(Text("ios.settings.ai.state.downloading"))
+                .accessibilityLabel(Text("app.settings.ai.state.downloading"))
         }
         slotActions(status: status, report: report)
     }
@@ -157,16 +157,16 @@ public struct AIAndModelsSettingsView: View {
     private func slotActions(status: AIModelStatus, report: AISlotReport) -> some View {
         switch report {
         case .notDownloaded:
-            Button("ios.settings.ai.download") {
+            Button("app.settings.ai.download") {
                 Task { await model.download(status.slot) }
             }
             .disabled(model.busySlot != nil)
         case .ready, .staleExcluded:
-            Button("ios.settings.ai.regenerate") {
+            Button("app.settings.ai.regenerate") {
                 Task { await model.regenerate(status.slot) }
             }
             .disabled(model.busySlot != nil)
-            Button("ios.settings.ai.remove", role: .destructive) {
+            Button("app.settings.ai.remove", role: .destructive) {
                 slotPendingRemoval = status.slot
             }
         case .downloading, .unsupportedOnThisDevice:
@@ -176,11 +176,11 @@ public struct AIAndModelsSettingsView: View {
 
     private func purposeKey(_ purpose: AIModelStatus.Purpose) -> String {
         switch purpose {
-        case .imageEmbedding: "ios.settings.ai.purpose.image_embedding"
-        case .faceDetection: "ios.settings.ai.purpose.face_detection"
-        case .faceEmbedding: "ios.settings.ai.purpose.face_embedding"
-        case .sceneTagging: "ios.settings.ai.purpose.scene_tagging"
-        case .unknown: "ios.settings.ai.purpose.unknown"
+        case .imageEmbedding: "app.settings.ai.purpose.image_embedding"
+        case .faceDetection: "app.settings.ai.purpose.face_detection"
+        case .faceEmbedding: "app.settings.ai.purpose.face_embedding"
+        case .sceneTagging: "app.settings.ai.purpose.scene_tagging"
+        case .unknown: "app.settings.ai.purpose.unknown"
         }
     }
 
@@ -188,11 +188,11 @@ public struct AIAndModelsSettingsView: View {
 
     private var provenanceSection: some View {
         Section {
-            SettingsNoteRow(textKey: "ios.settings.ai.provenance.body")
+            SettingsNoteRow(textKey: "app.settings.ai.provenance.body")
         } header: {
-            Text("ios.settings.ai.provenance.header")
+            Text("app.settings.ai.provenance.header")
         } footer: {
-            Text("ios.settings.ai.provenance.footer")
+            Text("app.settings.ai.provenance.footer")
         }
     }
 }

@@ -58,7 +58,7 @@ public extension SettingsSection {
     /// Derived from ``RawRepresentable/rawValue`` rather than a per-case switch:
     /// eighteen screens is exactly the size at which a hand-maintained table
     /// starts silently missing rows, and a derived key cannot.
-    var titleKey: String { "ios.settings.section.\(rawValue)" }
+    var titleKey: String { "app.settings.section.\(rawValue)" }
 
     /// The section a settings deep link lands on when it names no screen.
     static let `default` = SettingsSection.account

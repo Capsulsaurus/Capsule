@@ -89,7 +89,7 @@ public enum SidebarGroup: String, Sendable, Hashable, Codable, CaseIterable {
     case system
 
     /// The catalog key for this group's heading.
-    public var titleKey: String { "ios.sidebar.group.\(rawValue)" }
+    public var titleKey: String { "app.sidebar.group.\(rawValue)" }
 }
 
 // MARK: - SidebarItemDescriptor

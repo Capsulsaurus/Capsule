@@ -48,12 +48,12 @@ public struct QuarantineActionOption: Sendable, Equatable, Identifiable {
                 isEnabled: item.surface.storage.preservesOriginalBytes,
                 unavailableReasonKey: item.surface.storage.preservesOriginalBytes
                     ? nil
-                    : "ios.quarantine.action.inspect.unavailable"
+                    : "app.quarantine.action.inspect.unavailable"
             ),
             QuarantineActionOption(
                 resolution: .repair,
                 isEnabled: item.isRecoverable,
-                unavailableReasonKey: item.isRecoverable ? nil : "ios.quarantine.action.repair.unavailable"
+                unavailableReasonKey: item.isRecoverable ? nil : "app.quarantine.action.repair.unavailable"
             ),
             QuarantineActionOption(resolution: .discard, isEnabled: true),
         ]

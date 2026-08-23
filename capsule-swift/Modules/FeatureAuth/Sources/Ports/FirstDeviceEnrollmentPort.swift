@@ -29,10 +29,10 @@ public enum EnrollmentStage: String, Sendable, Hashable, CaseIterable {
     case recoveryPassphrase = "recovery_passphrase"
 
     /// The catalog key for this stage's title.
-    public var titleKey: String { "ios.enrollment.stage.\(rawValue).title" }
+    public var titleKey: String { "app.enrollment.stage.\(rawValue).title" }
 
     /// The catalog key for the one plain-language sentence under the title.
-    public var explanationKey: String { "ios.enrollment.stage.\(rawValue).explanation" }
+    public var explanationKey: String { "app.enrollment.stage.\(rawValue).explanation" }
 
     /// The SF Symbol for the rail. A symbol *and* a label: colour alone never
     /// carries the state.

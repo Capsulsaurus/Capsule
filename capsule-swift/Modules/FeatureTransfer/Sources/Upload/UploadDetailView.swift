@@ -39,7 +39,7 @@ public struct UploadDetailView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.transfer.detail.title")
+            .navigationTitle("app.transfer.detail.title")
             .task { await model.load() }
     }
 
@@ -58,8 +58,8 @@ public struct UploadDetailView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.transfer.detail.empty.title",
-                emptyDescription: "ios.transfer.detail.empty.description",
+                emptyTitle: "app.transfer.detail.empty.title",
+                emptyDescription: "app.transfer.detail.empty.description",
                 emptySymbol: "checkmark.circle",
                 retry: { await model.reload() }
             )
@@ -70,13 +70,13 @@ public struct UploadDetailView: View {
 
     private var offlineNotice: some View {
         Section {
-            Label("ios.transfer.state.offline.inline", systemImage: "wifi.slash")
+            Label("app.transfer.state.offline.inline", systemImage: "wifi.slash")
                 .foregroundStyle(.secondary)
         }
     }
 
     private var ladderSection: some View {
-        Section("ios.transfer.detail.ladder") {
+        Section("app.transfer.detail.ladder") {
             ForEach(model.tierProgress) { progress in
                 TierLegendRow(progress: progress, isGated: model.isGated(progress.tier))
             }
@@ -90,14 +90,14 @@ public struct UploadDetailView: View {
             NavigationLink {
                 ProtocolUpgradeRequiredView()
             } label: {
-                Label("ios.transfer.upgrade.link", systemImage: "exclamationmark.octagon.fill")
+                Label("app.transfer.upgrade.link", systemImage: "exclamationmark.octagon.fill")
                     .foregroundStyle(.red)
             }
         }
     }
 
     private var failureSection: some View {
-        Section("ios.transfer.detail.failures") {
+        Section("app.transfer.detail.failures") {
             ForEach(model.failures) { failure in
                 UploadFailureRow(failure: failure) { await model.recover(failure) }
             }
@@ -108,15 +108,15 @@ public struct UploadDetailView: View {
         Section {
             SessionStateTrack(state: session.state)
             ProgressView(value: session.fractionComplete)
-                .accessibilityLabel("ios.transfer.detail.progress")
+                .accessibilityLabel("app.transfer.detail.progress")
                 .accessibilityValue(Text(verbatim: TransferFormat.percent(session.fractionComplete)))
-            LabeledContent("ios.transfer.detail.resume_at") {
+            LabeledContent("app.transfer.detail.resume_at") {
                 Text(verbatim: TransferFormat.bytes(model.resumptionPoint(for: session)))
             }
-            LabeledContent("ios.transfer.detail.declared_size") {
+            LabeledContent("app.transfer.detail.declared_size") {
                 Text(verbatim: TransferFormat.bytes(session.declaredSize))
             }
-            LabeledContent("ios.transfer.detail.throughput") {
+            LabeledContent("app.transfer.detail.throughput") {
                 throughput(for: session)
             }
             AdaptiveChunkDisclosure(plan: model.chunkPlan(for: session))
@@ -133,7 +133,7 @@ public struct UploadDetailView: View {
         if let rate = model.rate(for: session.id) {
             Text(verbatim: TransferFormat.rate(bytesPerSecond: rate))
         } else {
-            Text("ios.transfer.row.throughput_measuring")
+            Text("app.transfer.row.throughput_measuring")
         }
     }
 
@@ -142,7 +142,7 @@ public struct UploadDetailView: View {
     @ViewBuilder
     private func cancelButton(for session: UploadSession) -> some View {
         if session.state.isCancellable {
-            Button("ios.transfer.action.cancel", role: .destructive) {
+            Button("app.transfer.action.cancel", role: .destructive) {
                 Task { await model.cancel(session.id) }
             }
             .disabled(!model.phase.permitsNetworkActions)
@@ -159,10 +159,10 @@ public struct UploadDetailView: View {
                     clock: clock
                 )
             } label: {
-                Label("ios.custody.link", systemImage: "signature")
+                Label("app.custody.link", systemImage: "signature")
             }
         } footer: {
-            Text("ios.custody.link.footer")
+            Text("app.custody.link.footer")
         }
     }
 }

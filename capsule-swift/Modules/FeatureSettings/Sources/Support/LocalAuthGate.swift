@@ -16,7 +16,7 @@ public enum GatedLibraryView: String, Sendable, Hashable, CaseIterable, Codable 
     case hidden
 
     /// The catalog key for this view's name.
-    public var titleKey: String { "ios.settings.security.gate.\(rawValue)" }
+    public var titleKey: String { "app.settings.security.gate.\(rawValue)" }
 }
 
 // MARK: - LocalAuthGate

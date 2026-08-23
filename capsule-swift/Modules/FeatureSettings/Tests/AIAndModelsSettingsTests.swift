@@ -37,7 +37,7 @@ struct AISlotReportTests {
         #expect(reports[4] == .unsupportedOnThisDevice)
         #expect(Set(reports.map(\.statusKey)).count == 5)
         for report in reports {
-            #expect(report.statusKey.hasPrefix("ios.settings.ai.state."))
+            #expect(report.statusKey.hasPrefix("app.settings.ai.state."))
             #expect(!report.statusKey.contains(" "))
         }
     }

@@ -59,7 +59,7 @@ public struct PlacesMapView: View {
                 }
             }
         }
-        .navigationTitle("ios.places.title")
+        .navigationTitle("app.places.title")
         .capsuleNavigationBarInline()
         .overlay { overlay }
         .task { await model.load() }
@@ -100,9 +100,9 @@ public struct PlacesMapView: View {
             ProgressView()
         } else if model.clusters.isEmpty {
             ContentUnavailableView(
-                "ios.places.empty.title",
+                "app.places.empty.title",
                 systemImage: "mappin.slash",
-                description: Text("ios.places.empty.description")
+                description: Text("app.places.empty.description")
             )
         }
     }
@@ -249,7 +249,7 @@ struct PlacesClusterGrid: View {
             onSelect: openViewer
         )
         .ignoresSafeArea(edges: .bottom)
-        .navigationTitle("ios.common.location")
+        .navigationTitle("app.common.location")
         .capsuleNavigationBarInline()
         .capsuleFullScreenCover(item: $viewerSelection) { selection in
             AssetViewerView(
@@ -332,7 +332,7 @@ private struct ClusterPin: View {
                 if cluster.isApproximate {
                     Image(systemName: "questionmark.circle.fill")
                         .font(.caption2)
-                        .accessibilityLabel("ios.places.approximate")
+                        .accessibilityLabel("app.places.approximate")
                 }
                 Text(verbatim: "\(cluster.assetCount)")
                     .font(.caption.bold())
@@ -363,7 +363,7 @@ private struct ClusterPin: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("place.preview")
-        .accessibilityLabel("ios.places.preview.open")
+        .accessibilityLabel("app.places.preview.open")
         .transition(.scale(scale: 0.7, anchor: .bottom).combined(with: .opacity))
     }
 }

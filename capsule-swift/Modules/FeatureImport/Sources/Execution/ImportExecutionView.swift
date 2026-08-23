@@ -35,10 +35,10 @@ public struct ImportExecutionView: View {
 
     public var body: some View {
         ImportScreen(
-            titleKey: "ios.import.run.title",
+            titleKey: "app.import.run.title",
             phase: model.phase,
-            emptyTitleKey: "ios.import.run.empty.title",
-            emptyDescriptionKey: "ios.import.run.empty.description",
+            emptyTitleKey: "app.import.run.empty.title",
+            emptyDescriptionKey: "app.import.run.empty.description",
             emptySymbol: "square.and.arrow.down",
             retry: { await model.run() },
             content: { runBody }
@@ -65,7 +65,7 @@ public struct ImportExecutionView: View {
     private var progressBar: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             ProgressView(value: model.fraction)
-                .accessibilityLabel(Text("ios.import.run.title"))
+                .accessibilityLabel(Text("app.import.run.title"))
                 .accessibilityValue(Text(verbatim: ImportFormat.percent(model.fraction)))
             Text(verbatim: progressText)
                 .font(.footnote)
@@ -79,7 +79,7 @@ public struct ImportExecutionView: View {
 
     private var progressText: String {
         String(
-            format: String(localized: "ios.import.run.progress"),
+            format: String(localized: "app.import.run.progress"),
             ImportFormat.count(model.completedCount),
             ImportFormat.count(model.itemCount)
         )
@@ -97,9 +97,9 @@ public struct ImportExecutionView: View {
     private var stateRow: some View {
         switch model.state {
         case .finished:
-            ImportStatusLabel(titleKey: "ios.import.run.done.title", tone: .positive)
+            ImportStatusLabel(titleKey: "app.import.run.done.title", tone: .positive)
         case .cancelled:
-            ImportStatusLabel(titleKey: "ios.import.run.cancelled.title", tone: .caution)
+            ImportStatusLabel(titleKey: "app.import.run.cancelled.title", tone: .caution)
         case .running, .idle:
             EmptyView()
         }
@@ -108,24 +108,24 @@ public struct ImportExecutionView: View {
     @ViewBuilder
     private var failureRow: some View {
         if model.hasRetryableFailures {
-            ImportValueRow(labelKey: "ios.import.run.failures", value: ImportFormat.count(model.failedCount))
+            ImportValueRow(labelKey: "app.import.run.failures", value: ImportFormat.count(model.failedCount))
         }
     }
 
     @ViewBuilder
     private var actionRow: some View {
         if model.isCancellable {
-            Button("ios.import.run.cancel", role: .cancel) {
+            Button("app.import.run.cancel", role: .cancel) {
                 Task { await model.cancel() }
             }
         }
         if model.hasRetryableFailures {
-            Button("ios.import.run.retry_all") {
+            Button("app.import.run.retry_all") {
                 Task { await model.retryAll() }
             }
         }
         if model.state == .cancelled {
-            ImportNote(textKey: "ios.import.run.cancelled.description")
+            ImportNote(textKey: "app.import.run.cancelled.description")
         }
     }
 
@@ -140,7 +140,7 @@ public struct ImportExecutionView: View {
                 }
             }
         } header: {
-            Text("ios.import.run.items.header")
+            Text("app.import.run.items.header")
         }
     }
 }
@@ -196,7 +196,7 @@ private struct ImportRunRow: View {
         if isRetrying {
             ProgressView().controlSize(.small)
         } else if item.isRetryable {
-            Button("ios.import.run.retry", action: retry)
+            Button("app.import.run.retry", action: retry)
                 .buttonStyle(.bordered)
                 .controlSize(.small)
         }

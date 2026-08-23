@@ -82,13 +82,13 @@ public struct SyncStateBadge: View {
 
     private var accessibilityKey: LocalizedStringKey {
         switch state {
-        case .durable: "ios.asset.sync.durable"
-        case .uploading: "ios.asset.sync.uploading"
-        case .awaitingOriginal: "ios.asset.sync.awaiting_original"
-        case .quarantined: "ios.asset.sync.quarantined"
-        case .unreadableOnThisDevice: "ios.asset.sync.unreadable"
-        case .writtenByNewerVersion: "ios.asset.sync.newer_version"
-        case .fullResolutionUnavailable: "ios.asset.sync.full_resolution_unavailable"
+        case .durable: "app.asset.sync.durable"
+        case .uploading: "app.asset.sync.uploading"
+        case .awaitingOriginal: "app.asset.sync.awaiting_original"
+        case .quarantined: "app.asset.sync.quarantined"
+        case .unreadableOnThisDevice: "app.asset.sync.unreadable"
+        case .writtenByNewerVersion: "app.asset.sync.newer_version"
+        case .fullResolutionUnavailable: "app.asset.sync.full_resolution_unavailable"
         }
     }
 }

@@ -29,7 +29,7 @@ public struct AlbumsRootView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.albums.title")
+            .navigationTitle("app.albums.title")
             // `.primaryAction` rather than `.topBarTrailing`: the topBar
             // placements exist only where there is a navigation bar, while
             // this one resolves to the same trailing slot on iOS and to the
@@ -39,20 +39,20 @@ public struct AlbumsRootView: View {
                     Button { isCreatingAlbum = true } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("ios.albums.new_album.title")
+                    .accessibilityLabel("app.albums.new_album.title")
                 }
             }
             .task { await model.load() }
-            .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
-                TextField("ios.albums.new_album.name_field", text: $newAlbumName)
-                Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
-                Button("ios.common.create") {
+            .alert("app.albums.new_album.title", isPresented: $isCreatingAlbum) {
+                TextField("app.albums.new_album.name_field", text: $newAlbumName)
+                Button("app.common.cancel", role: .cancel) { newAlbumName = "" }
+                Button("app.common.create") {
                     let name = newAlbumName
                     newAlbumName = ""
                     Task { await model.createAlbum(named: name) }
                 }
             } message: {
-                Text("ios.albums.new_album.message")
+                Text("app.albums.new_album.message")
             }
     }
 
@@ -62,18 +62,18 @@ public struct AlbumsRootView: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.userAlbums.isEmpty, model.smartAlbums.isEmpty {
             ContentUnavailableView(
-                "ios.albums.empty.title",
+                "app.albums.empty.title",
                 systemImage: "rectangle.stack",
-                description: Text("ios.albums.empty.description")
+                description: Text("app.albums.empty.description")
             )
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
                     if !model.userAlbums.isEmpty {
-                        albumSection("ios.albums.section.my_albums", model.userAlbums)
+                        albumSection("app.albums.section.my_albums", model.userAlbums)
                     }
                     if !model.smartAlbums.isEmpty {
-                        albumSection("ios.albums.section.smart_albums", model.smartAlbums)
+                        albumSection("app.albums.section.smart_albums", model.smartAlbums)
                     }
                 }
                 .padding()

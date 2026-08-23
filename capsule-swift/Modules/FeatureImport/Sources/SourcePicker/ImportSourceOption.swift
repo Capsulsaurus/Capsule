@@ -57,24 +57,24 @@ public struct ImportSourceOption: Sendable, Equatable, Identifiable {
         ImportSourceOption(
             id: "photos",
             kind: .cameraRoll,
-            titleKey: "ios.import.source.photos.title",
-            detailKey: "ios.import.source.photos.detail",
+            titleKey: "app.import.source.photos.title",
+            detailKey: "app.import.source.photos.detail",
             symbol: "photo.on.rectangle.angled",
             requiresLocatorPick: false
         ),
         ImportSourceOption(
             id: "files",
             kind: .folder,
-            titleKey: "ios.import.source.files.title",
-            detailKey: "ios.import.source.files.detail",
+            titleKey: "app.import.source.files.title",
+            detailKey: "app.import.source.files.detail",
             symbol: "folder",
             requiresLocatorPick: true
         ),
         ImportSourceOption(
             id: "watched-folder",
             kind: .watchedDirectory,
-            titleKey: "ios.import.source.watched_folder.title",
-            detailKey: "ios.import.source.watched_folder.detail",
+            titleKey: "app.import.source.watched_folder.title",
+            detailKey: "app.import.source.watched_folder.detail",
             symbol: "folder.badge.gearshape",
             requiresLocatorPick: true,
             requiresDesktopFileSystem: true
@@ -82,8 +82,8 @@ public struct ImportSourceOption: Sendable, Equatable, Identifiable {
         ImportSourceOption(
             id: "removable-volume",
             kind: .removableVolume,
-            titleKey: "ios.import.source.removable_volume.title",
-            detailKey: "ios.import.source.removable_volume.detail",
+            titleKey: "app.import.source.removable_volume.title",
+            detailKey: "app.import.source.removable_volume.detail",
             symbol: "sdcard",
             requiresLocatorPick: false,
             requiresDesktopFileSystem: true
@@ -91,8 +91,8 @@ public struct ImportSourceOption: Sendable, Equatable, Identifiable {
         ImportSourceOption(
             id: "takeout",
             kind: .takeoutArchive,
-            titleKey: "ios.import.source.takeout.title",
-            detailKey: "ios.import.source.takeout.detail",
+            titleKey: "app.import.source.takeout.title",
+            detailKey: "app.import.source.takeout.detail",
             symbol: "shippingbox",
             requiresLocatorPick: true
         ),

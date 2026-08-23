@@ -44,8 +44,8 @@ public struct RecoveryVerificationPromptView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.recovery.verify.title",
-                    subtitleKey: "ios.recovery.verify.subtitle",
+                    titleKey: "app.recovery.verify.title",
+                    subtitleKey: "app.recovery.verify.subtitle",
                     symbolName: "checkmark.shield"
                 )
                 content
@@ -64,14 +64,14 @@ public struct RecoveryVerificationPromptView: View {
     private var content: some View {
         switch model.state {
         case .idle, .loading:
-            AuthLoadingView(labelKey: "ios.recovery.verify.loading")
+            AuthLoadingView(labelKey: "app.recovery.verify.loading")
         case let .failed(error):
             AuthErrorBanner(error: error) { Task { await model.load() } }
         case .empty:
             ContentUnavailableView(
-                "ios.recovery.verify.unconfigured.title",
+                "app.recovery.verify.unconfigured.title",
                 systemImage: "shield.slash",
-                description: Text("ios.recovery.verify.unconfigured.description")
+                description: Text("app.recovery.verify.unconfigured.description")
             )
         case .ready:
             armedContent
@@ -91,9 +91,9 @@ public struct RecoveryVerificationPromptView: View {
             // through the sponsor's — so the cadence never prompts one, and the
             // screen must not invent an ask for a user with nothing to verify.
             ContentUnavailableView(
-                "ios.recovery.verify.not_armed.title",
+                "app.recovery.verify.not_armed.title",
                 systemImage: "person.2.badge.key",
-                description: Text("ios.recovery.verify.not_armed.description")
+                description: Text("app.recovery.verify.not_armed.description")
             )
         }
     }
@@ -101,7 +101,7 @@ public struct RecoveryVerificationPromptView: View {
     private var cadence: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             HStack(spacing: CapsuleTheme.Spacing.xSmall) {
-                Text("ios.recovery.verify.cadence")
+                Text("app.recovery.verify.cadence")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 Text(verbatim: "\(model.currentIntervalDays)")
@@ -112,18 +112,18 @@ public struct RecoveryVerificationPromptView: View {
 
             if model.isDue {
                 StatusChip(
-                    titleKey: "ios.recovery.verify.due",
+                    titleKey: "app.recovery.verify.due",
                     symbolName: "bell.badge.fill",
                     tint: .orange
                 )
             }
             if model.showsPersistentBadge {
                 StatusChip(
-                    titleKey: "ios.recovery.verify.badge.persistent",
+                    titleKey: "app.recovery.verify.badge.persistent",
                     symbolName: "exclamationmark.circle.fill",
                     tint: .orange
                 )
-                Text("ios.recovery.verify.badge.description")
+                Text("app.recovery.verify.badge.description")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -135,20 +135,20 @@ public struct RecoveryVerificationPromptView: View {
     private var prompt: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             LabeledField(
-                labelKey: "ios.recovery.verify.field.label",
-                footerKey: "ios.recovery.verify.field.footer"
+                labelKey: "app.recovery.verify.field.label",
+                footerKey: "app.recovery.verify.field.footer"
             ) {
-                SecureField("ios.recovery.verify.field.label", text: $model.passphraseInput)
+                SecureField("app.recovery.verify.field.label", text: $model.passphraseInput)
                     .textContentType(.password)
-                    .accessibilityLabel("ios.recovery.verify.field.label")
+                    .accessibilityLabel("app.recovery.verify.field.label")
             }
             if model.isVerifying {
-                AuthLoadingView(labelKey: "ios.recovery.verify.checking")
+                AuthLoadingView(labelKey: "app.recovery.verify.checking")
             }
-            Button("ios.recovery.verify.submit") { Task { await model.verify() } }
+            Button("app.recovery.verify.submit") { Task { await model.verify() } }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(model.isVerifying || model.passphraseInput.isEmpty)
-                .accessibilityLabel("ios.recovery.verify.submit")
+                .accessibilityLabel("app.recovery.verify.submit")
         }
     }
 
@@ -164,13 +164,13 @@ public struct RecoveryVerificationPromptView: View {
         switch outcome {
         case .verified:
             StatusChip(
-                titleKey: "ios.recovery.verify.outcome.verified",
+                titleKey: "app.recovery.verify.outcome.verified",
                 symbolName: "checkmark.seal.fill",
                 tint: .green
             )
         case .mismatch:
             StatusChip(
-                titleKey: "ios.recovery.verify.outcome.mismatch",
+                titleKey: "app.recovery.verify.outcome.mismatch",
                 symbolName: "xmark.circle.fill",
                 tint: .red
             )
@@ -179,7 +179,7 @@ public struct RecoveryVerificationPromptView: View {
             // network problem, and recording it against the user would punish
             // them for it.
             StatusChip(
-                titleKey: "ios.recovery.verify.outcome.inconclusive",
+                titleKey: "app.recovery.verify.outcome.inconclusive",
                 symbolName: "questionmark.circle.fill",
                 tint: .orange
             )
@@ -191,13 +191,13 @@ public struct RecoveryVerificationPromptView: View {
         if model.offersGuidedRewrap {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
                 AuthSectionHeader(
-                    titleKey: "ios.recovery.verify.rewrap.title",
-                    descriptionKey: "ios.recovery.verify.rewrap.description",
+                    titleKey: "app.recovery.verify.rewrap.title",
+                    descriptionKey: "app.recovery.verify.rewrap.description",
                     symbolName: "arrow.triangle.2.circlepath"
                 )
-                Button("ios.recovery.verify.rewrap.action") { isRewrapping = true }
+                Button("app.recovery.verify.rewrap.action") { isRewrapping = true }
                     .capsuleGlassButtonStyle(prominent: true)
-                    .accessibilityLabel("ios.recovery.verify.rewrap.action")
+                    .accessibilityLabel("app.recovery.verify.rewrap.action")
             }
             .authCard()
         }
@@ -208,13 +208,13 @@ public struct RecoveryVerificationPromptView: View {
             if model.canSnooze {
                 snoozeButtons
             }
-            Button("ios.recovery.verify.lost") { model.declareSecretLost() }
+            Button("app.recovery.verify.lost") { model.declareSecretLost() }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.recovery.verify.lost")
-            Button("ios.common.not_now", action: onDismiss)
+                .accessibilityLabel("app.recovery.verify.lost")
+            Button("app.common.not_now", action: onDismiss)
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.common.not_now")
-            Text("ios.recovery.verify.never_blocks")
+                .accessibilityLabel("app.common.not_now")
+            Text("app.recovery.verify.never_blocks")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

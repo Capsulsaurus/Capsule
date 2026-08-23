@@ -44,10 +44,10 @@ public struct ImportPlanConfirmView: View {
 
     public var body: some View {
         ImportScreen(
-            titleKey: "ios.import.plan.title",
+            titleKey: "app.import.plan.title",
             phase: model.phase,
-            emptyTitleKey: "ios.import.plan.empty.title",
-            emptyDescriptionKey: "ios.import.plan.empty.description",
+            emptyTitleKey: "app.import.plan.empty.title",
+            emptyDescriptionKey: "app.import.plan.empty.description",
             emptySymbol: "tray",
             retry: { await model.load() },
             content: { planBody }
@@ -139,9 +139,9 @@ public struct ImportPlanConfirmView: View {
             Section {
                 ImportDestinationRow(albumName: model.destinationName, rule: rule)
             } header: {
-                Text("ios.import.plan.destination.header")
+                Text("app.import.plan.destination.header")
             } footer: {
-                Text("ios.import.plan.destination.footer")
+                Text("app.import.plan.destination.footer")
             }
         }
     }
@@ -155,24 +155,24 @@ public struct ImportPlanConfirmView: View {
                 onEnableStreaming: { Task { await model.setStreaming(true) } }
             )
         } header: {
-            Text("ios.import.plan.space.header")
+            Text("app.import.plan.space.header")
         } footer: {
-            Text("ios.import.plan.space.footer")
+            Text("app.import.plan.space.footer")
         }
     }
 
     private var modeSection: some View {
         Section {
             ImportValueRow(
-                labelKey: "ios.import.plan.mode.header",
+                labelKey: "app.import.plan.mode.header",
                 value: String(localized: String.LocalizationValue(modeKey))
             )
             if model.releasesSource {
-                ImportStatusLabel(titleKey: "ios.import.plan.move.warning", tone: .caution)
+                ImportStatusLabel(titleKey: "app.import.plan.move.warning", tone: .caution)
                     .font(.footnote)
             }
             if model.isStreaming {
-                ImportNote(textKey: "ios.import.plan.streaming.enabled")
+                ImportNote(textKey: "app.import.plan.streaming.enabled")
             }
         }
     }
@@ -204,13 +204,13 @@ public struct ImportPlanConfirmView: View {
     @ViewBuilder
     private var blockedNote: some View {
         if !model.canConfirm, model.phase.isReady {
-            ImportNote(textKey: "ios.import.plan.confirm.blocked")
+            ImportNote(textKey: "app.import.plan.confirm.blocked")
         }
     }
 
     private var confirmTitle: String {
         String(
-            format: String(localized: "ios.import.plan.confirm"),
+            format: String(localized: "app.import.plan.confirm"),
             ImportFormat.count(model.count(for: .add))
         )
     }

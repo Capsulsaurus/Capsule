@@ -46,7 +46,7 @@ public struct TimelineRootView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.tab.library")
+            .navigationTitle("app.tab.library")
             .capsuleNavigationBarInline()
             // `.navigation` / `.primaryAction` rather than `.topBarLeading`
             // / `.topBarTrailing`: the topBar placements exist only where
@@ -55,7 +55,7 @@ public struct TimelineRootView: View {
             .toolbar {
                 if isSelecting {
                     ToolbarItem(placement: .navigation) {
-                        Button("ios.common.cancel") { exitSelection() }
+                        Button("app.common.cancel") { exitSelection() }
                     }
                     ToolbarItem(placement: .principal) {
                         Text(selectionTitle).font(.headline)
@@ -88,11 +88,11 @@ public struct TimelineRootView: View {
                 if importer.isImporting { importProgressOverlay }
             }
             .alert(
-                "ios.timeline.import_complete.title",
+                "app.timeline.import_complete.title",
                 isPresented: importResultBinding,
                 presenting: importer.lastResult
             ) { _ in
-                Button("ios.common.ok") {}
+                Button("app.common.ok") {}
             } message: { result in
                 Text(Self.importSummary(result))
             }
@@ -109,7 +109,7 @@ public struct TimelineRootView: View {
                 }
             }
             .confirmationDialog(
-                "ios.add_to_album.title",
+                "app.add_to_album.title",
                 isPresented: $isAddToAlbumPresented,
                 titleVisibility: .visible
             ) {
@@ -118,8 +118,8 @@ public struct TimelineRootView: View {
                 }
             } message: {
                 Text(userAlbums.isEmpty
-                    ? LocalizedStringKey("ios.add_to_album.empty_collections")
-                    : LocalizedStringKey("ios.add_to_album.choose"))
+                    ? LocalizedStringKey("app.add_to_album.empty_collections")
+                    : LocalizedStringKey("app.add_to_album.choose"))
             }
     }
 
@@ -133,16 +133,16 @@ public struct TimelineRootView: View {
             permissionPrompt
         case let .failed(message):
             ContentUnavailableView(
-                "ios.timeline.load_failed.title",
+                "app.timeline.load_failed.title",
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
         case .ready:
             if model.sections.isEmpty {
                 ContentUnavailableView(
-                    "ios.timeline.empty.title",
+                    "app.timeline.empty.title",
                     systemImage: "photo.on.rectangle",
-                    description: Text("ios.timeline.empty.description")
+                    description: Text("app.timeline.empty.description")
                 )
             } else {
                 PhotoGridView(
@@ -168,14 +168,14 @@ public struct TimelineRootView: View {
         } label: {
             Image(systemName: "square.and.arrow.down")
         }
-        .accessibilityLabel("ios.timeline.import.accessibility")
+        .accessibilityLabel("app.timeline.import.accessibility")
     }
 
     private var levelPicker: some View {
-        Picker("ios.timeline.view_picker", selection: levelBinding) {
-            Text("ios.timeline.level.years").tag(TimelineViewModel.TimelineLevel.years)
-            Text("ios.timeline.level.months").tag(TimelineViewModel.TimelineLevel.months)
-            Text("ios.timeline.level.all").tag(TimelineViewModel.TimelineLevel.all)
+        Picker("app.timeline.view_picker", selection: levelBinding) {
+            Text("app.timeline.level.years").tag(TimelineViewModel.TimelineLevel.years)
+            Text("app.timeline.level.months").tag(TimelineViewModel.TimelineLevel.months)
+            Text("app.timeline.level.all").tag(TimelineViewModel.TimelineLevel.all)
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
@@ -187,10 +187,10 @@ public struct TimelineRootView: View {
 
     private var densityMenu: some View {
         Menu {
-            Picker("ios.timeline.grid_size", selection: $model.columnCount) {
-                Label("ios.timeline.grid.large", systemImage: "square.grid.2x2").tag(3)
-                Label("ios.timeline.grid.medium", systemImage: "square.grid.3x3").tag(5)
-                Label("ios.timeline.grid.small", systemImage: "square.grid.4x3.fill").tag(7)
+            Picker("app.timeline.grid_size", selection: $model.columnCount) {
+                Label("app.timeline.grid.large", systemImage: "square.grid.2x2").tag(3)
+                Label("app.timeline.grid.medium", systemImage: "square.grid.3x3").tag(5)
+                Label("app.timeline.grid.small", systemImage: "square.grid.4x3.fill").tag(7)
             }
         } label: {
             Image(systemName: "square.grid.2x2")
@@ -199,12 +199,12 @@ public struct TimelineRootView: View {
 
     private var permissionPrompt: some View {
         ContentUnavailableView {
-            Label("ios.timeline.permission.title", systemImage: "lock.fill")
+            Label("app.timeline.permission.title", systemImage: "lock.fill")
         } description: {
-            Text("ios.timeline.permission.description")
+            Text("app.timeline.permission.description")
         } actions: {
             if let settingsURL = PhotoLibrarySettings.url {
-                Button("ios.timeline.permission.open_settings") { openURL(settingsURL) }
+                Button("app.timeline.permission.open_settings") { openURL(settingsURL) }
             }
         }
     }
@@ -212,7 +212,7 @@ public struct TimelineRootView: View {
     private var importProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.3).ignoresSafeArea()
-            ProgressView("ios.timeline.importing")
+            ProgressView("app.timeline.importing")
                 .padding(CapsuleTheme.Spacing.xLarge)
                 .capsuleGlass(in: RoundedRectangle(cornerRadius: CapsuleTheme.Radius.medium))
         }
@@ -253,7 +253,7 @@ public struct TimelineRootView: View {
 
 private extension TimelineRootView {
     var selectButton: some View {
-        Button("ios.timeline.select") { isSelecting = true }
+        Button("app.timeline.select") { isSelecting = true }
     }
 
     var selectionTitle: String {

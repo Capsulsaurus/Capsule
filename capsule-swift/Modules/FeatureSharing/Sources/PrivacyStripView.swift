@@ -49,15 +49,15 @@ struct PrivacyStripView: View {
             // Called, not forwarded: handing the stored `@MainActor @Sendable`
             // closure straight to `set:` makes SILGen emit an `@isolated(any)`
             // reabstraction thunk that crashes IRGen in Swift 6.3.3.
-            Toggle("ios.export.retain.toggle", isOn: Binding(
+            Toggle("app.export.retain.toggle", isOn: Binding(
                 get: { policy.retainsIdentifyingMetadata },
                 set: { setRetention($0) }
             ))
-            Text("ios.export.retain.footer")
+            Text("app.export.retain.footer")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } else {
-            ScopeNote(message: "ios.share.privacy.no_opt_out")
+            ScopeNote(message: "app.share.privacy.no_opt_out")
         }
     }
 
@@ -66,19 +66,19 @@ struct PrivacyStripView: View {
     /// than silently changing behaviour behind an unchanged list.
     private func dispositionTitle(for field: PrivacyStripField) -> LocalizedStringKey {
         switch policy.effectiveDisposition(for: field) {
-        case .removed: "ios.export.disposition.removed"
-        case .reduced: "ios.export.disposition.reduced"
-        case nil: "ios.export.disposition.retained"
+        case .removed: "app.export.disposition.removed"
+        case .reduced: "app.export.disposition.reduced"
+        case nil: "app.export.disposition.retained"
         }
     }
 
     private func title(for field: PrivacyStripField) -> LocalizedStringKey {
         switch field {
-        case .cameraSerial: "ios.export.field.camera_serial"
-        case .deviceIdentifier: "ios.export.field.device_id"
-        case .sessionIdentifier: "ios.export.field.session_id"
-        case .location: "ios.export.field.location"
-        case .contactTags: "ios.export.field.contact_tags"
+        case .cameraSerial: "app.export.field.camera_serial"
+        case .deviceIdentifier: "app.export.field.device_id"
+        case .sessionIdentifier: "app.export.field.session_id"
+        case .location: "app.export.field.location"
+        case .contactTags: "app.export.field.contact_tags"
         }
     }
 

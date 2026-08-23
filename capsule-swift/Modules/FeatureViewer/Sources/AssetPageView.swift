@@ -96,7 +96,7 @@ private struct LivePhotoPage: View {
     /// Apple's own badge, made live: tapping it replays the motion.
     private var liveBadge: some View {
         Button { playbackTicket += 1 } label: {
-            Label("ios.viewer.live.replay", systemImage: "livephoto")
+            Label("app.viewer.live.replay", systemImage: "livephoto")
                 .font(.caption.weight(.semibold))
                 .labelStyle(.titleAndIcon)
                 .foregroundStyle(CapsuleTheme.Colors.onMedia)
@@ -105,7 +105,7 @@ private struct LivePhotoPage: View {
                 .background(.black.opacity(0.35), in: Capsule())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("ios.viewer.live.replay.accessibility")
+        .accessibilityLabel("app.viewer.live.replay.accessibility")
         .accessibilityIdentifier("viewer.live.replay")
         .padding(CapsuleTheme.Spacing.large)
     }

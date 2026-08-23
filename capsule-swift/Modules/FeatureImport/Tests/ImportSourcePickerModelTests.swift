@@ -99,7 +99,7 @@ struct ImportSourcePickerModelTests {
     func everyRowExplainsItself() {
         for option in ImportSourceOption.catalog {
             #expect(!option.titleKey.isEmpty)
-            #expect(option.detailKey.hasPrefix("ios.import.source."))
+            #expect(option.detailKey.hasPrefix("app.import.source."))
         }
     }
 }

@@ -50,8 +50,8 @@ public struct CrossDeviceAddView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.crossdevice.title",
-                    subtitleKey: "ios.crossdevice.subtitle",
+                    titleKey: "app.crossdevice.title",
+                    subtitleKey: "app.crossdevice.subtitle",
                     symbolName: "iphone.and.arrow.right.outward"
                 )
                 content
@@ -65,7 +65,7 @@ public struct CrossDeviceAddView: View {
         case .idle: idleStep
         case .awaitingRedemption: awaitingStep
         case .verifyingSafetyCode: safetyStep
-        case .transferringKeys: AuthLoadingView(labelKey: "ios.crossdevice.transferring")
+        case .transferringKeys: AuthLoadingView(labelKey: "app.crossdevice.transferring")
         case let .completed(identifier): completedStep(identifier)
         case .abortedOnMismatch: abortedStep
         case let .failed(error): failedStep(error)
@@ -77,17 +77,17 @@ public struct CrossDeviceAddView: View {
     private var idleStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.crossdevice.start.title",
-                descriptionKey: "ios.crossdevice.start.description",
+                titleKey: "app.crossdevice.start.title",
+                descriptionKey: "app.crossdevice.start.description",
                 symbolName: "qrcode"
             )
             if model.isWorking {
-                AuthLoadingView(labelKey: "ios.crossdevice.issuing")
+                AuthLoadingView(labelKey: "app.crossdevice.issuing")
             }
-            Button("ios.crossdevice.issue") { Task { await model.issueCode() } }
+            Button("app.crossdevice.issue") { Task { await model.issueCode() } }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(model.isWorking)
-                .accessibilityLabel("ios.crossdevice.issue")
+                .accessibilityLabel("app.crossdevice.issue")
         }
     }
 
@@ -97,17 +97,17 @@ public struct CrossDeviceAddView: View {
     private var awaitingStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
             AuthSectionHeader(
-                titleKey: "ios.crossdevice.code.title",
-                descriptionKey: "ios.crossdevice.code.description",
+                titleKey: "app.crossdevice.code.title",
+                descriptionKey: "app.crossdevice.code.description",
                 symbolName: "qrcode"
             )
             qrCode
             fallbackCode
             liveness
-            AuthLoadingView(labelKey: "ios.crossdevice.waiting")
-            Button("ios.crossdevice.cancel") { Task { await model.cancel() } }
+            AuthLoadingView(labelKey: "app.crossdevice.waiting")
+            Button("app.crossdevice.cancel") { Task { await model.cancel() } }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.crossdevice.cancel")
+                .accessibilityLabel("app.crossdevice.cancel")
         }
     }
 
@@ -116,7 +116,7 @@ public struct CrossDeviceAddView: View {
         if let payload = model.qrPayload() {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
                 SecretQRCodeView(payload: payload)
-                Text("ios.crossdevice.code.qr_note")
+                Text("app.crossdevice.code.qr_note")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -130,11 +130,11 @@ public struct CrossDeviceAddView: View {
     private var fallbackCode: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             AuthCodeValue(
-                labelKey: "ios.crossdevice.code.fallback",
+                labelKey: "app.crossdevice.code.fallback",
                 code: model.textFallbackDisplay,
                 font: .title2.monospaced().weight(.semibold)
             )
-            Text("ios.crossdevice.code.fallback_note")
+            Text("app.crossdevice.code.fallback_note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -146,19 +146,19 @@ public struct CrossDeviceAddView: View {
     private var liveness: some View {
         if model.isInviteLive {
             StatusChip(
-                titleKey: "ios.crossdevice.code.live",
+                titleKey: "app.crossdevice.code.live",
                 symbolName: "clock.fill",
                 tint: .secondary
             )
         } else {
             StatusChip(
-                titleKey: "ios.crossdevice.code.expired",
+                titleKey: "app.crossdevice.code.expired",
                 symbolName: "clock.badge.xmark.fill",
                 tint: .orange
             )
-            Button("ios.crossdevice.issue_again") { Task { await model.issueCode() } }
+            Button("app.crossdevice.issue_again") { Task { await model.issueCode() } }
                 .buttonStyle(.bordered)
-                .accessibilityLabel("ios.crossdevice.issue_again")
+                .accessibilityLabel("app.crossdevice.issue_again")
         }
     }
 
@@ -176,7 +176,7 @@ public struct CrossDeviceAddView: View {
                 abort: { Task { await model.abortOnMismatch() } }
             )
         } else {
-            AuthLoadingView(labelKey: "ios.crossdevice.safety.loading")
+            AuthLoadingView(labelKey: "app.crossdevice.safety.loading")
         }
     }
 
@@ -185,12 +185,12 @@ public struct CrossDeviceAddView: View {
     private func completedStep(_ identifier: DeviceID) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.crossdevice.completed.title",
-                descriptionKey: "ios.crossdevice.completed.description",
+                titleKey: "app.crossdevice.completed.title",
+                descriptionKey: "app.crossdevice.completed.description",
                 symbolName: "checkmark.seal.fill"
             )
             AuthCodeValue(
-                labelKey: "ios.crossdevice.completed.device_id",
+                labelKey: "app.crossdevice.completed.device_id",
                 code: ChunkedCodeFormatter.chunked(identifier.rawValue),
                 font: .callout.monospaced()
             )
@@ -204,13 +204,13 @@ public struct CrossDeviceAddView: View {
     private var abortedStep: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.crossdevice.aborted.title",
-                descriptionKey: "ios.crossdevice.aborted.description",
+                titleKey: "app.crossdevice.aborted.title",
+                descriptionKey: "app.crossdevice.aborted.description",
                 symbolName: "exclamationmark.octagon.fill"
             )
-            Button("ios.crossdevice.aborted.restart") { Task { await model.issueCode() } }
+            Button("app.crossdevice.aborted.restart") { Task { await model.issueCode() } }
                 .capsuleGlassButtonStyle(prominent: true)
-                .accessibilityLabel("ios.crossdevice.aborted.restart")
+                .accessibilityLabel("app.crossdevice.aborted.restart")
         }
         .authCard()
     }
@@ -223,7 +223,7 @@ public struct CrossDeviceAddView: View {
         // rather than as a disabled button — a disabled button is not a control.
         if model.needsFreshLocalAuth {
             StatusChip(
-                titleKey: "ios.crossdevice.local_auth_required",
+                titleKey: "app.crossdevice.local_auth_required",
                 symbolName: "lock.badge.clock.fill",
                 tint: .orange
             )

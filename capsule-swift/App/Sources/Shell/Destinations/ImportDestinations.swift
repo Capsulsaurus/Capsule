@@ -35,7 +35,7 @@ struct ImportSectionView: View {
         )
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("ios.menu.import", systemImage: "square.and.arrow.down") {
+                Button("apple.menu.import", systemImage: "square.and.arrow.down") {
                     isImporting = true
                 }
                 .accessibilityIdentifier("imports.start")
@@ -88,7 +88,7 @@ struct ImportFlowView: View {
             content
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("ios.common.cancel") { onFinish() }
+                        Button("app.common.cancel") { onFinish() }
                     }
                 }
         }

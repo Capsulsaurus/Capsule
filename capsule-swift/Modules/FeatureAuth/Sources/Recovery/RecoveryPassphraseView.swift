@@ -39,8 +39,8 @@ public struct RecoveryPassphraseView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.recovery.passphrase.title",
-                    subtitleKey: "ios.recovery.passphrase.subtitle",
+                    titleKey: "app.recovery.passphrase.title",
+                    subtitleKey: "app.recovery.passphrase.subtitle",
                     symbolName: "text.word.spacing"
                 )
                 content
@@ -54,14 +54,14 @@ public struct RecoveryPassphraseView: View {
     private var content: some View {
         switch model.state {
         case .idle, .loading:
-            AuthLoadingView(labelKey: "ios.recovery.passphrase.loading")
+            AuthLoadingView(labelKey: "app.recovery.passphrase.loading")
         case let .failed(error):
             AuthErrorBanner(error: error) { Task { await model.reveal() } }
         case .empty:
             ContentUnavailableView(
-                "ios.recovery.passphrase.empty.title",
+                "app.recovery.passphrase.empty.title",
                 systemImage: "tray",
-                description: Text("ios.recovery.passphrase.empty.description")
+                description: Text("app.recovery.passphrase.empty.description")
             )
         case .ready:
             stage
@@ -87,10 +87,10 @@ public struct RecoveryPassphraseView: View {
             if let entropy = model.entropy {
                 RecoveryEntropyMeter(estimate: entropy)
             }
-            Button("ios.recovery.passphrase.continue") { model.beginTypeBack() }
+            Button("app.recovery.passphrase.continue") { model.beginTypeBack() }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(model.revealedWords.isEmpty)
-                .accessibilityLabel("ios.recovery.passphrase.continue")
+                .accessibilityLabel("app.recovery.passphrase.continue")
         }
     }
 
@@ -101,7 +101,7 @@ public struct RecoveryPassphraseView: View {
     /// have seen what it is about.
     private var shownOnceWarning: some View {
         Label {
-            Text("ios.recovery.passphrase.shown_once")
+            Text("app.recovery.passphrase.shown_once")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
         } icon: {
@@ -115,15 +115,15 @@ public struct RecoveryPassphraseView: View {
     private var copyControls: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             Button(
-                model.hasCopied ? "ios.recovery.passphrase.copied" : "ios.recovery.passphrase.copy",
+                model.hasCopied ? "app.recovery.passphrase.copied" : "app.recovery.passphrase.copy",
                 systemImage: model.hasCopied ? "checkmark" : "doc.on.doc"
             ) {
                 copySecret()
             }
             .buttonStyle(.bordered)
-            .accessibilityLabel("ios.recovery.passphrase.copy")
+            .accessibilityLabel("app.recovery.passphrase.copy")
 
-            Text("ios.recovery.passphrase.copy_note")
+            Text("app.recovery.passphrase.copy_note")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -145,8 +145,8 @@ public struct RecoveryPassphraseView: View {
     private var typeBackStage: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
             AuthSectionHeader(
-                titleKey: "ios.recovery.passphrase.gate.title",
-                descriptionKey: "ios.recovery.passphrase.gate.subtitle",
+                titleKey: "app.recovery.passphrase.gate.title",
+                descriptionKey: "app.recovery.passphrase.gate.subtitle",
                 symbolName: "checkmark.rectangle.stack"
             )
             ForEach(model.challenges) { challenge in
@@ -154,7 +154,7 @@ public struct RecoveryPassphraseView: View {
             }
             remainingLine
             gateActions
-            Text("ios.recovery.passphrase.gate.no_skip")
+            Text("app.recovery.passphrase.gate.no_skip")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -164,7 +164,7 @@ public struct RecoveryPassphraseView: View {
     private func challengeField(_ challenge: TypeBackChallenge) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
             HStack(spacing: CapsuleTheme.Spacing.xSmall) {
-                Text("ios.recovery.passphrase.gate.word_label")
+                Text("app.recovery.passphrase.gate.word_label")
                     .font(.headline)
                 Text(verbatim: "\(challenge.displayPosition)")
                     .font(.headline.monospacedDigit())
@@ -172,21 +172,21 @@ public struct RecoveryPassphraseView: View {
             .accessibilityElement(children: .combine)
 
             TextField(
-                "ios.recovery.passphrase.gate.word_label",
+                "app.recovery.passphrase.gate.word_label",
                 text: answerBinding(for: challenge.wordIndex)
             )
             .textFieldStyle(.roundedBorder)
             .font(.body.monospaced())
             .autocorrectionDisabled()
             .textContentType(.none)
-            .accessibilityLabel("ios.recovery.passphrase.gate.word_label")
+            .accessibilityLabel("app.recovery.passphrase.gate.word_label")
             .accessibilityValue(Text(verbatim: "\(challenge.displayPosition)"))
 
             if !challenge.typed.isEmpty {
                 StatusChip(
                     titleKey: challenge.isVerified
-                        ? "ios.recovery.passphrase.gate.verified"
-                        : "ios.recovery.passphrase.gate.unverified",
+                        ? "app.recovery.passphrase.gate.verified"
+                        : "app.recovery.passphrase.gate.unverified",
                     symbolName: challenge.isVerified ? "checkmark.circle.fill" : "xmark.circle.fill",
                     tint: challenge.isVerified ? .green : .orange
                 )
@@ -196,7 +196,7 @@ public struct RecoveryPassphraseView: View {
 
     private var remainingLine: some View {
         HStack(spacing: CapsuleTheme.Spacing.xSmall) {
-            Text("ios.recovery.passphrase.gate.remaining")
+            Text("app.recovery.passphrase.gate.remaining")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Text(verbatim: "\(model.remainingChallengeCount)")
@@ -208,19 +208,19 @@ public struct RecoveryPassphraseView: View {
 
     private var gateActions: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
-            Button("ios.recovery.passphrase.gate.finish") {
+            Button("app.recovery.passphrase.gate.finish") {
                 if model.complete() { answers.removeAll() }
             }
             .capsuleGlassButtonStyle(prominent: true)
             .disabled(!model.canComplete)
-            .accessibilityLabel("ios.recovery.passphrase.gate.finish")
+            .accessibilityLabel("app.recovery.passphrase.gate.finish")
 
             // Allowed only *before* the gate passes. The phrase is already on
             // this screen in this session, so refusing to re-show it would make
             // the user guess — the opposite of what the gate is for.
-            Button("ios.recovery.passphrase.gate.show_again") { model.returnToReveal() }
+            Button("app.recovery.passphrase.gate.show_again") { model.returnToReveal() }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("ios.recovery.passphrase.gate.show_again")
+                .accessibilityLabel("app.recovery.passphrase.gate.show_again")
         }
     }
 
@@ -239,13 +239,13 @@ public struct RecoveryPassphraseView: View {
     private var completedStage: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.recovery.passphrase.done.title",
-                descriptionKey: "ios.recovery.passphrase.done.description",
+                titleKey: "app.recovery.passphrase.done.title",
+                descriptionKey: "app.recovery.passphrase.done.description",
                 symbolName: "checkmark.seal.fill"
             )
-            Button("ios.recovery.passphrase.done.action", action: onComplete)
+            Button("app.recovery.passphrase.done.action", action: onComplete)
                 .capsuleGlassButtonStyle(prominent: true)
-                .accessibilityLabel("ios.recovery.passphrase.done.action")
+                .accessibilityLabel("app.recovery.passphrase.done.action")
         }
         .authCard()
     }

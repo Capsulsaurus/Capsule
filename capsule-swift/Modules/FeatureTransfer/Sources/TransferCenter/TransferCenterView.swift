@@ -46,7 +46,7 @@ public struct TransferCenterView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.transfer.title")
+            .navigationTitle("app.transfer.title")
             .toolbar { toolbar }
             .safeAreaInset(edge: .bottom) {
                 ConnectionFooter(
@@ -64,7 +64,7 @@ public struct TransferCenterView: View {
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .primaryAction) {
-            Button("ios.transfer.action.force_now") {
+            Button("app.transfer.action.force_now") {
                 Task { await model.forceUploads() }
             }
             .disabled(!model.phase.permitsNetworkActions || model.rows.isEmpty)
@@ -84,7 +84,7 @@ public struct TransferCenterView: View {
             .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("ios.common.done") { self.inspectedAsset = nil }
+                    Button("app.common.done") { self.inspectedAsset = nil }
                 }
             }
         }
@@ -105,7 +105,7 @@ public struct TransferCenterView: View {
                         Text(LocalizedStringKey(segment.titleKey)).tag(segment)
                     }
                 } label: {
-                    Text("ios.transfer.segment.label")
+                    Text("app.transfer.segment.label")
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -122,8 +122,8 @@ public struct TransferCenterView: View {
         if !model.phase.hasContent {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.transfer.empty.title",
-                emptyDescription: "ios.transfer.empty.description",
+                emptyTitle: "app.transfer.empty.title",
+                emptyDescription: "app.transfer.empty.description",
                 emptySymbol: "checkmark.circle",
                 retry: { await model.reload() }
             )
@@ -146,12 +146,12 @@ public struct TransferCenterView: View {
     @ViewBuilder
     private var uploadsSection: some View {
         if model.rows.isEmpty {
-            Section("ios.transfer.segment.uploads") {
-                Text("ios.transfer.uploads.empty")
+            Section("app.transfer.segment.uploads") {
+                Text("app.transfer.uploads.empty")
                     .foregroundStyle(.secondary)
             }
         } else {
-            Section("ios.transfer.segment.uploads") {
+            Section("app.transfer.segment.uploads") {
                 ForEach(model.rows) { row in
                     Button { inspectedAsset = row.assetID } label: {
                         TransferRowView(row: row)
@@ -166,7 +166,7 @@ public struct TransferCenterView: View {
     @ViewBuilder
     private func cancelAction(for row: TransferRow) -> some View {
         if let cancellable = row.sessions.first(where: { $0.state.isCancellable }) {
-            Button("ios.transfer.action.cancel", role: .destructive) {
+            Button("app.transfer.action.cancel", role: .destructive) {
                 Task { await model.cancel(cancellable.id) }
             }
         }
@@ -175,12 +175,12 @@ public struct TransferCenterView: View {
     @ViewBuilder
     private var activitySection: some View {
         if model.settledRows.isEmpty {
-            Section("ios.transfer.segment.activity") {
-                Text("ios.transfer.activity.empty")
+            Section("app.transfer.segment.activity") {
+                Text("app.transfer.activity.empty")
                     .foregroundStyle(.secondary)
             }
         } else {
-            Section("ios.transfer.segment.activity") {
+            Section("app.transfer.segment.activity") {
                 ForEach(model.settledRows) { row in TransferRowView(row: row) }
             }
         }
@@ -200,15 +200,15 @@ struct DownloadsSection: View {
     let status: SyncStatus
 
     var body: some View {
-        Section("ios.transfer.segment.downloads") {
-            LabeledContent("ios.transfer.downloads.pending") {
+        Section("app.transfer.segment.downloads") {
+            LabeledContent("app.transfer.downloads.pending") {
                 Text(verbatim: TransferFormat.count(status.pendingDownloadCount))
             }
-            Text("ios.transfer.downloads.ladder")
+            Text("app.transfer.downloads.ladder")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if status.pendingDownloadCount == 0 {
-                Label("ios.transfer.downloads.none", systemImage: "checkmark.circle")
+                Label("app.transfer.downloads.none", systemImage: "checkmark.circle")
                     .foregroundStyle(.secondary)
             }
         }

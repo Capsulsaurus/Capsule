@@ -18,8 +18,8 @@ public struct ModerationView: View {
         SharingStateView(
             phase: model.phase,
             empty: .init(
-                title: "ios.moderation.empty.title",
-                message: "ios.moderation.empty.description",
+                title: "app.moderation.empty.title",
+                message: "app.moderation.empty.description",
                 symbol: "hand.raised"
             ),
             retry: { Task { await model.load() } },
@@ -27,24 +27,24 @@ public struct ModerationView: View {
                 form
             }
         )
-        .navigationTitle("ios.moderation.title")
+        .navigationTitle("app.moderation.title")
         .task { await model.load() }
         .safeAreaInset(edge: .top) { OfflineNotice(connection: model.connection) }
         .confirmationDialog(
-            "ios.moderation.unblock.confirm_title",
+            "app.moderation.unblock.confirm_title",
             isPresented: Binding(
                 get: { model.pendingUnblock != nil },
                 set: { if !$0 { model.pendingUnblock = nil } }
             ),
             titleVisibility: .visible
         ) {
-            Button("ios.moderation.unblock.confirm") {
+            Button("app.moderation.unblock.confirm") {
                 guard let entry = model.pendingUnblock else { return }
                 Task { await model.unblock(entry) }
             }
-            Button("ios.common.cancel", role: .cancel) { model.pendingUnblock = nil }
+            Button("app.common.cancel", role: .cancel) { model.pendingUnblock = nil }
         } message: {
-            Text("ios.moderation.unblock.confirm_message")
+            Text("app.moderation.unblock.confirm_message")
         }
     }
 
@@ -67,7 +67,7 @@ public struct ModerationView: View {
     private var blocksSection: some View {
         Section {
             if model.blocks.isEmpty {
-                Text("ios.moderation.blocks.none")
+                Text("app.moderation.blocks.none")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.blocks) { entry in
@@ -75,11 +75,11 @@ public struct ModerationView: View {
                 }
             }
         } header: {
-            Text("ios.moderation.section.blocks")
+            Text("app.moderation.section.blocks")
         } footer: {
             // The honest limit: a block stops future access, it does not claw
             // back the epoch keys the blocked party already holds.
-            Text("ios.moderation.section.blocks_footer")
+            Text("app.moderation.section.blocks_footer")
         }
     }
 
@@ -94,9 +94,9 @@ public struct ModerationView: View {
                     }
                 }
             } header: {
-                Text("ios.moderation.section.untrusted")
+                Text("app.moderation.section.untrusted")
             } footer: {
-                Text("ios.moderation.section.untrusted_footer")
+                Text("app.moderation.section.untrusted_footer")
             }
         }
     }
@@ -105,23 +105,23 @@ public struct ModerationView: View {
     private var reportsSection: some View {
         Section {
             if model.reports.isEmpty {
-                Text("ios.moderation.reports.none")
+                Text("app.moderation.reports.none")
                     .foregroundStyle(.secondary)
             } else {
                 ForEach(model.reports) { ReportRowView(report: $0) }
             }
         } header: {
-            Text("ios.moderation.section.reports")
+            Text("app.moderation.section.reports")
         } footer: {
-            Text("ios.moderation.section.reports_footer")
+            Text("app.moderation.section.reports_footer")
         }
     }
 
     private var scopeSection: some View {
-        Section("ios.moderation.section.how") {
-            ScopeNote(message: "ios.moderation.note.no_scanning")
-            ScopeNote(message: "ios.moderation.note.no_silent_ops")
-            ScopeNote(message: "ios.moderation.note.appeal_master_key")
+        Section("app.moderation.section.how") {
+            ScopeNote(message: "app.moderation.note.no_scanning")
+            ScopeNote(message: "app.moderation.note.no_silent_ops")
+            ScopeNote(message: "app.moderation.note.appeal_master_key")
         }
     }
 }
@@ -143,13 +143,13 @@ struct BlockRowView: View {
                 LabeledContent {
                     Text(entry.blockedAt.date, format: .dateTime.year().month().day())
                 } label: {
-                    Text("ios.moderation.block.since")
+                    Text("app.moderation.block.since")
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: CapsuleTheme.Spacing.small)
-            Button("ios.moderation.unblock", action: unblock)
+            Button("app.moderation.unblock", action: unblock)
                 .buttonStyle(.borderless)
         }
         .accessibilityElement(children: .combine)
@@ -189,13 +189,13 @@ struct UntrustedOriginRow: View {
             LabeledContent {
                 Text(origin.withheldAssetCount, format: .number)
             } label: {
-                Text("ios.moderation.untrusted.withheld")
+                Text("app.moderation.untrusted.withheld")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
             // Called, not forwarded — see ``PrivacyStripView``: forwarding the
             // stored closure into `set:` crashes IRGen in Swift 6.3.3.
-            Toggle("ios.moderation.untrusted.consent", isOn: Binding(
+            Toggle("app.moderation.untrusted.consent", isOn: Binding(
                 get: { origin.isConsented },
                 set: { setConsent($0) }
             ))
@@ -215,22 +215,22 @@ struct ReportRowView: View {
             LabeledContent {
                 Text(report.submittedAt.date, format: .dateTime.year().month().day())
             } label: {
-                Text("ios.moderation.report.submitted")
+                Text("app.moderation.report.submitted")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
-            StatusBadge(title: "ios.moderation.report.state.submitted", symbol: "paperplane", tint: .secondary)
+            StatusBadge(title: "app.moderation.report.state.submitted", symbol: "paperplane", tint: .secondary)
         }
         .accessibilityElement(children: .combine)
     }
 
     private var reasonTitle: LocalizedStringKey {
         switch report.reason {
-        case .abuse: "ios.moderation.reason.abuse"
-        case .spam: "ios.moderation.reason.spam"
-        case .impersonation: "ios.moderation.reason.impersonation"
-        case .illegalContent: "ios.moderation.reason.illegal"
-        case .other, .unknown: "ios.moderation.reason.other"
+        case .abuse: "app.moderation.reason.abuse"
+        case .spam: "app.moderation.reason.spam"
+        case .impersonation: "app.moderation.reason.impersonation"
+        case .illegalContent: "app.moderation.reason.illegal"
+        case .other, .unknown: "app.moderation.reason.other"
         }
     }
 }

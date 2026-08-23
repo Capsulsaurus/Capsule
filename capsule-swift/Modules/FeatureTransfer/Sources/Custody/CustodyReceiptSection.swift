@@ -18,37 +18,37 @@ struct CustodyReceiptSection: View {
 
     var body: some View {
         Section {
-            LabeledContent("ios.custody.field.blob_role") {
+            LabeledContent("app.custody.field.blob_role") {
                 Text(verbatim: receipt.blobRole.rawValue)
             }
-            LabeledContent("ios.custody.field.size") {
+            LabeledContent("app.custody.field.size") {
                 Text(verbatim: TransferFormat.bytes(receipt.size))
             }
-            LabeledContent("ios.custody.field.ciphertext_hash") {
+            LabeledContent("app.custody.field.ciphertext_hash") {
                 Text(verbatim: TransferFormat.shortDigest(receipt.ciphertextHash.rawValue))
                     .font(.caption.monospaced())
             }
             envelopeRow
-            LabeledContent("ios.custody.field.received_at") {
+            LabeledContent("app.custody.field.received_at") {
                 Text(verbatim: TransferFormat.captureDate(receipt.receivedAt))
             }
-            LabeledContent("ios.custody.field.server") {
+            LabeledContent("app.custody.field.server") {
                 Text(verbatim: receipt.serverID)
             }
-            LabeledContent("ios.custody.field.server_key") {
+            LabeledContent("app.custody.field.server_key") {
                 Text(verbatim: TransferFormat.fingerprint(receipt.serverKeyID))
                     .font(.caption.monospaced())
             }
-            LabeledContent("ios.custody.field.sequence") {
+            LabeledContent("app.custody.field.sequence") {
                 Text(verbatim: TransferFormat.count(Int(clamping: receipt.receiptSequence)))
             }
             priorRow
         } header: {
-            Label("ios.custody.receipt.title", systemImage: "signature")
+            Label("app.custody.receipt.title", systemImage: "signature")
         } footer: {
             // The hash the *server* recomputed, never echoed from the client —
             // which is the whole reason the receipt can settle a dispute.
-            Text("ios.custody.receipt.footer")
+            Text("app.custody.receipt.footer")
         }
     }
 
@@ -56,12 +56,12 @@ struct CustodyReceiptSection: View {
     /// fact worth showing, not a blank row.
     @ViewBuilder
     private var envelopeRow: some View {
-        LabeledContent("ios.custody.field.envelope_hash") {
+        LabeledContent("app.custody.field.envelope_hash") {
             if let envelopeHash = receipt.envelopeHash {
                 Text(verbatim: TransferFormat.shortDigest(envelopeHash))
                     .font(.caption.monospaced())
             } else {
-                Text("ios.custody.field.absent")
+                Text("app.custody.field.absent")
                     .foregroundStyle(.secondary)
             }
         }
@@ -71,12 +71,12 @@ struct CustodyReceiptSection: View {
     /// discipline of the provenance chain, applied to the server's own log.
     @ViewBuilder
     private var priorRow: some View {
-        LabeledContent("ios.custody.field.prior_receipt") {
+        LabeledContent("app.custody.field.prior_receipt") {
             if let priorReceiptHash = receipt.priorReceiptHash {
                 Text(verbatim: TransferFormat.shortDigest(priorReceiptHash))
                     .font(.caption.monospaced())
             } else {
-                Text("ios.custody.field.first_in_log")
+                Text("app.custody.field.first_in_log")
                     .foregroundStyle(.secondary)
             }
         }

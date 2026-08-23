@@ -32,8 +32,8 @@ public struct PasskeyEnrollView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.large) {
                 CeremonyHeader(
-                    titleKey: "ios.passkey.title",
-                    subtitleKey: "ios.passkey.subtitle",
+                    titleKey: "app.passkey.title",
+                    subtitleKey: "app.passkey.subtitle",
                     symbolName: "person.badge.key.fill"
                 )
                 content
@@ -47,16 +47,16 @@ public struct PasskeyEnrollView: View {
     private var content: some View {
         switch model.state {
         case .idle:
-            AuthLoadingView(labelKey: "ios.passkey.loading")
+            AuthLoadingView(labelKey: "app.passkey.loading")
         case .loading:
-            AuthLoadingView(labelKey: model.isEnrolling ? "ios.passkey.enrolling" : "ios.passkey.loading")
+            AuthLoadingView(labelKey: model.isEnrolling ? "app.passkey.enrolling" : "app.passkey.loading")
         case let .failed(error):
             AuthErrorBanner(error: error) { Task { await model.enroll() } }
         case .empty:
             ContentUnavailableView(
-                "ios.passkey.unavailable.title",
+                "app.passkey.unavailable.title",
                 systemImage: "key.slash",
-                description: Text("ios.passkey.unavailable.description")
+                description: Text("app.passkey.unavailable.description")
             )
         case .ready:
             enrollment
@@ -75,42 +75,42 @@ public struct PasskeyEnrollView: View {
     private var form: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             LabeledField(
-                labelKey: "ios.passkey.name.label",
-                footerKey: "ios.passkey.name.footer"
+                labelKey: "app.passkey.name.label",
+                footerKey: "app.passkey.name.footer"
             ) {
-                TextField("ios.passkey.name.label", text: $model.displayNameInput)
+                TextField("app.passkey.name.label", text: $model.displayNameInput)
                     .autocorrectionDisabled()
-                    .accessibilityLabel("ios.passkey.name.label")
+                    .accessibilityLabel("app.passkey.name.label")
             }
             // The ceremony itself belongs to the OS: the system sheet collects
             // whatever it collects, and this returns only once the credential is
             // registered server-side, so a half-finished ceremony can never look
             // like an enrolled factor.
-            Button("ios.passkey.enroll") { Task { await model.enroll() } }
+            Button("app.passkey.enroll") { Task { await model.enroll() } }
                 .capsuleGlassButtonStyle(prominent: true)
                 .disabled(!model.canEnroll)
-                .accessibilityLabel("ios.passkey.enroll")
+                .accessibilityLabel("app.passkey.enroll")
         }
     }
 
     private func registered(_ registration: PasskeyRegistration) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             AuthSectionHeader(
-                titleKey: "ios.passkey.done.title",
-                descriptionKey: "ios.passkey.done.description",
+                titleKey: "app.passkey.done.title",
+                descriptionKey: "app.passkey.done.description",
                 symbolName: "checkmark.seal.fill"
             )
             AuthLabeledValue(
-                labelKey: "ios.passkey.done.authenticator",
+                labelKey: "app.passkey.done.authenticator",
                 value: registration.authenticatorLabel
             )
-            AuthLabeledDate(labelKey: "ios.passkey.done.created", date: registration.createdAt.date)
+            AuthLabeledDate(labelKey: "app.passkey.done.created", date: registration.createdAt.date)
         }
         .authCard()
     }
 
     private var scopeNote: some View {
-        Text("ios.passkey.scope_note")
+        Text("app.passkey.scope_note")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

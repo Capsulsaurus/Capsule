@@ -82,7 +82,7 @@ struct TransferRowView: View {
         } else {
             // Honest about the one case where there is no date yet, rather than
             // substituting an identifier the user has never seen.
-            Text("ios.transfer.row.capture_date_pending")
+            Text("app.transfer.row.capture_date_pending")
                 .font(.body)
                 .foregroundStyle(.secondary)
         }
@@ -103,7 +103,7 @@ struct TransferRowView: View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xxSmall) {
             ProgressView(value: row.fractionComplete)
                 .progressViewStyle(.linear)
-                .accessibilityLabel("ios.transfer.row.progress")
+                .accessibilityLabel("app.transfer.row.progress")
                 .accessibilityValue(Text(verbatim: TransferFormat.percent(row.fractionComplete)))
             HStack(spacing: CapsuleTheme.Spacing.small) {
                 BadgeChip(row.headlineState.badge)
@@ -121,9 +121,9 @@ struct TransferRowView: View {
             Text(verbatim: TransferFormat.rate(bytesPerSecond: rate))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .accessibilityLabel("ios.transfer.row.throughput")
+                .accessibilityLabel("app.transfer.row.throughput")
         } else {
-            Text("ios.transfer.row.throughput_measuring")
+            Text("app.transfer.row.throughput_measuring")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -169,7 +169,7 @@ struct ConnectionFooter: View {
             Text(connection.policyKey)
                 .font(.footnote)
             if policy == .staged {
-                Text("ios.transfer.policy.staged")
+                Text("app.transfer.policy.staged")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

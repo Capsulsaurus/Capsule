@@ -37,22 +37,22 @@ public struct QuarantineDetailView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.quarantine.detail.title")
+            .navigationTitle("app.quarantine.detail.title")
             .task { await model.load() }
             .onChange(of: model.isResolved) { _, isResolved in
                 if isResolved { onResolved?() }
             }
             .confirmationDialog(
-                "ios.quarantine.discard.confirm.title",
+                "app.quarantine.discard.confirm.title",
                 isPresented: $isConfirmingDiscard,
                 titleVisibility: .visible
             ) {
-                Button("ios.quarantine.discard.confirm.action", role: .destructive) {
+                Button("app.quarantine.discard.confirm.action", role: .destructive) {
                     Task { await model.discard() }
                 }
-                Button("ios.common.cancel", role: .cancel) {}
+                Button("app.common.cancel", role: .cancel) {}
             } message: {
-                Text("ios.quarantine.discard.confirm.message")
+                Text("app.quarantine.discard.confirm.message")
             }
     }
 
@@ -61,8 +61,8 @@ public struct QuarantineDetailView: View {
         if case let .failed(error) = model.phase {
             PhasePlaceholderView(
                 phase: .failed(error),
-                emptyTitle: "ios.quarantine.detail.title",
-                emptyDescription: "ios.quarantine.detail.title",
+                emptyTitle: "app.quarantine.detail.title",
+                emptyDescription: "app.quarantine.detail.title",
                 emptySymbol: "exclamationmark.triangle",
                 retry: { await model.load() }
             )
@@ -90,15 +90,15 @@ public struct QuarantineDetailView: View {
             Text(model.item.reason.explanationKey)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            LabeledContent("ios.quarantine.detail.reason_code") {
+            LabeledContent("app.quarantine.detail.reason_code") {
                 Text(verbatim: model.item.reason.code)
                     .font(.caption.monospaced())
             }
-            LabeledContent("ios.quarantine.detail.detected_at") {
+            LabeledContent("app.quarantine.detail.detected_at") {
                 Text(verbatim: TransferFormat.captureDate(model.item.detectedAt))
             }
         } header: {
-            Text("ios.quarantine.detail.what_happened")
+            Text("app.quarantine.detail.what_happened")
         }
     }
 
@@ -110,14 +110,14 @@ public struct QuarantineDetailView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             if let bytes = model.preservedBytes {
-                LabeledContent("ios.quarantine.detail.preserved_bytes") {
+                LabeledContent("app.quarantine.detail.preserved_bytes") {
                     Text(verbatim: TransferFormat.bytes(bytes))
                 }
             }
         } header: {
-            Text("ios.quarantine.detail.what_is_kept")
+            Text("app.quarantine.detail.what_is_kept")
         } footer: {
-            Text("ios.quarantine.detail.what_is_kept.footer")
+            Text("app.quarantine.detail.what_is_kept.footer")
         }
     }
 
@@ -131,9 +131,9 @@ public struct QuarantineDetailView: View {
                 }
             }
         } header: {
-            Text("ios.quarantine.detail.actions")
+            Text("app.quarantine.detail.actions")
         } footer: {
-            Text("ios.quarantine.detail.actions.footer")
+            Text("app.quarantine.detail.actions.footer")
         }
     }
 
@@ -142,13 +142,13 @@ public struct QuarantineDetailView: View {
             Text(verbatim: TransferFormat.fingerprint(bytes, keeping: 64))
                 .font(.caption.monospaced())
                 .textSelection(.enabled)
-            LabeledContent("ios.quarantine.inspect.sample_size") {
+            LabeledContent("app.quarantine.inspect.sample_size") {
                 Text(verbatim: TransferFormat.bytes(UInt64(bytes.count)))
             }
         } header: {
-            Text("ios.quarantine.inspect.title")
+            Text("app.quarantine.inspect.title")
         } footer: {
-            Text("ios.quarantine.inspect.footer")
+            Text("app.quarantine.inspect.footer")
         }
     }
 

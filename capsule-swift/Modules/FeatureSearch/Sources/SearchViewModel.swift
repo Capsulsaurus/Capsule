@@ -101,15 +101,27 @@ public enum SearchSuggestion: Identifiable, Hashable, Sendable {
         }
     }
 
+    /// This chip's label, localized.
+    ///
+    /// Resolved here rather than handed to the view as a key, because the same
+    /// string is *matched* against what the user typed and added to their
+    /// recent searches — matching a catalog key would compare the user's words
+    /// to `app.search.filter.media.photo`. The key is still the source of the
+    /// text; what differs is that this one has to be a value.
     public var title: String {
+        String(localized: String.LocalizationValue(titleKey))
+    }
+
+    /// The catalog key for this chip's label.
+    public var titleKey: String {
         switch self {
         case let .media(type):
             switch type {
-            case .photo: "Photos"
-            case .video: "Videos"
-            case .livePhoto: "Live Photos"
+            case .photo: "app.search.filter.media.photo"
+            case .video: "app.search.filter.media.video"
+            case .livePhoto: "app.search.filter.media.live_photo"
             }
-        case let .date(range): range.title
+        case let .date(range): range.titleKey
         }
     }
 

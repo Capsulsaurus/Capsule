@@ -112,11 +112,11 @@ public struct QuotaCategoryBreakdown: Sendable, Equatable {
 public extension QuotaCategoryBreakdown.Category {
     var titleKey: String {
         switch self {
-        case .originals: "ios.quota.category.originals"
-        case .derivatives: "ios.quota.category.derivatives"
-        case .metadata: "ios.quota.category.metadata"
-        case .trash: "ios.quota.category.trash"
-        case .other: "ios.quota.category.other"
+        case .originals: "app.quota.category.originals"
+        case .derivatives: "app.quota.category.derivatives"
+        case .metadata: "app.quota.category.metadata"
+        case .trash: "app.quota.category.trash"
+        case .other: "app.quota.category.other"
         }
     }
 

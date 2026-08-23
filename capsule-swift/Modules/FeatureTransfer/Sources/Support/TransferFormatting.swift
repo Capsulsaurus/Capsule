@@ -23,7 +23,7 @@ public enum TransferFormat {
     /// A transfer rate, as "<bytes>/s" in whatever form the catalog gives.
     public static func rate(bytesPerSecond: Double) -> String {
         let magnitude = bytes(UInt64(max(0, bytesPerSecond)))
-        return String(format: String(localized: "ios.transfer.unit.per_second"), magnitude)
+        return String(format: String(localized: "app.transfer.unit.per_second"), magnitude)
     }
 
     /// A 0…1 fraction as a percentage.

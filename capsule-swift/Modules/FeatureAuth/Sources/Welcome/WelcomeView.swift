@@ -27,8 +27,8 @@ public struct WelcomeView: View {
         CeremonyContainer {
             VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xLarge) {
                 CeremonyHeader(
-                    titleKey: "ios.auth.welcome.title",
-                    subtitleKey: "ios.auth.welcome.subtitle",
+                    titleKey: "app.auth.welcome.title",
+                    subtitleKey: "app.auth.welcome.subtitle",
                     symbolName: "photo.stack"
                 )
                 switch model.state {
@@ -53,21 +53,21 @@ public struct WelcomeView: View {
         }
         VStack(spacing: CapsuleTheme.Spacing.large) {
             choiceCard(
-                titleKey: "ios.auth.welcome.local.title",
-                descriptionKey: "ios.auth.welcome.local.description",
-                actionKey: "ios.auth.welcome.local.action",
+                titleKey: "app.auth.welcome.local.title",
+                descriptionKey: "app.auth.welcome.local.description",
+                actionKey: "app.auth.welcome.local.action",
                 symbolName: "iphone.gen3",
                 choice: .useWithoutAccount
             )
             choiceCard(
-                titleKey: "ios.auth.welcome.server.title",
-                descriptionKey: "ios.auth.welcome.server.description",
-                actionKey: "ios.auth.welcome.server.action",
+                titleKey: "app.auth.welcome.server.title",
+                descriptionKey: "app.auth.welcome.server.description",
+                actionKey: "app.auth.welcome.server.action",
                 symbolName: "server.rack",
                 choice: .connectServer
             )
         }
-        Text("ios.auth.welcome.later_note")
+        Text("app.auth.welcome.later_note")
             .font(.footnote)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -75,13 +75,13 @@ public struct WelcomeView: View {
 
     private func existingSession(_ handle: String) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.xSmall) {
-            Text("ios.auth.welcome.signed_in_as")
+            Text("app.auth.welcome.signed_in_as")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
             Text(verbatim: handle)
                 .font(.headline)
             if model.sessionHasExpired {
-                Text("ios.auth.welcome.session_expired")
+                Text("app.auth.welcome.session_expired")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

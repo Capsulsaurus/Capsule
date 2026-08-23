@@ -109,7 +109,7 @@ public struct TypedPhraseConfirmationSheet: View {
                 Text(LocalizedStringKey(messageKey))
                     .fixedSize(horizontal: false, vertical: true)
                 SettingsValueRow(
-                    labelKey: "ios.settings.confirm.phrase.required",
+                    labelKey: "app.settings.confirm.phrase.required",
                     value: gate.requiredPhrase
                 )
                 TextField(
@@ -120,14 +120,14 @@ public struct TypedPhraseConfirmationSheet: View {
                 .accessibilityLabel(Text(LocalizedStringKey(fieldLabelKey)))
                 if gate.isPartiallyTyped {
                     Label(
-                        "ios.settings.confirm.phrase.mismatch",
+                        "app.settings.confirm.phrase.mismatch",
                         systemImage: SettingsTone.caution.symbol
                     )
                     .foregroundStyle(SettingsTone.caution.tint)
                     .font(.footnote)
                 }
             } footer: {
-                Text("ios.settings.confirm.phrase.footer")
+                Text("app.settings.confirm.phrase.footer")
             }
 
             Section {
@@ -139,7 +139,7 @@ public struct TypedPhraseConfirmationSheet: View {
                     }
                 }
                 .disabled(!gate.isSatisfied)
-                Button("ios.settings.confirm.cancel", role: .cancel) {
+                Button("app.settings.confirm.cancel", role: .cancel) {
                     gate.reset()
                     dismiss()
                 }
@@ -174,7 +174,7 @@ public extension View {
             Button(LocalizedStringKey(confirmKey), role: .destructive) {
                 Task { await action() }
             }
-            Button("ios.settings.confirm.cancel", role: .cancel) {}
+            Button("app.settings.confirm.cancel", role: .cancel) {}
         } message: {
             Text(LocalizedStringKey(messageKey))
         }

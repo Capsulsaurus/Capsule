@@ -129,7 +129,7 @@ struct RecoverySnoozeTests {
 
         #expect(snoozed.nextDueAt == AuthInstant.days(option.days))
         #expect(snoozed.snoozeCount == 1)
-        #expect(option.titleKey == "ios.recovery.verify.snooze.\(option.rawValue)")
+        #expect(option.titleKey == "app.recovery.verify.snooze.\(option.rawValue)")
     }
 
     @Test("the snooze lengths are one day and one week")

@@ -48,17 +48,17 @@ public struct AtRestPosture: Sendable, Equatable, Hashable {
 
     /// iOS and iPadOS.
     public static let sandboxPrivate = AtRestPosture(
-        storeKey: "ios.settings.security.atrest.sandbox.store",
-        protectionKey: "ios.settings.security.atrest.sandbox.protection",
-        summaryKey: "ios.settings.security.atrest.sandbox.summary",
+        storeKey: "app.settings.security.atrest.sandbox.store",
+        protectionKey: "app.settings.security.atrest.sandbox.protection",
+        summaryKey: "app.settings.security.atrest.sandbox.summary",
         tone: .positive
     )
 
     /// macOS.
     public static let userDirectory = AtRestPosture(
-        storeKey: "ios.settings.security.atrest.userdir.store",
-        protectionKey: "ios.settings.security.atrest.userdir.protection",
-        summaryKey: "ios.settings.security.atrest.userdir.summary",
+        storeKey: "app.settings.security.atrest.userdir.store",
+        protectionKey: "app.settings.security.atrest.userdir.protection",
+        summaryKey: "app.settings.security.atrest.userdir.summary",
         tone: .caution
     )
 }

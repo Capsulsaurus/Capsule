@@ -73,7 +73,7 @@ public struct PhasePlaceholderView: View {
             ProgressView()
                 .controlSize(.large)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .accessibilityLabel("ios.transfer.state.loading")
+                .accessibilityLabel("app.transfer.state.loading")
         case .empty:
             ContentUnavailableView(
                 emptyTitle,
@@ -82,15 +82,15 @@ public struct PhasePlaceholderView: View {
             )
         case .offline:
             ContentUnavailableView {
-                Label("ios.transfer.state.offline.title", systemImage: "wifi.slash")
+                Label("app.transfer.state.offline.title", systemImage: "wifi.slash")
             } description: {
-                Text("ios.transfer.state.offline.description")
+                Text("app.transfer.state.offline.description")
             } actions: {
                 retryButton
             }
         case let .failed(error):
             ContentUnavailableView {
-                Label("ios.transfer.state.error.title", systemImage: "exclamationmark.triangle")
+                Label("app.transfer.state.error.title", systemImage: "exclamationmark.triangle")
             } description: {
                 Text(LocalizedStringKey(error.localizationKey))
             } actions: {
@@ -102,7 +102,7 @@ public struct PhasePlaceholderView: View {
     }
 
     private var retryButton: some View {
-        Button("ios.transfer.action.retry") {
+        Button("app.transfer.action.retry") {
             Task { await retry() }
         }
         .buttonStyle(.borderedProminent)

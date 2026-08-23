@@ -55,7 +55,7 @@ struct EnrollmentStageRailRow: View {
         if row.status == .running {
             HStack(spacing: CapsuleTheme.Spacing.xSmall) {
                 ProgressView().controlSize(.small)
-                Text("ios.enrollment.status.running")
+                Text("app.enrollment.status.running")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
@@ -67,11 +67,11 @@ struct EnrollmentStageRailRow: View {
 
     private var statusTitleKey: LocalizedStringKey {
         switch row.status {
-        case .pending: "ios.enrollment.status.pending"
-        case .running: "ios.enrollment.status.running"
-        case .done: "ios.enrollment.status.done"
-        case .deferred: "ios.enrollment.status.deferred"
-        case .failed: "ios.enrollment.status.failed"
+        case .pending: "app.enrollment.status.pending"
+        case .running: "app.enrollment.status.running"
+        case .done: "app.enrollment.status.done"
+        case .deferred: "app.enrollment.status.deferred"
+        case .failed: "app.enrollment.status.failed"
         }
     }
 
@@ -104,7 +104,7 @@ struct EnrollmentStageRailRow: View {
         EnrollmentStageRailRow(
             row: EnrollmentStageRow(
                 stage: .publishDirectory,
-                status: .deferred(reasonKey: "ios.enrollment.deferred.directory")
+                status: .deferred(reasonKey: "app.enrollment.deferred.directory")
             )
         )
         EnrollmentStageRailRow(

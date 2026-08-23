@@ -52,19 +52,19 @@ public enum AutoSyncCriterion: String, Sendable, Equatable, CaseIterable, Identi
 
     public var titleKey: String {
         switch self {
-        case .nonMeteredForSmallWork: "ios.sync.criterion.non_metered"
-        case .unmeteredForBulkWork: "ios.sync.criterion.unmetered"
-        case .externalPowerForLargeBatches: "ios.sync.criterion.external_power"
-        case .backgroundWindow: "ios.sync.criterion.background_window"
+        case .nonMeteredForSmallWork: "app.sync.criterion.non_metered"
+        case .unmeteredForBulkWork: "app.sync.criterion.unmetered"
+        case .externalPowerForLargeBatches: "app.sync.criterion.external_power"
+        case .backgroundWindow: "app.sync.criterion.background_window"
         }
     }
 
     public var explanationKey: String {
         switch self {
-        case .nonMeteredForSmallWork: "ios.sync.criterion.non_metered.description"
-        case .unmeteredForBulkWork: "ios.sync.criterion.unmetered.description"
-        case .externalPowerForLargeBatches: "ios.sync.criterion.external_power.description"
-        case .backgroundWindow: "ios.sync.criterion.background_window.description"
+        case .nonMeteredForSmallWork: "app.sync.criterion.non_metered.description"
+        case .unmeteredForBulkWork: "app.sync.criterion.unmetered.description"
+        case .externalPowerForLargeBatches: "app.sync.criterion.external_power.description"
+        case .backgroundWindow: "app.sync.criterion.background_window.description"
         }
     }
 }

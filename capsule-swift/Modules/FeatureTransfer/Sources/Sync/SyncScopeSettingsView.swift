@@ -25,7 +25,7 @@ public struct SyncScopeSettingsView: View {
 
     public var body: some View {
         content
-            .navigationTitle("ios.sync.scope.title")
+            .navigationTitle("app.sync.scope.title")
             .task { await model.load() }
     }
 
@@ -43,8 +43,8 @@ public struct SyncScopeSettingsView: View {
         } else {
             PhasePlaceholderView(
                 phase: model.phase,
-                emptyTitle: "ios.sync.scope.empty.title",
-                emptyDescription: "ios.sync.scope.empty.description",
+                emptyTitle: "app.sync.scope.empty.title",
+                emptyDescription: "app.sync.scope.empty.description",
                 emptySymbol: "slider.horizontal.3",
                 retry: { await model.reload() }
             )
@@ -64,9 +64,9 @@ public struct SyncScopeSettingsView: View {
                 .buttonStyle(.plain)
             }
         } header: {
-            Text("ios.sync.scope.section")
+            Text("app.sync.scope.section")
         } footer: {
-            Text("ios.sync.scope.footer")
+            Text("app.sync.scope.footer")
         }
     }
 
@@ -81,26 +81,26 @@ public struct SyncScopeSettingsView: View {
                 .buttonStyle(.plain)
             }
         } header: {
-            Text("ios.sync.policy.section")
+            Text("app.sync.policy.section")
         } footer: {
-            Text("ios.sync.policy.footer")
+            Text("app.sync.policy.footer")
         }
     }
 
     private var autoSyncSection: some View {
         Section {
-            Toggle("ios.sync.auto.enabled", isOn: Binding(
+            Toggle("app.sync.auto.enabled", isOn: Binding(
                 get: { model.settings.autoSyncEnabled },
                 set: { value in Task { await model.setAutoSyncEnabled(value) } }
             ))
-            Toggle("ios.sync.auto.staleness_warning", isOn: Binding(
+            Toggle("app.sync.auto.staleness_warning", isOn: Binding(
                 get: { model.settings.stalenessNotificationEnabled },
                 set: { value in Task { await model.setStalenessNotificationEnabled(value) } }
             ))
         } header: {
-            Text("ios.sync.auto.section")
+            Text("app.sync.auto.section")
         } footer: {
-            Text("ios.sync.auto.footer")
+            Text("app.sync.auto.footer")
         }
     }
 
@@ -112,9 +112,9 @@ public struct SyncScopeSettingsView: View {
                 CriterionRow(criterion: criterion, standing: model.standing(of: criterion))
             }
         } header: {
-            Text("ios.sync.criteria.section")
+            Text("app.sync.criteria.section")
         } footer: {
-            Text("ios.sync.criteria.footer")
+            Text("app.sync.criteria.footer")
         }
     }
 
@@ -174,11 +174,11 @@ struct PolicyChoiceRow: View {
     }
 
     private var titleKey: LocalizedStringKey {
-        policy == .staged ? "ios.sync.policy.staged" : "ios.sync.policy.full"
+        policy == .staged ? "app.sync.policy.staged" : "app.sync.policy.full"
     }
 
     private var explanationKey: LocalizedStringKey {
-        policy == .staged ? "ios.sync.policy.staged.description" : "ios.sync.policy.full.description"
+        policy == .staged ? "app.sync.policy.staged.description" : "app.sync.policy.full.description"
     }
 }
 
@@ -210,9 +210,9 @@ struct CriterionRow: View {
 
     private var standingKey: LocalizedStringKey {
         switch standing {
-        case .satisfied: "ios.sync.criterion.satisfied"
-        case .notSatisfied: "ios.sync.criterion.not_satisfied"
-        case .unknown: "ios.sync.criterion.unknown"
+        case .satisfied: "app.sync.criterion.satisfied"
+        case .notSatisfied: "app.sync.criterion.not_satisfied"
+        case .unknown: "app.sync.criterion.unknown"
         }
     }
 

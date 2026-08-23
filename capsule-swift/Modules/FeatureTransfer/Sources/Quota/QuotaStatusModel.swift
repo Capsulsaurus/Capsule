@@ -25,9 +25,9 @@ public enum QuotaRemediation: String, Sendable, Equatable, CaseIterable, Identif
 
     public var titleKey: String {
         switch self {
-        case .emptyTrash: "ios.quota.remediation.empty_trash"
-        case .reviewLargest: "ios.quota.remediation.review_largest"
-        case .contactAdministrator: "ios.quota.remediation.contact_admin"
+        case .emptyTrash: "app.quota.remediation.empty_trash"
+        case .reviewLargest: "app.quota.remediation.review_largest"
+        case .contactAdministrator: "app.quota.remediation.contact_admin"
         }
     }
 

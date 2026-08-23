@@ -199,7 +199,7 @@ struct StorageSettingsTests {
 
     @Test("every representation tier is named by its own catalog key", arguments: RepresentationTier.allCases)
     func everyTierIsNamed(tier: RepresentationTier) {
-        #expect(tier.titleKey.hasPrefix("ios.settings.storage.tier."))
+        #expect(tier.titleKey.hasPrefix("app.settings.storage.tier."))
         #expect(!tier.titleKey.contains(" "))
     }
 }

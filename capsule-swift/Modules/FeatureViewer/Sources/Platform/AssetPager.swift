@@ -43,8 +43,8 @@ struct AssetPager: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(Self.pageAnimation, value: currentIndex)
-            .overlay(alignment: .leading) { step(-1, symbol: "chevron.left", label: "ios.viewer.previous_photo") }
-            .overlay(alignment: .trailing) { step(1, symbol: "chevron.right", label: "ios.viewer.next_photo") }
+            .overlay(alignment: .leading) { step(-1, symbol: "chevron.left", label: "app.viewer.previous_photo") }
+            .overlay(alignment: .trailing) { step(1, symbol: "chevron.right", label: "app.viewer.next_photo") }
             .focusable()
             .focusEffectDisabled()
             .onKeyPress(.leftArrow) { advance(by: -1) ? .handled : .ignored }
