@@ -255,6 +255,22 @@ public extension Router {
         return true
     }
 
+    /// Whether ``perform(_:)`` would consume this action.
+    ///
+    /// Asked by the menu so an action the router declines renders **disabled**
+    /// rather than firing into nothing. The menu is a claim about what the app
+    /// can do; a live item that silently does nothing is a false one.
+    ///
+    /// Deliberately a separate switch from `perform`, not a dry run of it:
+    /// `perform` navigates, and asking "would this work" must not.
+    /// `NavigationCommandTests` pins the two to the same set.
+    func accepts(_ action: NavigationAction) -> Bool {
+        switch action {
+        case .toggleSidebar, .cullingReview, .zoom, .importMedia: true
+        default: false
+        }
+    }
+
     /// Handle an inbound URL, returning the parsed link — including its secret,
     /// which the router deliberately does not keep.
     ///

@@ -60,3 +60,33 @@ struct NavigationCommandTests {
         #expect(NavigationCommand.command(for: .previousAsset)?.shortcut == CommandShortcut(.leftArrow, modifiers: []))
     }
 }
+
+// MARK: - CommandAcceptanceTests
+
+/// `accepts` and `perform` are two switches over the same set, so they can
+/// drift — and drift is invisible: a command that reports acceptable but does
+/// nothing looks exactly like one that worked.
+@Suite("What the router says it accepts is what it does")
+@MainActor
+struct CommandAcceptanceTests {
+    /// Every action in the catalog, so a new one cannot skip this.
+    private static var allActions: [NavigationAction] { NavigationCommand.all.map(\.action) }
+
+    @Test("accepts agrees with perform for every command in the menu")
+    func acceptanceMatchesPerformance() {
+        for action in Self.allActions {
+            let asked = Router(shell: .split).accepts(action)
+            let done = Router(shell: .split).perform(action)
+            #expect(asked == done, "\(action): accepts says \(asked), perform says \(done)")
+        }
+    }
+
+    @Test("the menu renders every command, including the ones the router declines")
+    func declinedCommandsAreStillOffered() {
+        let declined = Self.allActions.filter { !Router(shell: .split).accepts($0) }
+        #expect(!declined.isEmpty, "if nothing is declined this test is asserting nothing")
+        // They stay in the catalog so the menu can show them disabled: a greyed
+        // item is discoverable, a missing one is not.
+        #expect(declined.allSatisfy { action in NavigationCommand.all.contains { $0.action == action } })
+    }
+}

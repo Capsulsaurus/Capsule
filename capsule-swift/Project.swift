@@ -436,6 +436,26 @@ private let appTarget: Target = .target(
         // macOS: without a category the Mac app shows as "Developer Tools" in
         // Finder and the App Store. Photography is what this is.
         "LSApplicationCategoryType": "public.app-category.photography",
+        // The `capsule://` scheme. Without this the OS has no idea the app
+        // claims those URLs, so `onOpenURL` — and the whole parser, its
+        // secret-redaction rules and its tests — could never be reached from
+        // outside the process. Declared on every destination: `openURL` routes
+        // by scheme on macOS exactly as it does on iOS.
+        //
+        // `https://<server>/s/<id>` share links are deliberately *not* here.
+        // Universal links need an `associated-domains` entitlement, a signed
+        // build, and an `apple-app-site-association` file served by each user's
+        // own server — and Capsule is self-hosted, so there is no single domain
+        // to claim. Reaching those needs a decision about how a self-hosted
+        // server advertises its app, which is a design question rather than a
+        // plist key.
+        "CFBundleURLTypes": [
+            [
+                "CFBundleURLName": "\(bundlePrefix).Capsule",
+                "CFBundleTypeRole": "Editor",
+                "CFBundleURLSchemes": ["capsule"],
+            ],
+        ],
         // Let the simulator reach a dev server on http://127.0.0.1:3000 (`mise run serve-api`,
         // slice S-P7). `NSAllowsLocalNetworking` is scoped to loopback and .local — it does
         // NOT weaken ATS for real servers, unlike NSAllowsArbitraryLoads. Production

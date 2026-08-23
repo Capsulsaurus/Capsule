@@ -50,6 +50,10 @@ struct RootShell: View {
             }
         }
         .environment(router)
+        // Menu commands live outside every view hierarchy, so they read the
+        // router from the *focused* scene rather than the environment. This is
+        // what makes a command act on the window you are looking at.
+        .focusedSceneValue(\.router, router)
         .onChange(of: usesSplitShell, initial: true) { _, isSplit in
             // Keep the router's own idea of the shell in step, so a command that
             // targets the detail column knows whether one exists.
