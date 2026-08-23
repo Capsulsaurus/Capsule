@@ -307,13 +307,18 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Z4 | README GraphQL scrub (13 READMEs + web) + regen | design/docs | — | S | ACTIVE | done | |
 | S-Z5 | Dead-code removal (exports stub, CLI import planner) | design/docs | — | S | MIXED | done | |
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
+| S-Z7 | Developer reference architecture (design) | design/docs | — | S | ACTIVE | done | |
+| S-Z8 | Reference shell + CLI reference | design/docs | S-Z7 | M | ACTIVE | ready | |
+| S-Z9 | REST reference from the Kynos document | design/docs | S-Z8, S-D8 | M | ACTIVE | blocked | Kynos document → `S-C27`/`S-D8` |
+| S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
 
-**Row counts.** 126 rows. By area: **44 ACTIVE / 47 RETIRED / 35 MIXED**. By status:
-**41 done / 18 done\* / 54 ready / 8 blocked / 4 post-v1 / 1 part-done** (`S-C27`).
+**Row counts.** 133 rows. By area: **49 ACTIVE / 49 RETIRED / 35 MIXED**. By status:
+**43 done / 18 done\* / 63 ready / 4 blocked / 4 post-v1 / 1 part-done** (`S-C27`).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Only three block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
-`S-N1`, and `S-P2`–`S-P6`/`S-P8` behind `S-P1`. Everything else that once read `blocked`
+ordering. Only four block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
+`S-N1`, `S-P2`–`S-P6`/`S-P8` behind `S-P1`, and `S-Z9` behind the Kynos rebuild.
+Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
 which `S-D16` has since landed),
 spargen shipped and is on crates.io (freeing `S-D8`), and the X-Wing codepoint `0x004D`
@@ -333,7 +338,7 @@ graph LR
   P1 --> P6[S-P6 SE wiring]
   P1 --> P8[S-P8 swift harness]
   N2 -.OIDC half.-> P2
-  C27[S-C27 wire types off salvo] --> KYNOS[Kynos rebuild: lanes C, E5, N1/N3, D1/D2/D7-D10/D17]
+  C27[S-C27 wire types off salvo] --> KYNOS[Kynos rebuild: lanes C, E5, N1/N3, D1/D2/D7-D10/D17, Z9]
 ```
 
 ## In-House and External Library Gates
@@ -2385,6 +2390,72 @@ and all three slices are `done` in `capsule-core`.
   waiting on is the **Kynos OpenAPI contract**, not spargen" — the "in development" and
   "parked (commented out)" claims are gone. With that, every "Done when" clause of this
   slice is met and the row is legitimately `done`.
+
+### S-Z7 — Developer reference architecture
+
+- **Gap:** every developer surface Capsule ships — the REST contract, the Rust SDK, the
+  Swift and Kotlin uniffi bindings, the wasm-bindgen browser surface, the CLI, and
+  workspace rustdoc — was unpublished, and `capsule-docs/src/content/docs/reference/`
+  still held the untouched Starlight scaffold page. There was no contract saying where
+  reference pages come from, so any attempt would have been hand-written and stale within
+  a release.
+- **Deliverable:** `design/developer-docs.md` — the projection contract. Names each
+  surface, the description artifact it is generated from, the gate that proves that
+  artifact current, and the page it lands on; fixes the boundary at *artifacts, not
+  toolchains* because the CI `docs` job is bun-only and path-filtered on
+  `capsule-docs/**`; keeps reference inside the single Starlight site and names rustdoc as
+  the one seam that cannot honor that; records why a try-it playground against a key-free
+  server would teach the wrong model. REST is **Blocked**, not Planned — the committed
+  contract is emitted from the retired Salvo server.
+- **Done when:** the doc is an owner row in `design/principles.md`, reachable from the
+  `Foundations` sidebar group and the design index, the scaffold `reference/example.md` is
+  gone, and `mise run check-docs` + `check-md` are green. **Tier:** docs build.
+- **Landed — verified 2026-08-23.** Design-only; `S-Z8`–`S-Z10` execute it.
+
+### S-Z8 — Reference shell + CLI reference
+
+- **Gap:** `/reference/` has an index and nothing under it, and `capsule-cli/README.md`
+  still defers entirely to `capsule --help`. No `clap_mangen` or `clap_complete` exists
+  anywhere in the workspace, so there is no man page and no shell completion either.
+- **Deliverable:** the reference shell (overview page per section) plus the first real
+  generated surface. `capsule-cli` gains a command-tree dump with a `--check` mode and
+  `clap_mangen`/`clap_complete` output; the docs build renders the committed dump into
+  `/reference/cli/`. The CI `docs` path filter widens to name every artifact the docs
+  build now reads — without that, a CLI change publishes a stale page without failing
+  anything.
+- **Done when:** `/reference/cli/` renders the full command tree from the committed dump,
+  the `--check` mode fails on a hand-edited dump, and the `docs` path filter names the
+  dump. **Tier:** docs build + the new drift gate. **Depends on:** S-Z7.
+
+### S-Z9 — REST reference from the Kynos document
+
+- **Gap:** `capsule-sdk/openapi.json` is emitted by `capsule-api`'s salvo-oapi binary, and
+  that server is retired. `capsule-server` exposes `openapi() -> Document` but has one
+  route ported and no emitter binary, so there is no Kynos document to publish. Rendering
+  the Salvo-derived file would document a server nothing runs.
+- **Deliverable:** `/reference/api/` generated from the Kynos document by a Starlight-native
+  OpenAPI generator — not an embedded renderer that mounts its own application, which would
+  forfeit the search index, the link validator, and the site palette.
+- **Done when:** the committed contract is Kynos-emitted, `openapi-check` gates it, and
+  `/reference/api/` renders every path in it as Starlight pages that Pagefind indexes.
+  **Tier:** docs build + `openapi-check`. **Depends on:** S-Z8, S-D8 (**live block** —
+  the schema must come from Kynos, which needs `S-C27`).
+
+### S-Z10 — SDK / FFI / WASM reference
+
+- **Gap:** the generated Swift and Kotlin bindings and the wasm-bindgen `.d.ts` are all
+  gitignored build output, so the bun-only docs build cannot read them; the workspace is
+  `publish = false`, so docs.rs will never build the extensive crate-level rustdoc that
+  already exists. Three real developer surfaces with no published reference.
+- **Deliverable:** a committed surface dump alongside each existing generation step —
+  seeded by the symbol-presence assertions already in `mise-tasks/gen-bindings`, which
+  enumerate the verbs but only assert them — rendered into `/reference/sdk/{swift,kotlin,wasm}/`;
+  plus rustdoc built by the Rust gate, deployed beside the site, and linked from
+  `/reference/crates/` with an accent-matched `--extend-css`. `/reference/sdk/rust/` stays
+  a Starlight page so the common path never leaves the chrome.
+- **Done when:** each dump has a `--check` in the Rust gate, the three binding pages render
+  from committed dumps, and `/reference/crates/` resolves. **Tier:** docs build + the new
+  drift gates. **Depends on:** S-Z8.
 
 ## Deferred Migrations Register
 
