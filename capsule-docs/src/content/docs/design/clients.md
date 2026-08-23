@@ -15,6 +15,8 @@ The offline-first requirement set every native client must satisfy — the local
 - **Native.** Native implementations per platform ensure familiar usability and enable platform-specific optimizations.
 - **Minimal divergence.** Heavy and complex logic is centralized in `capsule-core` and `capsule-sdk`; client-specific code is generally minimal and focused on display.
 
+**Status note — the Apple client is built against ports, not against the SDK (2026-08-22).** `capsule-sdk`'s FFI verbs do not exist yet, and waiting for them would leave the client unbuilt at the moment they land — the worst sequencing for the surface with the most design work and the slowest review loop. So the Apple client's data seam is a set of `async`/`Sendable` protocols with an in-memory adapter behind them, and every screen is written and tested against that. The domain types those protocols carry are shaped as structural matches for the uniffi records they will be generated from, so the swap is a constructor change in one composition root. **This does not relax any duty below.** `verify_asset` quarantine states, forward-version refusal, and the unreadable-on-this-device surface are all reachable and tested in the mocked client — a client that cannot *show* a quarantine is not a client that can be trusted to enforce one. The slice list is lane U in the repo-root `SLICES.md`.
+
 ## Platform Limitations
 
 Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/import/download-sync/#auto-syncing) on platforms where the necessary APIs are not available.

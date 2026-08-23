@@ -107,8 +107,11 @@ and cancels fetches that scroll out of margin. A cell with no page loaded yet is
 not blank: it renders the asset's dominant colour, then its LQIP, then the
 thumbnail.
 
-The same engine backs every grid in the app — album detail, search results,
-person, place, the culling filmstrip. There is one grid implementation.
+`TimelineLayout` and `AssetWindowStore` are built and tested; binding them to
+the `UICollectionView`/`NSCollectionView` island — which today still uses the
+prototype's simpler grid — is the next step. The intent is one grid
+implementation behind every surface: album detail, search results, person,
+place, the culling filmstrip.
 
 ### Mock scenarios
 
