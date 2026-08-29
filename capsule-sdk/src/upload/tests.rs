@@ -531,7 +531,9 @@ async fn recovery_session_not_found_recreates() {
 
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-B"),
-        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed on the re-created session, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => {
+            panic!("expected Completed on the re-created session, got {other:?}")
+        }
     }
     assert_eq!(
         creates.load(Ordering::SeqCst),
@@ -559,7 +561,9 @@ async fn recovery_duplicate_blob_merges() {
 
     match outcome {
         UploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "asset-xyz"),
-        other @ UploadOutcome::Completed { .. } => panic!("expected AlreadyStored (merge), got {other:?}"),
+        other @ UploadOutcome::Completed { .. } => {
+            panic!("expected AlreadyStored (merge), got {other:?}")
+        }
     }
 }
 
@@ -708,7 +712,9 @@ async fn resume_recreates_when_session_is_gone() {
         .unwrap();
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-new"),
-        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected re-created Completed, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => {
+            panic!("expected re-created Completed, got {other:?}")
+        }
     }
 }
 

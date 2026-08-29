@@ -126,9 +126,10 @@ where
     let mut content_length = 0usize;
     for line in lines {
         if let Some((k, v)) = line.split_once(':')
-            && k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse().unwrap_or(0);
-            }
+            && k.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = v.trim().parse().unwrap_or(0);
+        }
     }
     let mut body = buf[header_end + 4..].to_vec();
     while body.len() < content_length {

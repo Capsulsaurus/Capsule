@@ -196,7 +196,9 @@ async fn duplicate_blob_resolves_as_merge_not_error() {
         TierSessionOutcome::AlreadyStored { asset_ref } => {
             assert_eq!(asset_ref, "asset-77", "the merge carries the existing ref");
         }
-        other @ TierSessionOutcome::Uploaded { .. } => panic!("expected AlreadyStored (merge), got {other:?}"),
+        other @ TierSessionOutcome::Uploaded { .. } => {
+            panic!("expected AlreadyStored (merge), got {other:?}")
+        }
     }
     assert_eq!(creates.load(Ordering::SeqCst), 2, "one create per blob");
 }
