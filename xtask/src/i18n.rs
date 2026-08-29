@@ -413,7 +413,7 @@ mod tests {
     fn single_line_when_it_fits() {
         let out = str_slice_const(PREFIX, &owned(&["en"]));
         assert_eq!(out, format!("{PREFIX}&[\"en\"];"));
-        assert!(out.lines().count() == 1);
+        assert_eq!(out.lines().count(), 1);
     }
 
     /// The full twelve-locale set overflows `max_width`, so it breaks the brackets but

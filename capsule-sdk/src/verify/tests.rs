@@ -71,9 +71,8 @@ impl MockServer {
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
             loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => break,
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
                 };
                 let handler = handler.clone();
                 tokio::spawn(async move { handle_conn(stream, handler).await });
@@ -126,11 +125,10 @@ where
     // Drain the declared body so the client's write completes cleanly.
     let mut content_length = 0usize;
     for line in lines {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim().eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().unwrap_or(0);
             }
-        }
     }
     let mut body = buf[header_end + 4..].to_vec();
     while body.len() < content_length {

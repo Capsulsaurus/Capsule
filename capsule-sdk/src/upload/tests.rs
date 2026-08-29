@@ -293,7 +293,7 @@ async fn happy_path_single_chunk_round_trip() {
 
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-1"),
-        other => panic!("expected Completed, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed, got {other:?}"),
     }
     assert_eq!(*patches.lock().unwrap(), vec![(0, 4096)]);
 }
@@ -403,7 +403,7 @@ async fn session_composed_upload_injects_the_session_bearer() {
     let outcome = client.upload(&request(4096), &data).await.unwrap();
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-s7"),
-        other => panic!("expected Completed, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed, got {other:?}"),
     }
 }
 
@@ -531,7 +531,7 @@ async fn recovery_session_not_found_recreates() {
 
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-B"),
-        other => panic!("expected Completed on the re-created session, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected Completed on the re-created session, got {other:?}"),
     }
     assert_eq!(
         creates.load(Ordering::SeqCst),
@@ -559,7 +559,7 @@ async fn recovery_duplicate_blob_merges() {
 
     match outcome {
         UploadOutcome::AlreadyStored { asset_ref } => assert_eq!(asset_ref, "asset-xyz"),
-        other => panic!("expected AlreadyStored (merge), got {other:?}"),
+        other @ UploadOutcome::Completed { .. } => panic!("expected AlreadyStored (merge), got {other:?}"),
     }
 }
 
@@ -708,7 +708,7 @@ async fn resume_recreates_when_session_is_gone() {
         .unwrap();
     match outcome {
         UploadOutcome::Completed { session_id } => assert_eq!(session_id, "sess-new"),
-        other => panic!("expected re-created Completed, got {other:?}"),
+        other @ UploadOutcome::AlreadyStored { .. } => panic!("expected re-created Completed, got {other:?}"),
     }
 }
 

@@ -551,7 +551,7 @@ async fn stale_revival_is_quarantined_not_overwritten() {
     };
 
     // A pulls from B (newer): B's chain contains A's head as an ancestor → forward, adopted.
-    let from_b = export_of(&[asset_v2.clone()], &fx.dev_b, fx.id_b);
+    let from_b = export_of(std::slice::from_ref(&asset_v2), &fx.dev_b, fx.id_b);
     let a_heads = BTreeMap::from([(Uuid::from_u128(1), head_old)]);
     let a_got = ingest(&from_b, PASSPHRASE, &fx.dev_b.verifying_key(), &a_heads).unwrap();
     assert_eq!(a_got.applied.len(), 1, "A adopts the newer forward update");
@@ -559,7 +559,7 @@ async fn stale_revival_is_quarantined_not_overwritten() {
     assert!(a_got.quarantined.is_empty());
 
     // B pulls from A (older): A's head is NOT an ancestor of B's newer head → stale, quarantined.
-    let from_a = export_of(&[asset_v1.clone()], &fx.dev_a, fx.id_a);
+    let from_a = export_of(std::slice::from_ref(&asset_v1), &fx.dev_a, fx.id_a);
     let b_heads = BTreeMap::from([(Uuid::from_u128(1), head_new)]);
     let b_got = ingest(&from_a, PASSPHRASE, &fx.dev_a.verifying_key(), &b_heads).unwrap();
     assert!(

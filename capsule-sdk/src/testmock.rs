@@ -88,9 +88,8 @@ impl MockServer {
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
             loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => break,
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
                 };
                 let handler = handler.clone();
                 tokio::spawn(async move {
