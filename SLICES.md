@@ -198,8 +198,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B7 | iCloud export importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B8 | Immich importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B9 | Tethered camera import (PTP/IP) | media/import | S-B2 | L | MIXED | post-v1 | `ptpip-rs` gate |
-| S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | ready | |
-| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | blocked | |
+| S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | done | four doc rows owed; streaming path → `S-B3`/`S-B11` |
+| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | ready | `S-B10` landed; also wire the streaming path |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
@@ -726,6 +726,29 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   included. **Depends on:** S-A10 (landed — this slice is startable).
 - **Done when:** the pipeline doc's Takeout mapping-table bullet passes including the
   enrichment fields; fixture-archive determinism/resume unchanged. **Tier:** Unit + Smoke.
+- **Landed 2026-08-29.** The precedence rule resolves in **two** places and the split is
+  load-bearing: the adapter folds at extraction, and the write site then prefers the file's own
+  EXIF instant, else the adapter's *folded* value, else the import clock. Falling back to the folded
+  value rather than the raw exporter value is what keeps EXIF ahead — `resolve_timezone` yields
+  `capture_utc = None` for a floating `DateTimeOriginal` with no offset, the common case, and
+  consulting the exporter there would have let it beat real EXIF.
+- **This slice was untestable before `S-B16`.** That parser returned `None` for every well-formed
+  EXIF date, so "EXIF beats the exporter" was vacuously true and the both-present-and-disagreeing
+  case could not be constructed. It is now the central test.
+- **Four decisions the design docs do not cover — doc rows owed** in
+  `import/pipeline.md`'s mapping table and/or `metadata.md`: a Takeout favourite maps to
+  `rating = 5` (Capsule models no favourite, and `cull` is a review-pass state deliberately
+  orthogonal to stars, so writing `pick` would fabricate a cull the user never made); album
+  membership maps to `tags_user` (an asset lives in exactly one container album and Organization
+  forbids automated imports inventing destinations, so titles are preserved in the only
+  multi-valued user-content set the sidecar has, leaving the album reconstructible as a view); an
+  exporter GPS fix records `GpsSource::Manual` (`Exif` would be a lie in a signed record); and an
+  over-long description truncates on a char boundary with a warning rather than being dropped.
+- **Fidelity loss worth knowing:** the adapter collapses Takeout's `geoData` (user-editable) and
+  `geoDataExif` (the service's EXIF copy) into one point, so a `geoDataExif`-sourced fix cannot be
+  distinguished and also lands as `Manual`.
+- **Gap:** `import_asset_streaming` still passes `enrichment: None`. Wiring it changes a positional
+  API and belongs with `S-B3`/`S-B11`.
 
 ### S-B11 — CLI provider wiring + real-archive round trip
 
