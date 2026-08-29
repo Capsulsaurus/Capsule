@@ -260,6 +260,675 @@
           }
         ]
       }
+    },
+    "/v1/upload": {
+      "post": {
+        "summary": "Open an upload session for one blob of an asset bundle.",
+        "description": "Runs the refuse-by-default envelope battery — invariants 1–8 and the top-level↔envelope\nconsistency family — **before** anything is written, then stages the session's file and\nrecords the session. A request whose `(owner, hash, album)` tuple already has an active\nsession gets that session back rather than a second one.",
+        "operationId": "create_upload",
+        "parameters": [
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The protocol date the client speaks.\n\nRead as a string rather than a typed value so that a malformed one is *this* surface's\ncoded `400` rather than the framework's uncoded one.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Upload session created",
+            "headers": {
+              "Location": {
+                "description": "Where the session lives.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "X-Capsule-Suggested-Chunk-Size": {
+                "description": "The starting chunk size.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Offset": {
+                "description": "The authoritative offset, on a resumed session.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUploadResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The active session for these bytes, to resume",
+            "headers": {
+              "Location": {
+                "description": "Where the session lives.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "X-Capsule-Suggested-Chunk-Size": {
+                "description": "The starting chunk size.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Offset": {
+                "description": "The authoritative offset, on a resumed session.",
+                "required": false,
+                "schema": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateUploadResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "File too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/upload/{id}": {
+      "delete": {
+        "summary": "Cancel a session: its record, its accepted chunks and its staged bytes, together.",
+        "description": "Refused while finalization is running — it is not interruptible — and refused once the\nsession is terminal, because there is nothing left to cancel and the receipt is what a\nclient should read instead.",
+        "operationId": "cancel_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The session's identifier, as `POST /v1/upload` returned it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The protocol date the client speaks.\n\nRead as a string rather than a typed value so that a malformed one is *this* surface's\ncoded `400` rather than the framework's uncoded one.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload session not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Session not active",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "head": {
+        "summary": "Report a session's progress and state.",
+        "description": "The resumption primitive: a client that lost a connection, an acknowledgement, or a process\nasks here and learns the authoritative offset, the declared length and the session's state.\nThe answer carries **no body** — HTTP forbids one on `HEAD`, which is why the protocol puts\nall three on headers.",
+        "operationId": "head_upload",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The session's identifier, as `POST /v1/upload` returned it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The protocol date the client speaks.\n\nRead as a string rather than a typed value so that a malformed one is *this* surface's\ncoded `400` rather than the framework's uncoded one.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Progress and state on X-Capsule-* headers, no body",
+            "headers": {
+              "X-Capsule-Offset": {
+                "description": "The next byte the server expects.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Content-Length": {
+                "description": "The declared total, fixed at creation.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              },
+              "X-Capsule-Upload-Status": {
+                "description": "Where the session is in its state machine.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Cache-Control": {
+                "description": "`no-store`: progress is not cacheable.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload session not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "Append a chunk, and finalize when it completes the declared size.",
+        "description": "Every rule the [chunk\ncontract](../../../capsule-docs/src/content/docs/design/import/upload-protocol.md) fixes is\nchecked before a byte is written, and the checksum is verified against the received bytes\n*first*, so a chunk corrupted in transit persists nothing.",
+        "operationId": "append_chunk",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The session's identifier, as `POST /v1/upload` returned it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Protocol",
+            "in": "header",
+            "description": "The protocol date the client speaks.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Capsule-Offset",
+            "in": "header",
+            "description": "Where in the blob this chunk starts.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Capsule-Checksum",
+            "in": "header",
+            "description": "The chunk's SHA-256, bare lowercase hex. Required: the idempotency tuple is undefined\nwithout it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "X-Capsule-Offset": {
+                "description": "The next byte the server expects.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Protocol version unsupported",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Upload session not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Offset mismatch",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Chunk too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -386,6 +1055,223 @@
           "refresh_token"
         ],
         "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      },
+      "WireBlobRole": {
+        "type": "string",
+        "enum": [
+          "original",
+          "derivative",
+          "metadata",
+          "provenance",
+          "backup"
+        ],
+        "description": "A blob's role in its asset bundle, as the wire spells it.\n\nA wire type of its own rather than a serde derive on [`BlobRole`]: the state ports'\nrecords deliberately derive no serde traits, so that a record cannot be smuggled through a\nstore built for another. The mapping is one `match` in one direction."
+      },
+      "ManifestEnvelope": {
+        "properties": {
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The crypto suite the blob was sealed under. Must equal the top-level declaration."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol date the manifest was written under (`YYYY-MM-DD`)."
+          },
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album the asset belongs to. Must equal the top-level declaration."
+          },
+          "file_id": {
+            "type": "string",
+            "description": "The asset this blob belongs to — the same id across the bundle's members."
+          },
+          "amk_version": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "The album-key epoch the manifest was written under."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The ciphertext content hash, lowercase hex. Must equal the top-level `hash`."
+          },
+          "plaintext_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The plaintext length the manifest commits to."
+          },
+          "chunk_size": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "The STREAM plaintext chunk size."
+          },
+          "key_mode": {
+            "type": "string",
+            "description": "`derived` or `wrapped`."
+          },
+          "metadata_blob_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The content hash of the bundle's metadata blob, when the manifest commits to one."
+          },
+          "created_by_user": {
+            "type": "string",
+            "description": "The account that created the asset."
+          },
+          "created_by_device": {
+            "type": "string",
+            "description": "The device that created it, as a UUID — invariant 7's subject."
+          },
+          "client_version": {
+            "type": "string",
+            "description": "The client build that wrote the manifest."
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "The manifest's self-asserted RFC3339 timestamp — invariants 7 and 8's subject."
+          },
+          "action": {
+            "type": "string",
+            "description": "The lifecycle action. `create` on this surface; see [`GateReject::ActionNotAllowed`]."
+          },
+          "prior_provenance_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The provenance chain position this write continues from."
+          },
+          "retention_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The retention floor the manifest carries, when it carries one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "crypto_suite_id",
+          "protocol_version",
+          "file_id",
+          "amk_version",
+          "ciphertext_hash",
+          "plaintext_size",
+          "chunk_size",
+          "key_mode",
+          "created_by_user",
+          "created_by_device",
+          "client_version",
+          "timestamp",
+          "action"
+        ],
+        "description": "The server-visible mirror of the signed manifest's envelope fields, as declared at\n`POST /v1/upload`.\n\nStrict (`deny_unknown_fields`) like the rest of the transport JSON. The Postel asymmetry\nthe design draws — tolerant inside documents that outlive us, strict on the wire we own —\nputs unknown-key tolerance in the *signed CBOR interiors*, never in this JSON projection."
+      },
+      "CreateUploadRequest": {
+        "properties": {
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The ciphertext length in bytes. Immutable for the session's life."
+          },
+          "hash": {
+            "type": "string",
+            "description": "The ciphertext content hash, lowercase hex; the digest length is the suite's."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "The media type, from the closed enum this protocol version fixes."
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The crypto suite the blob was sealed under."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol date (`YYYY-MM-DD`) this session is pinned to."
+          },
+          "blob_role": {
+            "$ref": "#/components/schemas/WireBlobRole",
+            "description": "The blob's role in its bundle."
+          },
+          "manifest_envelope": {
+            "$ref": "#/components/schemas/ManifestEnvelope",
+            "description": "The unencrypted manifest fields the server validates."
+          },
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album the asset is filed into.\n\nOptional on the wire because the contract reserves the shape for owner-scoped kinds and\nfor the album-upgrade ceremony; **required by this server**, which has no way to check\ninvariant 6 without one and refuses rather than skipping it."
+          },
+          "owner_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The owner the asset is filed under, when it is not the uploader.\n\nRefused when it is anyone but the uploader: an on-behalf upload needs a verified\nrelationship, and the port that would answer for one does not exist here."
+          },
+          "intent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album-upgrade intent this write belongs to, when it belongs to one.\n\nCarried onto the session verbatim and read by nobody in this port; the ceremony that\ngives it meaning is `S-C24`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "size",
+          "hash",
+          "content_type",
+          "crypto_suite_id",
+          "protocol_version",
+          "blob_role",
+          "manifest_envelope"
+        ],
+        "description": "The body of `POST /v1/upload`.\n\nStrict (`deny_unknown_fields`): an unknown field is a client bug and is refused rather than\nignored. Plaintext metadata — a filename, a capture date, dimensions — is deliberately\nabsent: it rides the encrypted metadata blob and never the wire request."
+      },
+      "CreateUploadResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session's identifier."
+          },
+          "upload_url": {
+            "type": "string",
+            "description": "Where to send chunks."
+          },
+          "suggested_chunk_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "A starting chunk size. A suggestion only — the client owns adaptation."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "upload_url",
+          "suggested_chunk_size"
+        ],
+        "description": "What a client needs to start sending bytes."
       }
     },
     "securitySchemes": {

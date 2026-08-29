@@ -361,6 +361,43 @@ impl BlobStore for FilesystemBlobStore {
         })
     }
 
+    fn read_staged_at<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        offset: u64,
+        len: usize,
+    ) -> BlobFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            check_upload_id(upload)?;
+            let path = self.staged_path(upload);
+            let mut file = match tokio::fs::File::open(&path).await {
+                Ok(file) => file,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+                Err(error) => return Err(backend("open a staged upload", &error)),
+            };
+            let size = file
+                .metadata()
+                .await
+                .map_err(|error| backend("stat an open staged upload", &error))?
+                .len();
+
+            let (start, taken) = window(size, offset, len);
+            if taken == 0 {
+                return Ok(Some(Vec::new()));
+            }
+
+            file.seek(std::io::SeekFrom::Start(start as u64))
+                .await
+                .map_err(|error| backend("seek within a staged upload", &error))?;
+            let mut buffer = vec![0_u8; taken];
+            file.read_exact(&mut buffer)
+                .await
+                .map_err(|error| backend("read a staged upload", &error))?;
+            tracing::trace!(%upload, offset, len = taken, "read a window of a stage");
+            Ok(Some(buffer))
+        })
+    }
+
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool> {
         Box::pin(async move {
             check_upload_id(upload)?;
@@ -732,6 +769,7 @@ mod tests {
         put_stores_bytes_at_its_address_and_never_overwrites,
         an_absent_address_stats_and_reads_as_none,
         a_ranged_read_returns_exactly_its_window_and_clamps_at_the_end,
+        a_staged_upload_reads_back_in_windows,
         enumeration_yields_every_blob_in_content_address_order,
         enumeration_resumes_from_its_cursor_without_gaps_or_repeats,
         an_empty_store_enumerates_to_nothing_rather_than_failing,

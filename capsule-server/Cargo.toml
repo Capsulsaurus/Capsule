@@ -19,6 +19,15 @@ publish.workspace = true
 # The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
 # and not a version, and for the repin-on-publish exit.
 kynos = { workspace = true }
+# The shared, key-free validation invariants (slice `S-C1`). The envelope gate does not
+# reimplement invariants 1-8 and 15: `capsule_core::validation` owns them, the client's own
+# `verify_asset` mirrors them, and a second implementation here would be a second answer to a
+# question the threat model allows one answer to. `capsule_core::crypto::hash` comes with it,
+# which is how finalization recomputes the ciphertext hash without this crate picking its own
+# digest crate. A workspace member, already in the lock file through `capsule-api`, so this
+# adds no external dependency and needs no design/dependencies.md row. The `native` default is
+# not optional: `validation` is gated behind it.
+capsule-core = { path = "../capsule-core" }
 # The framework-free wire contracts (slice `S-C27`). The response taxonomy lives here so it
 # outlives whichever framework renders it.
 capsule-wire = { path = "../capsule-wire" }

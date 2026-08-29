@@ -239,6 +239,7 @@
     <string name="error_upload_stale_revival">This change is based on an out-of-date version of the item.</string>
     <string name="error_upload_storage_inconsistent">The server hit a storage problem. Please try again.</string>
     <string name="error_upload_timestamp_out_of_range">Your device\'s clock appears to be wrong. Check its date and time.</string>
+    <string name="error_upload_unavailable">The upload couldn\'t be completed. Please try again.</string>
     <string name="error_upload_unknown_crypto_suite">This app version uses an encryption suite the server doesn\'t recognize.</string>
     <string name="error_upload_unsupported_content_type">This file type is not supported.</string>
     <string name="error_upload_unsupported_media_type">Upload data was sent in an unsupported format.</string>

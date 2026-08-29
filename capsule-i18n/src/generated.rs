@@ -254,6 +254,9 @@ pub mod error_codes {
     /// `error.upload.timestamp_out_of_range`
     pub const UPLOAD_TIMESTAMP_OUT_OF_RANGE: &str = "error.upload.timestamp_out_of_range";
 
+    /// `error.upload.unavailable`
+    pub const UPLOAD_UNAVAILABLE: &str = "error.upload.unavailable";
+
     /// `error.upload.unknown_crypto_suite`
     pub const UPLOAD_UNKNOWN_CRYPTO_SUITE: &str = "error.upload.unknown_crypto_suite";
 

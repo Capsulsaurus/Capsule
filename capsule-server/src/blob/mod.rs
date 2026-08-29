@@ -284,6 +284,26 @@ pub trait BlobStore: fmt::Debug + Send + Sync {
     /// The staged file's length, or `None` when nothing is staged.
     fn staged_len<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, Option<u64>>;
 
+    /// Read up to `len` bytes of `upload`'s staged file starting at `offset`.
+    ///
+    /// The mirror of [`Self::read_at`] on the staging side, clamped the same way: a window
+    /// past the end yields what exists, and `None` means nothing is staged.
+    ///
+    /// It is on the port because of what [`Self::commit`] requires of its caller — that the
+    /// staged bytes have already been verified to hash to the address they are about to
+    /// occupy. A committed blob is immutable and deduplicated by address, so placing the wrong
+    /// bytes there does not corrupt one upload, it corrupts every asset that will ever name
+    /// that address. Without a staged read the caller would have to reach past the port to the
+    /// filesystem to perform that verification, which is exactly what a port exists to
+    /// prevent; with it, finalization streams the stage in bounded windows and hashes them
+    /// (`S-C1`, invariant 14).
+    fn read_staged_at<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        offset: u64,
+        len: usize,
+    ) -> BlobFuture<'a, Option<Vec<u8>>>;
+
     /// Discard `upload`'s staged bytes. `true` if there were any.
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool>;
 

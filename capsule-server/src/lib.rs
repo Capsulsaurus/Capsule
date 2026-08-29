@@ -30,6 +30,7 @@ pub mod blob;
 pub mod limits;
 pub mod routes;
 pub mod store;
+pub mod upload;
 
 use kynos::middleware::catch_panic::Propagate;
 use kynos::middleware::limits::BodySize;
@@ -60,6 +61,10 @@ pub fn router() -> ServerRouter {
             routes::auth::login_user,
             routes::auth::refresh_token,
             routes::auth::logout,
+            routes::upload::create_upload,
+            routes::upload::append_chunk,
+            routes::upload::head_upload,
+            routes::upload::cancel_upload,
         ])
 }
 

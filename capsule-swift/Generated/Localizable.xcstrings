@@ -16763,6 +16763,16 @@
         }
       }
     },
+    "error.upload.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The upload couldn't be completed. Please try again."
+          }
+        }
+      }
+    },
     "error.upload.unknown_crypto_suite": {
       "localizations": {
         "ar": {

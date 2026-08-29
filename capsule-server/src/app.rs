@@ -11,10 +11,11 @@
 //!
 //! # One field per module
 //!
-//! [`AuthContext`] is one field, not four, and the next lane-C slice adds an upload field beside
-//! it rather than more auth ones. `#[derive(Provider)]` emits one `Provides<T>` per field, and
-//! two fields of the same type is a derive error — so the shape here is "one bundle per cohesive
-//! module", which is also the shape design/module-map.md describes.
+//! [`AuthContext`] is one field, not four, and `S-C1`'s [`UploadContext`] is the second field
+//! beside it rather than five more loose collaborators. `#[derive(Provider)]` emits one
+//! `Provides<T>` per field, and two fields of the same type is a derive error — so the shape
+//! here is "one bundle per cohesive module", which is also the shape design/module-map.md
+//! describes.
 
 use std::sync::Arc;
 
@@ -23,6 +24,7 @@ use kynos::security::Authenticates;
 
 use crate::auth::{AccessToken, AccountDirectory, AuthContext, SessionTokens};
 use crate::store::{AuthStateStore, Clock};
+use crate::upload::UploadContext;
 
 /// Everything the server was built with.
 ///
@@ -33,18 +35,21 @@ use crate::store::{AuthStateStore, Clock};
 pub struct App {
     /// The authentication module's collaborators.
     auth: AuthContext,
+    /// The upload module's collaborators.
+    upload: UploadContext,
 }
 
 impl App {
-    /// Assembles the application from the authentication module.
+    /// Assembles the application from its modules.
     ///
-    /// Takes an already-built [`AuthContext`] rather than its four parts, so that adding a
+    /// Takes already-built module bundles rather than their parts, so that adding a
     /// collaborator to a module is not a change to this signature.
-    pub fn new(auth: AuthContext) -> Self {
-        Self { auth }
+    pub fn new(auth: AuthContext, upload: UploadContext) -> Self {
+        Self { auth, upload }
     }
 
-    /// Assembles the application from the auth module's four collaborators.
+    /// Assembles the application from the auth module's four collaborators and the upload
+    /// module's own bundle.
     ///
     /// The convenience form, for a caller that is wiring the whole server rather than composing
     /// modules.
@@ -53,8 +58,9 @@ impl App {
         accounts: Arc<dyn AccountDirectory>,
         tokens: Arc<SessionTokens>,
         clock: Arc<dyn Clock>,
+        upload: UploadContext,
     ) -> Self {
-        Self::new(AuthContext::new(sessions, accounts, tokens, clock))
+        Self::new(AuthContext::new(sessions, accounts, tokens, clock), upload)
     }
 }
 

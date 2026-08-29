@@ -125,6 +125,23 @@ impl BlobStore for InMemoryBlobStore {
         })
     }
 
+    fn read_staged_at<'a>(
+        &'a self,
+        upload: &'a UploadId,
+        offset: u64,
+        len: usize,
+    ) -> BlobFuture<'a, Option<Vec<u8>>> {
+        Box::pin(async move {
+            check_upload_id(upload)?;
+            let state = lock(&self.state);
+            let Some(bytes) = state.staged.get(upload) else {
+                return Ok(None);
+            };
+            let (start, taken) = window(bytes.len() as u64, offset, len);
+            Ok(Some(bytes[start..start + taken].to_vec()))
+        })
+    }
+
     fn abandon<'a>(&'a self, upload: &'a UploadId) -> BlobFuture<'a, bool> {
         Box::pin(async move {
             check_upload_id(upload)?;
@@ -341,6 +358,7 @@ mod tests {
         put_stores_bytes_at_its_address_and_never_overwrites,
         an_absent_address_stats_and_reads_as_none,
         a_ranged_read_returns_exactly_its_window_and_clamps_at_the_end,
+        a_staged_upload_reads_back_in_windows,
         enumeration_yields_every_blob_in_content_address_order,
         enumeration_resumes_from_its_cursor_without_gaps_or_repeats,
         an_empty_store_enumerates_to_nothing_rather_than_failing,

@@ -1343,6 +1343,7 @@ dependencies = [
 name = "capsule-server"
 version = "0.1.0"
 dependencies = [
+ "capsule-core",
  "capsule-i18n",
  "capsule-wire",
  "clap",

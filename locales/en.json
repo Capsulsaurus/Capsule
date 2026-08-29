@@ -319,6 +319,10 @@
         "message": "The server hit a storage problem. Please try again.",
         "context": "HTTP 500: the upload file's on-disk length diverged from the session's expected offset. Server-side inconsistency, never the client's fault."
     },
+    "error.upload.unavailable": {
+        "message": "The upload couldn't be completed. Please try again.",
+        "context": "HTTP 500: a collaborator the upload needs \u2014 the session store, the blob store, or the album/device authority \u2014 could not answer. Server-side, never the client's fault; the client retries the same request."
+    },
     "error.upload.invalid_action": {
         "message": "This change uses an action the album doesn't allow.",
         "context": "HTTP 400 on POST /albums/{album_id}/ops, invariant 16: the manifest's action is outside the closed lifecycle-action set, or is create/replace (which ride the upload protocol, not this surface). Always a client bug."

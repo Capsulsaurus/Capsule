@@ -324,6 +324,10 @@ pub async fn an_upload_id_that_cannot_name_a_file_is_refused_by_every_operation(
             ("begin", store.begin(&upload).await),
             ("append", store.append(&upload, 0, b"x").await.map(|_| ())),
             ("staged_len", store.staged_len(&upload).await.map(|_| ())),
+            (
+                "read_staged_at",
+                store.read_staged_at(&upload, 0, 1).await.map(|_| ()),
+            ),
             ("abandon", store.abandon(&upload).await.map(|_| ())),
             ("commit", store.commit(&upload, &address).await.map(|_| ())),
         ] {
@@ -532,6 +536,72 @@ pub async fn a_ranged_read_returns_exactly_its_window_and_clamps_at_the_end(h: &
     assert_eq!(
         present(ok(read(0, 0).await, "read_at"), "a zero-length window"),
         Vec::<u8>::new()
+    );
+}
+
+/// A staged upload reads back in windows, so finalization can verify it without the filesystem.
+///
+/// This is the case `S-C1` depends on: [`BlobStore::commit`] requires its caller to have
+/// verified that the staged bytes hash to the address they are about to occupy, and a
+/// committed blob is immutable and shared by every asset that names it. An adapter that could
+/// not hand the staged bytes back would leave that verification impossible through the port.
+pub async fn a_staged_upload_reads_back_in_windows(h: &dyn Harness) {
+    let store = h.store();
+    let case = "staged-read";
+    let id = upload(case, "windowed");
+    let bytes: Vec<u8> = (0..=255_u8).collect();
+
+    assert_eq!(
+        ok(store.read_staged_at(&id, 0, 16).await, "read_staged_at"),
+        None,
+        "nothing staged is absent, not empty"
+    );
+
+    ok(store.begin(&id).await, "begin");
+    ok(store.append(&id, 0, &bytes).await, "append");
+
+    let read = |offset: u64, len: usize| store.read_staged_at(&id, offset, len);
+    assert_eq!(
+        present(ok(read(0, 16).await, "read_staged_at"), "a window"),
+        bytes[..16].to_vec()
+    );
+    assert_eq!(
+        present(ok(read(64, 32).await, "read_staged_at"), "a window"),
+        bytes[64..96].to_vec()
+    );
+    assert_eq!(
+        present(
+            ok(read(250, 32).await, "read_staged_at"),
+            "a clamped window"
+        ),
+        bytes[250..].to_vec(),
+        "a window running past the end stops there"
+    );
+    assert_eq!(
+        present(ok(read(256, 8).await, "read_staged_at"), "an empty window"),
+        Vec::<u8>::new(),
+        "a window starting at the end is empty, not absent"
+    );
+
+    // Reading the whole stage window by window reproduces it exactly — the property
+    // finalization's hash recomputation rests on.
+    let mut streamed = Vec::new();
+    let mut offset = 0;
+    while let Some(window) = ok(read(offset, 32).await, "read_staged_at") {
+        if window.is_empty() {
+            break;
+        }
+        offset += window.len() as u64;
+        streamed.extend_from_slice(&window);
+    }
+    assert_eq!(streamed, bytes, "the stage streams back byte for byte");
+
+    // Committing clears the stage, so the staged read stops answering for it.
+    ok(store.commit(&id, &address(case, 1)).await, "commit");
+    assert_eq!(
+        ok(store.read_staged_at(&id, 0, 16).await, "read_staged_at"),
+        None,
+        "a committed upload is no longer staged"
     );
 }
 
@@ -832,6 +902,7 @@ pub async fn run_all(h: &dyn Harness) {
     put_stores_bytes_at_its_address_and_never_overwrites(h).await;
     an_absent_address_stats_and_reads_as_none(h).await;
     a_ranged_read_returns_exactly_its_window_and_clamps_at_the_end(h).await;
+    a_staged_upload_reads_back_in_windows(h).await;
 
     enumeration_yields_every_blob_in_content_address_order(h).await;
     enumeration_resumes_from_its_cursor_without_gaps_or_repeats(h).await;

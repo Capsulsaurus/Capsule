@@ -21,7 +21,7 @@ use capsule_server::routes::version::VersionResponse;
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
 use serde_json::json;
-use support::{EMAIL, Fixture, PASSWORD};
+use support::{EMAIL, Fixture, PASSWORD, PROTOCOL_VERSION, checksum, create_request, payload};
 
 /// A `Content-Length` no operation will accept.
 fn oversized() -> u64 {
@@ -96,11 +96,17 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/login"),
         ("POST", "/v1/auth/refresh"),
         ("POST", "/v1/auth/logout"),
+        ("POST", "/v1/upload"),
+        ("PATCH", "/v1/upload/anything"),
+        ("HEAD", "/v1/upload/anything"),
+        ("DELETE", "/v1/upload/anything"),
     ] {
-        let request = if method == "GET" {
-            client.get(path)
-        } else {
-            client.post(path)
+        let request = match method {
+            "GET" => client.get(path),
+            "PATCH" => client.patch(path),
+            "HEAD" => client.head(path),
+            "DELETE" => client.delete(path),
+            _ => client.post(path),
         };
         request
             .header("content-length", &oversized().to_string())
@@ -249,6 +255,313 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+
+    // ── The upload surface ─────────────────────────────────────────────────────────────────
+    // One session is opened and driven through every answer the four operations can give. The
+    // order is load-bearing: a `409` on `DELETE` needs a session mid-finalization, and a `200`
+    // on `POST` needs one already open for the same bytes.
+    let bearer = format!("Bearer {}", rotated.access_token);
+    let first = payload(b'a', 4096);
+    let second = payload(b'b', 4096);
+    let whole: Vec<u8> = first.iter().chain(second.iter()).copied().collect();
+
+    // POST 201, then PATCH 204 against it.
+    let opened: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let id = opened["id"].as_str().expect("a session id").to_owned();
+    let session = format!("/v1/upload/{id}");
+
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&first))
+        .body("application/octet-stream", first.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // POST 200: the active session for the same `(owner, hash, album)` tuple.
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // POST 400 / 415 / 422 / 426 / 401 / 403 / 500.
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&json!({ "size": "not a number" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+    client
+        .post("/v1/upload")
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 403: an album the authority does not hold — the fixture seeds exactly one.
+    let mut elsewhere = create_request(&fixture.clock, &whole, "original");
+    elsewhere["album_id"] = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".into();
+    elsewhere["manifest_envelope"]["album_id"] = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5eff".into();
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&elsewhere)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // HEAD 200 / 400 / 401 / 403 / 404 / 426.
+    client
+        .head(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .head(&session)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .head(&session)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    client
+        .head(&session)
+        .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .head("/v1/upload/nobody-opened-this")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .head(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // PATCH 400 / 401 / 403 / 404 / 409 / 415 / 426.
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .patch(&session)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .patch(&session)
+        .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .patch("/v1/upload/nobody-opened-this")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "8192")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&second))
+        .json(&json!({ "not": "bytes" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .header("x-capsule-offset", "4096")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // DELETE 401 / 403 / 404 / 426, then 204 on the session itself.
+    client
+        .delete(&session)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .delete(&session)
+        .header("authorization", &stranger)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete("/v1/upload/nobody-opened-this")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", "2020-01-01")
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+    client
+        .delete(&session)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // DELETE 409: finalization is not interruptible. A second session, claimed and left there.
+    let finalizing: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &second, "metadata"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let claimed = finalizing["id"].as_str().expect("a session id").to_owned();
+    fixture.uploads.claim_for_test(&claimed).await;
+    client
+        .delete(&format!("/v1/upload/{claimed}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // DELETE 204 on the first session, which is still open.
+    client
+        .delete(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The four 500s: one collaborator, broken for four requests and repaired.
+    fixture.uploads.set_unavailable(true);
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .head(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .patch(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&first))
+        .body("application/octet-stream", first.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete(&session)
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

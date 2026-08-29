@@ -240,6 +240,7 @@
   "error.upload.stale_revival": "This change is based on an out-of-date version of the item.",
   "error.upload.storage_inconsistent": "The server hit a storage problem. Please try again.",
   "error.upload.timestamp_out_of_range": "Your device's clock appears to be wrong. Check its date and time.",
+  "error.upload.unavailable": "The upload couldn't be completed. Please try again.",
   "error.upload.unknown_crypto_suite": "This app version uses an encryption suite the server doesn't recognize.",
   "error.upload.unsupported_content_type": "This file type is not supported.",
   "error.upload.unsupported_media_type": "Upload data was sent in an unsupported format.",
