@@ -20,13 +20,14 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::db::rows::{AssetStackRow, StackMemberRow};
-use crate::domain::{ImportMode, MemberRole};
+use crate::domain::{ImportMode, MemberRole, StackType};
 use crate::import::default_album::resolve_default_album;
 use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
 use crate::import::scan::ImportCandidate;
-use crate::lifecycle::{LifecycleError, SignedImportOptions, StackPlacement, Workspace};
+use crate::lifecycle::{LifecycleError, SignedImportOptions, Workspace};
+use crate::sidecar::sidecar_v1::{StackMembership, StackRole};
 
 type ExecError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -143,25 +144,20 @@ fn execute_candidate(
 ) -> Result<Vec<(PathBuf, ImportOutcome)>, ExecError> {
     let move_source = matches!(config.import_mode, ImportMode::Move);
     // One stack id per multi-file candidate; the primary member stays visible, the rest hidden.
-    let stack_id = candidate
-        .stack_type
-        .map(|_| format!("stack-{}", Uuid::now_v7().simple()));
+    let stack = candidate.stack_type.map(|st| (Uuid::now_v7(), st));
 
     let mut outcomes = Vec::new();
     let mut imported: Vec<(String, MemberRole)> = Vec::new();
 
     for (seq, (path, role)) in candidate.members.iter().enumerate() {
         let is_primary = *role == MemberRole::Primary || seq == 0;
-        let stack = stack_id.as_ref().map(|sid| StackPlacement {
-            stack_id: sid.clone(),
-            hidden: !is_primary,
-        });
+        let membership = stack_membership(stack, *role, is_primary, seq);
         // Offline import: release the Move source on the local durable commit. The online /
         // streaming path (S-B3) sets `defer_source_release` and gates on the server verdict.
         let opts = SignedImportOptions {
             move_source,
             defer_source_release: false,
-            stack,
+            stack: membership,
         };
 
         match workspace.import_asset_with(album_id, path, &opts) {
@@ -178,10 +174,10 @@ fn execute_candidate(
         }
     }
 
-    if let Some(sid) = &stack_id
+    if let Some((stack_id, _)) = stack
         && !imported.is_empty()
     {
-        persist_stack(workspace, candidate, sid, &imported)?;
+        persist_stack(workspace, candidate, &stack_id.to_string(), &imported)?;
     }
 
     Ok(outcomes)
@@ -243,6 +239,43 @@ fn import_error_outcome(e: &LifecycleError) -> ImportOutcome {
         ImportOutcome::PermissionDenied(msg)
     } else {
         ImportOutcome::CorruptUnreadable(msg)
+    }
+}
+
+/// The signed [`StackMembership`] one member of a multi-file candidate carries (`S-B15`), or
+/// `None` for a standalone candidate.
+///
+/// `is_primary` is the executor's own rule (the declared primary, or the first member when none
+/// is declared), and it is what the index projection reads as "not stack-hidden" — so it wins
+/// over the declared [`MemberRole`], which is why the role mapping is applied only to the rest.
+pub(crate) fn stack_membership(
+    stack: Option<(Uuid, StackType)>,
+    role: MemberRole,
+    is_primary: bool,
+    seq: usize,
+) -> Option<StackMembership> {
+    let (stack_id, stack_type) = stack?;
+    Some(StackMembership {
+        stack_id,
+        stack_type,
+        role: if is_primary {
+            StackRole::Primary
+        } else {
+            stack_role(role)
+        },
+        member_index: Some(seq as u32),
+    })
+}
+
+/// Narrow the importer's [`MemberRole`] onto the sidecar's closed [`StackRole`]. The register
+/// records only what a *view* needs — which member represents the stack, and which are proxies
+/// — so every other role collapses to an ordinary member. The full role stays in the
+/// `stack_members` index row.
+fn stack_role(r: MemberRole) -> StackRole {
+    match r {
+        MemberRole::Primary => StackRole::Primary,
+        MemberRole::Proxy => StackRole::Proxy,
+        _ => StackRole::Member,
     }
 }
 
@@ -516,6 +549,29 @@ mod tests {
             1,
             "only the primary member is visible"
         );
+
+        // S-B15: the grouping is *durable* — every member carries the signed
+        // `stack_membership` register, sharing one stack id, with exactly one primary. Before
+        // that slice the executor's placement was index columns and nothing else.
+        let mut stack_ids = Vec::new();
+        let mut primaries = 0;
+        for id in ws.asset_ids() {
+            let membership = ws
+                .asset(&id)
+                .unwrap()
+                .sidecar
+                .stack_membership
+                .get()
+                .and_then(Option::as_ref)
+                .expect("the executor wrote the stack register")
+                .clone();
+            assert_eq!(membership.stack_type, StackType::RawJpeg);
+            primaries += usize::from(membership.role == StackRole::Primary);
+            stack_ids.push(membership.stack_id);
+        }
+        assert_eq!(primaries, 1, "exactly one member represents the stack");
+        stack_ids.dedup();
+        assert_eq!(stack_ids.len(), 1, "both members share one stack id");
     }
 
     /// S-B2: an executor import produces `verify_asset`-accepting assets **with signed

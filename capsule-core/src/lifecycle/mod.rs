@@ -67,7 +67,7 @@ use crate::federation::AlbumGroupAssertion;
 use crate::library::Library;
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
-use crate::sidecar::sidecar_v1::SidecarV1;
+use crate::sidecar::sidecar_v1::{SidecarV1, StackMembership, StackRole};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
@@ -197,15 +197,33 @@ pub struct AssetState {
     pub stack: Option<StackPlacement>,
 }
 
-/// Placement of a signed asset within an import stack. The executor mints one `stack_id` per
-/// multi-file [`ImportCandidate`](crate::import::scan::ImportCandidate) and marks every
-/// non-primary member `hidden`, so the primary alone surfaces in the timeline.
+/// The **index projection** of an asset's stack membership: the two `assets` columns
+/// (`stack_id`, `is_stack_hidden`) that keep a non-primary member out of the timeline.
+///
+/// Since `S-B15` this is a *derived* value, not a source of truth: the durable record is the
+/// sidecar's signed `stack_membership` register, which both the importer and
+/// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
+/// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
+/// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
+/// [`library::rebuild`](crate::library::rebuild)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
     /// The shared stack id (the `asset_stacks` row id the members belong to).
     pub stack_id: String,
     /// Whether this member is hidden from the timeline (true for every non-primary member).
     pub hidden: bool,
+}
+
+impl StackPlacement {
+    /// The index projection of a signed [`StackMembership`] — the one mapping the write path and
+    /// [`library::rebuild`](crate::library::rebuild) must agree on: a member is suppressed from
+    /// the timeline exactly when it is not the stack's primary.
+    pub(crate) fn from_membership(m: &StackMembership) -> Self {
+        Self {
+            stack_id: m.stack_id.to_string(),
+            hidden: m.role != StackRole::Primary,
+        }
+    }
 }
 
 /// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack)
@@ -220,8 +238,11 @@ pub struct SignedImportOptions {
     /// the source is the only copy until the *server* durably holds it; left `false` for a
     /// plain offline import, which releases after the self-verified local commit.
     pub defer_source_release: bool,
-    /// Stack placement for a multi-file candidate member.
-    pub stack: Option<StackPlacement>,
+    /// Signed stack membership for a multi-file candidate member (`S-B15`). Written into the
+    /// sidecar's `stack_membership` LWW register — the same durable write
+    /// [`Workspace::set_stack_membership`] performs — and projected from there onto the index
+    /// row. `None` imports a standalone asset and leaves the register wire-absent.
+    pub stack: Option<StackMembership>,
 }
 
 /// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**

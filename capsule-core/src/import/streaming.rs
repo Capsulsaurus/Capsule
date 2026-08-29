@@ -34,7 +34,7 @@ use crate::import::scan::ImportCandidate;
 use crate::library::{
     ReleaseDecision, ReleaseGate, RetainReason, StorageVerifier, available_bytes,
 };
-use crate::lifecycle::{StackPlacement, StreamedImport, Workspace};
+use crate::lifecycle::{StreamedImport, Workspace};
 
 // ── The injected network seam ─────────────────────────────────────────────────
 
@@ -382,32 +382,28 @@ where
     V: StorageVerifier,
 {
     let move_source = matches!(config.import_mode, ImportMode::Move);
-    let stack_id = candidate
-        .stack_type
-        .map(|_| format!("stack-{}", Uuid::now_v7().simple()));
+    let stack = candidate.stack_type.map(|st| (Uuid::now_v7(), st));
 
     let mut outcomes = Vec::new();
     let mut imported_members: Vec<(String, MemberRole)> = Vec::new();
 
     for (seq, (path, role)) in candidate.members.iter().enumerate() {
         let is_primary = *role == MemberRole::Primary || seq == 0;
-        let stack = stack_id.as_ref().map(|sid| StackPlacement {
-            stack_id: sid.clone(),
-            hidden: !is_primary,
-        });
+        let membership = crate::import::executor::stack_membership(stack, *role, is_primary, seq);
 
         // 1. Import onto the signed path with deferred release.
-        let imported = match workspace.import_asset_streaming(album_id, path, move_source, stack) {
-            Ok(i) => i,
-            Err(e) => {
-                outcomes.push(StreamedOutcome {
-                    asset_id: None,
-                    source_path: path.clone(),
-                    state: StreamedState::ImportFailed(e.to_string()),
-                });
-                continue;
-            }
-        };
+        let imported =
+            match workspace.import_asset_streaming(album_id, path, move_source, membership) {
+                Ok(i) => i,
+                Err(e) => {
+                    outcomes.push(StreamedOutcome {
+                        asset_id: None,
+                        source_path: path.clone(),
+                        state: StreamedState::ImportFailed(e.to_string()),
+                    });
+                    continue;
+                }
+            };
         on_event(StreamingEvent::Imported {
             asset_id: imported.asset_id,
             source: path.clone(),
@@ -437,11 +433,16 @@ where
     }
 
     // Persist the stack grouping once its members exist in the index.
-    if let Some(sid) = &stack_id
+    if let Some((stack_id, _)) = stack
         && !imported_members.is_empty()
     {
-        crate::import::executor::persist_stack(workspace, candidate, sid, &imported_members)
-            .map_err(|e| StreamingError::Db(e.to_string()))?;
+        crate::import::executor::persist_stack(
+            workspace,
+            candidate,
+            &stack_id.to_string(),
+            &imported_members,
+        )
+        .map_err(|e| StreamingError::Db(e.to_string()))?;
     }
 
     Ok(CandidateFlow::Done(outcomes))

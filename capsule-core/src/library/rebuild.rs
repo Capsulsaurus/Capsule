@@ -25,12 +25,14 @@
 //! | stacks | the `stack_membership` LWW register | the `stack_hint` field |
 //! | `cull` | *not an index projection* — see below | absent — no such field |
 //!
-//! One thing neither shape carries: an **importer-formed** stack. `import_asset_with` records
-//! it as `assets.stack_id` / `is_stack_hidden` and writes no `stack_membership` register, so
-//! it lives only in the index (which is why `Workspace::open` reads it back from there). A
-//! rebuild therefore *preserves* an existing row's placement rather than reconstructing it,
-//! and a truly lost index loses it. Persisting it would mean writing the register on import —
-//! that changes signed sidecar bytes, so it is its own slice, not this one.
+//! An **importer-formed** stack used to be the one thing neither shape carried: pre-`S-B15`,
+//! `import_asset_with` recorded it as `assets.stack_id` / `is_stack_hidden` and wrote no
+//! `stack_membership` register, so it lived only in the index and a lost index lost it.
+//! `S-B15` closed that: the importer now writes the register, so an importer-formed stack is
+//! reconstructed from disk like any other. The preservation branch in [`signed_asset_row`] is
+//! therefore no longer load-bearing for anything this build writes — it stays as the
+//! **compatibility path** for libraries imported before `S-B15`, whose sidecars carry no
+//! register and whose placement is still index-only.
 //!
 //! `cull` needs nothing here: it has no column in `assets` and no query projects it. The
 //! culling views ([`Workspace::assets_by_cull`](crate::lifecycle::Workspace::assets_by_cull))
@@ -313,18 +315,20 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
         // Every non-primary member is suppressed from the timeline, exactly as the write path
         // arranges it.
         Some(m) => (Some(m.stack_id.to_string()), m.role != StackRole::Primary),
-        // No membership register on disk. An importer-formed stack (`StackPlacement`) is
-        // written *only* to the index — `Workspace::open` step (6) reads it back from there
-        // because it lives nowhere else — so whatever the row already carries is the only
-        // copy in existence, and a rebuild must not erase it.
+        // No membership register on disk. Compatibility path only, since `S-B15`: every
+        // importer-formed stack this build writes carries the register above, so reaching here
+        // means a **pre-`S-B15` library**, whose placement was written only to the index and
+        // lives nowhere else. Whatever the row already carries is then the only copy in
+        // existence, and a rebuild must not erase it. (An asset that *left* a stack is not this
+        // case: that is a stamped `None`, which the `Some(_)` arm resolves to no placement.)
         None => prior.map_or((None, false), |p| (p.stack_id.clone(), p.is_stack_hidden)),
     };
     if membership.is_none() && stack_id.is_some() {
         tracing::debug!(
             asset_id = %s.uuid,
             stack_id = ?stack_id,
-            "rebuild_index: no stack_membership register on disk; keeping the index-only \
-             stack placement the existing row carries"
+            "rebuild_index: no stack_membership register on disk (pre-S-B15 asset); keeping \
+             the index-only stack placement the existing row carries"
         );
     }
     AssetRow {
@@ -935,10 +939,13 @@ mod tests {
         assert_eq!(members.len(), 2, "both members are in `stack_members`");
     }
 
-    /// A stack formed by the **importer** is recorded only as `assets.stack_id` /
-    /// `is_stack_hidden`: the signed sidecar gets no `stack_membership` register, so that
-    /// placement exists nowhere on disk. Rebuilding a *live* index (`capsule rebuild`) must
-    /// therefore leave it alone rather than overwrite the only copy with NULL.
+    /// The pre-`S-B15` compatibility case. A stack formed by an importer *of that vintage* was
+    /// recorded only as `assets.stack_id` / `is_stack_hidden` — its signed sidecar got no
+    /// `stack_membership` register, so that placement exists nowhere on disk. Rebuilding a
+    /// *live* index (`capsule rebuild`) must leave it alone rather than overwrite the only copy
+    /// with NULL. Current imports write the register (see
+    /// `lifecycle::import::importer_formed_stack_survives_index_loss_and_rebuild`), so this
+    /// covers existing libraries, not new writes.
     #[test]
     fn signed_rebuild_preserves_index_only_stack_placement() {
         let tmp = TempDir::new().unwrap();

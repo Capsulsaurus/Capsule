@@ -616,19 +616,26 @@ impl Workspace {
             Err(e) => return Err(LifecycleError::Io(format!("metadata blob: {e}"))),
         };
 
-        // (6) Stack placement lives only in the queryable index.
-        let stack = self
-            .library
-            .db
-            .find_by_uuid(&asset_id.to_string())
-            .ok()
-            .flatten()
-            .and_then(|row| {
-                row.stack_id.map(|stack_id| StackPlacement {
-                    stack_id,
-                    hidden: row.is_stack_hidden,
-                })
-            });
+        // (6) Stack placement. Since `S-B15` the durable record is the sidecar's signed
+        // `stack_membership` register, so a written register is authoritative — `Some` is a
+        // placement, a stamped `None` an explicit departure from a stack. Reading the index is
+        // the compatibility path for an asset imported *before* that slice, whose placement was
+        // written only as `assets.stack_id` / `is_stack_hidden` and exists nowhere else.
+        let stack = match sidecar.stack_membership.get() {
+            Some(membership) => membership.as_ref().map(StackPlacement::from_membership),
+            None => self
+                .library
+                .db
+                .find_by_uuid(&asset_id.to_string())
+                .ok()
+                .flatten()
+                .and_then(|row| {
+                    row.stack_id.map(|stack_id| StackPlacement {
+                        stack_id,
+                        hidden: row.is_stack_hidden,
+                    })
+                }),
+        };
 
         Ok(AssetState {
             asset_id,
