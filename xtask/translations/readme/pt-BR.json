@@ -304,15 +304,15 @@
     "target": "### Acordo de Licença de Contribuidor (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "Exigimos que todos os contribuidores assinem um CLA. Isso garante que o projeto mantenha a flexibilidade jurídica necessária para garantir financiamento futuro e uma equipe de manutenção dedicada, assegurando que o software continue ativamente suportado e autossuficiente por décadas."
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "Exigimos que todos os contribuidores concordem com um [CLA](CLA.md). Os direitos autorais do Capsule pertencem a uma única pessoa, e é isso que mantém possível a distribuição em lojas de aplicativos: os termos da App Store são incompatíveis com a AGPL, de modo que uma compilação para a loja só pode ser uma concessão separada do titular dos direitos. Em contrapartida, cada lançamento público do código-fonte permanece sob uma licença aprovada pela OSI."
   },
   {
     "source": "## License",
     "target": "## Licença"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "O Capsule é licenciado sob a [Licença AGPL-3.0](LICENSE)."
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "O Capsule é publicado sob [AGPL-3.0-only](LICENSE). Os direitos autorais pertencem exclusivamente a Justin Chung; os avisos de terceiros estão em [NOTICE](NOTICE). O titular dos direitos também pode oferecer o Capsule sob termos comerciais separados, incluindo os termos proprietários exigidos pelas lojas de aplicativos. Isso não afeta o que já foi publicado: qualquer versão que você receba sob a AGPL continua sendo sua sob a AGPL, permanentemente. A posição completa está documentada no [documento de design sobre licenciamento](https://capsule.justinchung.net/design/licensing/)."
   }
 ]

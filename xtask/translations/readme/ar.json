@@ -304,15 +304,15 @@
     "target": "### اتفاقية ترخيص المساهم (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "نطلب من جميع المساهمين توقيع اتفاقية CLA. يضمن ذلك احتفاظ المشروع بالمرونة القانونية اللازمة لتأمين تمويل مستقبلي وفريق صيانة مخصص، مما يضمن بقاء البرنامج مدعومًا بنشاط ومكتفيًا ذاتيًا لعقود قادمة."
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "نطلب من جميع المساهمين الموافقة على [CLA](CLA.md). حقوق النشر في Capsule يملكها شخص واحد، وهذا بالتحديد ما يُبقي التوزيع عبر متاجر التطبيقات ممكنًا: فشروط App Store غير متوافقة مع AGPL، ولذلك لا يمكن أن تكون نسخة المتجر إلا ترخيصًا منفصلاً يمنحه صاحب حقوق النشر. وفي المقابل، يبقى كل إصدار علني للشيفرة المصدرية تحت رخصة معتمدة من OSI."
   },
   {
     "source": "## License",
     "target": "## الترخيص"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsule مرخّص بموجب [رخصة AGPL-3.0](LICENSE)."
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "يُنشر Capsule بموجب [AGPL-3.0-only](LICENSE). حقوق النشر يملكها Justin Chung وحده؛ وإشعارات الأطراف الثالثة موجودة في [NOTICE](NOTICE). ويجوز لصاحب حقوق النشر أيضًا أن يقدّم Capsule بشروط تجارية منفصلة، بما في ذلك الشروط الاحتكارية التي تفرضها متاجر التطبيقات. ولا يؤثّر ذلك على ما نُشر بالفعل: فأي نسخة تحصل عليها بموجب AGPL تظل لك بموجب AGPL بصفة دائمة. الموقف الكامل موثّق في [وثيقة تصميم الترخيص](https://capsule.justinchung.net/design/licensing/)."
   }
 ]

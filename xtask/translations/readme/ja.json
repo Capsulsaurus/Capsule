@@ -304,15 +304,15 @@
     "target": "### コントリビューターライセンス契約 (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "私たちはすべてのコントリビューターにCLAへの署名を求めています。これにより、プロジェクトは将来の資金調達や専任のメンテナンスチームを確保するために必要な法的な柔軟性を維持でき、今後何十年にもわたってソフトウェアが積極的にサポートされ、自立し続けることが保証されます。"
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "すべてのコントリビューターに[CLA](CLA.md)への同意を求めています。Capsuleの著作権は一人の個人が保有しており、それこそがアプリストアでの配布を可能にしています。App Storeの規約はAGPLと両立しないため、ストア向けビルドは著作権者による別個の許諾としてのみ成立します。その見返りとして、公開されるソースコードのリリースは常にOSI承認ライセンスの下に置かれます。"
   },
   {
     "source": "## License",
     "target": "## ライセンス"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsuleは[AGPL-3.0ライセンス](LICENSE)の下でライセンスされています。"
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsuleは[AGPL-3.0-only](LICENSE)のもとで公開されています。著作権はJustin Chungが単独で保有し、サードパーティに関する告知は[NOTICE](NOTICE)にあります。著作権者は、アプリストアが要求するプロプライエタリな条件を含め、別途の商用ライセンスとしてCapsuleを提供することもできます。これはすでに公開されたものには影響しません。AGPLのもとで受け取ったバージョンは、恒久的にAGPLのもとであなたのものです。全体的な方針は[ライセンスに関する設計ドキュメント](https://capsule.justinchung.net/design/licensing/)に記載しています。"
   }
 ]
