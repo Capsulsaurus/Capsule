@@ -7,7 +7,7 @@
 //! the real-server round-trip drive these command functions directly rather than
 //! spawning the binary.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -16,13 +16,14 @@ use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
     CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
-    execute, plan,
+    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, execute_with_source_metadata,
+    plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, LibraryCommands};
+use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
@@ -81,6 +82,55 @@ fn display_id(bytes: &[u8]) -> String {
         _ => {
             use base64::Engine as _;
             base64::engine::general_purpose::STANDARD.encode(bytes)
+        }
+    }
+}
+
+/// Render the import's source paths for the one line that names them: a single path verbatim,
+/// several parts comma-separated (a split export imported in one run).
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Phase 1 of `capsule import`: turn the source paths into the [`ScanResult`] the pure planner
+/// consumes, plus the folded exporter metadata the executor writes into each signed sidecar.
+///
+/// Both arms feed the *same* plan → execute path — there is one import implementation, not two.
+/// Without `--provider` this is the filesystem scanner and an empty metadata index, exactly as
+/// before. With `--provider takeout` the Google Takeout [source adapter] walks every named part
+/// into one pool instead: it pairs each media file with its JSON sidecar (reconciling Google's
+/// truncated names, `(1)` duplicate counters, `-edited` renditions, and sidecars that landed in
+/// a different part), reads the per-album `metadata.json` manifests, and folds the exporter's
+/// record under the pipeline's precedence rule before the planner sees anything. The planner and
+/// executor are unchanged by the choice; only what they are fed differs.
+///
+/// [source adapter]: capsule_core::import::importers
+fn read_import_source(
+    provider: Option<ImportProviderArg>,
+    paths: &[PathBuf],
+) -> Result<(ScanResult, SourceMetadataIndex)> {
+    match provider {
+        None => {
+            let scanned = scan_files(paths).map_err(|e| eyre!("Scan failed: {e}"))?;
+            Ok((scanned, SourceMetadataIndex::empty()))
+        }
+        Some(ImportProviderArg::Takeout) => {
+            let extracted = TakeoutAdapter::new()
+                .extract(paths)
+                .map_err(|e| eyre!("Reading the export failed: {e}"))?;
+            let index = SourceMetadataIndex::from_extracted(&extracted);
+            tracing::info!(
+                provider = "takeout",
+                parts = paths.len(),
+                entries = extracted.entries.len(),
+                covered_files = index.len(),
+                "import: source adapter extraction complete"
+            );
+            Ok((extracted.to_scan_result(), index))
         }
     }
 }
@@ -164,7 +214,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
         // ── Import ────────────────────────────────────────────────────────
         Commands::Import {
-            path,
+            paths,
+            provider,
             library,
             r#move,
             force,
@@ -176,7 +227,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 "{}",
                 format!(
                     "Importing {} into library {}...",
-                    path.to_string_lossy().blue(),
+                    display_paths(&paths).blue(),
                     library.to_string_lossy().blue()
                 )
                 .green()
@@ -184,9 +235,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
             let mut ws = open_workspace(&library, passphrase_stdin)?;
 
-            // Phase 1: Scan
+            // Phase 1: Scan (plain tree) or extract (third-party export, S-B11).
             println!("{}", "Scanning source files...".cyan());
-            let scan_result = scan_files(&[path]).map_err(|e| eyre!("Scan failed: {e}"))?;
+            let (scan_result, source_metadata) = read_import_source(provider, &paths)?;
 
             println!(
                 "{}",
@@ -240,10 +291,14 @@ async fn dispatch(cli: Cli) -> Result<()> {
             println!("{}", "Importing...".cyan());
             let token = CancellationToken::new();
 
-            let summary = execute(
+            // The one execute path: a plain filesystem import reaches it with an empty index
+            // and behaves exactly as it always has; a `--provider` import reaches it with the
+            // adapter's folded metadata, which lands inside each signed sidecar (`S-B10`).
+            let summary = execute_with_source_metadata(
                 &plan_result,
                 &mut ws,
                 &config,
+                &source_metadata,
                 |event| {
                     if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event {
                         for (path, outcome) in &outcomes {

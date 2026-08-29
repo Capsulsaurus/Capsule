@@ -33,6 +33,6 @@ pub use scope::{IMPORT_SCOPE_V1, Scope, SourceKind};
 pub use special::{SpecialDirectoryStatus, SpecialFileStatus, SpecialStatus};
 pub use streaming::{
     AssetUploader, StreamHalt, StreamedOutcome, StreamedState, StreamingError, StreamingEvent,
-    StreamingReport, UploadHalt, execute_streaming,
+    StreamingReport, UploadHalt, execute_streaming, execute_streaming_with_source_metadata,
 };
 pub use upload::{StagedStreamingConflict, UploadPolicy, UploadTier, ensure_streaming_compatible};

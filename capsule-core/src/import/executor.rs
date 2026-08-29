@@ -15,7 +15,7 @@
 //! sidecars left by pre-signed-path libraries. The pure planner (`import::planner`) is unchanged:
 //! it still decides *what* to import; the executor decides *how* to commit it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use uuid::Uuid;
 
@@ -27,7 +27,7 @@ use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
 use crate::import::scan::ImportCandidate;
-use crate::lifecycle::{LifecycleError, SignedImportOptions, Workspace};
+use crate::lifecycle::{LifecycleError, SidecarEnrichment, SignedImportOptions, Workspace};
 use crate::sidecar::sidecar_v1::{StackMembership, StackRole};
 
 type ExecError = Box<dyn std::error::Error + Send + Sync>;
@@ -177,6 +177,37 @@ pub fn execute_with_source_metadata(
     Ok(summary)
 }
 
+// ── Per-member enrichment ────────────────────────────────────────────────────
+
+/// The signed-sidecar enrichment for one member path, with the fold decision logged.
+///
+/// The single place a [`SourceMetadataIndex`] is turned into a
+/// [`SidecarEnrichment`](crate::lifecycle::SidecarEnrichment), shared by this executor and the
+/// [streaming window](crate::import::streaming) so a *streamed* third-party import writes exactly
+/// what a bulk one does (`S-B11` closed the gap `S-B10` left open). A path the index does not
+/// cover, or a record that folds to nothing, yields [`None`] — the untouched write path.
+pub(crate) fn member_enrichment(
+    source: &SourceMetadataIndex,
+    path: &Path,
+) -> Option<SidecarEnrichment> {
+    source.get(path).and_then(|folded| {
+        // The fold decision itself, per member, so a surprising capture time or location in
+        // a sidecar can be traced back to the side it came from. User content (the
+        // description text, the album titles) stays out: sizes and counts are enough.
+        tracing::debug!(
+            path = %path.display(),
+            taken_time = ?folded.taken_time,
+            taken_time_source = ?folded.taken_time_source,
+            gps_source = ?folded.gps_source,
+            description_bytes = folded.description.as_ref().map_or(0, String::len),
+            favorite = folded.favorite,
+            albums = folded.albums.len(),
+            "import: exporter metadata folded for member"
+        );
+        sidecar_enrichment(folded)
+    })
+}
+
 // ── Per-candidate execution ──────────────────────────────────────────────────
 
 /// Import every member of `candidate` through the signed path, then persist its stack grouping
@@ -198,22 +229,7 @@ fn execute_candidate(
     for (seq, (path, role)) in candidate.members.iter().enumerate() {
         let is_primary = *role == MemberRole::Primary || seq == 0;
         let membership = stack_membership(stack, *role, is_primary, seq);
-        let enrichment = source.get(path.as_path()).and_then(|folded| {
-            // The fold decision itself, per member, so a surprising capture time or location in
-            // a sidecar can be traced back to the side it came from. User content (the
-            // description text, the album titles) stays out: sizes and counts are enough.
-            tracing::debug!(
-                path = %path.display(),
-                taken_time = ?folded.taken_time,
-                taken_time_source = ?folded.taken_time_source,
-                gps_source = ?folded.gps_source,
-                description_bytes = folded.description.as_ref().map_or(0, String::len),
-                favorite = folded.favorite,
-                albums = folded.albums.len(),
-                "import: exporter metadata folded for member"
-            );
-            sidecar_enrichment(folded)
-        });
+        let enrichment = member_enrichment(source, path);
         // Offline import: release the Move source on the local durable commit. The online /
         // streaming path (S-B3) sets `defer_source_release` and gates on the server verdict.
         let opts = SignedImportOptions {

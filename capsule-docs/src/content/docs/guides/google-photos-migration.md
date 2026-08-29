@@ -67,7 +67,7 @@ Google may hand you several files, for example `takeout-…-001.zip`,
 
 1. **Download every part.** A single media file and its metadata sidecar can
    land in *different* parts — Capsule reunites them, but only if every part is
-   present.
+   present *in the same import run* (see [Step 3](#step-3--import-your-originals-into-a-capsule-library)).
 2. **Extract every part.** You can extract them side by side into one parent
    folder, or each into its own folder — both work. For example:
 
@@ -86,13 +86,31 @@ per-album `metadata.json` manifests — to reconstruct structure.
 
 ## Step 3 — Import your originals into a Capsule library
 
-Point the `capsule import` command at the extracted export. If you extracted the
-parts into separate folders, import each folder — Capsule deduplicates by content
-across runs, so importing in several passes is safe:
+Point the `capsule import` command at the extracted export with
+`--provider takeout`, which reads the tree as a Google Photos export rather than
+as a plain folder of files:
 
 ```sh
-capsule import ./takeout-extracted --library ~/capsule-library
+capsule import ./takeout-extracted --provider takeout --library ~/capsule-library
 ```
+
+If you extracted the parts into separate folders, **name every part in one
+command** so a media file and a sidecar that landed in different parts are still
+paired:
+
+```sh
+capsule import ./part-001 ./part-002 ./part-003 --provider takeout --library ~/capsule-library
+```
+
+Importing the parts in separate passes is safe — Capsule deduplicates by content
+across runs — but a sidecar whose media file was in another pass has nothing to
+pair with, so its metadata is lost for that file. One run over every part is the
+reliable way.
+
+Without `--provider takeout` the same command still imports your originals and
+deduplicates them, but reads the tree as ordinary files: the Takeout JSON is
+ignored, so albums, favorites, captions, and JSON-only times and locations do not
+come across.
 
 You will be prompted for the library passphrase (a first import into a fresh
 path initializes the library under that passphrase). The command then:
@@ -118,38 +136,40 @@ recognized by content hash and skipped, so a second pass reports `Nothing to
 import`. This is what lets you resume an interrupted import — just run the same
 command again.
 
-### What the current CLI import applies — and what it doesn't yet
+### What the CLI import applies
 
-Capsule's Takeout **source adapter** understands far more than raw files: it
-pairs each media file with its JSON sidecar, folds the exporter's metadata under
-a fixed precedence rule, and reconciles Google's naming quirks (see
-[the next section](#how-capsule-reads-a-takeout-export)). That adapter ships in
-`capsule-core` today and is proven by fixtures, but two follow-ups matter for
-what you actually see after importing through the CLI right now:
+With `--provider takeout`, the import applies everything the Takeout **source
+adapter** understands (described in [the next
+section](#how-capsule-reads-a-takeout-export)) and writes it into each imported
+asset's signed metadata record:
 
-- **Album, favorite, and caption reconstruction is not applied yet.** The
-  adapter recovers album membership, favorites, and user-typed descriptions from
-  the Takeout JSON, but writing that recovered metadata into Capsule's signed
-  sidecar is a documented follow-up seam. Today's `capsule import` brings your
-  **originals** across — file bytes and their embedded EXIF — and deduplicates
-  them; it does not yet re-create your Google albums, starred/favorite flags, or
-  typed captions in Capsule.
-- **Sidecar-supplied time and location are not applied yet either.** When a file
-  carries its own EXIF capture time and GPS (most camera and phone photos do),
-  that embedded metadata is preserved as part of the original. But for files
-  whose timestamp or location lived *only* in the Takeout JSON, that exporter
-  value is not yet folded into the imported asset.
+- **Capture time and location.** A file's own EXIF wins; where the timestamp or
+  GPS fix lived *only* in the Takeout JSON, the exporter's value fills the gap.
+- **Captions.** A user-typed description becomes the asset's caption.
+- **Favorites.** A starred/favorited photo is imported with the **maximum star
+  rating** (5). Capsule has no separate "favorite" flag, so this is where a
+  favorite lands; your culling flags are left untouched.
+- **Album membership.** Google album titles are preserved as **user tags** on
+  each asset in that album — so an album is reconstructible as a search over its
+  title. Capsule does not create container albums from an import: an import
+  never invents destinations, so every asset lands in the library's default
+  album with its Google album recorded as a tag.
 
-In short: **your photos and videos come across intact and deduplicated today;
-the Google-specific enrichment (albums, favorites, captions, and JSON-only
-time/GPS) lands in a future release.** Keep your Takeout archive so you can
-re-run the import once that enrichment ships.
+Two fidelity notes worth knowing before you reconcile anything:
+
+- A location that came from the Takeout JSON is recorded as **manually
+  supplied**, not as EXIF — it was read out of Google's record, not out of your
+  file's bytes, and the metadata record is signed, so it says where the value
+  actually came from.
+- Google exports both a user-editable location and its own copy of the file's
+  EXIF location. Capsule folds them into one point, so a fix that came from
+  Google's EXIF copy is also recorded as manually supplied.
 
 ## How Capsule reads a Takeout export
 
-This section documents what the Takeout adapter in `capsule-core` understands
-about an export. It is the behavior the enrichment follow-up above will surface;
-it is already covered by the adapter's fixture tests.
+This section documents what the Takeout adapter understands about an export —
+the behavior `--provider takeout` applies, and what the mapping above is built
+on.
 
 ### The metadata precedence rule
 
@@ -228,26 +248,29 @@ You can lean on this for integrity:
 
 ### Metadata sampling
 
-Sample a handful of imported assets and confirm their **embedded** metadata
-survived — capture time, camera make/model, and GPS baked into the file. You can
-inspect a source original with any EXIF tool, and compare it against what Capsule
-reports:
+Sample a handful of source originals with any EXIF tool and keep the record —
+capture time, camera make/model, and GPS baked into the file. `capsule match`
+reports what Capsule reads off a **source file** (its hash, size, and
+timestamps), which is how you confirm a specific file is the one that came
+across:
 
 ```sh
 capsule match './takeout-extracted/Takeout/Google Photos/Photos from 2021/example.jpg'
 ```
 
-Remember the gap called out above: **album membership, favorites, and typed
-captions are not yet reconstructed** from the Takeout JSON in the current
-release, so do not expect those to appear yet. Sample them from Google directly
-while your account is still active, so you have a record to reconcile against
-once enrichment ships.
+Do the same for the **exporter-supplied** metadata, since that is what
+`--provider takeout` adds: pick a few photos you know are in an album, are
+favorited, or carry a typed caption in Google Photos, and note them down.
+
+The current CLI has no command that prints an imported asset's caption, rating,
+or tags back to you, so this sample is a record to reconcile later rather than
+something you can diff today. That is exactly why the guide keeps insisting you
+retain the Takeout archive and keep Google Photos alive through the cutover.
 
 ## After you've verified
 
 Only once counts reconcile, spot hashes match, and you have sampled metadata to
 your satisfaction — and after you have run both systems in parallel long enough
 to trust the result — should you consider winding down Google Photos. Even then,
-keep the Takeout archive and a backup of your Capsule library: the album,
-favorite, and caption enrichment is still coming, and you will want the archive
-to replay it.
+keep the Takeout archive and a backup of your Capsule library: the archive is
+what lets you replay the import if anything about the result ever surprises you.

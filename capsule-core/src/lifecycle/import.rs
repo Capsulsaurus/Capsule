@@ -9,8 +9,8 @@ use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{
-    AssetState, LifecycleError, Result, SignedImport, SignedImportOptions, StackPlacement,
-    StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
+    AssetState, LifecycleError, Result, SidecarEnrichment, SignedImport, SignedImportOptions,
+    StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
 };
 use crate::cbor;
 use crate::crypto::encryption::{blob_ciphertext_hash, encrypt_asset_rekey, seal_metadata_blob};
@@ -552,20 +552,29 @@ impl Workspace {
     /// per-asset upload → verify → release step from. The local original (and any Move-mode
     /// source) is left in place — the [streaming executor](crate::import::streaming) releases it
     /// only after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
-    #[tracing::instrument(skip_all, fields(album_id = %album_id, src = %src.display(), move_source))]
+    ///
+    /// `enrichment` carries the folded third-party exporter metadata for this file exactly as
+    /// [`import_asset_with`](Self::import_asset_with) takes it (`S-B11`). It is a parameter and
+    /// not a hard-wired `None` because the enrichment is written *inside the signed sidecar*:
+    /// dropping it here would make a streamed Takeout import silently lossier than a bulk one,
+    /// and the difference would be unrecoverable without re-importing.
+    #[tracing::instrument(
+        skip_all,
+        fields(album_id = %album_id, src = %src.display(), move_source, enriched = enrichment.is_some())
+    )]
     pub fn import_asset_streaming(
         &mut self,
         album_id: Uuid,
         src: &Path,
         move_source: bool,
         stack: Option<StackMembership>,
+        enrichment: Option<SidecarEnrichment>,
     ) -> Result<StreamedImport> {
         let opts = SignedImportOptions {
             move_source,
             defer_source_release: true,
             stack,
-            // Streaming import (`S-B3`) does not yet carry adapter metadata; see `S-B10`.
-            enrichment: None,
+            enrichment,
         };
         let asset_id = self.import_asset_with(album_id, src, &opts)?.asset_id;
         let asset = self

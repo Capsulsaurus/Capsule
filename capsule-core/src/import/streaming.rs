@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::crypto::verify_asset::VerifyOutcome;
 use crate::domain::{ImportMode, MemberRole};
+use crate::import::enrichment::SourceMetadataIndex;
 use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::scan::ImportCandidate;
@@ -237,15 +238,61 @@ pub enum StreamingEvent {
 /// errors: on a pause the window halts (`report.halted` set) with no further files admitted, and
 /// the run can be re-invoked after reconnect — the deterministic planner re-derives the remaining
 /// work and skips already-completed assets.
-#[tracing::instrument(
-    skip_all,
-    fields(candidates = plan.actions.len(), mode = ?config.import_mode, headroom = headroom_margin)
-)]
 #[allow(clippy::too_many_arguments)]
 pub fn execute_streaming<U, V>(
     plan: &ImportActionPlan,
     workspace: &mut Workspace,
     config: &ImportConfig,
+    uploader: &U,
+    verifier: &V,
+    headroom_margin: u64,
+    on_event: impl Fn(StreamingEvent),
+    cancel: &CancellationToken,
+) -> Result<StreamingReport, StreamingError>
+where
+    U: AssetUploader,
+    V: StorageVerifier,
+{
+    execute_streaming_with_source_metadata(
+        plan,
+        workspace,
+        config,
+        &SourceMetadataIndex::empty(),
+        uploader,
+        verifier,
+        headroom_margin,
+        on_event,
+        cancel,
+    )
+}
+
+/// [`execute_streaming`], with the folded metadata a third-party [source adapter] extracted
+/// attached to each file it covers — the streaming twin of
+/// [`execute_with_source_metadata`](crate::import::executor::execute_with_source_metadata)
+/// (slice `S-B11`, closing the gap `S-B10` left open).
+///
+/// The enrichment is written *inside the signed sidecar*, at the same single write path the bulk
+/// executor drives, so the drive mode a user picks never changes what a migrated library keeps:
+/// a storage-constrained device streaming a Takeout export lands the exporter's capture time,
+/// GPS, caption, favorite, and album membership exactly as an unconstrained one does. Files the
+/// index does not cover import exactly as they do through [`execute_streaming`].
+///
+/// [source adapter]: crate::import::importers
+#[tracing::instrument(
+    skip_all,
+    fields(
+        candidates = plan.actions.len(),
+        mode = ?config.import_mode,
+        headroom = headroom_margin,
+        source_metadata = source.len(),
+    )
+)]
+#[allow(clippy::too_many_arguments)]
+pub fn execute_streaming_with_source_metadata<U, V>(
+    plan: &ImportActionPlan,
+    workspace: &mut Workspace,
+    config: &ImportConfig,
+    source: &SourceMetadataIndex,
     uploader: &U,
     verifier: &V,
     headroom_margin: u64,
@@ -318,7 +365,7 @@ where
         match decision {
             ImportDecision::Import => {
                 match stream_candidate(
-                    workspace, config, album_id, candidate, uploader, verifier, &on_event,
+                    workspace, config, album_id, candidate, source, uploader, verifier, &on_event,
                 )? {
                     CandidateFlow::Done(outs) => report.outcomes.extend(outs),
                     CandidateFlow::Halt(reason, outs) => {
@@ -373,6 +420,7 @@ fn stream_candidate<U, V>(
     config: &ImportConfig,
     album_id: Uuid,
     candidate: &ImportCandidate,
+    source: &SourceMetadataIndex,
     uploader: &U,
     verifier: &V,
     on_event: &impl Fn(StreamingEvent),
@@ -391,19 +439,27 @@ where
         let is_primary = *role == MemberRole::Primary || seq == 0;
         let membership = crate::import::executor::stack_membership(stack, *role, is_primary, seq);
 
-        // 1. Import onto the signed path with deferred release.
-        let imported =
-            match workspace.import_asset_streaming(album_id, path, move_source, membership) {
-                Ok(i) => i,
-                Err(e) => {
-                    outcomes.push(StreamedOutcome {
-                        asset_id: None,
-                        source_path: path.clone(),
-                        state: StreamedState::ImportFailed(e.to_string()),
-                    });
-                    continue;
-                }
-            };
+        // 1. Import onto the signed path with deferred release, carrying whatever the source
+        //    adapter folded for this member (`S-B11`). Resolved through the *same* helper the
+        //    bulk executor uses, so the two drive modes cannot drift apart.
+        let enrichment = crate::import::executor::member_enrichment(source, path);
+        let imported = match workspace.import_asset_streaming(
+            album_id,
+            path,
+            move_source,
+            membership,
+            enrichment,
+        ) {
+            Ok(i) => i,
+            Err(e) => {
+                outcomes.push(StreamedOutcome {
+                    asset_id: None,
+                    source_path: path.clone(),
+                    state: StreamedState::ImportFailed(e.to_string()),
+                });
+                continue;
+            }
+        };
         on_event(StreamingEvent::Imported {
             asset_id: imported.asset_id,
             source: path.clone(),
@@ -519,6 +575,7 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use jiff::Timestamp;
     use tempfile::TempDir;
     use uuid::Uuid;
 
@@ -526,9 +583,13 @@ mod tests {
     use crate::crypto::hash::Hash32;
     use crate::crypto::primitives::Argon2Params;
     use crate::domain::ImportMode;
+    use crate::import::importers::{
+        ExtractedImport, ExtractedMetadata, FoldSource, GeoPoint, SourceEntry,
+    };
     use crate::import::planner::{ImportConfig, plan};
     use crate::import::scanner::scan;
     use crate::library::{BlobRole, BlobVerdict, StorageVerdict, VerifierError};
+    use crate::metadata::AssetType;
 
     fn noop_event(_: StreamingEvent) {}
 
@@ -992,6 +1053,160 @@ mod tests {
             ws.asset_ids().len(),
             0,
             "no file imported when the staged policy is refused"
+        );
+    }
+
+    // ── Third-party enrichment through the window (S-B11) ───────────────────────
+    //
+    // `S-B10` wired the adapter's folded metadata into the *bulk* executor and left the
+    // streaming window passing `enrichment: None` — a streamed Takeout import silently
+    // discarded exactly what that slice recovered. These two tests are the contract for
+    // closing it:
+    //
+    // - `a_streamed_import_carries_the_exporter_metadata_into_the_signed_sidecar` — a file the
+    //   index covers lands its exporter caption, favorite rating, album tags, capture time and
+    //   GPS inside the signed sidecar, and still verifies.
+    // - `a_streamed_import_the_index_does_not_cover_is_unenriched` — the plain-filesystem
+    //   arm: the wrapper's empty index leaves every enriched register at its default.
+
+    /// One entry covering `path` with a full exporter record.
+    fn covering_index(path: &Path) -> SourceMetadataIndex {
+        let entry = SourceEntry {
+            candidate: ImportCandidate {
+                source_paths: vec![path.to_path_buf()],
+                detected_type: AssetType::Photo,
+                stack_type: None,
+                detection_method: None,
+                detection_key: None,
+                members: vec![(path.to_path_buf(), MemberRole::Primary)],
+            },
+            metadata: ExtractedMetadata {
+                taken_time: Timestamp::from_second(1_609_502_400).ok(),
+                taken_time_source: FoldSource::Exporter,
+                gps: Some(GeoPoint {
+                    lat: 21.3,
+                    lon: -157.8,
+                }),
+                gps_source: FoldSource::Exporter,
+                description: Some("Snowy morning".into()),
+                favorite: true,
+                albums: vec!["Vacation 2021".to_string()],
+            },
+        };
+        SourceMetadataIndex::from_extracted(&ExtractedImport {
+            entries: vec![entry],
+        })
+    }
+
+    /// Stream-import everything under `src` with `index` attached. The verifier withholds the
+    /// `durable` verdict on purpose: release deletes the local original, and the enrichment
+    /// assertions below end with a full `verify_asset` pass, which needs those bytes. The window
+    /// itself — import → upload → verify → gate — runs in full either way.
+    fn stream_with(index: &SourceMetadataIndex, src: &Path, ws: &mut Workspace) -> StreamingReport {
+        let config = ImportConfig::default();
+        let plan = plan(&scan(&[src.to_path_buf()]).unwrap(), ws.db(), &config).unwrap();
+        execute_streaming_with_source_metadata(
+            &plan,
+            ws,
+            &config,
+            index,
+            &OkUploader,
+            &MockVerifier {
+                durable: false,
+                receipt: true,
+            },
+            0,
+            noop_event,
+            &CancellationToken::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn a_streamed_import_carries_the_exporter_metadata_into_the_signed_sidecar() {
+        let src = TempDir::new().unwrap();
+        let lib = TempDir::new().unwrap();
+        let photo = src.path().join("photo_0.jpg");
+        fs::write(&photo, b"streamed bytes with no exif of their own").unwrap();
+        let mut ws = signed_workspace(lib.path());
+
+        let report = stream_with(&covering_index(&photo), src.path(), &mut ws);
+        assert_eq!(report.retained_count(), 1, "the window ran the whole step");
+
+        let id = ws.asset_ids().into_iter().next().expect("one asset");
+        let sidecar = &ws.asset(&id).expect("asset").sidecar;
+
+        assert_eq!(
+            sidecar.caption.get().map(String::as_str),
+            Some("Snowy morning"),
+            "the exporter description must survive the streaming window"
+        );
+        assert_eq!(
+            sidecar.rating.get(),
+            Some(&crate::import::enrichment::FAVORITE_RATING)
+        );
+        assert!(sidecar.tags_user.value().contains("Vacation 2021"));
+        assert_eq!(
+            sidecar
+                .capture_timestamp
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .as_second(),
+            1_609_502_400,
+            "these bytes carry no EXIF, so the exporter's taken-time fills the gap"
+        );
+        let gps = sidecar.gps.as_ref().expect("the exporter's fix");
+        assert_eq!((gps.lat, gps.lon), (21.3, -157.8));
+        assert_eq!(
+            gps.source,
+            crate::sidecar::sidecar_v1::GpsSource::Manual,
+            "an exporter-sourced fix must not claim to be this file's EXIF"
+        );
+
+        // Enrichment happens inside the signed sidecar, so the asset must still verify.
+        assert_eq!(
+            ws.verify(&id).expect("verify"),
+            crate::crypto::verify_asset::VerifyOutcome::Accept
+        );
+    }
+
+    #[test]
+    fn a_streamed_import_the_index_does_not_cover_is_unenriched() {
+        let src = TempDir::new().unwrap();
+        let lib = TempDir::new().unwrap();
+        write_sources(src.path(), 1);
+        let mut ws = signed_workspace(lib.path());
+
+        // The `execute_streaming` wrapper — the plain filesystem drive — passes an empty index.
+        let plan = plan(
+            &scan(&[src.path().to_path_buf()]).unwrap(),
+            ws.db(),
+            &ImportConfig::default(),
+        )
+        .unwrap();
+        execute_streaming(
+            &plan,
+            &mut ws,
+            &ImportConfig::default(),
+            &OkUploader,
+            &MockVerifier {
+                durable: true,
+                receipt: true,
+            },
+            0,
+            noop_event,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+
+        let id = ws.asset_ids().into_iter().next().expect("one asset");
+        let sidecar = &ws.asset(&id).expect("asset").sidecar;
+        assert_eq!(sidecar.caption.get(), None);
+        assert_eq!(sidecar.rating.get(), None);
+        assert!(sidecar.tags_user.value().is_empty());
+        assert!(
+            sidecar.gps.is_none(),
+            "no exporter record and no EXIF means no fix at all"
         );
     }
 }

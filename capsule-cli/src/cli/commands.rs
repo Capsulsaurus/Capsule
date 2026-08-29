@@ -15,6 +15,16 @@ pub(crate) enum CullFlagArg {
     Reject,
 }
 
+/// The exporting service an import reads (`--provider takeout`). Only the providers with a
+/// committed source adapter are spellable: `capsule_core::import::ImportProvider` also names
+/// iCloud, Immich, and tethered-camera imports, but their adapters are post-v1 and offering the
+/// flag before the adapter exists would be a promise the CLI cannot keep.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImportProviderArg {
+    /// A Google Photos export produced by Google Takeout, extracted to disk.
+    Takeout,
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
     /// Authentication commands
@@ -24,8 +34,16 @@ pub(crate) enum Commands {
     },
     /// Import files into a local Capsule library
     Import {
-        /// Source file or directory to import
-        path: PathBuf,
+        /// Source file or directory to import. Repeatable: a split Takeout export extracted
+        /// into several folders is imported by naming every part in one run, so a media file
+        /// and a sidecar that landed in different parts are still paired.
+        #[arg(required = true, value_name = "PATH", num_args = 1..)]
+        paths: Vec<PathBuf>,
+        /// Read the source as an export from this service instead of as a plain directory
+        /// tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album
+        /// membership) is folded into the imported assets.
+        #[arg(long, value_name = "PROVIDER")]
+        provider: Option<ImportProviderArg>,
         /// Path to the Capsule library
         #[arg(long, value_name = "PATH")]
         library: PathBuf,
