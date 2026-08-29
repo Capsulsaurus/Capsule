@@ -87,6 +87,13 @@ re-running helps. Reclaim, then re-run:
 # Leaked testcontainers use different image tags than the compose services
 # (postgres:15-alpine / valkey:8.0.1 vs postgres:17 / valkey:8.1.1), so this
 # cannot touch the stack `serve-api` depends on.
+#
+# CAVEAT, learned the hard way: that separation is a convention, not a guarantee.
+# `capsule-api/media`'s attestation test pins `postgres:17` — the compose service's
+# own tag — so a tag filter alone would kill the running stack. Check `podman ps`
+# before pruning: the compose services show an uptime in days, leaked
+# testcontainers show hours. Uptime is the reliable discriminator; the tag is a
+# convenience that any new test can invalidate.
 podman rm -f $(podman ps -aq \
   --filter ancestor=docker.io/library/postgres:15-alpine \
   --filter ancestor=docker.io/valkey/valkey:8.0.1)
