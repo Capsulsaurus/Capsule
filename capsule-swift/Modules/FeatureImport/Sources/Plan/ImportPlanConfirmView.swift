@@ -65,6 +65,8 @@ public struct ImportPlanConfirmView: View {
             modeSection
         }
         .safeAreaInset(edge: .bottom) { confirmBar }
+        // The form dissolves into the bar instead of being sheared off by it.
+        .capsuleScrollEdgeEffect(for: .bottom)
     }
 
     // MARK: Sections
@@ -198,7 +200,7 @@ public struct ImportPlanConfirmView: View {
             blockedNote
         }
         .padding(CapsuleTheme.Spacing.large)
-        .background(.bar)
+        .capsuleGlass(in: Rectangle())
     }
 
     @ViewBuilder

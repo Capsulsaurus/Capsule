@@ -66,6 +66,12 @@ public struct TimelineRootView: View {
                         ToolbarItem(placement: .principal) { levelPicker }
                         if model.level == .all {
                             ToolbarItem(placement: .primaryAction) { densityMenu }
+                            // Two adjacent trailing items share one glass
+                            // capsule without this, which says they are the same
+                            // kind of thing. Changing how the grid is *drawn*
+                            // and entering a mode that changes what a tap
+                            // *does* are not.
+                            ToolbarSpacer(.fixed, placement: .primaryAction)
                             ToolbarItem(placement: .primaryAction) { selectButton }
                         }
                     }

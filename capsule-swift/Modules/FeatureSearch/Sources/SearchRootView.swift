@@ -35,7 +35,7 @@ public struct SearchRootView: View {
         content
             .navigationTitle("app.tab.search")
             .capsuleNavigationBarInline()
-            .capsuleAlwaysVisibleSearchable(text: $model.query, prompt: "app.search.prompt")
+            .capsuleSearchable(text: $model.query, prompt: "app.search.prompt")
             .searchSuggestions { suggestionList }
             .task { await model.load() }
             .capsuleFullScreenCover(item: $viewerSelection) { selection in

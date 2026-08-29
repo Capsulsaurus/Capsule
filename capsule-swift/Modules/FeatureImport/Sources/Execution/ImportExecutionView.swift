@@ -58,6 +58,8 @@ public struct ImportExecutionView: View {
         }
         .listStyle(.plain)
         .safeAreaInset(edge: .top) { progressBar }
+        // The rows dissolve into the bar instead of being sheared off by it.
+        .capsuleScrollEdgeEffect(for: .top)
     }
 
     // MARK: Chrome
@@ -74,7 +76,7 @@ public struct ImportExecutionView: View {
         }
         .padding(.horizontal, CapsuleTheme.Spacing.large)
         .padding(.vertical, CapsuleTheme.Spacing.small)
-        .background(.bar)
+        .capsuleGlass(in: Rectangle())
     }
 
     private var progressText: String {
