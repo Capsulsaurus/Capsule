@@ -239,7 +239,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | ready | found porting auth |
-| S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | ready | `openapi-check` still points at Salvo |
+| S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1424,6 +1424,13 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   reaches parity, committing its document as the contract and dropping the `OmitRule` narrowings.
 - **Done when:** changing a Kynos route's response set fails `openapi-check` until the committed
   document is regenerated. **Tier:** gate.
+- **Landed 2026-08-29.** `capsule-server/openapi.json` is committed and `openapi-check-kynos` is in
+  `check-rust`. Verified to have teeth rather than assumed: deleting the `423` makes it exit 1
+  naming the file. The document declares 3.2.0 with 18 responses over four operations.
+  **Deliberately a second gate, not a replacement** — the SDK still generates from the Salvo
+  document, and committing both as *the* contract at once would leave a client no way to know which
+  to believe. The re-point at parity is the remaining half, and it drops the `OmitRule` narrowings
+  with it.
 
 ### S-C29 — The two storage ports, and the generic blob store they replace
 
