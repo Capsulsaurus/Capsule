@@ -68,7 +68,6 @@ stylistic one. Settled with slice `S-C35`:
   layout change — a `.server/version` bump and a data move — and fails a compile-time assertion
   rather than silently misfiling blobs under shards that no longer derive from them.
 
-
 ## Uniform, Opaque Blobs
 
 A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), and the encrypted CBOR metadata blob (which carries the LQIP) — every one of them fully opaque, content-addressed ciphertext the store does not distinguish. Beside them, each write persists its signed **manifest envelope object** (see [Provenance — Physical placement](/design/cryptography/provenance/#asset-manifest)): a small, deliberately server-visible signed CBOR object, stored content-addressed like any blob, whose append-only sequence is the asset's provenance chain. The hot-path mapping from an asset to its blobs and their roles lives in PostgreSQL, with the envelope objects as its durable, key-free fallback.
