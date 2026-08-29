@@ -43,6 +43,18 @@ capsule-i18n = { path = "../capsule-i18n" }
 # EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`;
 # see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
 jsonwebtoken = { workspace = true }
+# The blob store's filesystem adapter (slice `S-C33`). `tokio::fs` because every blob write is
+# an await on a server runtime and `std::fs` on that runtime blocks it; `fs`/`io-util`/`rt` are
+# the three features a ranged read and a durable append need, and nothing more. Already the
+# workspace's async runtime (design/dependencies.md, "Async runtime") and already in this
+# crate's tree through kynos — this promotes it from a dev-dependency, it does not add a crate.
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+# The `.reason.json` a quarantined blob keeps beside it (design/filesystem/server.md). The
+# encoding belongs to the filesystem *adapter*, not to the port's record — which derives no
+# serde traits, exactly as the state ports' records do not — so this is used in one file.
+# Already a workspace dependency with a row in design/dependencies.md, and already here as a
+# dev-dependency.
+serde_json = { workspace = true }
 
 # `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
 # and this mirrors it deliberately: two committed documents, two identical drift guards, so the
@@ -55,9 +67,9 @@ color-eyre = "0.6.5"
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
 # built around. Dev-only: the assertions belong to the tests, not the served binary.
 kynos = { workspace = true, features = ["test-util"] }
-# Reading the emitted document back to assert its declared OpenAPI version; the server itself
-# never parses JSON by hand.
-serde_json = { workspace = true }
+# `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
+# `#[tokio::test]` attribute and a runtime to drive it. Test-only, so the served binary carries
+# neither.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 # Ed25519 key generation for the token tests. A dev-dependency and nothing more: the suite
 # mints a fresh key pair per signer rather than reading a checked-in PEM, because a private key

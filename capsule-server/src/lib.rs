@@ -26,9 +26,14 @@
 
 pub mod app;
 pub mod auth;
+pub mod blob;
+pub mod limits;
 pub mod routes;
 pub mod store;
 
+use kynos::middleware::catch_panic::Propagate;
+use kynos::middleware::limits::BodySize;
+use kynos::middleware::stack::Cons;
 use kynos::prelude::*;
 use kynos::router::service::Service;
 
@@ -43,14 +48,28 @@ pub use self::app::App;
 /// It takes no context *value* — [`App`] appears only as a type parameter — which is what lets
 /// [`openapi`] describe the whole server without a database, a cache or a signing key. The
 /// description is a property of the types, not of a running deployment.
-pub fn router() -> Router<App> {
-    Router::<App>::new().mount(kynos::routes![
-        routes::version::get_version,
-        routes::auth::login_user,
-        routes::auth::refresh_token,
-        routes::auth::logout,
-    ])
+pub fn router() -> ServerRouter {
+    Router::<App>::new()
+        // Mounted on the whole router, not on the operations that happen to take a body today:
+        // an oversized body is refused wherever it is sent, and the `413` that refusal produces
+        // is declared on every operation it covers because Kynos derives the declaration from
+        // the interceptor's own type. See [`limits`].
+        .intercept(limits::body_size())
+        .mount(kynos::routes![
+            routes::version::get_version,
+            routes::auth::login_user,
+            routes::auth::refresh_token,
+            routes::auth::logout,
+        ])
 }
+
+/// The router's full type, interceptors included.
+///
+/// Spelled out because a Kynos interceptor is part of the router's *type* — that is what makes
+/// two interceptors answering with one status a compile error rather than a runtime surprise —
+/// so mounting one changes this signature. That is a feature: the alias is the one place the
+/// server's middleware stack is written down.
+pub type ServerRouter = Router<App, Propagate, Cons<BodySize, ()>>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///

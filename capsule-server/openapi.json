@@ -20,6 +20,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
           }
         }
       }
@@ -109,6 +112,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
           }
         }
       }
@@ -188,6 +194,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
           }
         }
       }
@@ -240,6 +249,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
           }
         },
         "security": [

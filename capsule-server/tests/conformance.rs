@@ -23,6 +23,11 @@ use kynos::test::TestClient;
 use serde_json::json;
 use support::{EMAIL, Fixture, PASSWORD};
 
+/// A `Content-Length` no operation will accept.
+fn oversized() -> u64 {
+    capsule_server::limits::MAX_REQUEST_BODY_BYTES + 1
+}
+
 /// `GET /v1/version` answers the shape `capsule status` reads.
 ///
 /// The literal `capsule-api` is asserted, not derived from the crate name: this crate is
@@ -81,6 +86,29 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // 413 is declared on *every* operation, because the body-size limit is mounted on the whole
+    // router and a Kynos interceptor's declaration is its type (`S-C33`). So every operation
+    // produces one here, sent the cheapest way the limit can be reached: an over-declared
+    // `Content-Length`, refused before a byte of the body is read.
+    for (method, path) in [
+        ("GET", "/v1/version"),
+        ("POST", "/v1/auth/login"),
+        ("POST", "/v1/auth/refresh"),
+        ("POST", "/v1/auth/logout"),
+    ] {
+        let request = if method == "GET" {
+            client.get(path)
+        } else {
+            client.post(path)
+        };
+        request
+            .header("content-length", &oversized().to_string())
+            .body("application/json", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
     // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
     // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.
