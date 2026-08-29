@@ -55,6 +55,8 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
     let onCancelPrefetch: ([Item]) -> Void
     let onMagnify: ((Bool) -> Void)?
     let onLeadingVisibleItem: ((SectionID, Item) -> Void)?
+    let onColumnsChange: ((Int) -> Void)?
+    let columns: Int
     let itemContent: (SectionID, Item) -> ItemContent
     let headerContent: (SectionID) -> HeaderContent
 
@@ -75,6 +77,11 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
     ///   - onCancelPrefetch: items that scrolled away unseen — drop the warm-up.
     ///   - onMagnify: a discrete zoom step: `true` to zoom in (finer), `false`
     ///     to zoom out (coarser). `nil` disables the gesture entirely.
+    ///   - columns: the density the caller currently renders. The base every
+    ///     pinch measures from; the caller stays the owner of the value.
+    ///   - onColumnsChange: a new resting density chosen by a live pinch. Fires
+    ///     *during* the gesture, which is what makes it a zoom rather than a
+    ///     toggle.
     ///   - onLeadingVisibleItem: the topmost item currently on screen, reported
     ///     only when it *changes*. A grid with no section headers has nowhere to
     ///     say where in the library the reader is, so the caller puts it in the
@@ -94,6 +101,8 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
         onCancelPrefetch: @escaping ([Item]) -> Void = { _ in },
         onMagnify: ((Bool) -> Void)? = nil,
         onLeadingVisibleItem: ((SectionID, Item) -> Void)? = nil,
+        columns: Int = PhotoGridZoom.defaultColumns,
+        onColumnsChange: ((Int) -> Void)? = nil,
         @ViewBuilder item: @escaping (SectionID, Item) -> ItemContent,
         @ViewBuilder header: @escaping (SectionID) -> HeaderContent
     ) {
@@ -107,6 +116,8 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
         self.onCancelPrefetch = onCancelPrefetch
         self.onMagnify = onMagnify
         self.onLeadingVisibleItem = onLeadingVisibleItem
+        self.columns = columns
+        self.onColumnsChange = onColumnsChange
         itemContent = item
         headerContent = header
     }

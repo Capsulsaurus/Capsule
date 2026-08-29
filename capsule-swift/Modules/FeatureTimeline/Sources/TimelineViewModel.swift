@@ -31,7 +31,12 @@ public final class TimelineViewModel {
     }
 
     /// Permitted grid densities, coarse to fine.
-    public static let columnOptions = [3, 5, 7]
+    ///
+    /// Owned by ``PhotoGridZoom`` rather than spelled here, so the pinch and the
+    /// density menu cannot drift apart: a menu offering a rung the gesture can
+    /// never settle on — or a gesture settling on one the menu cannot show — is
+    /// a bug you only find by pinching.
+    public static let columnOptions = PhotoGridZoom.ladder
 
     public private(set) var state: LoadState = .loading
     public private(set) var sections: [PhotoGridSection] = []
@@ -86,7 +91,11 @@ public final class TimelineViewModel {
         self.provider = provider
         self.hiddenStore = hiddenStore
         let stored = UserDefaults.standard.object(forKey: Self.columnCountKey) as? Int
-        columnCount = Self.columnOptions.contains(stored ?? 0) ? (stored ?? 5) : 5
+        // A value stored before the ladder changed is not on it any more, and
+        // rendering an off-ladder density would make the next pinch jump.
+        columnCount = Self.columnOptions.contains(stored ?? 0)
+            ? (stored ?? PhotoGridZoom.defaultColumns)
+            : PhotoGridZoom.defaultColumns
     }
 
     deinit {

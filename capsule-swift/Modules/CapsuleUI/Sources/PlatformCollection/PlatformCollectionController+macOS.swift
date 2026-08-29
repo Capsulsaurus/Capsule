@@ -23,6 +23,8 @@
             controller.onCancelPrefetch = onCancelPrefetch
             controller.onMagnify = onMagnify
             controller.onLeadingVisibleItem = onLeadingVisibleItem
+            controller.onColumnsChange = onColumnsChange
+            controller.columns = columns
             controller.update(
                 sections: sections,
                 layout: layout,
@@ -57,6 +59,14 @@
         var onCancelPrefetch: (([Item]) -> Void)?
         var onMagnify: ((Bool) -> Void)?
         var onLeadingVisibleItem: ((SectionID, Item) -> Void)?
+        /// Report a new resting column count chosen by a trackpad magnification.
+        var onColumnsChange: ((Int) -> Void)?
+        /// The density the caller currently renders — the base a magnification
+        /// measures from.
+        var columns: Int = PhotoGridZoom.defaultColumns
+
+        private var pinchBaseColumns: Int?
+        private var pinchAnchor: IndexPath?
 
         /// The last item reported through ``onLeadingVisibleItem``, so a scroll
         /// that stays inside one tile reports nothing.
@@ -131,9 +141,8 @@
             bridge.onCancelPrefetch = { [weak self] indexPaths in
                 self?.forwardPrefetch(indexPaths, cancel: true)
             }
-            bridge.onMagnify = { [weak self] scale in
-                guard let step = PlatformCollectionMagnification.step(forScale: scale) else { return }
-                self?.onMagnify?(step)
+            bridge.onMagnifyGesture = { [weak self] recognizer in
+                self?.handleMagnification(recognizer)
             }
 
             // The Mac's pinch is a trackpad magnification, reported as a delta
@@ -183,10 +192,63 @@
             scrollToItem = newItemTarget
             if layoutChanged {
                 collectionView.collectionViewLayout = PlatformCollectionLayoutBuilder.make(newLayout)
+                restoreAnchorAfterLayoutChange()
             }
             applySnapshot(animated: hasAppliedSnapshot && !layoutChanged)
             applyScrollTargetIfNeeded()
             reportLeadingVisibleItem()
+        }
+
+        // MARK: Magnification
+
+        /// Drive the column count from a live trackpad magnification.
+        ///
+        /// The iOS twin of `handlePinch`, with one spelling difference that
+        /// matters: AppKit reports magnification as a *delta around zero* while
+        /// UIKit reports a *scale around one*, so the value is normalised before
+        /// the shared arithmetic sees it. Getting that wrong makes the Mac zoom
+        /// the wrong way, which is why the conversion is written once, here.
+        private func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
+            let scale = 1 + recognizer.magnification
+            switch recognizer.state {
+            case .began:
+                pinchBaseColumns = columns
+                pinchAnchor = anchorIndexPath(near: recognizer.location(in: collectionView))
+            case .changed:
+                guard let base = pinchBaseColumns else { return }
+                if let step = PhotoGridZoom.levelStep(base: base, scale: scale) {
+                    recognizer.state = .ended
+                    pinchBaseColumns = nil
+                    onMagnify?(step)
+                    return
+                }
+                let settled = PhotoGridZoom.settle(
+                    PhotoGridZoom.continuousColumns(base: base, scale: scale)
+                )
+                guard settled != columns else { return }
+                onColumnsChange?(settled)
+            case .ended, .cancelled, .failed:
+                pinchBaseColumns = nil
+                pinchAnchor = nil
+            default:
+                break
+            }
+        }
+
+        private func anchorIndexPath(near point: CGPoint) -> IndexPath? {
+            collectionView.indexPathForItem(at: point)
+                ?? collectionView.indexPathsForVisibleItems().min()
+        }
+
+        /// Keep the magnified-on photo in view across a column change, so the
+        /// reader stays where they were in the library rather than wherever the
+        /// old scroll offset now points.
+        private func restoreAnchorAfterLayoutChange() {
+            guard let anchor = pinchAnchor,
+                  anchor.section < collectionView.numberOfSections,
+                  anchor.item < collectionView.numberOfItems(inSection: anchor.section)
+            else { return }
+            collectionView.scrollToItems(at: [anchor], scrollPosition: .centeredVertically)
         }
 
         /// Report the topmost visible item, when it is not the one last
@@ -308,6 +370,7 @@
         var onPrefetch: (([IndexPath]) -> Void)?
         var onCancelPrefetch: (([IndexPath]) -> Void)?
         var onMagnify: ((CGFloat) -> Void)?
+        var onMagnifyGesture: ((NSMagnificationGestureRecognizer) -> Void)?
 
         func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
             // Selection visuals are owned by the hosted SwiftUI content, so the
@@ -327,10 +390,7 @@
         }
 
         @objc func handleMagnify(_ recognizer: NSMagnificationGestureRecognizer) {
-            guard recognizer.state == .ended else { return }
-            // AppKit's magnification is a delta around zero; the shared threshold
-            // logic speaks UIKit's scale around one.
-            onMagnify?(1 + recognizer.magnification)
+            onMagnifyGesture?(recognizer)
         }
     }
 

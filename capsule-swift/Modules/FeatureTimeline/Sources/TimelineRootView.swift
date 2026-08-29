@@ -171,7 +171,8 @@ public struct TimelineRootView: View {
                     onSelectSection: { model.drillDown(into: $0) },
                     onZoomLevelChange: { model.zoom(in: $0) },
                     onToggleSelection: { toggleSelection($0) },
-                    onLeadingVisibleAsset: { visibleDate = $0.captureDate }
+                    onLeadingVisibleAsset: { visibleDate = $0.captureDate },
+                    onColumnsChange: { model.columnCount = $0 }
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -213,16 +214,44 @@ public struct TimelineRootView: View {
         Binding(get: { model.level }, set: { model.setLevel($0) })
     }
 
+    /// The three named densities, spanning the pinch ladder's range.
+    ///
+    /// A shortcut, not the whole vocabulary: pinching reaches all six rungs of
+    /// ``PhotoGridZoom/ladder``, and this names the three worth naming. It also
+    /// exists so density is reachable *without* a pinch, which matters for
+    /// anyone who cannot make one.
+    private static let namedDensities = [3, 5, 10]
+
     private var densityMenu: some View {
         Menu {
-            Picker("app.timeline.grid_size", selection: $model.columnCount) {
-                Label("app.timeline.grid.large", systemImage: "square.grid.2x2").tag(3)
-                Label("app.timeline.grid.medium", systemImage: "square.grid.3x3").tag(5)
-                Label("app.timeline.grid.small", systemImage: "square.grid.4x3.fill").tag(7)
+            Picker("app.timeline.grid_size", selection: namedDensityBinding) {
+                Label("app.timeline.grid.large", systemImage: "square.grid.2x2")
+                    .tag(Self.namedDensities[0])
+                Label("app.timeline.grid.medium", systemImage: "square.grid.3x3")
+                    .tag(Self.namedDensities[1])
+                Label("app.timeline.grid.small", systemImage: "square.grid.4x3.fill")
+                    .tag(Self.namedDensities[2])
             }
         } label: {
             Image(systemName: "square.grid.2x2")
         }
+    }
+
+    /// The density menu's selection, snapped to a rung the menu actually offers.
+    ///
+    /// A pinch can settle on 2, 4, or 7 — rungs with no menu entry — and a
+    /// `Picker` whose selection matches none of its tags renders as though
+    /// nothing is chosen. Reading through the nearest named rung means the menu
+    /// always shows where the grid is, even when a pinch put it between names.
+    private var namedDensityBinding: Binding<Int> {
+        Binding(
+            get: {
+                Self.namedDensities.min {
+                    abs($0 - model.columnCount) < abs($1 - model.columnCount)
+                } ?? PhotoGridZoom.defaultColumns
+            },
+            set: { model.columnCount = $0 }
+        )
     }
 
     private var permissionPrompt: some View {
@@ -289,49 +318,14 @@ private extension TimelineRootView {
     }
 
     var selectionActionBar: some View {
-        HStack(spacing: 0) {
-            shareSelectionAction
-            selectionAction("heart") { Task { await favoriteSelected() } }
-            selectionAction("rectangle.stack.badge.plus") { Task { await presentAddToAlbum() } }
-            selectionAction("eye.slash") { Task { await hideSelected() } }
-            selectionAction("trash", role: .destructive) { isDeleteConfirmPresented = true }
-        }
-        .padding(.vertical, CapsuleTheme.Spacing.medium)
-        .padding(.horizontal, CapsuleTheme.Spacing.small)
-        .capsuleGlass(in: Capsule())
-        .padding(.horizontal, CapsuleTheme.Spacing.large)
-        .padding(.bottom, CapsuleTheme.Spacing.small)
-        .disabled(selectedIDs.isEmpty)
-    }
-
-    /// Share every selected asset.
-    ///
-    /// A `ShareLink` rather than a button that pre-loads images into state:
-    /// ``ShareableAsset`` decodes each original only once the user has chosen a
-    /// destination, so selecting two hundred photos costs nothing until then —
-    /// and `ShareLink` is the one share affordance both platforms have.
-    var shareSelectionAction: some View {
-        ShareLink(
-            items: selectedAssets.map { ShareableAsset(asset: $0, mediaLoader: mediaLoader) },
-            preview: { SharePreview($0.previewTitle) },
-            label: { selectionActionLabel("square.and.arrow.up") }
+        SelectionActionBar(
+            assets: selectedAssets,
+            mediaLoader: mediaLoader,
+            onFavorite: { Task { await favoriteSelected() } },
+            onAddToAlbum: { Task { await presentAddToAlbum() } },
+            onHide: { Task { await hideSelected() } },
+            onDelete: { isDeleteConfirmPresented = true }
         )
-    }
-
-    func selectionAction(
-        _ symbol: String,
-        role: ButtonRole? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(role: role, action: action) {
-            selectionActionLabel(symbol)
-        }
-    }
-
-    func selectionActionLabel(_ symbol: String) -> some View {
-        Image(systemName: symbol)
-            .font(.title3)
-            .frame(maxWidth: .infinity)
     }
 
     var selectedAssets: [Asset] {

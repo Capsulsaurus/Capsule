@@ -32,6 +32,7 @@ public struct PhotoGridView: View {
     private let onZoomLevelChange: ((Bool) -> Void)?
     private let onToggleSelection: ((AssetID) -> Void)?
     private let onLeadingVisibleAsset: ((Asset) -> Void)?
+    private let onColumnsChange: ((Int) -> Void)?
 
     @Environment(\.displayScale) private var displayScale
     /// The state the hosted cells observe. Held here, not passed through the
@@ -58,7 +59,8 @@ public struct PhotoGridView: View {
         onSelectSection: ((PhotoGridSection) -> Void)? = nil,
         onZoomLevelChange: ((Bool) -> Void)? = nil,
         onToggleSelection: ((AssetID) -> Void)? = nil,
-        onLeadingVisibleAsset: ((Asset) -> Void)? = nil
+        onLeadingVisibleAsset: ((Asset) -> Void)? = nil,
+        onColumnsChange: ((Int) -> Void)? = nil
     ) {
         self.sections = sections
         self.style = style
@@ -73,6 +75,7 @@ public struct PhotoGridView: View {
         self.onZoomLevelChange = onZoomLevelChange
         self.onToggleSelection = onToggleSelection
         self.onLeadingVisibleAsset = onLeadingVisibleAsset
+        self.onColumnsChange = onColumnsChange
     }
 
     /// Convenience initializer for the common uniform-tile grid.
@@ -127,6 +130,8 @@ public struct PhotoGridView: View {
             onLeadingVisibleItem: onLeadingVisibleAsset.map { report in
                 { _, asset in report(asset) }
             },
+            columns: style.columnCount,
+            onColumnsChange: onColumnsChange,
             item: { sectionID, asset in itemContent(sectionID: sectionID, asset: asset) },
             header: { sectionID in
                 PhotoGridSectionHeader(title: sectionTitles[sectionID] ?? "")

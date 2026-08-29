@@ -23,6 +23,8 @@
             controller.onCancelPrefetch = onCancelPrefetch
             controller.onMagnify = onMagnify
             controller.onLeadingVisibleItem = onLeadingVisibleItem
+            controller.onColumnsChange = onColumnsChange
+            controller.columns = columns
             controller.update(
                 sections: sections,
                 layout: layout,
@@ -54,6 +56,16 @@
         var onCancelPrefetch: (([Item]) -> Void)?
         var onMagnify: ((Bool) -> Void)?
         var onLeadingVisibleItem: ((SectionID, Item) -> Void)?
+        /// Report a new resting column count chosen by a pinch.
+        var onColumnsChange: ((Int) -> Void)?
+        /// The column count the caller currently renders — the base every pinch
+        /// measures from, and the value `onColumnsChange` asks it to replace.
+        var columns: Int = PhotoGridZoom.defaultColumns
+
+        /// The column count in force when the current pinch began, and the item
+        /// under its centroid. Both are `nil` outside a gesture.
+        private var pinchBaseColumns: Int?
+        private var pinchAnchor: IndexPath?
 
         /// The last item reported through ``onLeadingVisibleItem``, so a scroll
         /// that stays inside one tile reports nothing.
@@ -136,13 +148,13 @@
             bridge.onCancelPrefetch = { [weak self] indexPaths in
                 self?.forwardPrefetch(indexPaths, cancel: true)
             }
-            bridge.onMagnify = { [weak self] scale in
-                guard let step = PlatformCollectionMagnification.step(forScale: scale) else { return }
-                self?.onMagnify?(step)
-            }
+            bridge.onPinch = { [weak self] recognizer in self?.handlePinch(recognizer) }
             bridge.onScroll = { [weak self] in self?.reportLeadingVisibleItem() }
 
-            let pinch = UIPinchGestureRecognizer(target: bridge, action: #selector(PlatformCollectionBridge.handlePinch))
+            let pinch = UIPinchGestureRecognizer(
+                target: bridge,
+                action: #selector(PlatformCollectionBridge.handlePinch)
+            )
             collectionView.addGestureRecognizer(pinch)
 
             applySnapshot(animated: false)
@@ -173,11 +185,78 @@
                 collectionView.setCollectionViewLayout(
                     PlatformCollectionLayoutBuilder.make(newLayout),
                     animated: hasAppliedSnapshot
-                )
+                ) { [weak self] _ in
+                    self?.restoreAnchorAfterLayoutChange()
+                }
             }
             applySnapshot(animated: hasAppliedSnapshot && !layoutChanged)
             applyScrollTargetIfNeeded()
             reportLeadingVisibleItem()
+        }
+
+        // MARK: Pinch
+
+        /// Drive the column count from a live pinch.
+        ///
+        /// The grid responds *during* the gesture rather than at the end of it,
+        /// which is the difference between a zoom and a toggle. What it does not
+        /// do is draw fractional columns: half a tile cannot be rendered, so the
+        /// gesture maps continuously onto a ladder of rungs and the layout
+        /// animates between them. `UICollectionView` interpolates the item
+        /// frames itself, so crossing a rung reads as the tiles growing rather
+        /// than as a jump.
+        ///
+        /// The caller owns the column count — it is SwiftUI state, and the
+        /// layout arrives back through `update(...)`. Changing it here as well
+        /// would give one value two owners and a fight on the next render.
+        private func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
+            switch recognizer.state {
+            case .began:
+                pinchBaseColumns = columns
+                pinchAnchor = anchorIndexPath(near: recognizer.location(in: collectionView))
+            case .changed:
+                guard let base = pinchBaseColumns else { return }
+                if let step = PhotoGridZoom.levelStep(base: base, scale: recognizer.scale) {
+                    // Past the end of the ladder: this is a level change, and
+                    // continuing to report columns would fight it.
+                    recognizer.state = .ended
+                    pinchBaseColumns = nil
+                    onMagnify?(step)
+                    return
+                }
+                let settled = PhotoGridZoom.settle(
+                    PhotoGridZoom.continuousColumns(base: base, scale: recognizer.scale)
+                )
+                guard settled != columns else { return }
+                onColumnsChange?(settled)
+            case .ended, .cancelled, .failed:
+                pinchBaseColumns = nil
+                pinchAnchor = nil
+            default:
+                break
+            }
+        }
+
+        /// The item under a point, or the topmost visible one if the pinch
+        /// landed in a gap between tiles.
+        private func anchorIndexPath(near point: CGPoint) -> IndexPath? {
+            collectionView.indexPathForItem(at: point)
+                ?? collectionView.indexPathsForVisibleItems.min()
+        }
+
+        /// Keep the pinched-on photo under the fingers across a column change.
+        ///
+        /// Without this the grid keeps its *scroll offset*, which means a
+        /// different number of rows now sits above it and the reader is
+        /// somewhere else in the library — the further down they were, the
+        /// further they are thrown. Re-finding the anchor is what makes a pinch
+        /// feel like zooming a photograph rather than resizing a list.
+        private func restoreAnchorAfterLayoutChange() {
+            guard let anchor = pinchAnchor,
+                  anchor.section < collectionView.numberOfSections,
+                  anchor.item < collectionView.numberOfItems(inSection: anchor.section)
+            else { return }
+            collectionView.scrollToItem(at: anchor, at: .centeredVertically, animated: false)
         }
 
         /// Report the topmost visible item, when it is not the one last
@@ -288,6 +367,7 @@
         var onPrefetch: (([IndexPath]) -> Void)?
         var onCancelPrefetch: (([IndexPath]) -> Void)?
         var onMagnify: ((CGFloat) -> Void)?
+        var onPinch: ((UIPinchGestureRecognizer) -> Void)?
         var onScroll: (() -> Void)?
         /// Whether the deselect that immediately follows a tap animates — it
         /// should not while multi-select is driving its own selection visuals.
@@ -313,8 +393,7 @@
         }
 
         @objc func handlePinch(_ recognizer: UIPinchGestureRecognizer) {
-            guard recognizer.state == .ended else { return }
-            onMagnify?(recognizer.scale)
+            onPinch?(recognizer)
         }
     }
 
