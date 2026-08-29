@@ -29,4 +29,7 @@ serde = { workspace = true }
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
 # built around. Dev-only: the assertions belong to the tests, not the served binary.
 kynos = { workspace = true, features = ["test-util"] }
+# Reading the emitted document back to assert its declared OpenAPI version; the server itself
+# never parses JSON by hand.
+serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

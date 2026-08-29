@@ -59,7 +59,7 @@ hex = { workspace = true }
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.12.28", default-features = false, features = [
     "json",
     "rustls-tls",
     "stream",
@@ -100,7 +100,7 @@ tonic-prost-build = { workspace = true }
 # and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
 # only: its embedded runtime is emitted into the generated module, so spargen never appears
 # in the SDK's runtime dependency tree.
-spargen = { version = "0.1.0", default-features = false }
+spargen = { version = "0.4.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

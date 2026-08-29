@@ -53,6 +53,19 @@ pub fn service() -> kynos::Result<Service<()>> {
     router().build(())
 }
 
+/// The specification version Capsule's document targets.
+///
+/// **3.2, pinned deliberately.** `Router::openapi()` would emit the *lowest* version that
+/// expresses the API without loss — a good default, and not what a committed contract wants.
+/// `capsule-sdk/openapi.json` is checked in and generated from by spargen, so its version must
+/// be a decision rather than a consequence: left to follow the API it would flip 3.1 → 3.2 the
+/// day the first streamed response lands, churning the schema gate and regenerating the client
+/// for a change nobody asked for. Kynos names this exact case — "reach for this when a
+/// consumer's toolchain pins a version" — and `openapi_as` targets rather than downgrades, so a
+/// construct 3.2 cannot express is an error listing what blocks it, never a document with
+/// operations quietly missing.
+const SPEC_VERSION: kynos::openapi::SpecVersion = kynos::openapi::SpecVersion::V3_2;
+
 /// Emits the OpenAPI document for the assembled router.
 ///
 /// This is the only path from the code to a description: there is no document to hand-edit and
@@ -61,7 +74,8 @@ pub fn service() -> kynos::Result<Service<()>> {
 ///
 /// # Errors
 ///
-/// Returns an error if the router's types cannot be described.
+/// Returns an error if the router's types cannot be described, or if the API uses a construct
+/// [`SPEC_VERSION`] cannot express.
 pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
-    router().openapi()
+    router().openapi_as(SPEC_VERSION)
 }

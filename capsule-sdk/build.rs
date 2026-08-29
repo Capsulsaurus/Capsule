@@ -62,16 +62,64 @@ fn build_rest_client() {
         .into_string()
         .expect("UTF-8 OUT_DIR path");
 
-    let report = spargen::generate(&spargen::Config::new(
-        spec.clone(),
-        spargen::OutputTarget::Module(out.into()),
-    ));
+    // spargen 0.3 split the old `Config` into `Spec` (what to read) and `Build` (how to emit),
+    // and made `Report::outcome` a method. `Spec::build` is the one-line form the crate prefers.
+    //
+    // Four operations are narrowed out rather than generated. spargen 0.4 validates the
+    // document strictly and rejects each as a structure violation; spargen 0.1.0 accepted them,
+    // which is the only reason they were ever in the committed contract.
+    //
+    //   POST /v1/albums/{album_id}/ops        `responses` is `{}`
+    //   GET  /v1/auth/devices/directory/{user_id}
+    //   GET  /v1/auth/devices/enroll/channel/{channel_id}
+    //   POST /v1/auth/devices/enroll/channel/{channel_id}
+    //                                         path template declares no path parameters
+    //
+    // The lifecycle-ops handler returns `()` and writes into `&mut Response` by hand, choosing
+    // its success status at run time (`StatusCode::from_u16(result.status)`) so an idempotent
+    // replay returns the stored bytes verbatim — so salvo-oapi has no return type to describe.
+    // The three device routes take their parameter from the path template without declaring it,
+    // so a generated client would have nowhere to put it.
+    //
+    // All four are therefore *already* uncallable from a typed client, which is why the SDK
+    // hand-writes `capsule_sdk::directory` at all. Narrowed rather than repaired here on
+    // purpose: repairing salvo-oapi annotations is work thrown away, and Kynos makes both
+    // classes unrepresentable — status is part of the return type, and `#[kynos::get(..)]`
+    // checks at compile time that the path type's fields are exactly the template's variables.
+    // Recorded against `S-C16`/`S-C28` and as acceptance criteria for the Kynos port; the
+    // hand-written directory client goes when the rebuilt schema declares these properly.
+    // The instruction below stands — narrow the surface, never mutilate the spec.
+    let omitted = [
+        spargen::OmitRule::operation(spargen::OmitMethod::Post, "/v1/albums/{album_id}/ops"),
+        spargen::OmitRule::operation(
+            spargen::OmitMethod::Get,
+            "/v1/auth/devices/directory/{user_id}",
+        ),
+        spargen::OmitRule::operation(
+            spargen::OmitMethod::Get,
+            "/v1/auth/devices/enroll/channel/{channel_id}",
+        ),
+        spargen::OmitRule::operation(
+            spargen::OmitMethod::Post,
+            "/v1/auth/devices/enroll/channel/{channel_id}",
+        ),
+    ];
+    let spec_cfg = omitted
+        .into_iter()
+        .fold(spargen::Spec::new(spec.clone()), spargen::Spec::omit_rule);
+    let report = spargen::generate(&spec_cfg.build(out));
 
+    // `Cached` is a success: spargen verified the already-rendered module against the build
+    // cache and had no work to do. Demanding `Generated` alone would fail every incremental
+    // build that legitimately had nothing to regenerate. `Rejected` is the failure to catch.
     assert!(
-        report.outcome == spargen::Outcome::Generated,
+        matches!(
+            report.outcome(),
+            spargen::Outcome::Generated | spargen::Outcome::Cached
+        ),
         "spargen could not generate the REST client from {spec}: {report:#?}. \
-         The schema is OpenAPI 3.1 by contract and is never downgraded to 3.0; if spargen \
-         rejects a construct, fix the schema or narrow the surface with `spargen::omit!` — \
-         never mutilate the spec."
+         The schema is OpenAPI 3.2 by contract and is never downgraded — not to 3.1, and \
+         certainly not to 3.0. If spargen rejects a construct, fix the schema or narrow the \
+         surface with `spargen::omit!` — never mutilate the spec."
     );
 }

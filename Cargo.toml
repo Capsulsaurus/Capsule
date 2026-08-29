@@ -61,16 +61,16 @@ repository = "https://github.com/Capsulsaurus/Capsule"
 
 [workspace.dependencies]
 argon2 = "0.5.3"
-# Kynos — the REST/OpenAPI server framework the `capsule-api` rebuild targets. Pinned to an
-# immutable rev, never a branch or tag: Kynos is not published on crates.io and its README
-# reads "Status: Not for public use yet!", so a rev bump is a reviewed dependency change
-# rather than a lockfile refresh. Rationale, MSRV (1.85) and the repin-on-publish exit are
-# recorded in design/dependencies.md, which CLAUDE.md requires before a new dependency lands.
-kynos = { git = "https://github.com/getkono/kynos", rev = "6513109b5725a3e0713808de0eaee6b4b74281e3" }
+# Kynos — the REST/OpenAPI server framework the `capsule-api` rebuild targets. Consumed from
+# crates.io: it published 0.1.0 on 2026-08-29, which discharges the repin-on-publish exit the
+# dependencies doc recorded while it was a git dependency. `openapi32` is a strict, purely
+# additive superset of the default `openapi31`, and Capsule emits a 3.2 document — see the
+# OpenAPI row in design/dependencies.md.
+kynos = { version = "0.1.0", features = ["openapi32"] }
 base64 = "0.22.1"
 bb8 = "0.9.1"
 bb8-redis = "0.26.0"
-bytes = "1.11"
+bytes = "1.12.1"
 chrono = { version = "0.4.45", features = ["serde"] }
 data-encoding = "2.11.0"
 derive_more = "2.1.1"
@@ -103,8 +103,8 @@ sea-orm-migration = { version = "1.1.20", features = [
     "runtime-tokio-rustls",
 ] }
 secrecy = { version = "0.10.3", features = ["serde"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 testcontainers = "0.26.3"
 testcontainers-modules = { version = "0.14.0", features = [
     "postgres",

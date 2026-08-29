@@ -84,3 +84,27 @@ fn the_router_emits_a_document() {
         "the emitted document must carry the operation the server serves"
     );
 }
+
+/// The emitted document declares OpenAPI 3.2.
+///
+/// 3.2 is a project-level requirement, not a preference: spargen consumes this document to
+/// generate the typed client, and 3.2 is what lets a stream and a binary body be *described*
+/// rather than hand-parsed. A silent drop to the `openapi31` default would not fail any other
+/// test here — the paths and schemas would still be right — so the version is asserted on its
+/// own. It is a one-word difference in a feature list that changes what the client can express.
+#[test]
+fn the_document_declares_openapi_32() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = document.to_json().expect("document serializes");
+
+    let parsed: serde_json::Value = serde_json::from_str(&json).expect("document is JSON");
+    let version = parsed
+        .get("openapi")
+        .and_then(serde_json::Value::as_str)
+        .expect("every OpenAPI document declares its version");
+
+    assert!(
+        version.starts_with("3.2"),
+        "expected an OpenAPI 3.2 document, got {version:?} — check the `openapi32` feature"
+    );
+}
