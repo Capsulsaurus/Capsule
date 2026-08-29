@@ -527,6 +527,66 @@
         "message": "reject",
         "context": "Culling flag name: the asset is marked for rejection. Used inside other `capsule cull` messages."
     },
+    "cli.import.in_progress": {
+        "message": "Importing {paths} into library {library}…",
+        "context": "CLI status line printed when `capsule import` starts. {paths} is the list of source paths given on the command line; {library} is the destination library path."
+    },
+    "cli.import.scanning": {
+        "message": "Scanning source files…",
+        "context": "CLI status line printed while `capsule import` walks the source paths, before any file is planned."
+    },
+    "cli.import.provider_notice": {
+        "message": "Reading the source as a {provider} export.",
+        "context": "CLI notice printed when `capsule import --provider` reads the source through a third-party export adapter instead of as a plain directory tree. {provider} is a product name shown verbatim in every locale (e.g. \"Google Takeout\")."
+    },
+    "cli.import.candidates_found": {
+        "message": "Found {candidates} candidate(s) ({files} file(s) total).",
+        "context": "CLI summary after `capsule import` finishes scanning. {candidates} is the number of importable items found; {files} is the total number of files seen, including sidecars and non-media files. Both are counts."
+    },
+    "cli.import.plan_summary": {
+        "message": "Plan: {to_import} to import, {duplicates} duplicate(s) skipped, {unsupported} unsupported or errored.",
+        "context": "CLI summary of the `capsule import` plan, printed before anything is written. All three placeholders are counts."
+    },
+    "cli.import.nothing_to_import": {
+        "message": "Nothing to import.",
+        "context": "CLI notice when the `capsule import` plan contains no new assets — every candidate was already in the library or was unsupported. Not an error."
+    },
+    "cli.import.executing": {
+        "message": "Importing…",
+        "context": "CLI status line printed when `capsule import` begins writing assets into the library, after planning."
+    },
+    "cli.import.outcome.duplicate": {
+        "message": "= {path} (duplicate)",
+        "context": "CLI per-file result line from `capsule import`: the file was already in the library and was skipped. {path} is the source file path."
+    },
+    "cli.import.outcome.corrupt_transfer": {
+        "message": "✗ {path} (corrupt transfer)",
+        "context": "CLI per-file result line from `capsule import`: the copy into the library did not match the source, so the file was not committed. {path} is the source file path."
+    },
+    "cli.import.outcome.unreadable": {
+        "message": "✗ {path} (unreadable: {reason})",
+        "context": "CLI per-file result line from `capsule import`: the source file could not be read. {path} is the source file path; {reason} is an English technical detail from the operating system."
+    },
+    "cli.import.done": {
+        "message": "Done: {imported} imported, {duplicates} duplicate(s), {errors} error(s).",
+        "context": "CLI summary after `capsule import` finishes. All three placeholders are counts."
+    },
+    "cli.import.scan_failed": {
+        "message": "Scanning the source files failed: {reason}",
+        "context": "CLI error when `capsule import` cannot walk the source paths. {reason} is an English technical detail."
+    },
+    "cli.import.extract_failed": {
+        "message": "Reading the export failed: {reason}",
+        "context": "CLI error when `capsule import --provider` cannot read the third-party export. {reason} is an English technical detail."
+    },
+    "cli.import.plan_failed": {
+        "message": "Planning the import failed: {reason}",
+        "context": "CLI error when `capsule import` cannot build a plan from the scanned candidates. {reason} is an English technical detail."
+    },
+    "cli.import.execute_failed": {
+        "message": "The import failed: {reason}",
+        "context": "CLI error when `capsule import` fails while writing assets into the library. {reason} is an English technical detail."
+    },
     "device.cohort.label.previously_used": {
         "message": "A device you've used before (last seen {last_seen})",
         "context": "Devices screen: label for a device grouping (cohort) the account has enrolled before — e.g. after reinstalling the app. Assert-don't-litigate copy: it states recognition, it never asks the user to confirm or deny. {last_seen} is a formatted date the app supplies."

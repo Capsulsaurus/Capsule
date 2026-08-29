@@ -457,7 +457,10 @@ mod tests {
         let status = AuthStatus::check(&store).expect("check");
         assert!(status.signed_in);
         assert!(status.access_token_fresh);
-        assert_eq!(status.token_expires_at.map(|t| t.as_second()), Some(future));
+        assert_eq!(
+            status.token_expires_at.map(jiff::Timestamp::as_second),
+            Some(future)
+        );
     }
 
     /// An expired *access* token is not a logged-out session — the refresh token still

@@ -200,7 +200,7 @@ fn flagging_an_unknown_asset_fails_the_command() {
     let _ids = fixture_library(scratch.path());
     let library = scratch.path().join("library");
 
-    let stray = Uuid::from_u128(0x5713A9);
+    let stray = Uuid::from_u128(0x0057_13A9);
     let out = Command::new(env!("CARGO_BIN_EXE_capsule"))
         .arg("cull")
         .arg("--library")

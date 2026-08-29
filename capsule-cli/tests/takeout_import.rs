@@ -409,15 +409,15 @@ fn a_takeout_export_imports_through_the_cli_with_its_exporter_metadata() {
     let out = fx.import(&library, true);
     // Six candidates over seven files: the edited/original pair is *one* candidate.
     assert!(
-        out.contains("Found 6 candidates (7 files total)"),
+        out.contains("Found 6 candidate(s) (7 file(s) total)."),
         "the adapter must collapse the edited pair and pair every sidecar\nstdout:\n{out}"
     );
     assert!(
-        out.contains("Plan: 6 to import, 0 duplicates skipped, 0 unsupported/errors"),
+        out.contains("Plan: 6 to import, 0 duplicate(s) skipped, 0 unsupported or errored."),
         "stdout:\n{out}"
     );
     assert!(
-        out.contains("Done: 7 imported, 0 duplicates, 0 errors"),
+        out.contains("Done: 7 imported, 0 duplicate(s), 0 error(s)."),
         "stdout:\n{out}"
     );
 
@@ -544,7 +544,7 @@ fn re_running_the_same_takeout_import_skips_completed_work() {
 
     let first = fx.import(&library, true);
     assert!(
-        first.contains("Done: 7 imported, 0 duplicates, 0 errors"),
+        first.contains("Done: 7 imported, 0 duplicate(s), 0 error(s)."),
         "stdout:\n{first}"
     );
     let after_first = reopen(&library).asset_ids().len();
@@ -591,5 +591,47 @@ fn without_the_provider_flag_the_exporter_metadata_is_not_applied() {
     assert_eq!(
         beach.sidecar.gps.as_ref().map(|g| g.source),
         Some(GpsSource::Exif)
+    );
+}
+
+/// Slice `S-I5`: the import arm's output is rendered from the `locales/` catalog, not from
+/// literals in `capsule-cli`. The assertion is deliberately written against the catalog
+/// message rather than against English text — an English-only assertion would still pass if
+/// somebody re-hardcoded the string, which is exactly the regression `S-I5` exists to stop.
+#[test]
+fn the_import_arm_prints_catalog_messages_not_hardcoded_english() {
+    let fx = fixture();
+    let library = fx.library();
+    let bundle = capsule_cli::i18n::cli_bundle();
+
+    let out = fx.import(&library, true);
+
+    // The provider notice is new in `S-I5`: a `--provider` run says which adapter read the
+    // source. The product name is substituted in, never translated.
+    let notice = bundle.format(
+        capsule_cli::i18n::keys::IMPORT_PROVIDER_NOTICE,
+        &[("provider", capsule_cli::i18n::Value::Str("Google Takeout"))],
+    );
+    assert!(
+        notice.contains("Google Takeout"),
+        "the key must interpolate the provider name, got {notice:?}"
+    );
+    assert!(out.contains(&notice), "stdout:\n{out}");
+
+    for key in [
+        capsule_cli::i18n::keys::IMPORT_SCANNING,
+        capsule_cli::i18n::keys::IMPORT_EXECUTING,
+    ] {
+        let message = bundle.format(key, &[]);
+        assert_ne!(message, key, "{key} is missing from the catalog");
+        assert!(out.contains(&message), "{key} missing from stdout:\n{out}");
+    }
+
+    // A plain filesystem import takes the other arm, so it must NOT claim a provider.
+    let plain_library = fx.library();
+    let plain = fx.import(&plain_library, false);
+    assert!(
+        !plain.contains(&notice),
+        "a plain import must not announce an export adapter\nstdout:\n{plain}"
     );
 }

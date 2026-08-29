@@ -156,7 +156,7 @@ impl Fixture {
             true,
         );
         assert!(
-            out.contains("Done: 1 imported, 0 duplicates, 0 errors"),
+            out.contains("Done: 1 imported, 0 duplicate(s), 0 error(s)."),
             "stdout:\n{out}"
         );
         out

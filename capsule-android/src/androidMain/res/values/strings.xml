@@ -68,6 +68,21 @@
     <string name="cli_cull_swept">Swept %1$s rejected asset(s) to trash; recoverable for %2$s day(s).</string>
     <string name="cli_cull_unknown_asset">Unknown asset %s in this library.</string>
     <string name="cli_cull_view">Cull view: %1$s pick, %2$s neutral, %3$s reject.</string>
+    <string name="cli_import_candidates_found">Found %1$s candidate(s) (%2$s file(s) total).</string>
+    <string name="cli_import_done">Done: %1$s imported, %2$s duplicate(s), %3$s error(s).</string>
+    <string name="cli_import_execute_failed">The import failed: %s</string>
+    <string name="cli_import_executing">Importing…</string>
+    <string name="cli_import_extract_failed">Reading the export failed: %s</string>
+    <string name="cli_import_in_progress">Importing %1$s into library %2$s…</string>
+    <string name="cli_import_nothing_to_import">Nothing to import.</string>
+    <string name="cli_import_outcome_corrupt_transfer">✗ %s (corrupt transfer)</string>
+    <string name="cli_import_outcome_duplicate">= %s (duplicate)</string>
+    <string name="cli_import_outcome_unreadable">✗ %1$s (unreadable: %2$s)</string>
+    <string name="cli_import_plan_failed">Planning the import failed: %s</string>
+    <string name="cli_import_plan_summary">Plan: %1$s to import, %2$s duplicate(s) skipped, %3$s unsupported or errored.</string>
+    <string name="cli_import_provider_notice">Reading the source as a %s export.</string>
+    <string name="cli_import_scan_failed">Scanning the source files failed: %s</string>
+    <string name="cli_import_scanning">Scanning source files…</string>
     <string name="cli_list_empty">No assets have synced yet.</string>
     <string name="cli_list_failed">Failed to list the library: %s</string>
     <string name="cli_list_header">Synced library (%s asset(s)):</string>

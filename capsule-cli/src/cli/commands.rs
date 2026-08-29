@@ -25,6 +25,18 @@ pub(crate) enum ImportProviderArg {
     Takeout,
 }
 
+impl ImportProviderArg {
+    /// The provider's name as shown to the user. A brand name is displayed verbatim in
+    /// every locale, so it is a *value* substituted into the `cli.import.provider_notice`
+    /// message rather than translatable prose of its own.
+    #[must_use]
+    pub(crate) const fn display_name(self) -> &'static str {
+        match self {
+            Self::Takeout => "Google Takeout",
+        }
+    }
+}
+
 #[derive(Subcommand, Debug)]
 pub(crate) enum Commands {
     /// Authentication commands

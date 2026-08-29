@@ -28,7 +28,7 @@ use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
 
-use crate::i18n::{Value, keys};
+use crate::i18n::{Bundle, Value, keys};
 use crate::utils::directories::{
     get_cache_dir, get_config_dir, get_data_dir, get_session_file_path,
 };
@@ -55,6 +55,14 @@ pub const CLIENT_ID: &str = "capsule-cli";
 #[must_use]
 fn as_capsule_cli(ws: Workspace) -> Workspace {
     ws.with_client_id(CLIENT_ID, env!("CARGO_PKG_VERSION"))
+}
+
+/// Narrow a count for an ICU `{name}` argument. Counts here are bounded by the number of
+/// files in one import, so the saturating arm is unreachable in practice — but it keeps the
+/// conversion total rather than panicking on a value no user could produce.
+#[must_use]
+fn as_count(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -110,18 +118,42 @@ fn display_paths(paths: &[PathBuf]) -> String {
 ///
 /// [source adapter]: capsule_core::import::importers
 fn read_import_source(
+    bundle: &Bundle,
     provider: Option<ImportProviderArg>,
     paths: &[PathBuf],
 ) -> Result<(ScanResult, SourceMetadataIndex)> {
     match provider {
         None => {
-            let scanned = scan_files(paths).map_err(|e| eyre!("Scan failed: {e}"))?;
+            let scanned = scan_files(paths).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_SCAN_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
             Ok((scanned, SourceMetadataIndex::empty()))
         }
-        Some(ImportProviderArg::Takeout) => {
-            let extracted = TakeoutAdapter::new()
-                .extract(paths)
-                .map_err(|e| eyre!("Reading the export failed: {e}"))?;
+        Some(provider @ ImportProviderArg::Takeout) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::IMPORT_PROVIDER_NOTICE,
+                        &[("provider", Value::Str(provider.display_name()))],
+                    )
+                    .cyan()
+            );
+            let extracted = TakeoutAdapter::new().extract(paths).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_EXTRACT_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
             let index = SourceMetadataIndex::from_extracted(&extracted);
             tracing::info!(
                 provider = "takeout",
@@ -223,30 +255,40 @@ async fn dispatch(cli: Cli) -> Result<()> {
             push,
             staged,
         } => {
+            let bundle = i18n::cli_bundle();
             println!(
                 "{}",
-                format!(
-                    "Importing {} into library {}...",
-                    display_paths(&paths).blue(),
-                    library.to_string_lossy().blue()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_IN_PROGRESS,
+                        &[
+                            ("paths", Value::Str(&display_paths(&paths))),
+                            ("library", Value::Str(&library.to_string_lossy())),
+                        ],
+                    )
+                    .green()
             );
 
             let mut ws = open_workspace(&library, passphrase_stdin)?;
 
             // Phase 1: Scan (plain tree) or extract (third-party export, S-B11).
-            println!("{}", "Scanning source files...".cyan());
-            let (scan_result, source_metadata) = read_import_source(provider, &paths)?;
+            println!("{}", bundle.format(keys::IMPORT_SCANNING, &[]).cyan());
+            let (scan_result, source_metadata) = read_import_source(&bundle, provider, &paths)?;
 
             println!(
                 "{}",
-                format!(
-                    "Found {} candidates ({} files total)",
-                    scan_result.candidates.len(),
-                    scan_result.total_files()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_CANDIDATES_FOUND,
+                        &[
+                            (
+                                "candidates",
+                                Value::Int(as_count(scan_result.candidates.len()))
+                            ),
+                            ("files", Value::Int(as_count(scan_result.total_files()))),
+                        ],
+                    )
+                    .green()
             );
 
             // Phase 2: Plan
@@ -263,22 +305,46 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 ..Default::default()
             };
 
-            let plan_result =
-                plan(&scan_result, ws.db(), &config).map_err(|e| eyre!("Planning failed: {e}"))?;
+            let plan_result = plan(&scan_result, ws.db(), &config).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_PLAN_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
 
             println!(
                 "{}",
-                format!(
-                    "Plan: {} to import, {} duplicates skipped, {} unsupported/errors",
-                    plan_result.counts.to_import,
-                    plan_result.counts.duplicates,
-                    plan_result.counts.unsupported + plan_result.counts.errors,
-                )
-                .cyan()
+                bundle
+                    .format(
+                        keys::IMPORT_PLAN_SUMMARY,
+                        &[
+                            (
+                                "to_import",
+                                Value::Int(as_count(plan_result.counts.to_import))
+                            ),
+                            (
+                                "duplicates",
+                                Value::Int(as_count(plan_result.counts.duplicates)),
+                            ),
+                            (
+                                "unsupported",
+                                Value::Int(as_count(
+                                    plan_result.counts.unsupported + plan_result.counts.errors,
+                                )),
+                            ),
+                        ],
+                    )
+                    .cyan()
             );
 
             if plan_result.counts.to_import == 0 {
-                println!("{}", "Nothing to import.".yellow());
+                println!(
+                    "{}",
+                    bundle.format(keys::IMPORT_NOTHING_TO_IMPORT, &[]).yellow()
+                );
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
                 if push {
@@ -288,7 +354,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
 
             // Phase 3: Execute
-            println!("{}", "Importing...".cyan());
+            println!("{}", bundle.format(keys::IMPORT_EXECUTING, &[]).cyan());
             let token = CancellationToken::new();
 
             // The one execute path: a plain filesystem import reaches it with an empty index
@@ -308,13 +374,40 @@ async fn dispatch(cli: Cli) -> Result<()> {
                                     println!("{}", format!("✓ {msg}").green());
                                 }
                                 ImportOutcome::DuplicateSkipped { .. } => {
-                                    println!("{}", format!("= {msg} (duplicate)").yellow());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_DUPLICATE,
+                                                &[("path", Value::Str(&msg))],
+                                            )
+                                            .yellow()
+                                    );
                                 }
                                 ImportOutcome::CorruptTransfer => {
-                                    println!("{}", format!("✗ {msg} (corrupt transfer)").red());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_CORRUPT_TRANSFER,
+                                                &[("path", Value::Str(&msg))],
+                                            )
+                                            .red()
+                                    );
                                 }
                                 ImportOutcome::CorruptUnreadable(e) => {
-                                    println!("{}", format!("✗ {msg} (unreadable: {e})").red());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_UNREADABLE,
+                                                &[
+                                                    ("path", Value::Str(&msg)),
+                                                    ("reason", Value::Str(e)),
+                                                ],
+                                            )
+                                            .red()
+                                    );
                                 }
                                 _ => {
                                     println!("{}", format!("- {msg}").dimmed());
@@ -325,17 +418,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 },
                 &token,
             )
-            .map_err(|e| eyre!("Import execution failed: {e}"))?;
+            .map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_EXECUTE_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
 
             println!(
                 "{}",
-                format!(
-                    "Done: {} imported, {} duplicates, {} errors",
-                    summary.imported_count(),
-                    summary.duplicate_count(),
-                    summary.error_count()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_DONE,
+                        &[
+                            ("imported", Value::Int(as_count(summary.imported_count()))),
+                            (
+                                "duplicates",
+                                Value::Int(as_count(summary.duplicate_count()))
+                            ),
+                            ("errors", Value::Int(as_count(summary.error_count()))),
+                        ],
+                    )
+                    .green()
             );
 
             // `--push` is sugar only: import itself never touches the network (its

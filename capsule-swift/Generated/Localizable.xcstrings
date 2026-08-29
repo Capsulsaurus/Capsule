@@ -4425,6 +4425,156 @@
         }
       }
     },
+    "cli.import.candidates_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Found %1$@ candidate(s) (%2$@ file(s) total)."
+          }
+        }
+      }
+    },
+    "cli.import.done": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Done: %1$@ imported, %2$@ duplicate(s), %3$@ error(s)."
+          }
+        }
+      }
+    },
+    "cli.import.execute_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The import failed: %@"
+          }
+        }
+      }
+    },
+    "cli.import.executing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing…"
+          }
+        }
+      }
+    },
+    "cli.import.extract_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading the export failed: %@"
+          }
+        }
+      }
+    },
+    "cli.import.in_progress": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Importing %1$@ into library %2$@…"
+          }
+        }
+      }
+    },
+    "cli.import.nothing_to_import": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to import."
+          }
+        }
+      }
+    },
+    "cli.import.outcome.corrupt_transfer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "✗ %@ (corrupt transfer)"
+          }
+        }
+      }
+    },
+    "cli.import.outcome.duplicate": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "= %@ (duplicate)"
+          }
+        }
+      }
+    },
+    "cli.import.outcome.unreadable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "✗ %1$@ (unreadable: %2$@)"
+          }
+        }
+      }
+    },
+    "cli.import.plan_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Planning the import failed: %@"
+          }
+        }
+      }
+    },
+    "cli.import.plan_summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Plan: %1$@ to import, %2$@ duplicate(s) skipped, %3$@ unsupported or errored."
+          }
+        }
+      }
+    },
+    "cli.import.provider_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reading the source as a %@ export."
+          }
+        }
+      }
+    },
+    "cli.import.scan_failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning the source files failed: %@"
+          }
+        }
+      }
+    },
+    "cli.import.scanning": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scanning source files…"
+          }
+        }
+      }
+    },
     "cli.list.empty": {
       "localizations": {
         "ar": {

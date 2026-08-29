@@ -552,7 +552,9 @@ mod tests {
             "CAPSULE_UPLOAD_ENDPOINT",
             "CAPSULE_PROTOCOL",
         ];
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved: Vec<_> = VARS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
         for k in VARS {
             unsafe { std::env::remove_var(k) };
