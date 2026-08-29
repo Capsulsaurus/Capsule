@@ -12,7 +12,7 @@ This doc defines that missing query and the rule that every client follows befor
 
 A blob being content-addressed and hash-matching is necessary but not sufficient — a hash match only proves the *bytes the client holds* are internally consistent, not that the *server* has them in a serveable state. "Safely stored" is the conjunction of three independent facts the server can attest **without any key**:
 
-- **Stored** — the ciphertext blob is present in the [blob store](/design/filesystem/server/#blob-store-layout) at its content address (a `stat` at the layout that doc owns, `blobs/{hash}.bin`), not merely an in-flight `incoming/` chunk.
+- **Stored** — the ciphertext blob is present in the blob store at its content address: a `stat` at the [sharded layout](/design/filesystem/server/#blob-store-layout) that doc owns and settles, not merely an in-flight `incoming/` chunk. The shard is invisible to this verdict by construction — a `stat` at a known content address costs the same sharded or flat, which is why the layout was settled on the enumeration paths (scrub, GC, rebuild) rather than on this one.
 - **Indexed** — a committed Postgres row references the blob with `uploaded = true`, the asset's [provenance chain head](/design/cryptography/provenance/#provenance-of-library-modifications) is current, and the blob's role on the asset is recorded (see [PostgreSQL: What the Server Knows](/design/filesystem/server/#postgresql-what-the-server-knows)).
 - **Retrievable** — the blob is in a state the server would actually serve: reference count > 0, **not** marked `collectable_since` (mid-[GC](/design/filesystem/server/#deletion-and-garbage-collection)), **not** quarantined, and not a dangling-reference integrity error.
 

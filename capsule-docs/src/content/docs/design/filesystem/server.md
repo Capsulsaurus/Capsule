@@ -18,6 +18,8 @@ The server's state is split across **three required systems** — one code path,
 
 The durable/volatile split is design, not a tuning knob: the hot upload path — offset increments and status transitions — never touches the durable Postgres asset row, which is written exactly twice per upload (pending row at session creation, `uploaded` flip at finalization). A Postgres-resident session table would be a second implementation of the same contract; Capsule ships exactly one.
 
+Required means required. The server refuses to start without `VALKEY_URL` — it is a startup variable the environment loader demands, not a scaling knob a small deployment can leave unset — and there is no profile, measured or otherwise, in which Valkey is optional. Each state port keeps an **in-memory adapter for tests only**: a deterministic test double, never a deployment mode. The alternative considered and rejected was a Postgres fallback that would let a single-node deployment skip Valkey; it fails on exactly the ground the split above rests on, since emulating TTL and expiry in SQL is the generic TTL abstraction the [server module plan](/design/module-map/#planned-server-modules) declines to introduce.
+
 ## Blob Store Layout
 
 ```text
@@ -25,7 +27,8 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 ├── incoming/
 │   └── {upload_id}.bin             # in-progress append-only upload, pre-verification
 ├── blobs/
-│   └── {hash}.bin                  # finalized blob, content-addressed
+│   └── {hash[0:2]}/{hash[2:4]}/
+│       └── {hash}.bin              # finalized blob, content-addressed, two-level hex shard
 └── .server/
     ├── version                     # server filesystem schema version
     └── config                      # server-wide configuration
@@ -33,7 +36,7 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 
 - **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
 - **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
-- **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix, in a single flat directory — amended 2026-07-12 to the landed layout: no hot path enumerates the directory, and modern filesystems handle multi-million-entry directories. If directory scaling ever bites, the pre-agreed migration is a two-level hex-prefix shard (`{hash[0:2]}/{hash[2:4]}/{hash}`) behind a `.server/version` bump. **The flat namespace must be re-ratified explicitly in the `capsule-api::blob` port design, not inherited**: it is recorded here as a measured fact of the shipped store, and no design record on either side states *why* the shard was dropped — a single directory of content-hashes has directory-entry and `readdir`/rebuild-scan scaling consequences the shard was chosen to avoid, so the new server must re-decide it on the merits (with the rebuild scan, not just the serve path, as the sizing case). A finalized blob is immutable.
+- **`blobs/`**: the finalized store, **sharded two levels deep on the content hash's own hex prefix**: `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, the filename being the [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix. This is the re-ratification the 2026-07-12 amendment demanded, and it overturns that amendment's flat namespace. The amendment argued the flat layout from the wrong sizing case: *no hot path enumerates the directory* is true and beside the point, because lookup is a `stat` at a known content address and costs the same flat or sharded. The cost lands on the **enumerations**, of which there are three, each a full `readdir` + `stat` of the store — the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)'s blob→row pass, the [refcount GC](#deletion-and-garbage-collection)'s orphan sweep, and the [index rebuild](#recovering-the-index-from-blobs-alone) — and a multi-million-entry flat directory is precisely where those hurt. All three are integrity or recovery paths, so they must stay affordable exactly when a deployment is already in trouble. Timing settles the rest: no deployment holds blobs to move, so the shard is free **now** and a version-bumped data move behind `.server/version` forever after. The store in the tree today is still flat; the shard is the target `capsule-api::blob` is built to, not a migration it performs. Shard directories are created on demand at finalization and the rename stays inside `{blob_root}`, so finalization remains atomic. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
 
 ## Uniform, Opaque Blobs
@@ -106,7 +109,8 @@ Clients need to confirm an asset is *safely stored* before they discard their on
 
 ## Validation
 
-- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash}.bin` on disk. Recompute the hash from disk; assert match.
+- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly its sharded content address `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin` on disk — never at a flat `blobs/{hash}.bin`. Recompute the hash from disk; assert match.
+- **Enumeration over the shard tree (unit).** Populate blobs across multiple shard directories; assert the scrub, GC, and rebuild walks each recover exactly the same blob set a flat walk would, and that a partially-populated shard tree (missing intermediate directories) enumerates without error.
 - **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
 - **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.
