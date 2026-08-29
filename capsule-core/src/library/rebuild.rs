@@ -310,20 +310,28 @@ fn signed_asset_row(s: &SidecarV1, facts: &ChainFacts, prior: Option<&AssetRow>)
             "rebuild_index: unparseable capture timestamp; indexing it as the epoch"
         );
     }
-    let membership = s.stack_membership.get().and_then(Option::as_ref);
-    let (stack_id, is_stack_hidden) = match membership {
-        // Every non-primary member is suppressed from the timeline, exactly as the write path
-        // arranges it.
-        Some(m) => (Some(m.stack_id.to_string()), m.role != StackRole::Primary),
-        // No membership register on disk. Compatibility path only, since `S-B15`: every
-        // importer-formed stack this build writes carries the register above, so reaching here
-        // means a **pre-`S-B15` library**, whose placement was written only to the index and
-        // lives nowhere else. Whatever the row already carries is then the only copy in
-        // existence, and a rebuild must not erase it. (An asset that *left* a stack is not this
-        // case: that is a stamped `None`, which the `Some(_)` arm resolves to no placement.)
+    // Three cases, and the middle one is why this matches on `get()` rather than flattening
+    // through `and_then(Option::as_ref)`: a *stamped* `None` and a *never-written* register are
+    // different facts, and collapsing them resurrects placement the user deliberately removed.
+    // Mirrors `lifecycle::import::asset_row_from_state`, which is the write path's answer to the
+    // same question.
+    let register = s.stack_membership.get();
+    let (stack_id, is_stack_hidden) = match register {
+        // Stamped with a membership: project it. Every non-primary member is suppressed from the
+        // timeline, exactly as the write path arranges it.
+        Some(membership) => membership.as_ref().map_or((None, false), |m| {
+            // Stamped `None` — the asset left the stack. The register is authoritative and says
+            // so, so the columns are cleared rather than reconstructed from a stale index row.
+            (Some(m.stack_id.to_string()), m.role != StackRole::Primary)
+        }),
+        // No register on disk at all. Compatibility path only, since `S-B15`: every
+        // importer-formed stack this build writes carries the register, so reaching here means a
+        // **pre-`S-B15` library**, whose placement was written only to the index and lives nowhere
+        // else. Whatever the row already carries is then the only copy in existence, and a rebuild
+        // must not erase it.
         None => prior.map_or((None, false), |p| (p.stack_id.clone(), p.is_stack_hidden)),
     };
-    if membership.is_none() && stack_id.is_some() {
+    if register.is_none() && stack_id.is_some() {
         tracing::debug!(
             asset_id = %s.uuid,
             stack_id = ?stack_id,
@@ -972,6 +980,50 @@ mod tests {
             "the rebuild must not resurrect a stacked secondary into the timeline"
         );
         assert!(lib.db.query_timeline(0, 100).unwrap().is_empty());
+    }
+
+    /// Leaving a stack is a **stamped** `None`, and the register says so — so a rebuild must
+    /// clear the columns rather than reconstruct the old placement from a surviving index row.
+    ///
+    /// This is the other half of `signed_rebuild_preserves_index_only_stack_placement`, and the
+    /// two together are why the projection matches on `get()` instead of flattening: a stamped
+    /// `None` and a never-written register are different facts. Flattened, they collapse into one
+    /// arm and an asset the user pulled out of a stack silently returns to it — still suppressed
+    /// from the timeline — on the next rebuild.
+    #[test]
+    fn signed_rebuild_clears_placement_when_the_register_says_the_asset_left() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().join("lib");
+        let lib = init_library(&root, "T").unwrap();
+
+        let id = Uuid::from_u128(0x1EF7);
+        let mut sidecar = signed_sidecar(id, 0x1E);
+        // Stamped `None`: this asset was in a stack and was taken out of it.
+        sidecar
+            .stack_membership
+            .set(None, "2026-08-02T00:00:00Z", Uuid::from_u128(0xD1));
+        write_signed(&root.join(FIXTURE_MEDIA), &sidecar);
+
+        // An index row still carrying the placement from before it left.
+        rebuild_index(&lib).unwrap();
+        let mut row = lib.db.find_by_uuid(&id.to_string()).unwrap().unwrap();
+        row.stack_id = Some("stack-stale".to_string());
+        row.is_stack_hidden = true;
+        lib.db.upsert_asset(&row).unwrap();
+
+        rebuild_index(&lib).unwrap();
+
+        let after = lib.db.find_by_uuid(&id.to_string()).unwrap().unwrap();
+        assert_eq!(
+            after.stack_id, None,
+            "a stamped `None` is authoritative; the stale index placement must not survive"
+        );
+        assert!(!after.is_stack_hidden);
+        assert_eq!(
+            lib.db.query_timeline(0, 100).unwrap().len(),
+            1,
+            "an asset that left a stack belongs back in the timeline"
+        );
     }
 
     /// Recovery must not depend on a second full pass being harmless-in-practice: rebuilding
