@@ -60,7 +60,7 @@ modules, not separate public transports or microservices.
 | --- | --- | --- |
 | `auth` | [Authentication](/design/authentication/) and [Device Enrollment](/design/device-enrollment/) | Unit plus Postgres/Valkey adapter parity |
 | `upload` | [Upload Protocol](/design/import/upload-protocol/) | State-machine property tests, adapter parity, smoke and E2E |
-| `blob` | [Server Filesystem](/design/filesystem/server/) and [Storage Verification](/design/import/storage-verification/) | Layout, range, corruption, crash, quarantine and GC tests |
+| `blob` | [Server Filesystem](/design/filesystem/server/) and [Storage Verification](/design/import/storage-verification/) | [Sharded-layout](/design/filesystem/server/#blob-store-layout) round-trip and full-store enumeration, range, corruption, crash, quarantine and GC tests |
 | `sync` | [Download and Sync](/design/import/download-sync/) | Cursor, monotonicity, pagination and range-resume tests |
 | `shares` | [Share Links](/design/share-links/) | Capability and expiry tests |
 | `federation` | [Federation](/design/federation/) | Capability, compartmentalization and pull-path tests |
@@ -74,7 +74,7 @@ separate typed ports; no generic CAS, transfer, or TTL library is planned.
 
 | Boundary | Decision |
 | --- | --- |
-| REST client | Spargen-generated Rust from a checked-in OpenAPI 3.1 document |
+| REST client | Spargen-generated Rust from a checked-in OpenAPI 3.2 document |
 | SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
 | Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step, and the `capsule_core` namespace never shares a binary with it |
 | Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work |
@@ -88,13 +88,13 @@ the named acceptance gaps are verified with contract fixtures or a minimal spike
 
 | Library | Scope Capsule delegates | Acceptance gaps Capsule must verify |
 | --- | --- | --- |
-| Kynos | HTTP runtime, REST routing, middleware composition, OpenAPI 3.1 emission, limits, shutdown, observability | Streaming request/response bodies, cancellation and backpressure; deterministic schema output; custom protocol/error headers on every response; middleware ordering; test harnesses without live infrastructure |
-| Spargen | Rust client generation from the checked-in Kynos OpenAPI contract | OpenAPI 3.1 compatibility; streaming upload/range download; opaque binary bodies; stable error-code mapping; auth and protocol headers; supported Rust targets; deterministic generation and version-compatibility checks |
+| Kynos | HTTP runtime, REST routing, middleware composition, OpenAPI 3.1 and 3.2 emission, limits, shutdown, observability | Streaming request/response bodies, cancellation and backpressure; deterministic schema output; custom protocol/error headers on every response; middleware ordering; test harnesses without live infrastructure |
+| Spargen | Rust client generation from the checked-in Kynos OpenAPI contract | OpenAPI 3.1 and 3.2 compatibility; streaming upload/range download; opaque binary bodies; stable error-code mapping; auth and protocol headers; supported Rust targets; deterministic generation and version-compatibility checks |
 | Rawshift | Media detection, decoding/encoding, metadata normalization, derivatives, previews, and video processing | Required format/codec matrix; bounded memory and concurrency; cancellation/progress; malformed-input isolation; deterministic orientation/color/HDR behavior; normalized metadata provenance; mobile/desktop targets; no Chromahash API |
 | Chromahash v1 | LQIP encode/decode only, imported directly by Capsule | Stable v1 wire format and versioning; deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. It remains absent from Cargo until v1 is released |
 | OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
 | PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
-| `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; parity with PostgreSQL and in-memory test suites |
+| `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the PostgreSQL and in-memory adapters under one conformance suite — parity is what lets the in-memory double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services) |
 | RustCrypto, `ciborium`, `rusqlite`, `sqlite-vec`, UniFFI, `wasm-bindgen` | Existing crypto primitives, canonical serialization, local catalog and vector index, native bindings, and the browser boundary | Continue vectors, canonical-byte tests, migration tests, and binding smoke tests; these libraries do not own Capsule protocols or schemas |
 
 Explicit non-dependencies: no generic CAS crate, `object_store`, resumable-transfer library, generic
@@ -117,7 +117,8 @@ unit and smoke tests. Cases whose surface is entirely inside `capsule-core` are 
    account's album entries → the client applies them and a local `library.sqlite` query lists the
    expected albums (rich queries are client-side per [API Surfaces](/design/api-surfaces/)).
 2. **Full import + upload + finalize.** Local scan → plan → execute → upload session → finalize →
-   blob present at `blobs/{hash}` and the index row marked uploaded.
+   blob present at its [content address](/design/filesystem/server/#blob-store-layout) and the index
+   row marked uploaded.
 3. **Sync feed pickup.** Upload from device A → device B's feed advances → device B fetches the
    metadata blob and, per scope, the original.
 4. **Federation cross-server pull.** Alice on `home.tld` shares to Bob on `other.tld` → capability

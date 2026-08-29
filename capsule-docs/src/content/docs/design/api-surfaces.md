@@ -4,8 +4,9 @@ description: The Kynos REST/OpenAPI server surface and its negotiation and rejec
 status: draft
 ---
 
-Capsule exposes one public server transport: **Kynos REST with a checked-in OpenAPI 3.1
-contract**. This document owns the surface-to-module map and the HTTP carriage of the
+Capsule exposes one public server transport: **Kynos REST with a checked-in OpenAPI 3.2
+contract**. This document owns the surface-to-module map, the document model that contract is
+served under, and the HTTP carriage of the
 [universal handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).
 Handshake rules remain owned by Threat Model — Validation, and stable error-code identity by
 [Internationalization](/design/i18n/#server-error-codes).
@@ -41,9 +42,44 @@ the guest drop and the share-link viewer.
 
 ## Why REST/OpenAPI Only
 
-The checked-in OpenAPI **3.1** document is the public contract and the input to Spargen. Kynos owns
+The checked-in OpenAPI **3.2** document is the public contract and the input to Spargen. Kynos owns
 routing, middleware composition, and deterministic schema emission. Capsule owns authentication,
 protocol headers, error bodies, encrypted-upload state, blob storage ports, and business rules.
+
+### The Document Is 3.2, and Its Version Is Pinned
+
+3.2 is not a floor the document may drift above; it is the version the document declares.
+`capsule-server::openapi()` calls `router().openapi_as(SpecVersion::V3_2)` rather than the plain
+`router().openapi()`, because the plain emitter returns the *lowest* version that expresses the API
+without loss — a sound default for a document produced on demand, and the wrong one for a contract
+that is committed to the repository and generated from. Left to follow the API, the committed
+contract would flip 3.1 → 3.2 the day the first streamed response landed, churning the schema gate
+and regenerating the SDK for a change nobody asked for.
+
+Enabling Kynos's `openapi32` feature is a *different* thing and does not by itself produce a 3.2
+document; why the emitted version is deliberately not keyed on a feature flag belongs to the Kynos
+row in [Dependencies](/design/dependencies/#rust). What matters here is the consequence:
+`openapi_as` targets rather than downgrades, so a construct 3.2 cannot express is an error naming
+what blocks it, never a document with operations quietly missing.
+
+### What Is Generated, and What Is Not
+
+The line is **parsing and serialization versus orchestration**, and with Spargen's two gaps closed
+it now falls in exactly one place.
+
+*Generated from the contract*: every request and response body, every typed parameter, and the
+byte-serving endpoints. The blob-fetch and asset-serve tree — `GET /blob/{hash}` with `Range`, and
+the derivative reads beside it — is back in the generated client, because textual and binary
+response decoding and typed parameter serialization both work now. A hand-written byte path is no
+longer justified by a generator limitation, and adding one back would be a second parser for a
+surface the contract already describes.
+
+*Hand-written*: the resumable upload state machine (slice `S-D1`) — chunk scheduling, offset
+resumption after an interruption, retry laddering, and the connection-class budget. None of that is
+parsing. It is orchestration **over** the generated calls, driven by conditions an OpenAPI document
+cannot express, which is why it was never a generator gap and does not close with one. This is the
+existing contract with the gaps removed, not a new one; the Spargen pin and its history are the
+codegen row in [Dependencies](/design/dependencies/#rust).
 
 One transport keeps negotiation, observability, error handling, streaming, cancellation, and test
 harnesses consistent. GraphQL and gRPC are retired architecture, not compatibility surfaces.
@@ -108,8 +144,10 @@ Clients switch on the code, never on status alone.
 
 - Drive every fail-closed handshake rule through representative routes in each module and assert
   the same headers, status, and `error.*` code.
-- Generate the OpenAPI contract twice and assert byte-identical output; generate the Spargen client
-  from the checked-in contract and fail CI on drift.
+- Generate the OpenAPI contract twice and assert byte-identical output, and assert the emitted
+  document declares OpenAPI **3.2** — a contract that silently reverted to 3.1 would still be
+  valid, still generate, and no longer be the committed decision. Generate the Spargen client from
+  the checked-in contract and fail CI on drift, byte-serving operations included.
 - Exercise streaming upload and ranged download with cancellation, backpressure, retry, and body
   limits without live infrastructure.
 - Present valid and invalid federation capabilities through REST and assert compartmentalized,
