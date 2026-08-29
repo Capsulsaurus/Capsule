@@ -13,6 +13,7 @@ What this doc deliberately does **not** own, per the [SSoT rule](/design/princip
 - **Client test and performance tooling** — [Clients — Test and Performance Tooling](/design/clients/#test-and-performance-tooling).
 - **Which existing identifier uses which UUID version** — [Metadata — Identifiers](/design/metadata/#identifiers). This doc owns only the default-for-new rule.
 - **Media formats and codecs** — [Thumbnails and Previews](/design/thumbnails/) owns derivative formats; the sidecar's `content_type` set is owned by [Metadata](/design/metadata/#closed-enum-value-sets).
+- **Which licences a dependency may carry, and how it may be linked** — [Licensing](/design/licensing/). This doc picks the library; that doc decides whether its licence and linkage are admissible, and `deny.toml` enforces the answer.
 
 Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[workspace.dependencies]`; member crates consume it with `workspace = true` and never declare their own version. Toolchain versions (Rust nightly, bun, tuist, …) are pinned by mise per `CONTRIBUTING.md`.
 

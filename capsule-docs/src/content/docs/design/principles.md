@@ -58,6 +58,7 @@ The owner docs are:
 | Stacking taxonomy + trash retention semantics                         | [Asset Organization](/design/organization/)                         |
 | Lifecycle action set                                                  | [Authorization](/design/authorization/)                             |
 | Damage scenarios + client class taxonomy + containment shells         | [Threat Model](/design/threat-model/)                               |
+| Outbound licence + dependency-licence policy + linkage rules           | [Licensing](/design/licensing/)                                     |
 | Server- + client-side refuse-by-default validation invariants         | [Threat Model — Validation](/design/threat-model/validation/)       |
 | Schema evolution rules, forbidden behaviors, deprecation policy       | [Threat Model — Schema Rules](/design/threat-model/schema-rules/)   |
 | Share links + public-share serving                                    | [Share Links](/design/share-links/)                                 |

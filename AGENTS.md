@@ -18,6 +18,7 @@
 - TLS: `rustls` only; never native-tls/openssl.
 - Identifiers: UUIDv7 for new ids; UUIDv4 only where creation time must not leak.
 - The canonical table (all platforms, exceptions, rationale) is the [Dependencies design doc](capsule-docs/src/content/docs/design/dependencies.md) — add a row there before introducing a dependency for a new domain.
+- Licences: never add a `GPL-*`, `LGPL-*`, or `AGPL-*` dependency — `deny.toml` fails the build, and a copyleft crate in a statically-linked binary forecloses app-store distribution. Elect a permitted arm of a multi-licensed crate. Anything beyond attribution needs a `deny.toml` exception plus a root `NOTICE` entry, per the [Licensing design doc](capsule-docs/src/content/docs/design/licensing.md).
 
 ## Internationalization
 

@@ -61,6 +61,7 @@ export default defineConfig({
                                 { slug: 'design/developer-docs' },
                                 { slug: 'design/networking' },
                                 { slug: 'design/dependencies' },
+                                { slug: 'design/licensing' },
                             ],
                         },
                         {
