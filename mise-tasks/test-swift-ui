@@ -13,6 +13,13 @@ if [ "$(uname)" != "Darwin" ]; then echo "Skipping swift UI tests (not macOS)"; 
 # one does not: Browse exists precisely because a phone cannot show twenty
 # sidebar rows, so the phone is where reachability can actually regress.
 #
+# `LibraryGridTests` is here rather than in the unit suites because what it
+# asserts is only true on a running screen: that scrolling the headerless grid
+# puts a date in the navigation bar, and that the aggregation picker is not
+# sitting in the slot that date needs. Both compiled and unit-tested green while
+# the date was invisible, which is exactly the class of defect a gate that never
+# looks at the screen cannot catch.
+#
 # `AccessibilityAuditTests` is deliberately NOT in this list, and that is a
 # statement about the app rather than about the suite: the audit fails today on
 # most surfaces and always has — verified against the tree before any of this
@@ -36,5 +43,6 @@ xcodebuild test \
     -destination "platform=iOS Simulator,name=iPhone 17 Pro" \
     -only-testing:CapsuleAppUITests/SectionReachabilityTests \
     -only-testing:CapsuleAppUITests/LaunchFlowTests \
+    -only-testing:CapsuleAppUITests/LibraryGridTests \
     CODE_SIGNING_ALLOWED=NO \
     | mise exec -- xcbeautify

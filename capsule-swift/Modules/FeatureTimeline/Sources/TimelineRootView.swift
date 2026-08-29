@@ -69,7 +69,6 @@ public struct TimelineRootView: View {
                 } else {
                     ToolbarItem(placement: .navigation) { importButton }
                     if model.state == .ready, !model.sections.isEmpty {
-                        ToolbarItem(placement: .principal) { levelPicker }
                         if model.level == .all {
                             ToolbarItem(placement: .primaryAction) { densityMenu }
                             // Two adjacent trailing items share one glass
@@ -111,7 +110,11 @@ public struct TimelineRootView: View {
                 Text(ImportSummary.text(for: result))
             }
             .overlay(alignment: .bottom) {
-                if isSelecting { selectionActionBar }
+                if isSelecting {
+                    selectionActionBar
+                } else if model.state == .ready, !model.sections.isEmpty {
+                    levelPicker
+                }
             }
             .confirmationDialog(
                 "Delete \(selectedIDs.count) Items?",
@@ -205,6 +208,19 @@ public struct TimelineRootView: View {
         .accessibilityLabel("app.timeline.import.accessibility")
     }
 
+    /// Years / Months / All, as a floating control at the bottom of the library.
+    ///
+    /// It used to sit in the navigation bar's `.principal` slot, which is the
+    /// slot the *title* occupies — so the library could show the reader which
+    /// aggregation level they were on, or where in time they were, but never
+    /// both, and the title silently lost. That mattered more once the grid
+    /// stopped drawing day headers, because the navigation bar became the only
+    /// thing left that could say *when*.
+    ///
+    /// The bottom is also where the platform puts it: iOS 26's own Photos app
+    /// floats this control over the grid rather than burying it in the bar. Here
+    /// it is a glass capsule over photo content, which is the one place
+    /// ``CapsuleGlassVariant/clear`` is meant for.
     private var levelPicker: some View {
         Picker("app.timeline.view_picker", selection: levelBinding) {
             Text("app.timeline.level.years").tag(TimelineViewModel.TimelineLevel.years)
@@ -212,7 +228,11 @@ public struct TimelineRootView: View {
             Text("app.timeline.level.all").tag(TimelineViewModel.TimelineLevel.all)
         }
         .pickerStyle(.segmented)
-        .frame(maxWidth: 260)
+        .labelsHidden()
+        .frame(maxWidth: 280)
+        .padding(CapsuleTheme.Spacing.xSmall)
+        .capsuleGlass(.clear, in: Capsule())
+        .padding(.bottom, CapsuleTheme.Spacing.small)
     }
 
     private var levelBinding: Binding<TimelineViewModel.TimelineLevel> {
