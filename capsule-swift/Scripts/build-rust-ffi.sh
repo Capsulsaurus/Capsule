@@ -49,6 +49,24 @@ cargo run -p "$CRATE" --bin uniffi-bindgen -- \
 test -s "$GEN_DIR/capsule_core_ffi.swift"
 test -s "$GEN_DIR/capsule_sdk.swift"
 
+# Swift 6 language mode (SWIFT_VERSION 6.0 in Project.swift) rejects a global of a
+# non-Sendable type outright — it is not a strict-concurrency knob that can be dialled
+# down per target. uniffi emits exactly one such global per `with_foreign` callback
+# interface:
+#
+#   static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterface…>
+#
+# which fails to compile ("not concurrency-safe because non-'Sendable' type … may have
+# shared mutable state"). The pointer is written once during static initialization and
+# only ever read afterwards, so `nonisolated(unsafe)` states the truth rather than
+# suppressing a real race. Applied here because the glue is generated on every build and
+# git-ignored, so it cannot be fixed by editing a checked-in file. Drop this step once
+# uniffi emits the annotation itself.
+echo "▸ Annotating uniffi callback vtables for Swift 6 concurrency"
+for glue in "$GEN_DIR/capsule_core_ffi.swift" "$GEN_DIR/capsule_sdk.swift"; do
+    perl -0pi -e 's/^(\s*)static let vtablePtr:/$1nonisolated(unsafe) static let vtablePtr:/mg' "$glue"
+done
+
 # uniffi emits `<namespace>FFI.modulemap` (one per namespace); an xcframework's headers
 # directory must contain a file literally named `module.modulemap` — concatenating the
 # per-namespace maps yields one file declaring every C module.
