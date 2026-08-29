@@ -202,6 +202,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | blocked | |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
+| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | ready | ThumbHash retires with it |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
@@ -232,6 +233,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | ready | |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
+| S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -550,6 +552,15 @@ not touch them.
   (`#[serde(default, skip_serializing_if = …)]`); a present-`null` encoding changes
   `signing_bytes()` and silently breaks re-verification of every directory signed before it.
   A wire-absence regression test is mandatory, mirroring the one in `manifest.rs`.
+- **Unsettled, and it must be decided first:** *which* public half `dek_public` carries.
+  `dsk_public` is a `HybridVerifyingKey`, but the encryption side has two candidates — `DekKeypair`
+  (`DEK_PUBLIC_LEN` = 1184 + 32) and the `P256HybridDek` that `S-F5`/`S-F8` introduced. Whether one
+  field covers both, or the P-256 hybrid needs a tagged type, is open; picking wrong is expensive
+  because the field is inside the signed bytes.
+- **Adjacent, worth knowing before it looks like tidying:** `added_at` and `revoked_at` are plain
+  `Option<String>` with no `skip_serializing_if`, so they already encode as present-`null`. The
+  directory will therefore carry both conventions for the same reason manifests do, and
+  "make the optionals consistent" is a signature-visible change, not a cleanup.
 - **Done when:** a directory published with a DEK verifies under the IK; a directory signed
   before this change still verifies byte-identically; and a peer can encapsulate to a device
   using only the published entry. **Tier:** Unit.
@@ -565,17 +576,22 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
 
 - **Contract:** [Thumbnails](capsule-docs/src/content/docs/design/thumbnails.md).
 - **Deliverable:** **still-image** thumbnail/preview generation through a narrow
-  Rawshift adapter, plus direct Chromahash v1 LQIP + `dominant_color` integration into
-  the sidecar `lqip` field, `DerivativeManifest`-signed outputs. Video tiers are split to
+  Rawshift adapter with `DerivativeManifest`-signed outputs. Video tiers are split to
   `S-B5` (distinct transcode toolchain).
+- **Scope reduced 2026-08-29:** the LQIP half left this slice for **`S-B14`**. It was bundled here
+  because both halves needed decoded pixels, but LQIP cannot retire with the media stack and come
+  back — it is reachable from the import pipeline, the apps through the FFI, and the browser
+  through `capsule-wasm`, and a placeholder that depends on which client imported a photo is a
+  visible defect. `S-B14` is `ACTIVE` and lands outside `capsule-core::media`; this slice keeps
+  only the derivative generation that genuinely retires with Rawshift's adapter.
 - **Done when:** generation produces the committed still formats with signed
-  derivative manifests; LQIP lands in the sidecar and renders as the fallback tier.
+  derivative manifests.
 - **Tier:** Unit + Smoke. **Blocks:** S-B2, S-B5.
 - **Landed in retired code:** generation ships today over injected per-platform encoder
   seams and is green in this workspace, but it lives in `capsule-core::media` +
   `capsule-media`, both review material on `master`. **Re-scoped:** re-land on the
   Rawshift-backed pipeline. The signed `DerivativeManifest` chain and the sidecar `lqip`
-  field are `ACTIVE` and stay.
+  field are `ACTIVE` and stay — the field stays here, its producer moves to `S-B14`.
 
 ### S-B2 — Signed-path import-executor rewrite
 
@@ -765,6 +781,53 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   `capsule-core::media`. **Re-scoped:** the uninhabited-stub discipline and the
   `is_decodable`/`from_extension` coverage table are the contract the Rawshift-backed
   rebuild inherits; `DerivativeStatus` on `ImportOutcome` is `ACTIVE` and stays.
+
+### S-B14 — LQIP on Chromahash 0.7.1, in its own module
+
+- **Contract:** [Thumbnails — LQIP](capsule-docs/src/content/docs/design/thumbnails.md#lqip);
+  [Dependencies](capsule-docs/src/content/docs/design/dependencies.md).
+- **Why it exists** (allocated 2026-08-29): AGENTS.md gated Chromahash to "after its v1 release",
+  which is why `lqip.rs` calls `thumbhash::rgba_to_thumb_hash` today. 0.7.1 shipped and the gate is
+  amended to that version, so ThumbHash goes — the cargo dependency and the npm one in
+  `capsule-web` both.
+- **Why a new module rather than a fix in place:** the code sits in `capsule-core::media`, which
+  retires to `legacy-review/`. LQIP cannot retire with it: it is reachable from the import
+  pipeline, from the apps through the FFI, and from the browser through `capsule-wasm`, and a
+  placeholder that differs by which client imported the photo is a visible defect. AGENTS.md also
+  forbids Rawshift from wrapping Chromahash — Capsule imports it directly. A small Capsule-owned
+  module outside the retiring stack is the only home satisfying both, and it survives Stage 7.5
+  untouched.
+- **Tier:** `DEFAULT_TIER` — exactly 32 bytes, which is what `ChromaHash::encode` produces.
+- **The migration is free, and that was checked rather than assumed.** Nothing pins a ThumbHash
+  payload: the only literal `lqip` bytes in the tree are eight bytes of synthetic filler in
+  `sidecar_v1.rs`'s round-trip test, the committed KATs never encode a sidecar, and there is no
+  snapshot infrastructure (no `insta`, no golden files). Every other assertion is presence-only.
+  So **no `sidecar_schema` bump and `format_version` stays 1** — and it is legitimate for a reason
+  worth writing down: the schema already *declares* chromahash. The field is `Lqip.chromahash` and
+  `LQIP_FORMAT_V1` is documented as "the current LQIP chromahash format version" while the code
+  calls ThumbHash. ThumbHash was an undeclared stand-in for an unreleased dependency, not the
+  declared encoding, so this makes the code match a contract that never changed.
+- **The condition on that:** the migration must be **total**. ThumbHash payloads are shorter than
+  32 bytes but overlap the lower chromahash tiers in length, so byte length alone will not catch a
+  stale value. A partial migration needs a new `format_version`, never a redefinition of 1.
+- **Four things the move forces that the decision does not settle:**
+  1. **It is not a file move.** `lqip.rs` also owns `render_sidecar_lqip` and
+     `dominant_color_fill`, which return `media::image::buffer::ImageBuffer` and take
+     `media::metadata::ColorSpace` — both inside the retiring stack. The new module either returns
+     raw `(w, h, rgba)` or needs a buffer type outside `media`.
+  2. **Feature gating fights the one-implementation goal.** LQIP compiles only under `media`,
+     which implies `native`. `capsule-wasm` can only reach it if the module is default/wasm-safe,
+     and chromahash building for `wasm32-unknown-unknown` is unverified.
+  3. **`gamut` is a new input.** `encode` needs a `Gamut`; the pipeline carries
+     `media::metadata::ColorSpace` and the sidecar stores no gamut, so a mapping must be defined
+     and the gamut is not recoverable from the sidecar afterwards.
+  4. **The 100px pre-resize is a ThumbHash artifact.** `from_rgba_buffer` downsizes to a 100px
+     long edge before hashing; chromahash takes full RGBA and band-limits on the read side with
+     `decode_capped`. Carrying the resize forward silently caps fidelity.
+- **Done when:** `cargo tree -i thumbhash` is empty and `thumbhash` is gone from
+  `capsule-web/package.json`; an encode is asserted to be exactly 32 bytes; a signed sidecar
+  round-trips with a chromahash payload; and the same input produces the same bytes from the
+  CLI, the FFI and `capsule-wasm`. **Tier:** Unit.
 
 ## Lane C — server (key-free surfaces)
 
@@ -1251,7 +1314,13 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Deliverable:** `AuthStateStore` and `UploadSessionStore` as two separate typed traits, plus
   **typed ceremony stores** replacing the blob store — one per ceremony, each owning its own record
   type and its own TTL as a property, not a parameter. Three adapters each: Postgres, Valkey
-  (`redis-rs`), and a deterministic in-memory one. A single **conformance suite every adapter must
+  (`redis-rs`), and a deterministic in-memory one — but note that **three adapters are not three
+  deployment modes**. Valkey is
+  [required](capsule-docs/src/content/docs/design/filesystem/server.md) (settled 2026-08-29; the
+  server already refuses to boot without `VALKEY_URL`), and the in-memory adapter is a test double.
+  The rejected alternative was a Postgres fallback that removes Valkey, which would mean emulating
+  TTL and expiry in SQL — precisely the generic TTL abstraction the architecture decisions refuse,
+  and the thing this slice exists to delete. A single **conformance suite every adapter must
   pass**, so "the in-memory adapter behaves like Valkey" is asserted rather than assumed — that
   suite is what lets the rest of the rebuild be tested without a container, which is the
   acceptance gap module-map.md sets for Kynos.
@@ -1276,9 +1345,20 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   producer is not.
 - **Root cause, and why it is not a one-line fix:** the signed manifest never reaches the
   server. `capsule_core::lifecycle::upload_bundle` puts the metadata blob, derivatives, and
-  original on the wire; `BlobRole::Provenance` exists but nothing ever uploads one. Closing
-  this means deciding where the signed manifest is carried (a provenance blob per write, or
-  a field on `POST /upload`) and storing it verbatim.
+  original on the wire; `BlobRole::Provenance` exists but nothing ever uploads one.
+- **Settled 2026-08-29 — it rides as a provenance blob**, not as a field on `POST /upload`. The
+  client uploads the signed manifest as one more blob in the bundle the protocol already carries,
+  so there is **no new wire surface**; the server stores it verbatim at its content address like
+  any other blob, identical manifests dedupe, and the feed serves those exact bytes. The contract
+  is [Provenance — the signed bytes are the served bytes](capsule-docs/src/content/docs/design/cryptography/provenance.md)
+  with the wire shape in [Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md).
+  This kills the `prepare_feed_input` re-serialization rather than correcting it.
+- **Open inside the decision:** whether finalization re-derives the JSON envelope projection from
+  the stored bytes or keeps cross-checking the declared projection against them. The decision fixes
+  only that the server never *produces* manifest bytes. Note the server does not parse the CBOR
+  today, so accepting a provenance blob it never decodes leaves nothing guaranteeing the blob
+  agrees with the projection it validated — including `created_by_device` (invariant 7). Whoever
+  closes this decides whether an unparsed provenance blob can satisfy the visibility gate.
 - **Deliverable:** the client uploads the signed manifest, the server stores it verbatim, and
   the feed serves those exact bytes.
 - **Done when:** an entry pulled from the feed verifies through
@@ -1287,6 +1367,30 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Not blocking `S-P1`:** the SDK's sync-apply verb consumes the *contracted* shape and is
   proven against it end to end; what is missing is a producer that emits it. It **does** block
   a real second-device `S-P5` render, which is why this is indexed rather than noted.
+
+### S-C31 — Custody receipt attests a hash of server-invented bytes
+
+- **Contract:** [Storage Verification](capsule-docs/src/content/docs/design/import/storage-verification.md);
+  [Provenance](capsule-docs/src/content/docs/design/cryptography/provenance.md).
+- **Gap** (found 2026-08-29 while landing the `S-C30` design amendment): the custody receipt binds
+  to an `envelope_hash` computed by `prepare_receipt_input` — which sits immediately below
+  `prepare_feed_input` in the same file and inherits the same defect. The hash is taken over the
+  server's *own* re-serialization of the envelope projection, so the receipt attests to bytes no
+  client ever signed and no client can reproduce. A receipt is supposed to be the server's
+  admission that it holds what the client sent; this one attests that it holds what it made.
+- **Why it is separate from `S-C30` rather than folded in:** `S-C30` fixes what the *feed serves*.
+  A receipt is a signed artefact with its own verification story and its own consumers, and
+  changing what it binds to changes what an already-issued receipt means. Landing it under
+  `S-C30`'s "done when" would let a feed fix silently re-point an attestation.
+- **Deliverable:** `envelope_hash` becomes the provenance blob's content address — the same bytes
+  the client signed and the feed serves — so a receipt, a feed entry and a direct blob fetch all
+  name one object. Decide explicitly what happens to receipts issued under the old hash.
+- **Watch out:** `prior_provenance_hash` is fixed at SHA-256 while a blob's content address is
+  whatever `crypto_suite_id` selects. After this change both are digests of the same byte string
+  but are **not** interchangeable identifiers, and the chain-walk and blob-fetch paths need a
+  stated relation between them.
+- **Done when:** a receipt's `envelope_hash` resolves to a stored provenance blob and the client
+  recomputes it from the bytes it signed. **Tier:** Unit + Integration.
 
 ## Lane D — SDK / clients
 
@@ -1663,7 +1767,9 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 
 ### S-D23 — Client SQLite schema has no upgrade path
 
-- **Contract:** [Client Filesystem](capsule-docs/src/content/docs/design/filesystem/client.md),
+- **Contract:** [Versioning — Client Catalog Migration](capsule-docs/src/content/docs/design/versioning.md)
+  (added 2026-08-29 — the catalog is a durability promise alongside the server's, not a cache),
+  [Client Filesystem](capsule-docs/src/content/docs/design/filesystem/client.md),
   [Maintenance](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
 - **Gap** (found 2026-08-22 while landing `S-D19`): `db::schema::init_schema` is
   `CREATE TABLE IF NOT EXISTS` plus a `PRAGMA user_version` stamp. It creates the current schema
