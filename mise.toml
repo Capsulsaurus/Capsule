@@ -89,6 +89,7 @@ run = [
   "mise run i18n-check",
   "mise run i18n-guard",
   "mise run openapi-check",
+  "mise run openapi-check-kynos",
   "mise run license-check",
   "mise run translate-readme-check",
   "mise run build-rust",
@@ -212,6 +213,18 @@ run = "cargo deny --all-features check licenses"
 [tasks.openapi]
 description = "Dump the server OpenAPI 3.1 schema to capsule-sdk/openapi.json"
 run = "cargo run -q -p capsule-api --bin gen_openapi"
+
+# The Kynos document (slice `S-C34`). Gated separately from the Salvo one on purpose: the SDK
+# still generates its client from `capsule-sdk/openapi.json`, and committing both as *the*
+# contract at once would leave no way to say which a client should believe. Two documents, two
+# identical drift guards, so the changeover at parity is a re-point rather than a new mechanism.
+[tasks.openapi-kynos]
+description = "Dump the Kynos OpenAPI 3.2 document to capsule-server/openapi.json"
+run = "cargo run -q -p capsule-server --bin gen_openapi"
+
+[tasks.openapi-check-kynos]
+description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
+run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
 
 # Mint a JWT_ED25519_DER signing key for a local or self-hosted server (slice S-P7). The key
 # comes from the same `capsule-api-environment` module that parses it at boot, so anything this

@@ -1345,6 +1345,8 @@ version = "0.1.0"
 dependencies = [
  "capsule-i18n",
  "capsule-wire",
+ "clap",
+ "color-eyre",
  "jiff",
  "jsonwebtoken",
  "kynos",

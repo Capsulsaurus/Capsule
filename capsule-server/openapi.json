@@ -1,0 +1,388 @@
+{
+  "openapi": "3.2.0",
+  "info": {
+    "title": "API",
+    "version": "0.0.0"
+  },
+  "paths": {
+    "/v1/version": {
+      "get": {
+        "summary": "Reports the server's name and version.",
+        "description": "Unauthenticated and side-effect free. Clients use it as a reachability probe before\nattempting a protocol handshake, so it must stay cheap and must never fail for a reason\nthe caller could act on — there is no failure variant, and the return type says so.",
+        "operationId": "get_version",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "summary": "Exchange an email and password for a session.",
+        "description": "Opens a session in the state store and returns the pair of tokens it is worked through. The\ntwo advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded on\nthe session for the devices listing and gate nothing; an unusable one is dropped rather than\nrefused.",
+        "operationId": "login_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Account locked",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "summary": "Exchange a refresh token for a new pair, rotating the session.",
+        "description": "The presented session is **closed** and a new one opened in its place, so a refresh token is\ngood exactly once. The session's advisory provenance — its cohort hash and device id — is\ncarried across the rotation, or the devices listing would lose track of a device every time\nits tokens turned over.",
+        "operationId": "refresh_token",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Session expired",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "summary": "End the session the presented access token was issued against.",
+        "description": "Idempotent: a session that is already closed, expired, or was never opened produces the same\nanswer, because \"there is no longer a session\" is what the caller asked for.",
+        "operationId": "logout",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "VersionResponse": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The server package name."
+          },
+          "version": {
+            "type": "string",
+            "description": "The server package version."
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "version"
+        ],
+        "description": "Identifies the running server.\n\nDeliberately incurious: a name and a version, no build host, no commit, no uptime, no\nfeature list. This endpoint is unauthenticated, so everything it returns is public, and a\nkey-free server has no reason to hand an anonymous caller a fingerprint of its deployment.\nExact client build identification runs the other way (`S-D15`) — clients tell the server\nwhat they are, not the reverse."
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account's email address."
+          },
+          "password": {
+            "type": "string",
+            "description": "The account's password.\n\nVerified by the account directory and never retained, logged, or echoed."
+          },
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments\n(slice `S-C13`).\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID.\n\nClient-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for\nthe same reason as `cohort_hash`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "description": "Credentials, plus the two advisory identifiers a client may volunteer.\n\n`Debug` is hand-written. A derived one would print the password into any log line, panic\nmessage or `tracing` field that formatted the request — which is the single worst thing this\nfile could do, and is one `#[derive(Debug)]` away at all times.\nNo `#[schema(min_length = ...)]` on either credential, deliberately. Kynos 0.1.0 publishes a\nstring constraint into the document but does not enforce it on the request path — an empty\npassword reaches the handler — so declaring one would put a promise in the contract that the\nserver does not keep, which is the exact class of drift this rebuild exists to remove. Length\nis a body-size concern and belongs to a limits middleware; it is recorded as owed rather than\nasserted here."
+      },
+      "Problem": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "instance": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true,
+        "type": "object",
+        "required": [
+          "type",
+          "status"
+        ],
+        "title": "Problem Details",
+        "description": "An RFC 9457 problem detail."
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "description": "The short-lived credential for ordinary requests."
+          },
+          "refresh_token": {
+            "type": "string",
+            "description": "The long-lived credential that buys new pairs from `POST /v1/auth/refresh`."
+          },
+          "token_type": {
+            "type": "string",
+            "description": "Always `Bearer`."
+          },
+          "expires_by": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The **absolute** Unix-seconds instant `access_token` stops being honoured.\n\nAbsolute rather than a duration, which is what the field has always carried despite its\nname; the SDK depends on it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "refresh_token",
+          "token_type",
+          "expires_by"
+        ],
+        "description": "A freshly issued token pair.\n\nThe field names and `expires_by`'s meaning are a live client contract — `capsule-sdk`'s\n`TokenResponseBody` reads exactly these — so they are preserved verbatim from the Salvo\nsurface. `Debug` is hand-written; both tokens are bearer credentials.\n\n`Deserialize` is derived so the suite reads the pair back through the same type the server\nwrote — a test that pulled `access_token` out of a `serde_json::Value` would still pass if\nthe field were renamed on the way out."
+      },
+      "RefreshRequest": {
+        "properties": {
+          "refresh_token": {
+            "type": "string",
+            "description": "The refresh token issued by a previous login or refresh.\n\nUnconstrained in the schema for the reason [`LoginRequest`] records: an empty one is a\ntoken that does not verify, which is a 401 the handler already answers correctly."
+          }
+        },
+        "type": "object",
+        "required": [
+          "refresh_token"
+        ],
+        "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "A short-lived Capsule access token, issued by `POST /v1/auth/login` and rotated by `POST /v1/auth/refresh`."
+      }
+    }
+  }
+}

@@ -44,6 +44,12 @@ capsule-i18n = { path = "../capsule-i18n" }
 # see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
 jsonwebtoken = { workspace = true }
 
+# `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
+# and this mirrors it deliberately: two committed documents, two identical drift guards, so the
+# changeover at parity is a re-point rather than a new mechanism.
+clap = { version = "4.6.1", features = ["derive"] }
+color-eyre = "0.6.5"
+
 [dev-dependencies]
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
