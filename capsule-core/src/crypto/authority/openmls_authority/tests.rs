@@ -57,6 +57,7 @@ impl Device {
             devices: vec![DeviceEntry {
                 device_id: self.device_id,
                 dsk_public: self.dsk.verifying_key(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],
@@ -100,6 +101,7 @@ fn directory_for(user: Uuid, device_id: Uuid, device: &HybridSigningKey) -> Devi
         devices: vec![DeviceEntry {
             device_id,
             dsk_public: device.verifying_key(),
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],
@@ -539,6 +541,7 @@ fn leaf_binding_is_enforced_against_the_device_directory() {
         devices: vec![DeviceEntry {
             device_id: bob.device_id,
             dsk_public: wrong_dsk.verifying_key(), // not the key that signed the binding
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],
@@ -1098,6 +1101,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
         devices: vec![DeviceEntry {
             device_id: admin_dev.device_id,
             dsk_public: wrong_dsk.verifying_key(),
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],

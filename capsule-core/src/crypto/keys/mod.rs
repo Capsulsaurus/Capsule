@@ -35,7 +35,7 @@ pub mod tpm;
 pub use album::{Amk, AmkVersion};
 #[cfg(feature = "native")]
 pub use albumstore::{AlbumStore, AlbumStoreError, AmkRow, PersistedAlbum, PersistedAuthority};
-pub use directory::{DeviceDirectory, DeviceEntry, DirectoryCore};
+pub use directory::{DekPublic, DeviceDirectory, DeviceEntry, DirectoryCore};
 pub use hardware::{
     HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HardwareSignerError,
 };

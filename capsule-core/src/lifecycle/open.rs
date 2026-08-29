@@ -650,6 +650,7 @@ impl Workspace {
             devices: vec![DeviceEntry {
                 device_id: account.device.device_id,
                 dsk_public,
+                dek_public: None,
                 added_at: DEVICE_ADDED_AT.into(),
                 revoked_at: None,
             }],

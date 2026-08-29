@@ -316,6 +316,7 @@ fn signed_directory_bytes(version: u64, device_count: usize, ik: &HybridSigningK
             DeviceEntry {
                 device_id: Uuid::from_u128(0xD0 + i as u128),
                 dsk_public: key.verifying_key(),
+                dek_public: None,
                 added_at: "2026-07-10T00:00:00Z".into(),
                 revoked_at: None,
             }

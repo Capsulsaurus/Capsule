@@ -231,6 +231,7 @@ impl MlsDeviceIdentity {
         DeviceEntry {
             device_id: self.device_id,
             dsk_public: self.dsk.verifying_key(),
+            dek_public: None,
             added_at: added_at.to_string(),
             revoked_at: None,
         }

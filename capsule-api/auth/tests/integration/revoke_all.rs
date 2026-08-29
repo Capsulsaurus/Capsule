@@ -47,6 +47,7 @@ fn signed_directory_bytes(ik: &HybridSigningKey) -> Vec<u8> {
         devices: vec![DeviceEntry {
             device_id: Uuid::from_u128(0xD7),
             dsk_public: device.verifying_key(),
+            dek_public: None,
             added_at: "2026-08-21T00:00:00Z".into(),
             revoked_at: None,
         }],
