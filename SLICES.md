@@ -207,7 +207,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
-| S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
+| S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
@@ -225,10 +225,10 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1 | M | RETIRED | ready | pin column → `S-C19` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
-| S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | ready | |
+| S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
 | S-C20 | Invariant-7 floor grounded in the device directory | server | — | M | RETIRED | ready | |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | ready | |
-| S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | — | S | RETIRED | ready | |
+| S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | — | S | RETIRED | blocked | needs an asset index; answering from blob presence leaks |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | — | M | RETIRED | ready | |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
@@ -241,7 +241,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
-| S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | not yet wired into `App` — one field, owed to `S-C1` |
+| S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | wired by `S-C1`, which also found a missing operation |
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
@@ -1311,6 +1311,14 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** the SDK merge path switches on the structured field; schema gate
   green. **Tier:** Unit.
 
+- **Blocked, and on a disclosure argument rather than effort** (found 2026-08-29 porting `S-C1`): a
+  `409 duplicate_blob` must name the *existing asset*, and there is no asset index yet. The
+  tempting shortcut — answering from blob presence alone — would tell one account that another
+  account holds a particular blob. Content addressing makes that a real cross-tenant disclosure, so
+  the status is refused entirely until there is an index that can answer it honestly. Create-dedup
+  is scoped to the uploader in the meantime, since only the uploader may append and handing back
+  another party's session would hand back an unusable one.
+
 ### S-C23 — Revoke-all with master-key proof
 
 - **Contract:** [Authentication — Explicit Revocation item 3 + Validation](capsule-docs/src/content/docs/design/authentication.md);
@@ -1471,6 +1479,13 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   created shard directory across a crash; whether `incoming/` and `quarantine/` shard too; and
   tying the two-level split to the 64-char lowercase-hex invariant `is_content_hash` enforces, so a
   future digest change fails a test rather than corrupting the layout silently.
+- **A missing operation, found by the first consumer.** `commit` requires the caller to have
+  verified that staged bytes hash to the address, and the port had **no way to read staged bytes
+  back** — so upload invariant 14's re-hash was not expressible without reaching past the port to
+  the filesystem, which is the one thing the "no caller reaches past the port" criterion forbids.
+  `read_staged_at` was added with `S-C1`, mirroring `read_at`. Worth noting the conformance suite
+  did not catch this: a suite proves the operations that exist behave consistently, never that the
+  set is sufficient. Only a consumer can find a missing verb.
 - **Done when:** one shared conformance suite passes for every adapter, enumeration is exercised
   over a populated shard tree, and no caller reaches past the port to the filesystem.
   **Tier:** Unit + conformance.
