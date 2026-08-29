@@ -2497,6 +2497,12 @@ and all three slices are `done` in `capsule-core`.
   waiting on is the **Kynos OpenAPI contract**, not spargen" — the "in development" and
   "parked (commented out)" claims are gone. With that, every "Done when" clause of this
   slice is met and the row is legitimately `done`.
+- **Re-staled and re-verified 2026-08-29.** The dependency bump in Stage 5.4 broke this row's own
+  criterion without touching it: the README pinned spargen `0.1.0` and an OpenAPI 3.1 schema, both
+  of which the bump made false, so "describes the SDK as it is" silently stopped holding. Fixed,
+  and worth noting as a class rather than an incident — a docs slice whose criterion is
+  *agreement with the code* is re-opened by every dependency move, and nothing in the gate
+  catches it. `check-rust` verifies that docs build and link, never that they are true.
 
 ### S-Z7 — Developer reference architecture
 
