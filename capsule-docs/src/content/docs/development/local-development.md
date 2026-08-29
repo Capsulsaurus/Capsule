@@ -69,6 +69,35 @@ To drive it by hand, note that `dotenvy` searches the *current* directory, so `c
 
 Tests that need a real database use testcontainers rather than the compose stack. Under podman that requires a Docker-compatible socket (`systemctl --user enable --now podman.socket`); see `capsule-api/README.md` for the platform notes.
 
+### Testcontainers leak under podman — reclaim before you are stuck
+
+Rootless podman needs `TESTCONTAINERS_RYUK_DISABLED=true`, and Ryuk is the component that would
+otherwise reap containers after a run. Disabled, **every testcontainer suite leaves its container
+and its volume behind.** The podman VM's root filesystem is only 8.5 GB, so after a few dozen runs
+it fills and the next suite fails like this:
+
+```text
+start Valkey: … creating container storage: … no space left on device
+```
+
+That reads like a test failure and is not one — nothing is wrong with the code, and no amount of
+re-running helps. Reclaim, then re-run:
+
+```bash
+# Leaked testcontainers use different image tags than the compose services
+# (postgres:15-alpine / valkey:8.0.1 vs postgres:17 / valkey:8.1.1), so this
+# cannot touch the stack `serve-api` depends on.
+podman rm -f $(podman ps -aq \
+  --filter ancestor=docker.io/library/postgres:15-alpine \
+  --filter ancestor=docker.io/valkey/valkey:8.0.1)
+podman volume prune -f        # the containers' volumes outlive them
+podman machine ssh "df -h /"  # confirm headroom before re-running
+```
+
+One clearing recovered 46 containers and 48 volumes, taking the VM from 457 MB free to 2.4 GB.
+`podman system df` shows what is reclaimable if that is not enough — unused images are usually the
+next largest bucket.
+
 ## Git hooks
 
 `mise run hooks-install` installs [hk](https://hk.jdx.dev/) from `hk.pkl`. Every hook step delegates to a mise task, so the hook and the CI job run identical commands:
