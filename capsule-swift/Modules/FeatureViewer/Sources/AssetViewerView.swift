@@ -213,8 +213,7 @@ public struct AssetViewerView: View {
         CapsuleGlassContainer(spacing: CapsuleTheme.Spacing.medium) {
             HStack(spacing: CapsuleTheme.Spacing.medium) {
                 shareButton
-                    .fixedSize()
-                    .padding(CapsuleTheme.Spacing.medium)
+                    .frame(minWidth: Self.minimumHitTarget, minHeight: Self.minimumHitTarget)
                     .capsuleGlass(.clear, in: Circle())
                     .capsuleGlassID(BarGroup.share, in: barNamespace)
 
@@ -243,8 +242,7 @@ public struct AssetViewerView: View {
                 }
                 .accessibilityLabel("app.viewer.delete")
                 .accessibilityIdentifier("viewer.delete")
-                .fixedSize()
-                .padding(CapsuleTheme.Spacing.medium)
+                .frame(minWidth: Self.minimumHitTarget, minHeight: Self.minimumHitTarget)
                 .capsuleGlass(.clear, in: Circle())
                 .capsuleGlassID(BarGroup.delete, in: barNamespace)
             }
@@ -252,6 +250,15 @@ public struct AssetViewerView: View {
         .padding(.horizontal, CapsuleTheme.Spacing.large)
         .padding(.bottom, CapsuleTheme.Spacing.small)
     }
+
+    /// The smallest a control may be and still be reliably hittable.
+    ///
+    /// Apple's minimum, and the accessibility audit checks it. The circular
+    /// buttons need it stated: a `.title3` glyph plus symmetric padding lands
+    /// just under 44 pt, which passes review by eye and fails the audit — and
+    /// fails a thumb, in a viewer where fingers move fast and the control beside
+    /// the small one deletes the photo.
+    private static let minimumHitTarget: CGFloat = 44
 
     /// The bar's three glass groups, named so they can morph rather than
     /// cross-fade when the bar changes shape.
@@ -294,11 +301,19 @@ public struct AssetViewerView: View {
         }
     }
 
+    /// A bar glyph, sized so it is actually hittable.
+    ///
+    /// The `minHeight` is the load-bearing part. An image plus `maxWidth:
+    /// .infinity` is as tall as the glyph — about 19 pt — which looks correct
+    /// in a bar whose *padding* makes it appear larger, and which the
+    /// accessibility audit fails: the tappable region is the label, not the
+    /// padding around it. In a viewer where the neighbouring control deletes the
+    /// photo, a 19 pt target is not a cosmetic problem.
     private func barLabel(_ symbol: String, tint: Color = CapsuleTheme.Colors.onMedia) -> some View {
         Image(systemName: symbol)
             .font(CapsuleTheme.Typography.controlGlyph)
             .foregroundStyle(tint)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: Self.minimumHitTarget)
     }
 
     private var favoriteSymbol: String {
