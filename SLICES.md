@@ -263,7 +263,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
 | S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | done | importer stacks → `S-B15`; unsigned migration → `S-D24`; no hidden writer → `S-D25` |
-| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | done | `query_expired_trash` narrowing owed |
+| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | done | Swift half landed with `S-I4`; two small items owed |
 | S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | done | typed error at the `open` boundary still owed |
 | S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
@@ -294,7 +294,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I1 | Hardcoded-string migration to catalog keys | i18n | — | M | ACTIVE | done\* | Swift plural/InfoPlist gaps → `S-I4`; review → gates |
 | S-I2 | Official language-set rollout (12 locales + RTL) | i18n | — | L | ACTIVE | done\* | native RTL → post-v1; review → gates |
 | S-I3 | `xtask translate-readme` + CI drift check | i18n | S-I2 | M | ACTIVE | done | |
-| S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | ready | |
+| S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | ready | 130 strings across 13 locales |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
@@ -2069,9 +2069,19 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   crosses uniffi into a Swift `AssetCatalog` protocol method, its `MockCatalog` implementation, and
   a `MockCatalogTests` case asserting on `CatalogAsset` properties — five files in a lane whose
   tests do not run locally. Worth doing, but as scoped work in the iOS lane rather than a drive-by.
-- **Owed to the capsule-swift lane:** `RecentlyDeletedView.swift` has no authentication at all;
-  `HiddenView.swift` is the only Swift file touching `LocalAuthentication`. The trash list will not
-  populate until it supplies an `LAContext`-backed gate and calls `unlockView`.
+- **Swift half landed 2026-08-29 with `S-I4`.** `RecentlyDeletedView` now takes a grant through an
+  `LAContext`-backed `LocalAuthGate`, with a fresh `LAContext` per challenge — a reused one caches
+  its own success and would silently defeat the grace window. The two gated views deliberately
+  differ: Hidden authenticates in the view and re-prompts on every appearance, while trash takes its
+  grant in **Rust**, so re-entry inside the five-minute window is silent. That is the window working,
+  not a leak.
+- **One judgement call, recorded in the code:** when `canEvaluatePolicy` fails — no biometric *and*
+  no passcode — the gate allows rather than refuses. Refusing would make Recently Deleted permanently
+  unreachable on such a device while protecting nothing, and it matches what `HiddenView` already
+  does.
+- **Still owed, both small:** `lockViews()` is exported but unwired to scene-phase background,
+  because `AppEnvironment` holds a `TrashProvider` rather than a catalog — a composition-root change.
+  And `query_expired_trash` still returns full `AssetRecord`s (the narrowing above).
 
 ### S-D23 — Client SQLite schema has no upgrade path
 
