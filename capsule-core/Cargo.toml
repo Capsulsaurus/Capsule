@@ -65,6 +65,16 @@ media = [
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
 # TPM-capable host with `--features tpm`.
 tpm = ["dep:tss-esapi"]
+# `inference` gates the real per-platform model runners behind the `ml::ModelRunner` seam
+# (`ml/runner.rs`, `ml/orchestrator.rs`). It is **empty today and enables nothing** — that is
+# deliberate rather than an oversight. Four doc comments already describe the runners as riding a
+# "default-off, weight-fetching `inference` feature", and until this line existed that sentence
+# was simply untrue: `--features inference` was a hard cargo error, so the seam it names could not
+# be gated on even to test the claim. Declaring it makes the documentation honest and gives the
+# post-v1 CLIP runner something to attach to without a manifest change in the same commit as the
+# implementation. Nothing in the tree is `#[cfg(feature = "inference")]` yet; the first real runner
+# adds both the cfg and the `dep:` entries here. No model weights ship in git regardless.
+inference = []
 
 [dependencies]
 ciborium = "0.2"
