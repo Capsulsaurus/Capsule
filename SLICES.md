@@ -297,7 +297,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
-| S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | ready | latent; convention is the only guard |
+| S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done\* | refuses now; evaluating plurals still owed |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
@@ -2598,6 +2598,18 @@ lands on Kynos rather than on Salvo.
   ahead of time.
 - **Done when:** a Rust-consumed key containing a plural fails a test rather than reaching a user.
   **Tier:** Unit.
+- **First half landed 2026-08-29.** The runtime refuses via `debug_assert!` — loud where a developer
+  sees it, deliberately not a hard panic, because a release build must not gain a new crash on a
+  catalog it previously rendered badly. So a plural in a Rust-consumed key is now a test failure
+  rather than user-visible ICU, which was the property that mattered.
+- **A test was pinning the defect as intended behaviour.** `complex_placeholder_is_left_verbatim`
+  asserted the pass-through and called it a known limitation of the MVP runtime — the same shape as
+  the Android guard whose comment claimed it skipped what it could not translate. Retargeted rather
+  than deleted, with a companion test pinning that release builds still pass through and that the
+  pass-through reproduces the input exactly.
+- **Owed:** actually evaluating plurals, which needs CLDR rules in the runtime. That is the cost the
+  per-platform renderers avoid by compiling ahead of time, and it is why this runtime was the one
+  left behind.
 
 ### S-I8 — clap `--help` text is unreachable from the catalogs
 
