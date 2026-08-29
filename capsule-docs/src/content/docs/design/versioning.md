@@ -15,7 +15,8 @@ Versioning happens on multiple layers, each owned by the doc that defines it:
 - **Metadata CBOR schema** — `sidecar_schema` field 0 of every sidecar (see [Metadata — Schema Versioning Rules](/design/metadata/#schema-versioning-rules)).
 - **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/primitives/#versioning-identifiers)).
 - **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) for the universal handshake.
-- **Client cache** — internal and rebuildable; cache schema changes drop and rebuild rather than migrate.
+- **Client derived cache** — thumbnails, previews, transcodes: purely derived, so a format or layout change drops and regenerates rather than migrates.
+- **Client catalog** — `index/library.sqlite`, versioned by the database's own `PRAGMA user_version` and migrated forward stepwise, never dropped (see [Client Catalog Migration](#client-catalog-migration)).
 - **Server data structures** — PostgreSQL schema migrations forward-only. Volatile session state in Valkey is not a versioned API surface (see [Filesystem — Server: Required Services](/design/filesystem/server/#required-services)).
 
 ## Negotiation Headers
@@ -27,6 +28,14 @@ The negotiation-header set — `X-Capsule-Protocol`, `X-Capsule-Crypto-Suite`, `
 Initial startups of a client and server always strictly check for version compatibility and **crash early** rather than soft-degrade. The single handshake in [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) is the only point at which compatibility is determined; once an operation is past the handshake, both sides know they agree on `protocol_version`, `crypto_suite_id`, and `sidecar_schema`.
 
 Capsule does **not** support backwards migrations or version downgrades. Server-side schema migrations are forward-only; if a migration fails, the server refuses to start and the operator restores from backup. There is no "rollback then continue" — that path is what corrupts data.
+
+## Client Catalog Migration
+
+"Backward-compatible reads forever" is not a server-only promise. The client catalog — `index/library.sqlite` in the [client library layout](/design/filesystem/client/#desktop-library-layout) — **is** the user's library as they experience it, so it carries the same obligation as the server schema and is given the same mechanism: a **forward-only stepwise migrator keyed on `PRAGMA user_version`**, the client-side analogue of the server's forward-only migrations above. Each schema version has exactly one step to the next; opening a catalog stamped below the current version walks it up, in order, to the current one. There is no downgrade step, for the same reason the server has none — "rollback then continue" is what corrupts data, on a laptop as much as on a server.
+
+The objection this displaces is that the catalog is *derived*, so a schema change could simply drop it and rebuild from the sidecars. That reasoning is what the drop-and-rebuild rule rested on, and it does not hold. Until slice `S-D21` lands, a rebuild reconstructs rows from the **unsigned** sidecar shape rather than the signed one the write path emits, so the [hidden](/design/organization/#hidden-assets), [cull](/design/organization/#culling), and [stack-membership](/design/organization/#asset-stacking) registers come back at their defaults — a rebuild silently un-hides every hidden asset. Even once that is repaired, rebuild is the *repair* path ([Maintenance](/design/filesystem/maintenance/#repair)), reached when the index is already known-inconsistent; spending it on every shipped column would re-derive the whole library on each release and re-lose whatever the sidecars do not yet carry. The migrator is the durability mechanism; rebuild stays the recovery path it was.
+
+Implementation is slice `S-D23`.
 
 ## Album Protocol Version Pinning
 
@@ -88,5 +97,6 @@ The interaction with album pinning:
 - **Upgrade ceremony idempotency (smoke).** Run the 8-step ceremony against a multi-member testcontainer setup. Inject a crash after step 4 (the tombstone commit); resume; assert the same `intent_id` produces no second fork. Inject a divergent member state before step 4; assert the abort path triggers cleanly.
 - **Stranded write queue (smoke).** During quiescence, a member writes; the write is queued locally; the upgrade completes; the queued write is re-encoded against v_new and replayed. Assert no write is lost.
 - **Deprecation cutoff (unit).** Mock the cutoff date past; assert a request from a now-deprecated client returns `426` and the well-known announcement is served.
+- **Client catalog migration (unit).** Open a fixture library created at each historical `user_version`; assert it migrates stepwise to the current version with every column present, and that both default and gated projections answer correctly afterwards.
 
 The cross-module case — full upgrade ceremony exercised through a real client UI + server + MLS group — is one bounded E2E test in [Module Map](/design/module-map/#e2e-test-surface).
