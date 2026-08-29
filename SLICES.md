@@ -296,6 +296,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I3 | `xtask translate-readme` + CI drift check | i18n | S-I2 | M | ACTIVE | done | |
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | ready | |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
+| S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | ready | 130 strings across 13 locales |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
@@ -2510,6 +2511,31 @@ lands on Kynos rather than on Salvo.
   precondition rather than a parallel cleanup.
 - **Done when:** `i18n-guard` covers `capsule-cli` and passes, and no import-arm output is a
   literal. **Tier:** gate.
+
+### S-I6 — Android ships raw ICU to users, and the guard that should stop it never fires
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md).
+- **Gap** (found 2026-08-29 while landing `S-I4`): the Android renderer guards against ICU
+  plural/select with `Regex::new(r"\{[^{}]*,[^{}]*\}")`, intending to emit a TODO comment instead
+  of a `<string>`. **That regex cannot match a plural.** `[^{}]*` cannot span the nested braces an
+  ICU plural always contains — `{count, plural, one {# item} other {# items}}` — so the guard has
+  never fired once.
+- **Measured, not inferred:** `values/strings.xml` holds **10** raw ICU messages and **zero** TODO
+  comments; across all 13 locale directories it is **130 strings**. An Android screen rendering
+  `R.string.common_item_count` today shows the user the literal text
+  `{count, plural, one {# item} other {# items}}`.
+- **What makes it worse than a missing feature:** the comment says "skip rather than mis-translate",
+  so the code reads as a deliberate, safe deferral. It is the opposite — the unsafe branch is the
+  one that always runs. Nobody reviewing this file would look twice.
+- **The right fix is not the guard.** Android has a native plural mechanism, `<plurals>` with
+  `<item quantity="one|other|…">`, and the tree contains **no `<plurals>` element at all**. `S-I4`
+  just taught the generator to compile ICU into Apple's String Catalog form; this is the symmetric
+  task for Android, and the guard becomes unnecessary rather than repaired.
+- **Constraint to plan around:** the generator is `xtask` and is fully testable here, but the
+  call-site change from `R.string.*` to `R.plurals.*` is Kotlin, and the Gradle build does not run
+  on this machine — so that half is **owed-CI** and must be flagged rather than claimed.
+- **Done when:** no `strings.xml` contains ICU syntax, plural keys render through `<plurals>`, and a
+  generator test asserts both. **Tier:** Unit (generator) + owed-CI (call sites).
 
 ### S-N1 — OIDC relying party (server)
 
