@@ -35,6 +35,12 @@ Capsule does **not** support backwards migrations or version downgrades. Server-
 
 The objection this displaces is that the catalog is *derived*, so a schema change could simply drop it and rebuild from the sidecars. That reasoning is what the drop-and-rebuild rule rested on, and it does not hold. Until slice `S-D21` lands, a rebuild reconstructs rows from the **unsigned** sidecar shape rather than the signed one the write path emits, so the [hidden](/design/organization/#hidden-assets), [cull](/design/organization/#culling), and [stack-membership](/design/organization/#asset-stacking) registers come back at their defaults — a rebuild silently un-hides every hidden asset. Even once that is repaired, rebuild is the *repair* path ([Maintenance](/design/filesystem/maintenance/#repair)), reached when the index is already known-inconsistent; spending it on every shipped column would re-derive the whole library on each release and re-lose whatever the sidecars do not yet carry. The migrator is the durability mechanism; rebuild stays the recovery path it was.
 
+### Catalogs newer than the binary
+
+Forward-only settles the direction of migration, not what happens when a catalog is stamped *above* the running build's `SCHEMA_VERSION` — the case a user reaches the first time they install an older app build, or open a library synced from a device that updated first. That catalog is **refused, not opened and not downgraded**: the open fails with an error naming both versions and telling the user to update Capsule, and the catalog is left byte-for-byte untouched — no stamp rewrite, no DDL, no drop.
+
+Opening it read-write is the unsafe option, not the accommodating one. The older binary cannot know which invariants the newer schema added, so its writes are the divergence: it fills a column it does not know is authoritative, or omits a register the newer build treats as present, and the damage is only visible after the user goes back to the build that could read the library correctly. Refusal costs the user an app update, which is always available. There is no recovery from silent divergent writes, which is why this is the same call as having no downgrade step at all.
+
 Implementation is slice `S-D23`.
 
 ## Album Protocol Version Pinning

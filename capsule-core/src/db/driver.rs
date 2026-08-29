@@ -4,8 +4,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
+use crate::db::migrate::{self, MigrationError};
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
-use crate::db::schema;
 use crate::domain::model_identity::TaskKind;
 
 pub struct DatabaseDriver {
@@ -40,17 +40,33 @@ impl DatabaseDriver {
         }
     }
 
+    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], creating it if the database is empty
+    /// and otherwise migrating it forward (see [`crate::db::migrate`]).
+    ///
+    /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here because
+    /// this signature is consumed by `capsule-core-ffi` and `library::open`; callers that want
+    /// the typed error (and the list of steps applied) call [`Self::migrate`] instead.
     pub fn init_schema(&self) -> Result<(), rusqlite::Error> {
-        self.conn.execute_batch(schema::DDL)?;
         // The per-task `vec0` tables are deliberately NOT created here: their column width and
         // metric come from the model that writes them, which this layer knows nothing about.
         // Each is created on first insert/query from the spec its writer declares, or eagerly via
         // [`DatabaseDriver::create_vector_tables`].
-        self.conn.execute_batch(&format!(
-            "PRAGMA user_version = {};",
-            schema::SCHEMA_VERSION
-        ))?;
+        self.migrate()?;
         Ok(())
+    }
+
+    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], reporting exactly what ran.
+    ///
+    /// Refuses (without writing anything) a catalog stamped newer than this build supports —
+    /// see [`MigrationError::CatalogTooNew`].
+    pub fn migrate(&self) -> Result<migrate::Outcome, MigrationError> {
+        migrate::migrate(&self.conn)
+    }
+
+    /// The underlying connection, for schema-level assertions inside `crate::db`'s tests.
+    #[cfg(test)]
+    pub(in crate::db) fn connection(&self) -> &Connection {
+        &self.conn
     }
 
     pub fn schema_version(&self) -> Result<u32, rusqlite::Error> {
