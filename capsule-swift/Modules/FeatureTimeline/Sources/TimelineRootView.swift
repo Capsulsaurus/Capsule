@@ -23,6 +23,9 @@ public struct TimelineRootView: View {
     /// The capture date of the topmost tile on screen, which is the only place
     /// an unsectioned grid can say where in the library the reader is.
     @State private var visibleDate: Date?
+    /// The namespace the grid's tiles and the viewer share, so opening a photo
+    /// grows it out of its tile instead of cross-fading over the grid.
+    @Namespace private var zoomNamespace
     @Environment(\.openURL) private var openURL
     private let assetProvider: any AssetProvider
     private let albumProvider: any AlbumProvider
@@ -90,12 +93,13 @@ public struct TimelineRootView: View {
                     mediaLoader: mediaLoader,
                     albumProvider: albumProvider
                 )
+                .capsuleZoomTransition(id: selection.entryAssetID, in: zoomNamespace)
             }
             .photoImportPicker(isPresented: $importer.isPickerPresented) { sources in
                 Task { await importer.importPicked(sources) }
             }
             .overlay {
-                if importer.isImporting { importProgressOverlay }
+                if importer.isImporting { ImportProgressOverlay() }
             }
             .alert(
                 "app.timeline.import_complete.title",
@@ -104,7 +108,7 @@ public struct TimelineRootView: View {
             ) { _ in
                 Button("app.common.ok") {}
             } message: { result in
-                Text(Self.importSummary(result))
+                Text(ImportSummary.text(for: result))
             }
             .overlay(alignment: .bottom) {
                 if isSelecting { selectionActionBar }
@@ -140,7 +144,7 @@ public struct TimelineRootView: View {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .needsAuthorization:
-            permissionPrompt
+            LibraryPermissionPrompt(onOpenSettings: { openURL($0) })
         case let .failed(message):
             ContentUnavailableView(
                 "app.timeline.load_failed.title",
@@ -172,7 +176,8 @@ public struct TimelineRootView: View {
                     onZoomLevelChange: { model.zoom(in: $0) },
                     onToggleSelection: { toggleSelection($0) },
                     onLeadingVisibleAsset: { visibleDate = $0.captureDate },
-                    onColumnsChange: { model.columnCount = $0 }
+                    onColumnsChange: { model.columnCount = $0 },
+                    zoomNamespace: zoomNamespace
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
@@ -254,27 +259,6 @@ public struct TimelineRootView: View {
         )
     }
 
-    private var permissionPrompt: some View {
-        ContentUnavailableView {
-            Label("app.timeline.permission.title", systemImage: "lock.fill")
-        } description: {
-            Text("app.timeline.permission.description")
-        } actions: {
-            if let settingsURL = PhotoLibrarySettings.url {
-                Button("app.timeline.permission.open_settings") { openURL(settingsURL) }
-            }
-        }
-    }
-
-    private var importProgressOverlay: some View {
-        ZStack {
-            Color.black.opacity(0.3).ignoresSafeArea()
-            ProgressView("app.timeline.importing")
-                .padding(CapsuleTheme.Spacing.xLarge)
-                .capsuleGlass(in: RoundedRectangle(cornerRadius: CapsuleTheme.Radius.medium))
-        }
-    }
-
     private var importResultBinding: Binding<Bool> {
         Binding(
             get: { importer.lastResult != nil },
@@ -288,21 +272,11 @@ public struct TimelineRootView: View {
     private func openViewer(_ asset: Asset) {
         let assets = model.sections.flatMap(\.assets)
         guard let index = assets.firstIndex(of: asset) else { return }
-        viewerSelection = ViewerSelection(assets: assets, startIndex: index)
-    }
-
-    private static func importSummary(_ result: ImportResult) -> String {
-        var lines: [String] = []
-        if result.importedCount > 0 {
-            lines.append("\(result.importedCount) imported into Capsule.")
-        }
-        if result.duplicateCount > 0 {
-            lines.append("\(result.duplicateCount) already in your library.")
-        }
-        if result.failureCount > 0 {
-            lines.append("\(result.failureCount) couldn't be imported.")
-        }
-        return lines.isEmpty ? "Nothing to import." : lines.joined(separator: "\n")
+        viewerSelection = ViewerSelection(
+            assets: assets,
+            startIndex: index,
+            entryAssetID: asset.id
+        )
     }
 }
 
@@ -378,4 +352,14 @@ private struct ViewerSelection: Identifiable {
     let id = UUID()
     let assets: [Asset]
     let startIndex: Int
+
+    /// The photo the viewer opens on, which is the tile the zoom transition
+    /// grows out of.
+    ///
+    /// Recorded at construction rather than read back out of `assets` — the two
+    /// cannot then disagree — and non-optional because a selection is only ever
+    /// built from a tile that was tapped. Paging away from it afterwards is
+    /// fine: the transition matches on the way *in*, and a dismissal from a
+    /// photo whose tile is no longer on screen falls back to a fade.
+    let entryAssetID: AssetID
 }

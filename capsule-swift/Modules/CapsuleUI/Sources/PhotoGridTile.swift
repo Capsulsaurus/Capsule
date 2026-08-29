@@ -29,6 +29,7 @@ struct PhotoGridTile: View {
             .overlay(alignment: .bottomTrailing) { trailingBadge }
             .clipped()
             .contentShape(Rectangle())
+            .modifier(ZoomSource(id: asset.id, namespace: context.zoomNamespace))
             // The tile is the accessibility element — the badge overlay is
             // hidden, so a VoiceOver sweep of a grid reads one element per
             // photo rather than five. The identifier is what lets a UI sweep
@@ -119,4 +120,24 @@ struct PhotoGridTile: View {
 private struct DecodeRequest: Equatable {
     let id: AssetID
     let size: CGSize
+}
+
+/// Publishes a tile as the thing a zoom transition grows out of, when the grid
+/// has a namespace to publish into.
+///
+/// A `ViewModifier` rather than an inline `if`, because `matchedTransitionSource`
+/// changes the view's type and a branch inside the body would need an `AnyView`
+/// — in the one view in the app where an extra allocation per cell is least
+/// affordable.
+private struct ZoomSource: ViewModifier {
+    let id: AssetID
+    let namespace: Namespace.ID?
+
+    func body(content: Content) -> some View {
+        if let namespace {
+            content.capsuleZoomSource(id: id, in: namespace)
+        } else {
+            content
+        }
+    }
 }

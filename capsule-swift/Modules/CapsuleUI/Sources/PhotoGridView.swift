@@ -33,6 +33,7 @@ public struct PhotoGridView: View {
     private let onToggleSelection: ((AssetID) -> Void)?
     private let onLeadingVisibleAsset: ((Asset) -> Void)?
     private let onColumnsChange: ((Int) -> Void)?
+    private let zoomNamespace: Namespace.ID?
 
     @Environment(\.displayScale) private var displayScale
     /// The state the hosted cells observe. Held here, not passed through the
@@ -60,7 +61,8 @@ public struct PhotoGridView: View {
         onZoomLevelChange: ((Bool) -> Void)? = nil,
         onToggleSelection: ((AssetID) -> Void)? = nil,
         onLeadingVisibleAsset: ((Asset) -> Void)? = nil,
-        onColumnsChange: ((Int) -> Void)? = nil
+        onColumnsChange: ((Int) -> Void)? = nil,
+        zoomNamespace: Namespace.ID? = nil
     ) {
         self.sections = sections
         self.style = style
@@ -76,6 +78,7 @@ public struct PhotoGridView: View {
         self.onToggleSelection = onToggleSelection
         self.onLeadingVisibleAsset = onLeadingVisibleAsset
         self.onColumnsChange = onColumnsChange
+        self.zoomNamespace = zoomNamespace
     }
 
     /// Convenience initializer for the common uniform-tile grid.
@@ -109,6 +112,7 @@ public struct PhotoGridView: View {
                 .onChange(of: decodeSize, initial: true) { _, size in context.decodeSize = size }
         }
         .onChange(of: isSelecting, initial: true) { _, value in context.isSelecting = value }
+        .onAppear { context.zoomNamespace = zoomNamespace }
         .onChange(of: selectedIDs, initial: true) { _, value in context.selectedIDs = value }
     }
 

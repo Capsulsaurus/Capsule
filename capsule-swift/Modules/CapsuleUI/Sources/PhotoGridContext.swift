@@ -1,6 +1,7 @@
 import CapsuleFoundation
 import CoreGraphics
 import Observation
+import SwiftUI
 
 /// The mutable state every grid cell observes: how large to decode, and what is
 /// selected.
@@ -20,6 +21,12 @@ final class PhotoGridContext {
     var isSelecting = false
     /// The selected assets, in select mode.
     var selectedIDs: Set<AssetID> = []
+    /// The namespace a tile publishes itself into as a zoom-transition source.
+    ///
+    /// Optional because most grids do not present anything zoomable, and a tile
+    /// that names a namespace nothing presents into would pay for a matched
+    /// source that never matches.
+    var zoomNamespace: Namespace.ID?
 
     /// Whether `id` should render its selected treatment.
     func isSelected(_ id: AssetID) -> Bool {
