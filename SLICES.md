@@ -260,6 +260,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | ready | |
 | S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | ready | found by `S-D21` |
+| S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -1874,6 +1875,27 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   signed sidecar, so hiding is durable and survives the rebuild `S-D21` just fixed.
 - **Done when:** an asset hidden through the public API disappears from default projections,
   appears in the gated Hidden view, and is still hidden after `rebuild_index`. **Tier:** Unit.
+
+### S-D26 — the CLI drops the rotated token pair
+
+- **Contract:** [Authentication](capsule-docs/src/content/docs/design/authentication.md);
+  [Clients](capsule-docs/src/content/docs/design/clients.md).
+- **Gap** (found during the 2026-08-21 audit; **indexed 2026-08-29** — it was described in the audit
+  and never given an ID, which is how it survived the tracker unification): the server rotates on
+  refresh and revokes the old `sid`, but the CLI persists a session only in `auth_login` and
+  `auth_register`. `sync` and `push` both do `store.load()` → `AuthClient::resume` → work, and
+  **never save the session back**. The SDK's auto-refresh rotates the pair in memory, the process
+  exits, and the rotated pair is lost while the server has already revoked the one still on disk.
+- **What the user sees:** roughly fifteen minutes after registering, every command demands an
+  interactive re-login — while the refresh token it is holding still has seven days left. It looks
+  like a token-lifetime bug and is a persistence bug.
+- **Why it is `MIXED` and not `ACTIVE`:** the fix belongs in the REST client that replaces this
+  one, not in the Salvo-era `AuthClient`. Fixing it here would be rewritten within the same push.
+- **Deliverable:** persist the session after any operation that may have refreshed — including the
+  error paths, since a refresh can succeed and the operation then fail. A `Drop` guard cannot do it
+  (`export()` is async), so the shape is run-body-then-persist-then-`?`.
+- **Done when:** a command that triggers a refresh leaves the rotated pair on disk, and a
+  subsequent command succeeds without re-login. **Tier:** Unit (mock auth server) + Integration.
 
 ## Lane E — federation / sharing
 
