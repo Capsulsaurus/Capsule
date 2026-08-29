@@ -40,6 +40,7 @@ jobs:
             rust:
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'deny.toml'
               - 'rust-toolchain.toml'
               - 'Cross.toml'
               - 'mise.toml'
@@ -131,6 +132,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      # check-rust runs the dependency-licence gate via cargo-deny. mise is set up with
+      # install: false, so the [tools] pin does not put it on PATH here.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:

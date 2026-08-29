@@ -25,6 +25,11 @@ hk = "1.48.0"
 # aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
 "cargo:wasm-bindgen-cli" = "0.2.100"
+# cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
+# implements is capsule-docs/.../design/licensing.md). Only `check licenses` is wired
+# up: the advisories check needs a network fetch of the RustSec database, which would
+# make the gate non-deterministic and break the offline build.
+"cargo:cargo-deny" = "0.19.8"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -84,6 +89,7 @@ run = [
   "mise run i18n-check",
   "mise run i18n-guard",
   "mise run openapi-check",
+  "mise run license-check",
   "mise run translate-readme-check",
   "mise run build-rust",
   "mise run build-check-wasm",
@@ -190,6 +196,14 @@ run = "cargo run -q -p xtask -- i18n --check"
 [tasks.i18n-guard]
 description = "Fail on hardcoded user-facing literals (web/swift/compose)"
 run = "cargo run -q -p xtask -- i18n-guard"
+
+# Dependency-licence gate. Fails on any crate whose licence is not allowlisted in
+# deny.toml -- which denies GPL-*/LGPL-*/AGPL-* by omission, so a copyleft crate can
+# never reach a statically-linked release binary and quietly forfeit app-store
+# distribution. `--all-features` so wasm/UEFI-only crates are covered too.
+[tasks.license-check]
+description = "Verify every dependency licence is allowlisted in deny.toml"
+run = "cargo deny --all-features check licenses"
 
 # Dump the server's OpenAPI 3.1 schema (salvo-oapi) to the committed capsule-sdk/openapi.json
 # that spargen generates the typed REST client from (slice S-D8). The dump is state-free
