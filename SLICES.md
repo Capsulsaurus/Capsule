@@ -188,7 +188,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-A8 | BD-09 bounded input fold (flip `FoldGated`) | core-crypto | — | S | ACTIVE | done | |
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
-| S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | ready | |
+| S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | done | |
 | S-B1 | Thumbnail/LQIP generation | media/import | — | L | RETIRED | ready | |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
@@ -203,6 +203,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | ready | ThumbHash retires with it |
+| S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | ready | found by `S-D21` |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
@@ -253,9 +254,11 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
-| S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | ready | |
-| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | ready | |
+| S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | done | importer stacks → `S-B15`; unsigned migration → `S-D24`; no hidden writer → `S-D25` |
+| S-D22 | FFI `Catalog` bypasses the SR1 view gates | sdk/clients | S-D19 | S | ACTIVE | done | `query_expired_trash` narrowing owed |
 | S-D23 | Client SQLite schema has no upgrade path | sdk/clients | — | M | ACTIVE | ready | |
+| S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
+| S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | ready | found by `S-D21` |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -828,6 +831,27 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   `capsule-web/package.json`; an encode is asserted to be exactly 32 bytes; a signed sidecar
   round-trips with a chromahash payload; and the same input produces the same bytes from the
   CLI, the FFI and `capsule-wasm`. **Tier:** Unit.
+
+### S-B15 — Importer-formed stacks exist only in the index
+
+- **Contract:** [Organization — Asset Stacking](capsule-docs/src/content/docs/design/organization.md#asset-stacking).
+- **Gap** (found 2026-08-29 while landing `S-D21`): there are two ways an asset joins a stack and
+  only one of them is durable. `Workspace::set_stack_membership` writes the LWW register into the
+  signed sidecar; the **importer** does not — `import_asset_with` records a `StackPlacement` as
+  index columns and builds its sidecar with `stack_membership: Lww::new()`. `Workspace::open` reads
+  the placement back out of the index, which hides the asymmetry in normal use.
+- **Why it matters:** the placement exists nowhere on disk, so losing the index loses it and no
+  rebuild can recover it. That breaks the recovery-first principle for exactly the assets a user
+  never touched by hand.
+- **The hazard it already caused:** `S-D21`'s first pass projected the register onto every rebuilt
+  row, which would have overwritten importer placement with NULL on a *surviving* index and
+  resurrected stacked secondaries into the timeline. Rebuild now preserves an existing row's
+  placement when the register is absent — a correct workaround for a gap that should not exist.
+- **Deliverable:** write the stack register at import, the same way the manual path does.
+- **Cost, stated up front:** this changes signed sidecar bytes for newly imported assets, so it
+  carries the absent-key discipline every signed-struct change carries.
+- **Done when:** an importer-formed stack survives deleting `index/library.sqlite` and rebuilding;
+  the `S-D21` preservation workaround becomes redundant rather than load-bearing. **Tier:** Unit.
 
 ## Lane C — server (key-free surfaces)
 
@@ -1785,6 +1809,41 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   historical version opens, migrates, and answers every projection.
 - **Done when:** a v1-created fixture library opens at the current version with every column
   present and the gated/default projections correct. **Tier:** Unit.
+
+### S-D24 — Migrate the unsigned sidecars, then delete the reader
+
+- **Contract:** [Metadata — Sidecar Schema v1](capsule-docs/src/content/docs/design/metadata.md#sidecar-schema-v1).
+- **Gap** (found 2026-08-29 while landing `S-D21`): two sidecar shapes coexist and they are
+  **disjoint on the wire** — a `SidecarV1` carries integer field 0 and no `version` key, an
+  `AssetSidecar` carries `version` and no field 0. Neither can be mistaken for the other, which is
+  what makes probing safe, and also what made rebuild silently produce nothing for two releases.
+- **Why they must not be merged:** adding CRDT registers to the flat unsigned struct would
+  resurrect the write path `S-G4` retired, and unifying the types would drag unsigned EXIF mirrors
+  and stack hints into signed bytes. They converge by **retirement**, not by merging.
+- **Deliverable:** a one-time migration that rewrites each unsigned sidecar as a `SidecarV1`, after
+  which the compatibility reader and the `AssetSidecar` type are deleted outright.
+- **Blocked on a decision, not on code.** An unsigned asset has no provenance chain and no AMK, so
+  someone must decide what a synthesized `create` manifest is permitted to attest — and whether
+  such an asset is admitted to a signed library at all or quarantined. Until that is answered the
+  compatibility read is the honest state, which is why `S-D21` left it in place.
+- **Done when:** no `AssetSidecar` remains on disk or in the tree, and rebuild has one shape to
+  read. **Tier:** Unit + Integration.
+
+### S-D25 — `hidden` has a column, a gate and views but no writer
+
+- **Contract:** [Organization — Hidden Assets](capsule-docs/src/content/docs/design/organization.md#hidden-assets);
+  [Local Gallery — SR1](capsule-docs/src/content/docs/design/local-gallery.md).
+- **Gap** (found 2026-08-29 while landing `S-D21`): `S-D19` shipped the `is_hidden` column, the
+  `GateKeeper` that guards the Hidden view, and the projections that exclude hidden assets from
+  default queries — but **no way to hide anything**. There is no `Workspace::set_hidden`, so the
+  register the whole feature reads is written by nothing.
+- **How it stayed invisible:** every test that needs a hidden asset writes the register directly
+  onto the on-disk record. That is legitimate for testing rebuild, and it meant the missing writer
+  never failed anything.
+- **Deliverable:** the `Workspace` setter, mirroring `set_stack_membership` — an LWW write into the
+  signed sidecar, so hiding is durable and survives the rebuild `S-D21` just fixed.
+- **Done when:** an asset hidden through the public API disappears from default projections,
+  appears in the gated Hidden view, and is still hidden after `rebuild_index`. **Tier:** Unit.
 
 ## Lane E — federation / sharing
 
