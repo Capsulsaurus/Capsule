@@ -204,6 +204,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
+| S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
@@ -870,6 +871,31 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   carries the absent-key discipline every signed-struct change carries.
 - **Done when:** an importer-formed stack survives deleting `index/library.sqlite` and rebuilding;
   the `S-D21` preservation workaround becomes redundant rather than load-bearing. **Tier:** Unit.
+
+### S-B16 — every import was stamped by import time, not capture time
+
+- **Contract:** [Metadata](capsule-docs/src/content/docs/design/metadata.md);
+  [Client Filesystem — date bucketing](capsule-docs/src/content/docs/design/filesystem/client.md).
+- **Gap** (found 2026-08-29 by the `capsule import` process-boundary test): `extract_exif` parsed
+  `field.display_value().to_string()` with `%Y:%m:%d %H:%M:%S`. That pattern is right for the EXIF
+  *wire* format, which is colon-separated — but `display_value()` is not the wire format.
+  kamadak-exif's `Display` deliberately renders the date with **dashes**. The parse could never
+  match, so `date_time_original` was **always** `None` for well-formed EXIF, `capture_utc` went
+  unset, and `import_asset_with` fell back to `Timestamp::now()`.
+- **Blast radius:** the whole date-organised surface — the `media/{YYYY}/{YYYY-MM}` layout, timeline
+  ordering, and anything keyed on capture date. A user importing a decade of photos got them all
+  filed under the month they ran the import.
+- **Why it survived, and the lesson worth keeping:** `extract.rs`'s tests covered UUID helpers and
+  a nonexistent file, never feeding real EXIF through the extractor. `timezone.rs`'s tests built
+  `ExifExtract` values by hand using the same colon spelling the extractor expected. **Both sides
+  agreed on a format the crate never produces**, so the bug was consistent with every test that
+  touched it. Mutually-consistent fixtures on both sides of a boundary test nothing about reality.
+- **Landed:** parsed from the raw ASCII via `exif::DateTime::from_ascii`, the crate's own wire
+  parser, which additionally rejects the all-blank value the spec permits. The regression guard
+  goes through `extract_exif` over a hand-built JPEG container rather than a constructed struct.
+- **Audited while here:** the module's four other `display_value()` reads are safe — the GPS
+  hemisphere refs are substring checks and make/model pass through `strip_quotes`. Only the date
+  had a format contract to get wrong.
 
 ## Lane C — server (key-free surfaces)
 
