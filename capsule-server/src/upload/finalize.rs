@@ -139,7 +139,7 @@ pub async fn finalize(
                 asset_id = %record.asset_id,
                 blob_role = record.blob_role.as_str(),
                 placement = ?placement,
-                flips_visibility = super::visibility::finalization_makes_visible(record.blob_role),
+                completes_index_tier = super::visibility::completes_index_tier(record.blob_role),
                 original_held = super::visibility::derive_original_held(
                     record.blob_role == crate::store::BlobRole::Original
                 ),

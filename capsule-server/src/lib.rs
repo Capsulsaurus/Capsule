@@ -27,6 +27,7 @@
 pub mod app;
 pub mod auth;
 pub mod blob;
+pub mod index;
 pub mod limits;
 pub mod routes;
 pub mod store;
