@@ -261,6 +261,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
+| S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | ready | nextest LEAK under load only |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -1929,6 +1930,22 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   (`export()` is async), so the shape is run-body-then-persist-then-`?`.
 - **Done when:** a command that triggers a refresh leaves the rotated pair on disk, and a
   subsequent command succeeds without re-login. **Tier:** Unit (mock auth server) + Integration.
+
+### S-D27 — the SDK test mock never shuts its listener down
+
+- **Gap** (found 2026-08-29 during a full-suite run from clean): nextest reported
+  `LEAK` on `capsule-sdk ffi::tests::ffi_login_invalid_credentials_carries_catalog_code`. The test
+  passes; what leaks is `testmock`'s accept loop — the spawned task owning the `TcpListener` has no
+  shutdown signal, so under a loaded parallel run it is still alive when the test returns.
+- **Why it is worth an ID rather than a shrug:** it reproduces only under load. Run alone it is
+  clean three times out of three, so it will never be caught by anyone investigating it directly.
+  And the `ci` nextest profile sets `retries = 3` with exponential backoff, which is exactly the
+  configuration that turns an intermittent leak into a permanently invisible one — the retry
+  succeeds, the run is green, and the fd accumulation is never attributed.
+- **Deliverable:** give the mock a shutdown handle — a `oneshot` the accept loop selects on, or a
+  guard whose `Drop` closes the listener — so the task ends with the test that started it rather
+  than when the process exits.
+- **Done when:** a full `test-rust` run reports zero leaky tests. **Tier:** Unit.
 
 ## Lane E — federation / sharing
 
