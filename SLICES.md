@@ -232,9 +232,10 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
-| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | ready | |
+| S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
+| S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29` |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1351,6 +1352,14 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** all three adapters pass one shared conformance suite; a revoke-all reports the
   number of sessions actually removed; and no operation on either port takes an arbitrary
   serializable payload. **Tier:** Unit (in-memory + conformance) + Smoke (Postgres/Valkey).
+- **Landed to the in-memory tier — 2026-08-29 (`done\*`).** The contract, the 30-case conformance
+  suite and the in-memory adapter are in `capsule-server/src/store/`; **the Valkey and Postgres
+  adapters are not written**, and nothing stubs them. The over-count is unrepresentable rather than
+  fixed, proved by mutation: reintroducing the Salvo behaviour fails
+  `closing_one_session_removes_it_from_the_user_listing`. Two of this slice's properties are
+  type-level — no `T: Serialize` exists and no method takes a TTL — so they are documented as
+  having no runtime case rather than faked into one.
+  **Owed:** the two live adapters, and the counters that left this slice's scope → `S-C32`.
 
 ### S-C30 — Feed `manifest_cbor` carries the signed manifest
 
@@ -1415,6 +1424,27 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   stated relation between them.
 - **Done when:** a receipt's `envelope_hash` resolves to a stored provenance blob and the client
   recomputes it from the bytes it signed. **Tier:** Unit + Integration.
+
+### S-C32 — MFA-attempt and rate-limit counters have no port
+
+- **Contract:** AGENTS.md's Rust Architecture Decisions (no generic TTL/CAS abstraction);
+  [Threat Model — Validation Invariants](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-29 while landing `S-C29`): the Salvo `SessionStorage` grab-bag carried
+  four unrelated things. `S-C29` gave homes to three of them — session records, the per-user index,
+  and the four ceremony records — and deliberately left the fourth out. **MFA attempt counters and
+  rate-limit counters have no port and no owner.**
+- **Why they were excluded rather than folded in:** they are counters, not records, and their
+  contract is different in kind. A lost record is a lost ceremony the user retries; a lost
+  increment is a **security failure** — it is one more password guess or one more request than the
+  policy allows. Adding them to `AuthStateStore` would have rebuilt the grab-bag one field at a
+  time, which is the thing `S-C29` exists to delete.
+- **Deliverable:** a counter port whose operations are atomic increment-and-read against a
+  policy-owned window, with the same three-adapter treatment and the same shared conformance suite
+  `S-C29` established. The window is a property of what is being limited, never a caller argument —
+  the same rule that governs ceremony TTLs.
+- **Done when:** no counter reaches storage through `AuthStateStore`; a conformance case proves an
+  increment is never lost under concurrency; and the in-memory adapter is a test double rather than
+  a deployment mode. **Tier:** Unit + conformance.
 
 ## Lane D — SDK / clients
 
