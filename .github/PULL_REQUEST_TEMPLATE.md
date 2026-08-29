@@ -8,7 +8,7 @@
 
 ### Contributor Checklist
 
-- [ ] I have signed the [Contributor License Agreement](../CLA.md).
+- [ ] I agree to the [Contributor License Agreement](../CLA.md) for this and future contributions.
 - [ ] My code follows the project's style guidelines according to [CONTRIBUTING.md](../CONTRIBUTING.md).
 - [ ] Tests pass
 - [ ] No sensitive info / secrets
