@@ -36,19 +36,22 @@ public struct PlacesMapView: View {
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
 
     public init(
         places: any PlacesPort,
         assetProvider: any AssetProvider,
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil
     ) {
         _model = State(wrappedValue: PlacesMapViewModel(places: places, assets: assetProvider))
         self.assetProvider = assetProvider
         self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
     }
 
     public var body: some View {
@@ -69,7 +72,8 @@ public struct PlacesMapView: View {
                 assetProvider: assetProvider,
                 albumProvider: albumProvider,
                 thumbnails: thumbnails,
-                mediaLoader: mediaLoader
+                mediaLoader: mediaLoader,
+                captionStore: captionStore
             )
         }
     }
@@ -238,6 +242,7 @@ struct PlacesClusterGrid: View {
     let albumProvider: any AlbumProvider
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
+    let captionStore: (any CaptionStore)?
     @State private var viewerSelection: ClusterViewerSelection?
 
     var body: some View {
@@ -257,7 +262,8 @@ struct PlacesClusterGrid: View {
                 startIndex: selection.startIndex,
                 provider: assetProvider,
                 mediaLoader: mediaLoader,
-                albumProvider: albumProvider
+                albumProvider: albumProvider,
+                captionStore: captionStore
             )
         }
     }

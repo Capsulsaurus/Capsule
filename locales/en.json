@@ -6443,6 +6443,18 @@
     "message": "Info",
     "context": "Accessibility label for the info button in the photo viewer."
   },
+  "app.viewer.info.adjust": {
+    "message": "Adjust",
+    "context": "iOS asset info: button that opens an editor for the value beside it (capture date, location)."
+  },
+  "app.viewer.info.adjust_date.accessibility": {
+    "message": "Adjust date and time",
+    "context": "iOS asset info: VoiceOver label for the Adjust button beside the capture date."
+  },
+  "app.viewer.info.adjust_location.accessibility": {
+    "message": "Adjust location",
+    "context": "iOS asset info: VoiceOver label for the Adjust button on the location card."
+  },
   "app.viewer.info.aperture": {
     "message": "Aperture",
     "context": "iOS asset info row label: aperture (f-number)."
@@ -6450,6 +6462,14 @@
   "app.viewer.info.camera": {
     "message": "Camera",
     "context": "iOS asset info panel section header for camera/EXIF details."
+  },
+  "app.viewer.info.caption.accessibility": {
+    "message": "Caption",
+    "context": "iOS asset info: VoiceOver label for the editable caption field."
+  },
+  "app.viewer.info.caption_placeholder": {
+    "message": "Add a Caption",
+    "context": "iOS asset info: placeholder in the editable caption field at the top of the info panel."
   },
   "app.viewer.info.capture": {
     "message": "Capture",

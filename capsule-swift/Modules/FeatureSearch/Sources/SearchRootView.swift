@@ -17,18 +17,21 @@ public struct SearchRootView: View {
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
 
     public init(
         assetProvider: any AssetProvider,
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil
     ) {
         _model = State(wrappedValue: SearchViewModel(provider: assetProvider))
         self.assetProvider = assetProvider
         self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
     }
 
     public var body: some View {
@@ -44,7 +47,8 @@ public struct SearchRootView: View {
                     startIndex: selection.startIndex,
                     provider: assetProvider,
                     mediaLoader: mediaLoader,
-                    albumProvider: albumProvider
+                    albumProvider: albumProvider,
+                    captionStore: captionStore
                 )
             }
     }

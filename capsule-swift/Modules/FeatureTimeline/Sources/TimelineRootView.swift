@@ -31,6 +31,7 @@ public struct TimelineRootView: View {
     private let albumProvider: any AlbumProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
     private let hiddenStore: HiddenStore
 
     public init(
@@ -38,6 +39,7 @@ public struct TimelineRootView: View {
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil,
         importer: LibraryImporter,
         hiddenStore: HiddenStore
     ) {
@@ -47,6 +49,7 @@ public struct TimelineRootView: View {
         self.albumProvider = albumProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
         self.hiddenStore = hiddenStore
     }
 
@@ -90,7 +93,8 @@ public struct TimelineRootView: View {
                     startIndex: selection.startIndex,
                     provider: assetProvider,
                     mediaLoader: mediaLoader,
-                    albumProvider: albumProvider
+                    albumProvider: albumProvider,
+                    captionStore: captionStore
                 )
                 .capsuleZoomTransition(id: selection.entryAssetID, in: zoomNamespace)
             }

@@ -21,7 +21,7 @@ import Foundation
 /// ``OrganizePort`` performs `setFavorite` and `delete`. Taking both by
 /// constructor keeps that visible rather than hiding a second dependency inside
 /// a downcast.
-public struct PortBackedAssetProvider: AssetProvider {
+public struct PortBackedAssetProvider: AssetProvider, AssetLocationSource {
     /// Rows warmed before a freshly-loaded timeline is handed back. Twenty
     /// windows — enough that the healthy scenario's whole library is real on
     /// first draw, and enough of the huge one that a scroll has somewhere to

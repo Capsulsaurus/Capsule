@@ -99,6 +99,7 @@ extension RouteDestination {
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,
             mediaLoader: environment.mediaLoader,
+            captionStore: environment.captionStore,
             importer: environment.importer,
             hiddenStore: environment.hiddenStore
         )
@@ -141,7 +142,8 @@ extension RouteDestination {
             assetProvider: environment.assetProvider,
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,
-            mediaLoader: environment.mediaLoader
+            mediaLoader: environment.mediaLoader,
+            captionStore: environment.captionStore
         )
     }
 
@@ -150,7 +152,8 @@ extension RouteDestination {
             assetProvider: environment.assetProvider,
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,
-            mediaLoader: environment.mediaLoader
+            mediaLoader: environment.mediaLoader,
+            captionStore: environment.captionStore
         )
     }
 }

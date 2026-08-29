@@ -14,13 +14,15 @@ public struct AlbumDetailView: View {
     private let assetProvider: any AssetProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
 
     public init(
         album: AlbumSummary,
         albumProvider: any AlbumProvider,
         assetProvider: any AssetProvider,
         thumbnails: any ThumbnailProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil
     ) {
         _model = State(wrappedValue: AlbumDetailViewModel(album: album, albumProvider: albumProvider))
         self.album = album
@@ -28,6 +30,7 @@ public struct AlbumDetailView: View {
         self.assetProvider = assetProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
     }
 
     public var body: some View {
@@ -41,7 +44,8 @@ public struct AlbumDetailView: View {
                     startIndex: selection.startIndex,
                     provider: assetProvider,
                     mediaLoader: mediaLoader,
-                    albumProvider: albumProvider
+                    albumProvider: albumProvider,
+                    captionStore: captionStore
                 )
             }
     }

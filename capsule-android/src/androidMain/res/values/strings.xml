@@ -1611,8 +1611,13 @@
     <string name="app_viewer_delete">Delete</string>
     <string name="app_viewer_favorite">Favorite</string>
     <string name="app_viewer_info">Info</string>
+    <string name="app_viewer_info_adjust">Adjust</string>
+    <string name="app_viewer_info_adjust_date_accessibility">Adjust date and time</string>
+    <string name="app_viewer_info_adjust_location_accessibility">Adjust location</string>
     <string name="app_viewer_info_aperture">Aperture</string>
     <string name="app_viewer_info_camera">Camera</string>
+    <string name="app_viewer_info_caption_accessibility">Caption</string>
+    <string name="app_viewer_info_caption_placeholder">Add a Caption</string>
     <string name="app_viewer_info_capture">Capture</string>
     <string name="app_viewer_info_date">Date</string>
     <string name="app_viewer_info_dimensions">Dimensions</string>

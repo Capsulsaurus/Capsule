@@ -15,6 +15,7 @@ import SwiftUI
 public struct AssetViewerView: View {
     @State private var model: AssetViewerModel
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
     @Environment(\.dismiss) private var dismiss
     @State private var isAddToAlbumPresented = false
 
@@ -23,7 +24,8 @@ public struct AssetViewerView: View {
         startIndex: Int,
         provider: any AssetProvider,
         mediaLoader: ViewerMediaLoader,
-        albumProvider: any AlbumProvider
+        albumProvider: any AlbumProvider,
+        captionStore: (any CaptionStore)? = nil
     ) {
         _model = State(wrappedValue: AssetViewerModel(
             assets: assets,
@@ -32,6 +34,7 @@ public struct AssetViewerView: View {
             albumProvider: albumProvider
         ))
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
     }
 
     public var body: some View {
@@ -45,7 +48,11 @@ public struct AssetViewerView: View {
         .onDisappear { model.stopSlideshow() }
         .sheet(isPresented: $model.isInfoPanelPresented) {
             if let asset = model.currentAsset {
-                AssetInfoPanel(asset: asset, mediaLoader: mediaLoader)
+                AssetInfoPanel(
+                    asset: asset,
+                    mediaLoader: mediaLoader,
+                    captionStore: captionStore
+                )
             }
         }
         .confirmationDialog(

@@ -331,12 +331,32 @@
     "message": "View",
     "context": "Machine-translated seed pending human review."
   },
+  "app.viewer.info.adjust": {
+    "message": "Adjust",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.adjust_date.accessibility": {
+    "message": "Adjust date and time",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.adjust_location.accessibility": {
+    "message": "Adjust location",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.viewer.info.aperture": {
     "message": "Aperture",
     "context": "Machine-translated seed pending human review."
   },
   "app.viewer.info.camera": {
     "message": "Camera",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.caption.accessibility": {
+    "message": "Caption",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.viewer.info.caption_placeholder": {
+    "message": "Add a Caption",
     "context": "Machine-translated seed pending human review."
   },
   "app.viewer.info.capture": {

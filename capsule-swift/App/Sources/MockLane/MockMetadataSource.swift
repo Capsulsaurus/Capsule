@@ -22,6 +22,18 @@ import ImagePipeline
 /// `ImagePipeline`, which already depends on `AssetKit`, so the conformance
 /// cannot live in `AssetKit` without making the two mutually dependent.
 struct MockMetadataSource: AssetMetadataSource {
+    /// Where the photo was taken, read from the library rather than invented.
+    ///
+    /// The coordinate is the one field here that is *not* derived: the mock
+    /// library already stores one per asset and the Places screen renders it, so
+    /// deriving a second from the seed would put the same photo in two places
+    /// and neither would be wrong-looking on its own.
+    private let locations: any AssetLocationSource
+
+    init(locations: any AssetLocationSource) {
+        self.locations = locations
+    }
+
     /// The cameras the synthetic library was shot on.
     private static let cameras: [(make: String, model: String)] = [
         ("Apple", "iPhone 17 Pro Max"),
@@ -73,15 +85,21 @@ struct MockMetadataSource: AssetMetadataSource {
         ]
 
         let isVideo = asset.mediaType != .photo
-        metadata.originalFilename = Self.filename(seed: seed, isVideo: isVideo)
-        metadata.byteCount = Self.byteCount(seed: seed, asset: asset, isVideo: isVideo)
-        metadata.codec = isVideo
+        let codec = isVideo
             ? Self.videoCodecs[Int((seed >> 32) % UInt64(Self.videoCodecs.count))]
             : Self.photoCodecs[Int((seed >> 32) % UInt64(Self.photoCodecs.count))]
+        metadata.codec = codec
+        metadata.originalFilename = Self.filename(seed: seed, codec: codec)
+        metadata.byteCount = Self.byteCount(seed: seed, asset: asset, isVideo: isVideo)
         if isVideo {
             metadata.frameRate = Self.frameRates[Int((seed >> 40) % UInt64(Self.frameRates.count))]
             // Only some clips are HDR, so the panel has to render both cases.
             if seed.isMultiple(of: 3) { metadata.hdrFormat = .dolbyVision }
+        }
+
+        if let coordinate = await locations.location(for: asset.id) {
+            metadata.latitude = coordinate.latitude
+            metadata.longitude = coordinate.longitude
         }
         return metadata
     }
@@ -125,9 +143,20 @@ struct MockMetadataSource: AssetMetadataSource {
         return value
     }
 
-    private static func filename(seed: UInt64, isVideo: Bool) -> String {
+    /// A filename whose extension agrees with the codec beside it.
+    ///
+    /// Derived from the codec rather than from the media kind, because the panel
+    /// shows both on the same card: an `IMG_9811.HEIC` labelled ProRAW is the
+    /// sort of detail that makes a synthetic library look like a bug.
+    private static func filename(seed: UInt64, codec: String) -> String {
         let number = 1000 + Int(seed % 8999)
-        return isVideo ? "IMG_\(number).MOV" : "IMG_\(number).HEIC"
+        let ext = switch codec {
+        case "HEVC", "H.264": "MOV"
+        case "ProRAW": "DNG"
+        case "JPEG": "JPG"
+        default: "HEIC"
+        }
+        return "IMG_\(number).\(ext)"
     }
 
     /// A plausible size for the asset's pixel count and kind.

@@ -58,6 +58,8 @@ struct AppEnvironment {
     let hiddenStore: HiddenStore
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
+    /// Reads and writes asset captions for the viewer's info panel.
+    let captionStore: any CaptionStore
     let importer: LibraryImporter
 
     /// The local-authentication gate in front of Trash and Hidden (*SR1*).
@@ -144,7 +146,12 @@ struct AppEnvironment {
         self.mock = mock
         CapsuleLog.app.info("mock scenario: \(mock.scenario.rawValue, privacy: .public)")
 
-        assetProvider = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
+        // Held concretely for a moment: the info panel's metadata source wants
+        // this provider's `AssetLocationSource` conformance, which the erased
+        // `any AssetProvider` the rest of the app sees does not carry.
+        let library = PortBackedAssetProvider(library: mock.library, organize: mock.organize)
+        assetProvider = library
+        captionStore = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
         albumProvider = PortBackedAlbumProvider(albums: mock.albums, library: mock.library)
         trashProvider = PortBackedTrashProvider(organize: mock.organize, library: mock.library)
         hiddenStore = HiddenStore()
@@ -154,7 +161,10 @@ struct AppEnvironment {
         // anything that is not a system asset — which is everything in this
         // lane, so the viewer showed a spinner and never a photo. The renderer
         // that draws the grid draws the viewer's pixels too.
-        mediaLoader = ViewerMediaLoader(fallback: renderer, metadataSource: MockMetadataSource())
+        mediaLoader = ViewerMediaLoader(
+            fallback: renderer,
+            metadataSource: MockMetadataSource(locations: library)
+        )
         importer = Self.makeImporter()
 
         serverDiscovery = PreviewServerDiscovery(environment: mock)

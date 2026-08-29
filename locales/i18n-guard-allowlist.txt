@@ -11,3 +11,8 @@
 # is genuinely not translatable (brand names shown verbatim, sample data, etc.).
 #
 # Keep this list SHORT and justify each entry with a comment above it.
+
+# `PHAssetResource` exposes no public byte count, so its size is read by KVC.
+# `forKey:` is a Key-Value Coding key here, not a catalog key — the guard matches
+# the `…Key:` argument label and cannot tell the two apart.
+capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
