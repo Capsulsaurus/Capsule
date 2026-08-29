@@ -22,10 +22,12 @@
             controller.onPrefetch = onPrefetch
             controller.onCancelPrefetch = onCancelPrefetch
             controller.onMagnify = onMagnify
+            controller.onLeadingVisibleItem = onLeadingVisibleItem
             controller.update(
                 sections: sections,
                 layout: layout,
                 scrollToSectionID: scrollToSectionID,
+                scrollToItem: scrollToItem,
                 allowsMultipleSelection: allowsMultipleSelection
             )
         }
@@ -51,11 +53,17 @@
         var onPrefetch: (([Item]) -> Void)?
         var onCancelPrefetch: (([Item]) -> Void)?
         var onMagnify: ((Bool) -> Void)?
+        var onLeadingVisibleItem: ((SectionID, Item) -> Void)?
 
+        /// The last item reported through ``onLeadingVisibleItem``, so a scroll
+        /// that stays inside one tile reports nothing.
+        private var reportedLeadingItem: Item?
         private var layout: PlatformCollectionLayout
         private var sections: [PlatformCollectionSection<SectionID, Item>] = []
         private var scrollToSectionID: SectionID?
         private var appliedScrollTarget: SectionID?
+        private var scrollToItem: Item?
+        private var appliedScrollItem: Item?
         private var hasAppliedSnapshot = false
         private let bridge = PlatformCollectionBridge()
 
@@ -132,6 +140,7 @@
                 guard let step = PlatformCollectionMagnification.step(forScale: scale) else { return }
                 self?.onMagnify?(step)
             }
+            bridge.onScroll = { [weak self] in self?.reportLeadingVisibleItem() }
 
             let pinch = UIPinchGestureRecognizer(target: bridge, action: #selector(PlatformCollectionBridge.handlePinch))
             collectionView.addGestureRecognizer(pinch)
@@ -146,6 +155,7 @@
             sections newSections: [PlatformCollectionSection<SectionID, Item>],
             layout newLayout: PlatformCollectionLayout,
             scrollToSectionID newTarget: SectionID?,
+            scrollToItem newItemTarget: Item?,
             allowsMultipleSelection: Bool
         ) {
             let layoutChanged = newLayout != layout
@@ -157,6 +167,8 @@
             // same section a second time would silently not scroll.
             if newTarget == nil { appliedScrollTarget = nil }
             scrollToSectionID = newTarget
+            if newItemTarget == nil { appliedScrollItem = nil }
+            scrollToItem = newItemTarget
             if layoutChanged {
                 collectionView.setCollectionViewLayout(
                     PlatformCollectionLayoutBuilder.make(newLayout),
@@ -165,6 +177,25 @@
             }
             applySnapshot(animated: hasAppliedSnapshot && !layoutChanged)
             applyScrollTargetIfNeeded()
+            reportLeadingVisibleItem()
+        }
+
+        /// Report the topmost visible item, when it is not the one last
+        /// reported.
+        ///
+        /// `indexPathsForVisibleItems` is unordered, so the minimum is taken
+        /// rather than the first. Reporting on *change* rather than on every
+        /// scroll callback is what keeps this from driving a SwiftUI update per
+        /// frame during a fling — a tile spans many frames of scrolling.
+        private func reportLeadingVisibleItem() {
+            guard let onLeadingVisibleItem else { return }
+            guard let indexPath = collectionView.indexPathsForVisibleItems.min(),
+                  let item = dataSource.itemIdentifier(for: indexPath),
+                  let sectionID = sectionID(at: indexPath.section)
+            else { return }
+            guard item != reportedLeadingItem else { return }
+            reportedLeadingItem = item
+            onLeadingVisibleItem(sectionID, item)
         }
 
         private func applySnapshot(animated: Bool) {
@@ -177,14 +208,29 @@
             hasAppliedSnapshot = true
         }
 
-        /// Scroll a freshly-targeted section to the top, once per distinct request.
+        /// Scroll a freshly-targeted section or item to the top, once per
+        /// distinct request.
+        ///
+        /// A section target resolves through the controller's own `sections`; an
+        /// item target resolves through the data source, which is the only thing
+        /// that knows an item's index path and answers in constant time. Both
+        /// scroll one runloop turn later, because the snapshot has to land
+        /// before there is anything to scroll to.
         private func applyScrollTargetIfNeeded() {
-            guard let target = scrollToSectionID, target != appliedScrollTarget,
-                  let index = sections.firstIndex(where: { $0.id == target }) else { return }
-            appliedScrollTarget = target
-            let indexPath = IndexPath(item: 0, section: index)
-            // One turn later: the snapshot above has to land before the section
-            // exists to scroll to.
+            if let target = scrollToSectionID, target != appliedScrollTarget,
+               let index = sections.firstIndex(where: { $0.id == target }) {
+                appliedScrollTarget = target
+                scroll(to: IndexPath(item: 0, section: index))
+                return
+            }
+            if let item = scrollToItem, item != appliedScrollItem {
+                appliedScrollItem = item
+                guard let indexPath = dataSource.indexPath(for: item) else { return }
+                scroll(to: indexPath)
+            }
+        }
+
+        private func scroll(to indexPath: IndexPath) {
             Task { @MainActor [weak self] in
                 guard let self, indexPath.section < collectionView.numberOfSections else { return }
                 collectionView.scrollToItem(at: indexPath, at: .top, animated: false)
@@ -242,9 +288,14 @@
         var onPrefetch: (([IndexPath]) -> Void)?
         var onCancelPrefetch: (([IndexPath]) -> Void)?
         var onMagnify: ((CGFloat) -> Void)?
+        var onScroll: (() -> Void)?
         /// Whether the deselect that immediately follows a tap animates — it
         /// should not while multi-select is driving its own selection visuals.
         var deselectsAnimated = true
+
+        func scrollViewDidScroll(_: UIScrollView) {
+            onScroll?()
+        }
 
         func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
             // Selection visuals are owned by the hosted SwiftUI content, so the

@@ -50,6 +50,34 @@ public enum TimelineSectioning {
         }
     }
 
+    /// The whole timeline as **one** unsectioned run — the All Photos level.
+    ///
+    /// Apple Photos' library grid is a single uninterrupted field of tiles: no
+    /// day headers, no gaps, and no ragged last row where one day ends and the
+    /// next begins. Sectioning by day is what the Days level is *for*, and doing
+    /// it in All Photos as well meant the app had two views of the same shape
+    /// and neither was the continuous one.
+    ///
+    /// It is also, measurably, the cheaper shape. Resolving a
+    /// `UICollectionViewCompositionalLayout` over 250 000 assets costs 8.7 ms as
+    /// one uniform section and 426 ms as 3 650 day sections — the boundaries are
+    /// the expense, not the tiles. See `UniformGridLayoutTests`.
+    ///
+    /// The section keeps an empty title: nothing renders it, because the level
+    /// that uses this run draws no headers. Where the reader is in time is
+    /// reported from the topmost visible tile instead.
+    public static func uniformSection(from assets: [Asset]) -> [PhotoGridSection] {
+        guard !assets.isEmpty else { return [] }
+        return [PhotoGridSection(id: allPhotosSectionID, title: "", assets: assets)]
+    }
+
+    /// The identity of the single All Photos section.
+    ///
+    /// Not a day key, and deliberately not one a day key could ever collide
+    /// with: a diffable data source raises on duplicate section identifiers, and
+    /// the drill-down path matches day sections by `hasPrefix`.
+    public static let allPhotosSectionID = "all-photos"
+
     /// A stable `yyyy-MM-dd` key for a day.
     static func dayKey(_ day: Date, calendar: Calendar) -> String {
         let parts = calendar.dateComponents([.year, .month, .day], from: day)

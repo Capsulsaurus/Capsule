@@ -86,3 +86,68 @@ struct TimelineSectioningDuplicateTests {
         #expect(sections.map { $0.id } == ["2026-07-12", "2026-07-11", "2026-07-10"])
     }
 }
+
+// MARK: - The unsectioned All Photos run
+
+/// All Photos is one continuous field of tiles, the way Apple Photos draws a
+/// library. Day sectioning is what the Days level exists for; doing it in All
+/// Photos as well gave the app two views of the same shape and no continuous
+/// one.
+@Suite("All Photos is a single unsectioned run")
+struct TimelineUniformSectionTests {
+    private static let calendar = Calendar(identifier: .gregorian)
+
+    private static func asset(day: Int, hour: Int = 12) -> Asset {
+        var components = DateComponents()
+        components.year = 2026
+        components.month = 7
+        components.day = day
+        components.hour = hour
+        let date = calendar.date(from: components) ?? Date(timeIntervalSince1970: 0)
+        return Fixtures.asset(id: .managed(uuid: "u\(day)-h\(hour)"), captureDate: date)
+    }
+
+    @Test("many days collapse into exactly one section")
+    func manyDaysCollapseToOne() {
+        let assets = (1 ... 30).map { Self.asset(day: $0) }
+        let sections = TimelineSectioning.uniformSection(from: assets)
+
+        #expect(sections.count == 1)
+        #expect(sections[0].assets.count == 30)
+        // Not just the same count — the same order, unregrouped.
+        #expect(sections[0].assets.map(\Asset.id) == assets.map(\Asset.id))
+    }
+
+    @Test("an empty library produces no section at all, not an empty one")
+    func emptyLibraryHasNoSection() {
+        #expect(TimelineSectioning.uniformSection(from: []).isEmpty)
+    }
+
+    /// The screen renders its empty state on `sections.isEmpty`. A single
+    /// section holding zero assets would show an empty grid instead — a blank
+    /// screen with no explanation rather than the "no photos yet" copy.
+    @Test("the section carries no title, because nothing draws one")
+    func sectionHasNoTitle() {
+        let sections = TimelineSectioning.uniformSection(from: [Self.asset(day: 1)])
+        #expect(sections[0].title.isEmpty)
+    }
+
+    /// A diffable data source raises on duplicate section identifiers, and the
+    /// drill-down path matches day sections with `hasPrefix`. The All Photos
+    /// identity must therefore not look like a date to either of them.
+    @Test("the section identity cannot collide with a day, month, or year key")
+    func identityCannotCollideWithADateKey() {
+        let identity = TimelineSectioning.allPhotosSectionID
+        let assets = (1 ... 5).map { Self.asset(day: $0) }
+
+        let dayKeys = Set(TimelineSectioning.sections(from: assets).map(\.id))
+        let monthKeys = Set(TimelineSectioning.monthSections(from: assets).map(\.id))
+        let yearKeys = Set(TimelineSectioning.yearSections(from: assets).map(\.id))
+
+        #expect(!dayKeys.contains(identity))
+        #expect(!monthKeys.contains(identity))
+        #expect(!yearKeys.contains(identity))
+        // A date key is digits and dashes; this deliberately is not.
+        #expect(identity.contains { $0.isLetter })
+    }
+}

@@ -48,11 +48,13 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
     let sections: [PlatformCollectionSection<SectionID, Item>]
     let layout: PlatformCollectionLayout
     let scrollToSectionID: SectionID?
+    let scrollToItem: Item?
     let allowsMultipleSelection: Bool
     let onSelect: (SectionID, Item) -> Void
     let onPrefetch: ([Item]) -> Void
     let onCancelPrefetch: ([Item]) -> Void
     let onMagnify: ((Bool) -> Void)?
+    let onLeadingVisibleItem: ((SectionID, Item) -> Void)?
     let itemContent: (SectionID, Item) -> ItemContent
     let headerContent: (SectionID) -> HeaderContent
 
@@ -63,6 +65,9 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
     ///   - layout: how rows are arranged; a change re-lays-out in place.
     ///   - scrollToSectionID: a section to bring to the top, applied once per
     ///     distinct request so a re-render never re-scrolls the user.
+    ///   - scrollToItem: an *item* to bring to the top, under the same
+    ///     once-per-request rule. The anchor a grid with one section needs,
+    ///     where scrolling to the section means scrolling to the very top.
     ///   - allowsMultipleSelection: whether the collection tracks more than one
     ///     selected index path (multi-select mode).
     ///   - onSelect: the section and item the user activated.
@@ -70,6 +75,11 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
     ///   - onCancelPrefetch: items that scrolled away unseen — drop the warm-up.
     ///   - onMagnify: a discrete zoom step: `true` to zoom in (finer), `false`
     ///     to zoom out (coarser). `nil` disables the gesture entirely.
+    ///   - onLeadingVisibleItem: the topmost item currently on screen, reported
+    ///     only when it *changes*. A grid with no section headers has nowhere to
+    ///     say where in the library the reader is, so the caller puts it in the
+    ///     navigation bar instead — and a callback that fired every scroll frame
+    ///     would drive a SwiftUI update per frame.
     ///   - item: the SwiftUI content hosted by each cell.
     ///   - header: the SwiftUI content hosted by each pinned section header;
     ///     never dequeued when the layout has no header.
@@ -77,22 +87,26 @@ public struct PlatformCollectionView<SectionID, Item, ItemContent, HeaderContent
         sections: [PlatformCollectionSection<SectionID, Item>],
         layout: PlatformCollectionLayout,
         scrollToSectionID: SectionID? = nil,
+        scrollToItem: Item? = nil,
         allowsMultipleSelection: Bool = false,
         onSelect: @escaping (SectionID, Item) -> Void,
         onPrefetch: @escaping ([Item]) -> Void = { _ in },
         onCancelPrefetch: @escaping ([Item]) -> Void = { _ in },
         onMagnify: ((Bool) -> Void)? = nil,
+        onLeadingVisibleItem: ((SectionID, Item) -> Void)? = nil,
         @ViewBuilder item: @escaping (SectionID, Item) -> ItemContent,
         @ViewBuilder header: @escaping (SectionID) -> HeaderContent
     ) {
         self.sections = sections
         self.layout = layout
         self.scrollToSectionID = scrollToSectionID
+        self.scrollToItem = scrollToItem
         self.allowsMultipleSelection = allowsMultipleSelection
         self.onSelect = onSelect
         self.onPrefetch = onPrefetch
         self.onCancelPrefetch = onCancelPrefetch
         self.onMagnify = onMagnify
+        self.onLeadingVisibleItem = onLeadingVisibleItem
         itemContent = item
         headerContent = header
     }

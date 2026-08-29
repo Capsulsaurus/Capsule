@@ -24,12 +24,14 @@ public struct PhotoGridView: View {
     private let thumbnails: any ThumbnailProvider
     private let showsSectionHeaders: Bool
     private let scrollToSectionID: String?
+    private let scrollToAsset: Asset?
     private let isSelecting: Bool
     private let selectedIDs: Set<AssetID>
     private let onSelect: (Asset) -> Void
     private let onSelectSection: ((PhotoGridSection) -> Void)?
     private let onZoomLevelChange: ((Bool) -> Void)?
     private let onToggleSelection: ((AssetID) -> Void)?
+    private let onLeadingVisibleAsset: ((Asset) -> Void)?
 
     @Environment(\.displayScale) private var displayScale
     /// The state the hosted cells observe. Held here, not passed through the
@@ -40,31 +42,37 @@ public struct PhotoGridView: View {
     /// The full grid surface: choose a ``PhotoGridStyle``, and — for the
     /// aggregation levels — handle card taps, pinch-to-zoom level changes, and an
     /// optional section to scroll into view after a level switch. Pass
-    /// `isSelecting` / `selectedIDs` / `onToggleSelection` to drive multi-select.
+    /// `isSelecting` / `selectedIDs` / `onToggleSelection` to drive multi-select,
+    /// and `onLeadingVisibleAsset` to follow where in the library the reader is —
+    /// which a grid with no section headers has no other way to say.
     public init(
         sections: [PhotoGridSection],
         style: PhotoGridStyle,
         thumbnails: any ThumbnailProvider,
         showsSectionHeaders: Bool = true,
         scrollToSectionID: String? = nil,
+        scrollToAsset: Asset? = nil,
         isSelecting: Bool = false,
         selectedIDs: Set<AssetID> = [],
         onSelect: @escaping (Asset) -> Void,
         onSelectSection: ((PhotoGridSection) -> Void)? = nil,
         onZoomLevelChange: ((Bool) -> Void)? = nil,
-        onToggleSelection: ((AssetID) -> Void)? = nil
+        onToggleSelection: ((AssetID) -> Void)? = nil,
+        onLeadingVisibleAsset: ((Asset) -> Void)? = nil
     ) {
         self.sections = sections
         self.style = style
         self.thumbnails = thumbnails
         self.showsSectionHeaders = showsSectionHeaders
         self.scrollToSectionID = scrollToSectionID
+        self.scrollToAsset = scrollToAsset
         self.isSelecting = isSelecting
         self.selectedIDs = selectedIDs
         self.onSelect = onSelect
         self.onSelectSection = onSelectSection
         self.onZoomLevelChange = onZoomLevelChange
         self.onToggleSelection = onToggleSelection
+        self.onLeadingVisibleAsset = onLeadingVisibleAsset
     }
 
     /// Convenience initializer for the common uniform-tile grid.
@@ -106,6 +114,7 @@ public struct PhotoGridView: View {
             sections: sections.map { PlatformCollectionSection(id: $0.id, items: $0.assets) },
             layout: style.platformLayout(pinnedHeaders: showsSectionHeaders),
             scrollToSectionID: scrollToSectionID,
+            scrollToItem: scrollToAsset,
             allowsMultipleSelection: isSelecting,
             onSelect: handleSelection,
             onPrefetch: { assets in
@@ -115,6 +124,9 @@ public struct PhotoGridView: View {
                 Task { await thumbnails.cancelPrefetching(for: assets, pixelSize: decodeSize) }
             },
             onMagnify: onZoomLevelChange,
+            onLeadingVisibleItem: onLeadingVisibleAsset.map { report in
+                { _, asset in report(asset) }
+            },
             item: { sectionID, asset in itemContent(sectionID: sectionID, asset: asset) },
             header: { sectionID in
                 PhotoGridSectionHeader(title: sectionTitles[sectionID] ?? "")

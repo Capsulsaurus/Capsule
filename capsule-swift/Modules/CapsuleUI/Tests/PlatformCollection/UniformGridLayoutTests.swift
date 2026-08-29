@@ -80,6 +80,55 @@ struct UniformGridLayoutTests {
             }
         }
 
+        /// One enormous unsectioned run is the shape the library actually uses,
+        /// and it has to resolve a viewport in the time a scroll frame has.
+        ///
+        /// This assertion is the evidence behind
+        /// ``TimelineSectioning/uniformSection(from:)``. The design worry was the
+        /// opposite of what is true: a quarter-million tiles in *one* section
+        /// resolves in single-digit milliseconds because compositional layout
+        /// computes uniform frames analytically, while 3 650 day sections cost
+        /// ~50× more — the section boundaries are the expense, not the tiles. A
+        /// regression that reintroduces per-item layout work would blow the
+        /// budget here long before anyone noticed it by scrolling.
+        @Test("a quarter-million tiles in one section resolve a viewport cheaply")
+        func hugeSingleSectionResolvesCheaply() {
+            let layout = PlatformCollectionLayoutBuilder.make(
+                .uniformGrid(columns: 5, itemSpacing: 2, pinnedHeaders: false)
+            )
+            let view = UICollectionView(
+                frame: CGRect(x: 0, y: 0, width: Self.width, height: 800),
+                collectionViewLayout: layout
+            )
+            let source = FixedItemCount(count: 250000)
+            view.dataSource = source
+            view.reloadData()
+            view.layoutIfNeeded()
+
+            // Exact, and derived rather than measured: 250 000 / 5 = 50 000 rows.
+            let side = Self.width / 5
+            #expect(abs(layout.collectionViewContentSize.height - side * 50000) < side)
+
+            // A viewport near the end costs the same as one at the start. If
+            // this ever became linear in the item count it would time out here
+            // rather than merely stutter on a device.
+            let deep = CGRect(
+                x: 0,
+                y: layout.collectionViewContentSize.height - 900,
+                width: Self.width,
+                height: 800
+            )
+            let start = ContinuousClock().now
+            let attributes = layout.layoutAttributesForElements(in: deep) ?? []
+            let elapsed = ContinuousClock().now - start
+
+            #expect(!attributes.isEmpty)
+            // A screenful is ~55 tiles; anything resolving the whole run would be
+            // orders of magnitude over this.
+            #expect(attributes.count < 200)
+            #expect(elapsed < .milliseconds(50))
+        }
+
         /// The whole row is used — the last column lands flush with the edge
         /// rather than leaving a ragged margin.
         @Test("the row spans the full width")

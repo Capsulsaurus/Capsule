@@ -39,7 +39,17 @@ public final class TimelineViewModel {
     /// The current aggregation level (Years / Months / All Photos).
     public private(set) var level: TimelineLevel = .all
     /// A section to scroll into view after a level change (drill-down focus).
+    ///
+    /// Only meaningful at the Months and Years levels. All Photos has exactly
+    /// one section, so there is nothing to distinguish by scrolling to it.
     public private(set) var focusSectionID: String?
+
+    /// An asset to scroll into view after drilling into All Photos.
+    ///
+    /// The replacement for ``focusSectionID`` at the level that no longer has
+    /// per-period sections: drilling from July 2024 has to land on July 2024's
+    /// first photo, and in an unsectioned run that is an asset identity.
+    public private(set) var focusAsset: Asset?
 
     /// The grid column count; persisted across launches.
     public var columnCount: Int {
@@ -103,6 +113,7 @@ public final class TimelineViewModel {
         guard newLevel != level else { return }
         level = newLevel
         focusSectionID = nil
+        focusAsset = nil
         Task { sections = await Self.buildSections(for: newLevel, from: visibleAssets) }
     }
 
@@ -127,7 +138,18 @@ public final class TimelineViewModel {
         Task {
             let built = await Self.buildSections(for: finer, from: visibleAssets)
             sections = built
-            focusSectionID = built.first { $0.id.hasPrefix(section.id) }?.id
+            // Months still drill into a `yyyy-MM` section; All Photos is a
+            // single run with no per-period section to land on, so the anchor
+            // becomes an asset rather than a section. `focusAsset` is what the
+            // grid scrolls to there.
+            switch finer {
+            case .all:
+                focusSectionID = nil
+                focusAsset = firstAsset(inPeriod: section.id)
+            case .months, .years:
+                focusAsset = nil
+                focusSectionID = built.first { $0.id.hasPrefix(section.id) }?.id
+            }
         }
     }
 
@@ -176,6 +198,18 @@ public final class TimelineViewModel {
         }
     }
 
+    /// The first asset captured inside a `yyyy` or `yyyy-MM` period, in
+    /// timeline order — where a drill-down into All Photos should land.
+    private func firstAsset(inPeriod periodID: String) -> Asset? {
+        let calendar = Calendar.current
+        return visibleAssets.first { asset in
+            let parts = calendar.dateComponents([.year, .month], from: asset.captureDate)
+            let year = String(format: "%04d", parts.year ?? 0)
+            let month = String(format: "%04d-%02d", parts.year ?? 0, parts.month ?? 0)
+            return periodID == year || periodID == month
+        }
+    }
+
     /// Materialise a snapshot into a plain asset array (cheap; index access).
     private nonisolated static func materialize(_ snapshot: any AssetSnapshot) -> [Asset] {
         (0 ..< snapshot.count).map { snapshot.asset(at: $0) }
@@ -187,7 +221,9 @@ public final class TimelineViewModel {
         from assets: [Asset]
     ) async -> [PhotoGridSection] {
         switch level {
-        case .all: TimelineSectioning.sections(from: assets)
+        // One unsectioned run, not one section per day. See
+        // ``TimelineSectioning/uniformSection(from:)``.
+        case .all: TimelineSectioning.uniformSection(from: assets)
         case .months: TimelineSectioning.monthSections(from: assets)
         case .years: TimelineSectioning.yearSections(from: assets)
         }

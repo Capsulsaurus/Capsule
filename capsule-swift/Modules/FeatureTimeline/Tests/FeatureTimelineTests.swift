@@ -128,14 +128,17 @@ struct TimelineAggregationTests {
 @Suite("TimelineViewModel")
 @MainActor
 struct TimelineViewModelTests {
-    @Test("loads and sections an authorized library")
+    @Test("loads an authorized library as one uninterrupted run")
     func loadsAuthorizedLibrary() async {
         let provider = MockAssetProvider(assets: Fixtures.assets(count: 6), status: .authorized)
         let model = TimelineViewModel(provider: provider)
         await model.load()
         #expect(model.state == .ready)
-        // Six assets one day apart → six day sections.
-        #expect(model.sections.count == 6)
+        // Six assets a day apart used to be six day sections. All Photos is now
+        // one continuous field of tiles, so they are one section of six — the
+        // days are still visible in the dates, not in the layout.
+        #expect(model.sections.count == 1)
+        #expect(model.sections.first?.assets.count == 6)
     }
 
     @Test("surfaces the permission prompt when access is denied")

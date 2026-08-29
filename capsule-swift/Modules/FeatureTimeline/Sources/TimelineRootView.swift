@@ -20,6 +20,9 @@ public struct TimelineRootView: View {
     @State private var userAlbums: [AlbumSummary] = []
     @State private var isAddToAlbumPresented = false
     @State private var isDeleteConfirmPresented = false
+    /// The capture date of the topmost tile on screen, which is the only place
+    /// an unsectioned grid can say where in the library the reader is.
+    @State private var visibleDate: Date?
     @Environment(\.openURL) private var openURL
     private let assetProvider: any AssetProvider
     private let albumProvider: any AlbumProvider
@@ -46,7 +49,7 @@ public struct TimelineRootView: View {
 
     public var body: some View {
         content
-            .navigationTitle("app.tab.library")
+            .navigationTitle(navigationTitle)
             .capsuleNavigationBarInline()
             // `.navigation` / `.primaryAction` rather than `.topBarLeading`
             // / `.topBarTrailing`: the topBar placements exist only where
@@ -78,6 +81,7 @@ public struct TimelineRootView: View {
                 }
             }
             .task { await model.load() }
+            .onChange(of: model.level) { _, _ in visibleDate = nil }
             .capsuleFullScreenCover(item: $viewerSelection) { selection in
                 AssetViewerView(
                     assets: selection.assets,
@@ -155,17 +159,35 @@ public struct TimelineRootView: View {
                     sections: model.sections,
                     style: model.gridStyle,
                     thumbnails: thumbnails,
+                    // All Photos is one continuous run, so it draws no day
+                    // headers; Months and Years are card levels whose cards
+                    // carry their own titles.
+                    showsSectionHeaders: false,
                     scrollToSectionID: model.focusSectionID,
+                    scrollToAsset: model.focusAsset,
                     isSelecting: isSelecting,
                     selectedIDs: selectedIDs,
                     onSelect: openViewer,
                     onSelectSection: { model.drillDown(into: $0) },
                     onZoomLevelChange: { model.zoom(in: $0) },
-                    onToggleSelection: { toggleSelection($0) }
+                    onToggleSelection: { toggleSelection($0) },
+                    onLeadingVisibleAsset: { visibleDate = $0.captureDate }
                 )
                 .ignoresSafeArea(edges: .bottom)
             }
         }
+    }
+
+    /// The library's own name until the reader has scrolled into a date.
+    ///
+    /// A grid with no section headers has nowhere else to say *when* you are
+    /// looking at, and losing your place in a quarter of a million photos is the
+    /// failure that costs. Apple Photos puts the same answer in the same place.
+    private var navigationTitle: Text {
+        guard model.level == .all, let visibleDate else {
+            return Text("app.tab.library")
+        }
+        return Text(visibleDate, format: .dateTime.month(.wide).year())
     }
 
     private var importButton: some View {

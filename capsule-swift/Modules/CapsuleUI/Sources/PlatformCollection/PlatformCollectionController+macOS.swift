@@ -22,10 +22,12 @@
             controller.onPrefetch = onPrefetch
             controller.onCancelPrefetch = onCancelPrefetch
             controller.onMagnify = onMagnify
+            controller.onLeadingVisibleItem = onLeadingVisibleItem
             controller.update(
                 sections: sections,
                 layout: layout,
                 scrollToSectionID: scrollToSectionID,
+                scrollToItem: scrollToItem,
                 allowsMultipleSelection: allowsMultipleSelection
             )
         }
@@ -54,11 +56,17 @@
         var onPrefetch: (([Item]) -> Void)?
         var onCancelPrefetch: (([Item]) -> Void)?
         var onMagnify: ((Bool) -> Void)?
+        var onLeadingVisibleItem: ((SectionID, Item) -> Void)?
 
+        /// The last item reported through ``onLeadingVisibleItem``, so a scroll
+        /// that stays inside one tile reports nothing.
+        private var reportedLeadingItem: Item?
         private var layout: PlatformCollectionLayout
         private var sections: [PlatformCollectionSection<SectionID, Item>] = []
         private var scrollToSectionID: SectionID?
         private var appliedScrollTarget: SectionID?
+        private var scrollToItem: Item?
+        private var appliedScrollItem: Item?
         private var hasAppliedSnapshot = false
         private let bridge = PlatformCollectionBridge()
 
@@ -136,6 +144,20 @@
             )
             collectionView.addGestureRecognizer(magnify)
 
+            // AppKit has no scroll-view delegate callback: a scroll is a bounds
+            // change on the clip view, and the notification only fires once the
+            // clip view is told to post it.
+            if let clipView = (view as? NSScrollView)?.contentView {
+                clipView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.addObserver(
+                    forName: NSView.boundsDidChangeNotification,
+                    object: clipView,
+                    queue: .main
+                ) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.reportLeadingVisibleItem() }
+                }
+            }
+
             applySnapshot(animated: false)
         }
 
@@ -146,6 +168,7 @@
             sections newSections: [PlatformCollectionSection<SectionID, Item>],
             layout newLayout: PlatformCollectionLayout,
             scrollToSectionID newTarget: SectionID?,
+            scrollToItem newItemTarget: Item?,
             allowsMultipleSelection: Bool
         ) {
             let layoutChanged = newLayout != layout
@@ -156,11 +179,27 @@
             // same section a second time would silently not scroll.
             if newTarget == nil { appliedScrollTarget = nil }
             scrollToSectionID = newTarget
+            if newItemTarget == nil { appliedScrollItem = nil }
+            scrollToItem = newItemTarget
             if layoutChanged {
                 collectionView.collectionViewLayout = PlatformCollectionLayoutBuilder.make(newLayout)
             }
             applySnapshot(animated: hasAppliedSnapshot && !layoutChanged)
             applyScrollTargetIfNeeded()
+            reportLeadingVisibleItem()
+        }
+
+        /// Report the topmost visible item, when it is not the one last
+        /// reported. The iOS twin of this, callback for callback.
+        private func reportLeadingVisibleItem() {
+            guard let onLeadingVisibleItem else { return }
+            guard let indexPath = collectionView.indexPathsForVisibleItems().min(),
+                  let item = dataSource.itemIdentifier(for: indexPath),
+                  let sectionID = sectionID(at: indexPath.section)
+            else { return }
+            guard item != reportedLeadingItem else { return }
+            reportedLeadingItem = item
+            onLeadingVisibleItem(sectionID, item)
         }
 
         private func applySnapshot(animated: Bool) {
@@ -173,14 +212,24 @@
             hasAppliedSnapshot = true
         }
 
-        /// Scroll a freshly-targeted section to the top, once per distinct request.
+        /// Scroll a freshly-targeted section or item to the top, once per
+        /// distinct request. The iOS twin of this, resolution rule for
+        /// resolution rule.
         private func applyScrollTargetIfNeeded() {
-            guard let target = scrollToSectionID, target != appliedScrollTarget,
-                  let index = sections.firstIndex(where: { $0.id == target }) else { return }
-            appliedScrollTarget = target
-            let indexPath = IndexPath(item: 0, section: index)
-            // One turn later: the snapshot above has to land before the section
-            // exists to scroll to.
+            if let target = scrollToSectionID, target != appliedScrollTarget,
+               let index = sections.firstIndex(where: { $0.id == target }) {
+                appliedScrollTarget = target
+                scroll(to: IndexPath(item: 0, section: index))
+                return
+            }
+            if let item = scrollToItem, item != appliedScrollItem {
+                appliedScrollItem = item
+                guard let indexPath = dataSource.indexPath(for: item) else { return }
+                scroll(to: indexPath)
+            }
+        }
+
+        private func scroll(to indexPath: IndexPath) {
             Task { @MainActor [weak self] in
                 guard let self, indexPath.section < collectionView.numberOfSections else { return }
                 collectionView.scrollToItems(at: [indexPath], scrollPosition: .top)
@@ -282,72 +331,6 @@
             // AppKit's magnification is a delta around zero; the shared threshold
             // logic speaks UIKit's scale around one.
             onMagnify?(1 + recognizer.magnification)
-        }
-    }
-
-    // MARK: - Hosting item
-
-    /// An `NSCollectionViewItem` whose entire body is a hosted SwiftUI view.
-    ///
-    /// Re-hosting on dequeue is what makes the SwiftUI content's own `task`
-    /// cancellation work: the recycled item is handed the next item's content
-    /// before it is shown, so the previous subtree is torn down and its
-    /// in-flight thumbnail decode cancelled — exactly what `prepareForReuse`
-    /// did by hand in the UIKit-only implementation this replaced.
-    final class PlatformHostingItem: NSCollectionViewItem {
-        static let identifier = NSUserInterfaceItemIdentifier("PlatformHostingItem")
-
-        private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
-
-        override func loadView() {
-            let container = NSView()
-            hostingView.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(hostingView)
-            NSLayoutConstraint.activate([
-                hostingView.topAnchor.constraint(equalTo: container.topAnchor),
-                hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-                hostingView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            ])
-            view = container
-        }
-
-        func host(_ content: AnyView) {
-            hostingView.rootView = content
-        }
-    }
-
-    /// The supplementary-view twin of ``PlatformHostingItem``, used for pinned
-    /// section headers.
-    /// Conforms to `NSCollectionViewElement` because AppKit's
-    /// `supplementaryViewProvider` is typed `(NSView & NSCollectionViewElement)?`,
-    /// not plain `NSView` as the item provider is. The protocol has no required
-    /// members — the conformance is what makes the view usable as a supplementary
-    /// element at all.
-    final class PlatformHostingSupplementaryView: NSView, NSCollectionViewElement {
-        static let identifier = NSUserInterfaceItemIdentifier("PlatformHostingSupplementaryView")
-
-        private let hostingView = NSHostingView(rootView: AnyView(EmptyView()))
-
-        override init(frame frameRect: NSRect) {
-            super.init(frame: frameRect)
-            hostingView.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(hostingView)
-            NSLayoutConstraint.activate([
-                hostingView.topAnchor.constraint(equalTo: topAnchor),
-                hostingView.bottomAnchor.constraint(equalTo: bottomAnchor),
-                hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
-                hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            ])
-        }
-
-        @available(*, unavailable)
-        required init?(coder _: NSCoder) {
-            fatalError("PlatformHostingSupplementaryView is not loaded from a nib")
-        }
-
-        func host(_ content: AnyView) {
-            hostingView.rootView = content
         }
     }
 
