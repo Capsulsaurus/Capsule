@@ -199,7 +199,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B8 | Immich importer | media/import | S-B6 | M | MIXED | post-v1 | |
 | S-B9 | Tethered camera import (PTP/IP) | media/import | S-B2 | L | MIXED | post-v1 | `ptpip-rs` gate |
 | S-B10 | Takeout metadata → signed sidecar enrichment | media/import | S-A10 | M | ACTIVE | done | four doc rows owed; streaming path → `S-B3`/`S-B11` |
-| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | ready | `S-B10` landed; also wire the streaming path |
+| S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | done\* | synthesized archive only; real export owed |
+| S-B18 | No CLI surface shows what the importer actually wrote | media/import | S-B10 | S | ACTIVE | ready | users cannot verify enrichment |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
@@ -238,9 +239,10 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
-| S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | ready | found porting auth |
+| S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
-| S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | ready | `S-C1`/`S-C3`/`S-C10`/`S-C14` all consume it |
+| S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | not yet wired into `App` — one field, owed to `S-C1` |
+| S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -293,6 +295,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I2 | Official language-set rollout (12 locales + RTL) | i18n | — | L | ACTIVE | done\* | native RTL → post-v1; review → gates |
 | S-I3 | `xtask translate-readme` + CI drift check | i18n | S-I2 | M | ACTIVE | done | |
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | ready | |
+| S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
@@ -759,6 +762,36 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   Takeout archive. Flips `S-Z2` done\*→done. **Depends on:** S-B10 (**live block**).
 - **Done when:** the guide's verification checklist passes on a real archive; re-run
   skips completed work. **Tier:** Smoke.
+
+- **Landed 2026-08-29 as `done*`.** `--provider takeout` drives the `S-B6` adapter through the
+  standard plan/execute path, and the positional widened to accept **many** paths — not cosmetic,
+  since the adapter's seam is parts-based and a media file in part 1 pairs with its sidecar in part
+  2 only if both are named in one run. `--provider` spells only the provider with a committed
+  adapter, so iCloud and Immich are unspellable rather than accepted-and-ignored.
+- **The streaming gap `S-B10` left is closed:** `import_asset_streaming` takes enrichment, and the
+  fold moved into a shared helper so the bulk and streaming drive modes cannot drift — which was the
+  real risk, a streamed Takeout import silently discarding what the bulk path had just learned to
+  keep.
+- **Why it stays `done*`, and why `S-Z2` does too:** a synthesized two-part export covers the quirks
+  table, the precedence rule in both directions, and the re-run step. It cannot cover the magnitude
+  check against Google's own item count, real camera EXIF across the device long tail, real
+  HEIC/MP4/Live Photo payloads, or how Google actually encodes non-ASCII filenames. There is no real
+  Takeout archive on this machine and no claim is made about one.
+
+### S-B18 — no CLI surface shows what the importer actually wrote
+
+- **Gap** (found 2026-08-29 running `S-B11`'s guide checklist by hand): `capsule match` reports
+  **source-file** facts only — hash, size, timestamps. Nothing in the CLI prints an imported asset's
+  caption, rating, tags or GPS, so a user cannot verify the enrichment `S-B10` exists to deliver.
+  The migration guide had to be rewritten to say so rather than instruct something impossible.
+- **Why it matters beyond convenience:** the enrichment lands in a **signed** sidecar, and the
+  mapping decisions are lossy by design (a favourite becomes five stars, an album becomes a tag). A
+  user who cannot see the result cannot discover a mapping they disagree with until much later,
+  when correcting it costs a signed `metadata-update` per asset.
+- **Deliverable:** a read surface — extending `capsule match`, or an `info`/`show` verb — that
+  prints an asset's sidecar projection. Strings must come from `locales/`, which for the import arm
+  do not exist yet (`S-I5`).
+- **Done when:** the guide's metadata-sampling step is executable as written. **Tier:** Smoke.
 
 ### S-B12 — Base default-album resolution
 
@@ -1455,6 +1488,37 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   upstream enforces them, or stay a handler concern.
 - **Done when:** an oversized body is refused before it reaches a handler, and no schema constraint
   appears in the document that the server will not apply. **Tier:** Unit.
+
+- **Landed 2026-08-29.** Kynos already ships `middleware::limits::BodySize`, so it is used rather
+  than hand-rolled — and it is the structurally right one: an interceptor declares its responses as
+  an associated type, so configuring the limit and documenting it are **one action**, which makes
+  the `S-C28` class unrepresentable here. The cap is **32 MiB, deliberately not 16**: the largest
+  legitimate body is one 16 MiB upload chunk, and the protocol answers a breach itself with a coded
+  `413 error.upload.chunk_too_large`. A 16 MiB cap would make that coded rejection unreachable and
+  replace a diagnosis with a bare status. The emitted document gained a `413` on every operation,
+  each of which had to be *produced* by a test.
+- **Still open (`done*`):** whether per-field `#[schema]` constraints get re-declared once upstream
+  enforces them, or stay a handler concern. Nothing currently makes the document promise a check the
+  server skips, which was the property that mattered.
+
+### S-C36 — Kynos's framework rejections carry no `error.*` code
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md) — every server rejection
+  carries a stable code from the `error.*` namespace, which the client localizes while the English
+  detail stays English.
+- **Gap** (found 2026-08-29 landing `S-C33`, and visible in the auth port before it): the `413` the
+  body-limit interceptor renders is a bare RFC 9457 Problem with **no `code` extension member**, and
+  the same is true of `AuthRejection`'s `401`/`403`. Capsule's whole i18n design is that a client
+  localizes a stable code **offline**, with no server-side catalogs — a rejection without one is a
+  response the client can only show in English.
+- **Why it was not fixed in place:** Kynos's own rejection types have no extension seam, and
+  emitting a parallel Capsule `401` beside the framework's would mean two `401` bodies for one
+  condition, one of them missing the `WWW-Authenticate` header the document declares as required.
+- **Deliverable:** a Capsule-owned interceptor that attaches the code to framework-generated
+  problems, or an upstream Kynos change adding the seam. Decide which; the second is better and
+  slower.
+- **Done when:** every response the document declares carries an `error.*` code, asserted by a test
+  over the emitted document rather than per-handler. **Tier:** Unit.
 
 ### S-C34 — nothing gates the Kynos OpenAPI document
 
@@ -2426,6 +2490,26 @@ first-class**; [Authentication — Choosing an Auth Path](capsule-docs/src/conte
 carries the audience split. Today OIDC is a config struct with zero routes
 (`capsule-api/auth/src/oidc.rs`) — and that whole tree is `RETIRED`, so the OIDC work
 lands on Kynos rather than on Salvo.
+
+### S-I5 — the CLI import arm has no `cli.import.*` catalog namespace
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md) — no hardcoded user-facing
+  strings; every translatable string is a key in the canonical `locales/` catalogs.
+- **Gap** (found 2026-08-29 while landing `S-B11`): `locales/` has **no `cli.import.*` namespace at
+  all**. The entire import arm has printed hardcoded English since long before that slice, so
+  `S-B11` deliberately added no new printed string and reused the existing hardcoded lines rather
+  than deepening the hole.
+- **Why nothing ever caught it:** `xtask i18n-guard` scans **web, Swift and Compose** only. The CLI
+  has never been in the guard's scope, so a gate that exists specifically to catch hardcoded strings
+  has been structurally blind to an entire binary. That is the more important half of this slice —
+  migrating the strings without widening the guard leaves the next command free to regress.
+- **Deliverable:** migrate the import arm as a unit — at minimum `cli.import.in_progress`,
+  `.scanning`, `.provider_notice`, `.candidates_found`, `.plan_summary`, `.nothing_to_import`,
+  `.done`, `.scan_failed`, `.extract_failed` — and extend `i18n-guard` to cover `capsule-cli`.
+- **Note:** `S-B18` (a read surface for imported metadata) needs these keys, so this is its
+  precondition rather than a parallel cleanup.
+- **Done when:** `i18n-guard` covers `capsule-cli` and passes, and no import-arm output is a
+  literal. **Tier:** gate.
 
 ### S-N1 — OIDC relying party (server)
 
