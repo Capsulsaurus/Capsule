@@ -13,7 +13,11 @@
 //!   the staleness a swap creates: it walks
 //!   [`stale_embedding_assets`](crate::db::DatabaseDriver::stale_embedding_assets) and re-embeds
 //!   each asset at the new canonical version through an injected [`Embedder`](regen::Embedder)
-//!   seam, resumably and per-asset (never a global truncate).
+//!   seam, resumably and per-asset (never a global truncate). The production implementor is
+//!   [`RunnerEmbedder`](regen::RunnerEmbedder), which rebuilds the derived index by re-reading
+//!   each **original** through [`AssetSource`](orchestrator::AssetSource) and re-running the
+//!   canonical model through [`ModelRunner`](runner::ModelRunner) — the same two seams first-time
+//!   indexing uses, so a regenerated vector equals what a fresh import would produce.
 //!
 //! - the [`runner`] seam — the [`ModelRunner`](runner::ModelRunner) trait every consumer routes
 //!   per-task inference over decoded pixels through, and the deterministic
@@ -48,7 +52,10 @@ pub use orchestrator::{
     StoreError, auto_tag, choose_batch_mode, embed_and_store, micro_batch_size, resolve_partition,
     semantic_search, should_pause_for_heat,
 };
-pub use regen::{DeterministicEmbedder, Embedder, RegenError, RegenReport, regenerate_stale};
+pub use regen::{
+    DeterministicEmbedder, EmbedError, Embedder, RegenError, RegenReport, RunnerEmbedder,
+    regenerate_stale,
+};
 pub use registry::{
     DistanceMetric, EmbeddingDim, ModelId, ModelRow, ModelVersion, Registry, RegistryError,
     TaskKind, TaskOutput,

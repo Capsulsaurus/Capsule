@@ -24,8 +24,11 @@
 //! [AI/ML — Embedding Provenance]: https://docs/design/ai/#embedding-provenance
 
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::db::{DatabaseDriver, EmbeddingInsert, VectorIndexError};
+use crate::ml::orchestrator::AssetSource;
+use crate::ml::runner::{Frame, ModelRunner};
 use crate::ml::{ModelId, ModelVersion, Registry, TaskKind};
 
 /// The embedder seam the regeneration loop drives: "produce the canonical embedding for an asset
@@ -159,9 +162,19 @@ pub fn regenerate_stale<E: Embedder>(
         .map_err(|e| RegenError::Vector(e.into()))?;
     let total = worklist.len();
     let take = budget.unwrap_or(total);
+    tracing::info!(
+        ?task,
+        platform = %platform,
+        model_id = %canon.model_id,
+        model_version = %canon.canonical_version,
+        stale = total,
+        chunk = take,
+        "ml regen: starting a regeneration chunk"
+    );
 
     let mut regenerated = 0;
     for asset_id in worklist.iter().take(take) {
+        tracing::trace!(?task, asset_id, "ml regen: re-embedding a stale asset");
         let vector = embedder.embed(asset_id, task)?;
         db.insert_embedding(
             registry,
@@ -175,13 +188,101 @@ pub fn regenerate_stale<E: Embedder>(
             },
         )?;
         regenerated += 1;
+        tracing::debug!(
+            ?task,
+            asset_id,
+            model_version = %canon.canonical_version,
+            "ml regen: stale embedding replaced at the canonical version"
+        );
     }
 
+    let remaining = total - regenerated;
+    tracing::info!(
+        ?task,
+        platform = %platform,
+        regenerated,
+        remaining,
+        "ml regen: chunk complete"
+    );
     Ok(RegenReport {
         task,
         regenerated,
-        remaining: total - regenerated,
+        remaining,
     })
+}
+
+/// The production [`Embedder`]: regeneration **re-runs inference over the originals**.
+///
+/// This is the adapter that makes regeneration mean what [AI/ML — Embedding
+/// Provenance](https://docs/design/ai/#embedding-provenance) says it means. The vector index is
+/// derived state: a version bump invalidates it, and it is rebuilt by re-reading each asset's
+/// original plaintext through the [`AssetSource`] seam and re-running the canonical model through
+/// the [`ModelRunner`] seam — never by copying, re-labelling, or restoring the stale vector. It is
+/// the same pair of seams [`embed_and_store`](crate::ml::embed_and_store) uses for first-time
+/// indexing, so the regenerated vector is byte-identical to what a fresh import would produce.
+///
+/// `partition` is the `vec0` partition the outputs belong to — resolve it with
+/// [`resolve_partition`](crate::ml::resolve_partition) rather than assuming
+/// [`CANONICAL_PARTITION`](crate::ml::CANONICAL_PARTITION), so a device that failed the
+/// known-answer check regenerates within its own partition instead of polluting the shared one.
+#[derive(Debug, Clone, Copy)]
+pub struct RunnerEmbedder<'a, R, S> {
+    /// Where the originals come from (and whose catalog holds the index).
+    source: &'a S,
+    /// The inference seam the canonical model runs behind.
+    runner: &'a R,
+    /// The `vec0` partition these outputs belong to.
+    partition: &'a str,
+}
+
+impl<'a, R: ModelRunner, S: AssetSource> RunnerEmbedder<'a, R, S> {
+    /// An embedder that reads `source`'s originals and re-runs `runner` over them, writing into
+    /// `partition`.
+    pub fn new(source: &'a S, runner: &'a R, partition: &'a str) -> Self {
+        Self {
+            source,
+            runner,
+            partition,
+        }
+    }
+
+    /// The catalog holding the vector index these embeddings are regenerated into — pass it to
+    /// [`regenerate_stale`] so the work-list and the writes address one index.
+    pub fn index(&self) -> &'a DatabaseDriver {
+        self.source.vector_index()
+    }
+}
+
+impl<R: ModelRunner, S: AssetSource> Embedder for RunnerEmbedder<'_, R, S> {
+    fn model(&self, task: TaskKind) -> Option<(ModelId, ModelVersion)> {
+        self.runner.model(task)
+    }
+
+    fn platform(&self) -> &str {
+        self.partition
+    }
+
+    fn embed(&self, asset_id: &str, task: TaskKind) -> Result<Vec<f32>, EmbedError> {
+        let fail = |reason: String| EmbedError {
+            asset_id: asset_id.to_string(),
+            task,
+            reason,
+        };
+        // Index rows key assets by their string form; the store keys them by UUID.
+        let uuid =
+            Uuid::parse_str(asset_id).map_err(|e| fail(format!("asset id is not a UUID: {e}")))?;
+        // The originals are the source of truth the derived index is rebuilt from.
+        let bytes = self
+            .source
+            .read_plaintext(&uuid)
+            .map_err(|e| fail(format!("reading the original failed: {e}")))?;
+        self.runner
+            .embed_image(task, &[Frame::new(&bytes)])
+            .map_err(|e| fail(e.to_string()))?
+            .into_iter()
+            .next()
+            .ok_or_else(|| fail("runner returned no embedding".to_string()))
+    }
 }
 
 /// A deterministic reference embedder — **no real inference**, no model weights. It maps
@@ -310,7 +411,10 @@ fn seeded_unit_vector(key: &str, version: &str, dim: usize) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use crate::ml::{CANONICAL_PARTITION, FixtureRunner};
 
     const PLATFORM: &str = "cpu-reference";
 
@@ -407,11 +511,12 @@ mod tests {
         assert!(matches!(err, RegenError::NotAnEmbeddingTask { .. }));
     }
 
-    /// Bounded E2E — Module Map E2E case #10 ("Model regen after version bump"): bump the canonical
-    /// model version → stale embeddings excluded from queries → background regen produces fresh
-    /// embeddings per-asset → queries return correct results post-regen. Covers `capsule-core::ml`
-    /// (registry swap + regen loop) × `capsule-core::db` vector index, with the deterministic
-    /// embedder standing in for the on-device runner.
+    /// The in-module *orchestration* shape of Module Map **E2E case 10** ("Model regen after
+    /// version bump"), driven by the deterministic embedder: bump the canonical model version →
+    /// stale embeddings excluded from queries → regen produces fresh embeddings per-asset →
+    /// queries return correct results post-regen. The end-to-end proof — a real `Workspace`, real
+    /// originals, inference re-run through the [`RunnerEmbedder`] seam — is
+    /// `capsule-core/tests/model_regen_e2e.rs`; this one pins the loop's own bookkeeping.
     #[test]
     fn e2e_model_regen_after_version_bump_serves_only_current() {
         let db = db();
@@ -563,5 +668,141 @@ mod tests {
         );
         let again = regenerate_stale(&db, &reg2, &emb2, sem(), None).unwrap();
         assert_eq!((again.regenerated, again.remaining), (0, 0));
+    }
+
+    // ── `RunnerEmbedder`: regeneration re-runs inference over the originals ───────────────────
+
+    /// The smallest store satisfying [`AssetSource`] — the originals the derived index is
+    /// rebuilt from. (`ml` must not import `lifecycle`; the `Workspace` implementor is driven
+    /// end-to-end by `tests/model_regen_e2e.rs`.)
+    struct MemStore {
+        db: DatabaseDriver,
+        bytes: BTreeMap<Uuid, Vec<u8>>,
+    }
+
+    /// The store's read failure — the concrete error the seam type-erases.
+    #[derive(Debug, Error)]
+    #[error("no such asset: {0}")]
+    struct MissingAsset(Uuid);
+
+    impl AssetSource for MemStore {
+        type Error = MissingAsset;
+
+        fn read_plaintext(&self, asset_id: &Uuid) -> Result<Vec<u8>, MissingAsset> {
+            self.bytes
+                .get(asset_id)
+                .cloned()
+                .ok_or(MissingAsset(*asset_id))
+        }
+
+        fn vector_index(&self) -> &DatabaseDriver {
+            &self.db
+        }
+    }
+
+    impl MemStore {
+        fn with_assets(assets: &[(Uuid, &[u8])]) -> Self {
+            Self {
+                db: DatabaseDriver::open_in_memory().unwrap(),
+                bytes: assets.iter().map(|(id, b)| (*id, b.to_vec())).collect(),
+            }
+        }
+    }
+
+    /// Seed a stale (v1) row for `asset` so the bump has something to invalidate.
+    fn seed_v1(store: &MemStore, asset: Uuid) {
+        let reg1 = Registry::canonical();
+        let runner1 = FixtureRunner::new(PLATFORM);
+        let emb = RunnerEmbedder::new(store, &runner1, CANONICAL_PARTITION);
+        let (model_id, model_version) = emb.model(sem()).unwrap();
+        let vector = emb.embed(&asset.to_string(), sem()).unwrap();
+        store
+            .db
+            .insert_embedding(
+                &reg1,
+                EmbeddingInsert {
+                    asset_id: &asset.to_string(),
+                    task: sem(),
+                    model_id: &model_id,
+                    model_version: &model_version,
+                    platform: CANONICAL_PARTITION,
+                    vector: &vector,
+                },
+            )
+            .unwrap();
+    }
+
+    /// The whole point of the adapter: the vector it produces is inference over the asset's
+    /// **original bytes**, not a function of its id — so a rebuild genuinely re-runs the model.
+    #[test]
+    fn runner_embedder_embeds_the_originals_through_the_runner_seam() {
+        let id = Uuid::now_v7();
+        let store = MemStore::with_assets(&[(id, b"a beach at sunset")]);
+        let runner = FixtureRunner::new(PLATFORM);
+        let emb = RunnerEmbedder::new(&store, &runner, CANONICAL_PARTITION);
+
+        let expected = runner
+            .embed_image(sem(), &[Frame::new(b"a beach at sunset")])
+            .unwrap()
+            .remove(0);
+        assert_eq!(emb.embed(&id.to_string(), sem()).unwrap(), expected);
+        // The partition is the caller's resolved one, not the runner's device tag — a device that
+        // failed the known-answer check regenerates inside its own partition.
+        let fallback = FixtureRunner::new("wonky-npu");
+        assert_eq!(
+            RunnerEmbedder::new(&store, &fallback, "wonky-npu").platform(),
+            "wonky-npu"
+        );
+        assert_eq!(emb.platform(), CANONICAL_PARTITION);
+        // It declares the runner's pair, so the loop's canonical check applies to the real model.
+        assert_eq!(emb.model(sem()), runner.model(sem()));
+        // And it hands back the store's own catalog, so work-list and writes address one index.
+        assert_eq!(
+            std::ptr::from_ref(emb.index()),
+            std::ptr::from_ref(store.vector_index())
+        );
+    }
+
+    /// Without the originals there is nothing to regenerate from: the loop surfaces the store's
+    /// failure per-asset instead of writing a vector it did not derive from pixels.
+    #[test]
+    fn regeneration_fails_loudly_when_the_original_is_gone() {
+        let ghost = Uuid::now_v7();
+        // The index carries a stale row, but the store has lost the original.
+        let store = MemStore::with_assets(&[(ghost, b"present for the v1 seed")]);
+        seed_v1(&store, ghost);
+        let store = MemStore {
+            db: store.db,
+            bytes: BTreeMap::new(),
+        };
+
+        let mut reg2 = Registry::canonical();
+        reg2.bump_version(sem());
+        let runner2 = FixtureRunner::with_registry(PLATFORM, reg2.clone());
+        let emb = RunnerEmbedder::new(&store, &runner2, CANONICAL_PARTITION);
+
+        let err = regenerate_stale(&store.db, &reg2, &emb, sem(), None).unwrap_err();
+        let RegenError::Embed(e) = err else {
+            panic!("expected a per-asset embed failure");
+        };
+        assert_eq!(e.asset_id, ghost.to_string());
+        assert!(e.reason.contains("reading the original failed"));
+        // The stale row is still stale — nothing was written under the new version.
+        assert_eq!(
+            store
+                .db
+                .stale_embedding_assets(&reg2, sem(), CANONICAL_PARTITION)
+                .unwrap(),
+            vec![ghost.to_string()]
+        );
+    }
+
+    #[test]
+    fn runner_embedder_rejects_an_asset_id_that_is_not_a_uuid() {
+        let store = MemStore::with_assets(&[]);
+        let runner = FixtureRunner::new(PLATFORM);
+        let emb = RunnerEmbedder::new(&store, &runner, CANONICAL_PARTITION);
+        let err = emb.embed("not-a-uuid", sem()).unwrap_err();
+        assert!(err.reason.contains("not a UUID"));
     }
 }

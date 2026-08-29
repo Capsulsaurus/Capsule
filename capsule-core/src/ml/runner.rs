@@ -108,13 +108,25 @@ pub trait ModelRunner {
     ) -> Result<Vec<Vec<Detection>>, RunnerError>;
 }
 
-/// Expand SHA-256 of `bytes` into a deterministic, L2-normalized `dim`-vector. Identical bytes
-/// produce an identical vector; distinct bytes produce near-orthogonal vectors.
-fn deterministic_embedding(bytes: &[u8], dim: usize) -> Embedding {
+/// Expand SHA-256 of `(model, bytes)` into a deterministic, L2-normalized `dim`-vector.
+///
+/// `model` is the `(model_id, model_version)` the caller declares, folded into the digest so the
+/// fixture models the one property a real model swap has: **a version bump changes the output for
+/// unchanged pixels**. Without the fold a "v2" fixture would reproduce v1's vectors byte-for-byte
+/// and a regeneration could not be distinguished from copying the stale vector forward — which is
+/// exactly what [E2E case 10](https://docs/design/module-map/#e2e-test-surface) has to tell apart.
+/// Within one version the fixture keeps its contract: identical bytes produce an identical vector,
+/// distinct bytes produce near-orthogonal ones, and image bytes embed identically to the same text
+/// (both fold the same semantic-search pair).
+fn deterministic_embedding(model: &str, bytes: &[u8], dim: usize) -> Embedding {
     let mut out: Embedding = Vec::with_capacity(dim);
     let mut counter: u32 = 0;
     while out.len() < dim {
-        let mut input = bytes.to_vec();
+        let mut input = Vec::with_capacity(model.len() + bytes.len() + 5);
+        input.extend_from_slice(model.as_bytes());
+        // A byte that cannot occur in the UTF-8 `model` tag, so `(model, bytes)` is unambiguous.
+        input.push(0xFF);
+        input.extend_from_slice(bytes);
         input.extend_from_slice(&counter.to_le_bytes());
         let digest = hash::hash_bytes(&input);
         for pair in digest.0.chunks_exact(2) {
@@ -173,6 +185,16 @@ impl FixtureRunner {
             .map(crate::ml::EmbeddingDim::get)
             .ok_or(RunnerError::Unsupported(task))
     }
+
+    /// The digest-domain tag for `task`'s canonical pair — what makes the fixture's output
+    /// version-sensitive (see [`deterministic_embedding`]).
+    fn model_tag(&self, task: TaskKind) -> Result<String, RunnerError> {
+        let row = self
+            .registry
+            .canonical_for(task)
+            .ok_or(RunnerError::Unsupported(task))?;
+        Ok(format!("{}@{}", row.model_id, row.canonical_version))
+    }
 }
 
 impl ModelRunner for FixtureRunner {
@@ -192,18 +214,21 @@ impl ModelRunner for FixtureRunner {
         frames: &[Frame<'_>],
     ) -> Result<Vec<Embedding>, RunnerError> {
         let dim = self.dim(task)?;
+        let model = self.model_tag(task)?;
         Ok(frames
             .iter()
-            .map(|f| deterministic_embedding(f.bytes, dim))
+            .map(|f| deterministic_embedding(&model, f.bytes, dim))
             .collect())
     }
 
     fn embed_text(&self, texts: &[&str]) -> Result<Vec<Embedding>, RunnerError> {
-        // Text shares the semantic-search space.
+        // Text shares the semantic-search space — same model tag, so identical content still
+        // embeds identically across the image and text sides.
         let dim = self.dim(TaskKind::SemanticSearch)?;
+        let model = self.model_tag(TaskKind::SemanticSearch)?;
         Ok(texts
             .iter()
-            .map(|t| deterministic_embedding(t.as_bytes(), dim))
+            .map(|t| deterministic_embedding(&model, t.as_bytes(), dim))
             .collect())
     }
 
@@ -299,6 +324,37 @@ mod tests {
         assert_eq!(
             r.detect(TaskKind::ObjectDetection, &[Frame::new(b"x")]),
             Ok(vec![vec![]])
+        );
+    }
+
+    /// A model swap must change the *output*, not just the declared tag. This is the property
+    /// [`crate::ml::regenerate_stale`] leans on to prove regeneration re-ran inference rather than
+    /// re-labelling the stale vector (Module Map E2E case 10), and the property a real model swap
+    /// has by construction.
+    #[test]
+    fn a_version_bump_changes_the_vectors_for_unchanged_pixels() {
+        let v1 = FixtureRunner::new("cpu-reference");
+        let mut reg = Registry::canonical();
+        reg.set_canonical_version(TaskKind::SemanticSearch, ModelVersion::from("2"));
+        let v2 = FixtureRunner::with_registry("cpu-reference", reg);
+
+        let pixels = Frame::new(b"a beach at sunset");
+        let a = v1.embed_image(TaskKind::SemanticSearch, &[pixels]).unwrap();
+        let b = v2.embed_image(TaskKind::SemanticSearch, &[pixels]).unwrap();
+        assert_ne!(
+            a, b,
+            "the same pixels embed differently at a new model version"
+        );
+        // The text side moves with it, so image/text content equality still holds *within* v2.
+        assert_eq!(b[0], v2.embed_text(&["a beach at sunset"]).unwrap()[0]);
+        // …and across versions the two spaces are not comparable.
+        assert_ne!(b[0], v1.embed_text(&["a beach at sunset"]).unwrap()[0]);
+        // Untouched slots keep their own space: a bump on semantic search does not move faces.
+        assert_eq!(
+            v1.embed_image(TaskKind::FaceRecognition, &[pixels])
+                .unwrap(),
+            v2.embed_image(TaskKind::FaceRecognition, &[pixels])
+                .unwrap()
         );
     }
 
