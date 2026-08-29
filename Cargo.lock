@@ -1343,9 +1343,12 @@ dependencies = [
 name = "capsule-server"
 version = "0.1.0"
 dependencies = [
+ "capsule-i18n",
  "capsule-wire",
  "jiff",
+ "jsonwebtoken",
  "kynos",
+ "ring",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

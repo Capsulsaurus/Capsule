@@ -14,9 +14,14 @@
 //!
 //! Run with `cargo nextest run -p capsule-server`.
 
+mod support;
+
+use capsule_server::routes::auth::TokenResponse;
 use capsule_server::routes::version::VersionResponse;
 use kynos::http::StatusCode;
 use kynos::test::TestClient;
+use serde_json::json;
+use support::{EMAIL, Fixture, PASSWORD};
 
 /// `GET /v1/version` answers the shape `capsule status` reads.
 ///
@@ -26,7 +31,8 @@ use kynos::test::TestClient;
 /// internal directory moved.
 #[tokio::test]
 async fn version_reports_the_server_identity() {
-    let client = TestClient::new(capsule_server::service().expect("router builds"));
+    let client =
+        TestClient::new(capsule_server::service(Fixture::working_app()).expect("router builds"));
 
     let body: VersionResponse = client
         .get("/v1/version")
@@ -52,13 +58,23 @@ async fn version_reports_the_server_identity() {
 
 /// Everything the description promises has actually been produced by a test.
 ///
-/// This is the assertion that would have caught `S-C28` at the moment it was introduced. It is
-/// kept as its own test so that a failure names the right problem: not "version is broken" but
-/// "the document describes a response nothing exercises".
+/// This is the assertion that would have caught `S-C28` at the moment it was introduced, and it
+/// is the reason the auth port deleted a status rather than documenting it: the Salvo login can
+/// answer `429`, the counter port that backs rate limiting does not exist (`S-C29` excluded
+/// counters; `S-C32` owns them), and a `429` declared here would fail this test on the first
+/// run. A gap the suite reports beats a promise the server cannot keep.
+///
+/// It walks **every** operation in one client, because the recorder is per-client and a status
+/// produced against a second server would not count. So the whole surface — eighteen responses
+/// across four operations at the time of writing — is driven here in order, and the two
+/// collaborators are broken for one request each and repaired, which is what
+/// [`support::SwitchableSessions`] and the directory's switch exist for.
 #[tokio::test]
 async fn every_declared_response_is_exercised() {
-    let client = TestClient::new(capsule_server::service().expect("router builds"));
+    let fixture = Fixture::working();
+    let client = &fixture.client;
 
+    // ── GET /v1/version → 200 ──────────────────────────────────────────────────────────────
     client
         .get("/v1/version")
         .header("accept", "application/json")
@@ -66,6 +82,149 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
+    // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
+    // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.
+    client
+        .post("/v1/auth/login")
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/login")
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 401: the credentials did not match.
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL, "password": "wrong" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 423: the account is locked. Reachable, therefore documented — the half of `S-C28` that
+    // was closed by declaring rather than deleting.
+    fixture.accounts.lock(EMAIL);
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::LOCKED);
+    fixture.accounts.insert(EMAIL, PASSWORD, &support::user());
+
+    // 500: a collaborator could not answer.
+    fixture.accounts.set_unavailable(true);
+    client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.accounts.set_unavailable(false);
+
+    // 200.
+    let pair: TokenResponse = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+
+    // ── POST /v1/auth/refresh ──────────────────────────────────────────────────────────────
+    client
+        .post("/v1/auth/refresh")
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/refresh")
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/refresh")
+        .json(&json!({ "refresh_token": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/v1/auth/refresh")
+        .json(&json!({ "refresh_token": "not-a-token" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.sessions.set_unavailable(true);
+    client
+        .post("/v1/auth/refresh")
+        .json(&json!({ "refresh_token": pair.refresh_token }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.sessions.set_unavailable(false);
+
+    let rotated: TokenResponse = client
+        .post("/v1/auth/refresh")
+        .header("accept", "application/json")
+        .json(&json!({ "refresh_token": pair.refresh_token }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+
+    // ── POST /v1/auth/logout ───────────────────────────────────────────────────────────────
+    // 401 with the `WWW-Authenticate` challenge the operation declares as required — a header
+    // `assert_conformance` checks was actually sent.
+    client
+        .post("/v1/auth/logout")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 403: a live refresh token is a valid credential and an insufficient one.
+    client
+        .post("/v1/auth/logout")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    fixture.sessions.set_unavailable(true);
+    client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", rotated.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.sessions.set_unavailable(false);
+
+    client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", rotated.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // Nothing escaped the description on the way through, and nothing the description promises
+    // was left unproduced.
+    client.assert_conformance();
     client.assert_declared_responses_covered();
 }
 

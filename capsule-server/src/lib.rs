@@ -24,19 +24,32 @@
 //! upload-session state stay behind separate Capsule-owned ports with Postgres, Valkey and
 //! deterministic in-memory adapters; no generic CAS, transfer or TTL abstraction is planned.
 
+pub mod app;
+pub mod auth;
 pub mod routes;
 pub mod store;
 
 use kynos::prelude::*;
 use kynos::router::service::Service;
 
+pub use self::app::App;
+
 /// Assembles the router.
 ///
 /// One function, used by [`service`], by the OpenAPI emitter and by the conformance tests, so
 /// all three describe the same server. A surface reachable in production but absent from the
 /// tested router would be a surface nothing proves anything about.
-pub fn router() -> Router<()> {
-    Router::<()>::new().mount(kynos::routes![routes::version::get_version])
+///
+/// It takes no context *value* — [`App`] appears only as a type parameter — which is what lets
+/// [`openapi`] describe the whole server without a database, a cache or a signing key. The
+/// description is a property of the types, not of a running deployment.
+pub fn router() -> Router<App> {
+    Router::<App>::new().mount(kynos::routes![
+        routes::version::get_version,
+        routes::auth::login_user,
+        routes::auth::refresh_token,
+        routes::auth::logout,
+    ])
 }
 
 /// Builds the service the server and the in-process tests both drive.
@@ -49,9 +62,10 @@ pub fn router() -> Router<()> {
 /// # Errors
 ///
 /// Returns an error if the router cannot be built — a route whose declared parameters do not
-/// match its path template, or two operations claiming the same method and path.
-pub fn service() -> kynos::Result<Service<()>> {
-    router().build(())
+/// match its path template, two operations claiming the same method and path, or a guarded
+/// operation whose context cannot authenticate the scheme guarding it.
+pub fn service(context: App) -> kynos::Result<Service<App>> {
+    router().build(context)
 }
 
 /// The specification version Capsule's document targets.

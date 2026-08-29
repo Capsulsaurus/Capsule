@@ -38,6 +38,9 @@ pub mod error_codes {
     /// `error.album.not_available`
     pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
 
+    /// `error.auth.account_locked`
+    pub const AUTH_ACCOUNT_LOCKED: &str = "error.auth.account_locked";
+
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
 
@@ -49,6 +52,12 @@ pub mod error_codes {
 
     /// `error.auth.revoke_proof_required`
     pub const AUTH_REVOKE_PROOF_REQUIRED: &str = "error.auth.revoke_proof_required";
+
+    /// `error.auth.session_expired`
+    pub const AUTH_SESSION_EXPIRED: &str = "error.auth.session_expired";
+
+    /// `error.auth.unavailable`
+    pub const AUTH_UNAVAILABLE: &str = "error.auth.unavailable";
 
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";

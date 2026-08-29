@@ -1,0 +1,814 @@
+//! The auth surface, driven end to end over HTTP.
+//!
+//! Every case ends in `assert_conformance()`, which is the assertion that the response the
+//! server just sent is one its own description predicts. The other direction — every response
+//! the description promises has been produced by *some* test — is
+//! `every_declared_response_is_exercised` in `conformance.rs`, and it is why the unhappy paths
+//! below are as thorough as the happy ones: a 423 nothing produces is exactly the `S-C28`
+//! defect pointing the other way.
+//!
+//! Nothing here needs a container. The session store is `S-C29`'s deterministic in-memory
+//! adapter, the account directory is a double, and the token signer is the **real** one over a
+//! generated key — so a 401 in this file is a token that genuinely does not verify.
+
+mod support;
+
+use capsule_server::auth::{ACCESS_TOKEN_TTL, TokenKind};
+use capsule_server::routes::auth::TokenResponse;
+use capsule_server::store::{AuthStateStore, Clock, SessionId};
+use jiff::SignedDuration;
+use kynos::http::StatusCode;
+use serde_json::json;
+use support::{EMAIL, Fixture, PASSWORD, SESSION_TTL, user};
+
+/// Post a JSON body to `path`, as a well-formed client would.
+macro_rules! post_json {
+    ($client:expr, $path:literal, $body:expr) => {
+        $client
+            .post($path)
+            .header("accept", "application/json")
+            .json(&$body)
+            .send()
+            .await
+    };
+}
+
+/// The `error.*` code an RFC 9457 problem body publishes as its `code` extension member.
+fn code_of(body: &serde_json::Value) -> &str {
+    body.get("code")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("<no code member>")
+}
+
+// ===========================================================================================
+// POST /v1/auth/login
+// ===========================================================================================
+
+#[tokio::test]
+async fn login_issues_a_pair_and_opens_the_session_it_names() {
+    let fixture = Fixture::working();
+
+    let body: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    assert_eq!(body.token_type, "Bearer");
+    assert_eq!(
+        body.expires_by,
+        u64::try_from((fixture.clock.now() + ACCESS_TOKEN_TTL).as_second()).expect("positive"),
+        "`expires_by` is the absolute instant the access token dies, which is what the SDK reads"
+    );
+
+    // The token names a session, and the session exists — asserted against the store the server
+    // wrote to rather than by reading the response body a second time.
+    let verified = fixture
+        .tokens
+        .verify(&body.access_token, TokenKind::Access)
+        .expect("the server's own signer reads the token it just minted");
+    assert_eq!(verified.user, user());
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1, "one login opens exactly one session");
+    assert_eq!(open[0].session_id, verified.session);
+    assert_eq!(open[0].created_at, fixture.clock.now());
+    assert_eq!(open[0].last_active_at, fixture.clock.now());
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn the_refresh_token_never_outlives_the_session_it_names() {
+    // The two lifetimes are one fact: the route issues against `AuthStateStore::ttl()`, so a
+    // deployment cannot configure a refresh token that verifies past its own session record.
+    let fixture = Fixture::working();
+
+    let body: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    fixture
+        .clock
+        .advance(SESSION_TTL - SignedDuration::from_secs(1));
+    assert!(
+        fixture
+            .tokens
+            .verify(&body.refresh_token, TokenKind::Refresh)
+            .is_ok(),
+        "a second before the session expires the refresh token is still live"
+    );
+
+    fixture.clock.advance(SignedDuration::from_secs(2));
+    assert!(
+        fixture
+            .tokens
+            .verify(&body.refresh_token, TokenKind::Refresh)
+            .is_err(),
+        "and it dies with the record, not after it"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn login_records_the_advisory_provenance_a_client_volunteered() {
+    let fixture = Fixture::working();
+    let device = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f";
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({
+            "email": EMAIL,
+            "password": PASSWORD,
+            "cohort_hash": "  a-physical-phone  ",
+            "device_id": device,
+        })
+    )
+    .assert_status(StatusCode::OK);
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open[0].cohort_hash.as_deref(), Some("a-physical-phone"));
+    assert_eq!(
+        open[0].device_id.map(|id| id.to_string()).as_deref(),
+        Some(device),
+        "the device id is parsed once, above the port, and stored as a `Uuid`"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_unusable_advisory_field_is_dropped_rather_than_refusing_the_sign_in() {
+    // Neither field gates anything (`S-C13`, `S-N3`), so failing a sign-in over one would let
+    // legibility metadata take down a security operation.
+    let fixture = Fixture::working();
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({
+            "email": EMAIL,
+            "password": PASSWORD,
+            "cohort_hash": "x".repeat(129),
+            "device_id": "definitely-not-a-uuid",
+        })
+    )
+    .assert_status(StatusCode::OK);
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open[0].cohort_hash, None);
+    assert_eq!(open[0].device_id, None);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_wrong_password_and_an_unknown_account_are_the_same_answer() {
+    // The Salvo service went to the trouble of verifying a dummy hash so the two paths took the
+    // same time. Here they are the same *value* — `Authentication::Refused` — so no caller can
+    // tell them apart even in principle.
+    let fixture = Fixture::working();
+
+    let wrong: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": "not the password" })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+
+    let unknown: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": "nobody@example.test", "password": PASSWORD })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+
+    assert_eq!(
+        wrong, unknown,
+        "the endpoint must not be an enumeration oracle"
+    );
+    assert_eq!(code_of(&wrong), "error.auth.invalid_credentials");
+
+    assert!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .is_empty(),
+        "a refused sign-in opens nothing"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_locked_account_is_refused_with_423_and_says_so() {
+    // The status `S-C28` found rendered and never declared. It is reachable — lockout is
+    // account state the directory owns, not a counter — so it is documented rather than deleted,
+    // and a correct password still gets it, which is exactly why it must be distinguishable
+    // from a 401.
+    let fixture = Fixture::working();
+    fixture.accounts.lock(EMAIL);
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::LOCKED)
+    .json();
+
+    assert_eq!(code_of(&body), "error.auth.account_locked");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn login_answers_500_when_the_account_directory_cannot_answer() {
+    let fixture = Fixture::working();
+    fixture.accounts.set_unavailable(true);
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+    .json();
+
+    assert_eq!(code_of(&body), "error.auth.unavailable");
+    assert!(
+        !serde_json::to_string(&body)
+            .unwrap_or_default()
+            .contains("refuses on purpose"),
+        "the backend's own words stay in the log. The Salvo 500 rendered \
+         `format!(\"DEBUG: {{:?}}\")` of the underlying error straight to the client in debug \
+         builds, in text/plain, on an endpoint whose every other status was JSON"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn login_answers_500_when_the_session_cannot_be_opened() {
+    // The other half of login's 500: the credentials were fine and the *store* could not take
+    // the session. A caller cannot tell the two apart, and should not have to.
+    let fixture = Fixture::working();
+    fixture.sessions.set_unavailable(true);
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// POST /v1/auth/refresh
+// ===========================================================================================
+
+#[tokio::test]
+async fn refresh_rotates_the_session_and_closes_the_one_it_was_given() {
+    let fixture = Fixture::working();
+
+    let first: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+    let original = fixture
+        .tokens
+        .verify(&first.refresh_token, TokenKind::Refresh)
+        .expect("the pair verifies")
+        .session;
+
+    let second: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": first.refresh_token })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+    let rotated = fixture
+        .tokens
+        .verify(&second.refresh_token, TokenKind::Refresh)
+        .expect("the new pair verifies")
+        .session;
+
+    assert_ne!(original, rotated, "a refresh mints a new session id");
+    assert!(
+        fixture
+            .sessions
+            .read_session(&original)
+            .await
+            .expect("store answers")
+            .is_none(),
+        "the presented session is closed, which is what makes a refresh token single-use"
+    );
+
+    // One session, not two — and the count is the store's, so a record left behind would show
+    // up here rather than being invisible the way the Salvo per-user index made it.
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].session_id, rotated);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_refresh_token_is_spent_by_the_first_use() {
+    let fixture = Fixture::working();
+
+    let first: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": first.refresh_token })
+    )
+    .assert_status(StatusCode::OK);
+
+    let replayed: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": first.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(code_of(&replayed), "error.auth.session_expired");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn rotation_carries_the_session_provenance_across() {
+    // Without this, the devices listing would lose track of a physical device every time its
+    // tokens turned over — the grouping `S-C13` exists for, and the `(device_id, session_id)`
+    // pair the support bundle carries (`S-N3`), both decay to nothing.
+    let fixture = Fixture::working();
+    let device = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f";
+
+    let first: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({
+            "email": EMAIL,
+            "password": PASSWORD,
+            "cohort_hash": "a-physical-phone",
+            "device_id": device,
+        })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": first.refresh_token })
+    )
+    .assert_status(StatusCode::OK);
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].cohort_hash.as_deref(), Some("a-physical-phone"));
+    assert_eq!(
+        open[0].device_id.map(|id| id.to_string()).as_deref(),
+        Some(device)
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_access_token_cannot_rotate_a_session() {
+    // The live Salvo defect: `refresh_token` decoded the token and never inspected its scopes,
+    // so a 15-minute access token bought a fresh 7-day pair. Here the kind is an argument to
+    // `verify`, so the check is not something a handler can omit.
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    let refused: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.access_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED)
+    .json();
+    assert_eq!(code_of(&refused), "error.auth.session_expired");
+
+    let open = fixture
+        .sessions
+        .sessions_for_user(&user())
+        .await
+        .expect("store answers");
+    assert_eq!(open.len(), 1, "and nothing was rotated");
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn refresh_refuses_an_expired_token_a_forgery_and_an_unknown_session_alike() {
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    // A token this server never signed.
+    let stranger = support::signer(fixture.clock.clone());
+    let forged = stranger
+        .issue(&user(), &SessionId::new("whatever"), SESSION_TTL)
+        .expect("the stranger signs");
+
+    // A correctly signed token naming a session the store does not hold.
+    let orphan = fixture
+        .tokens
+        .issue(&user(), &SessionId::new("never-opened"), SESSION_TTL)
+        .expect("the server's signer signs");
+
+    for candidate in [forged.refresh_token, orphan.refresh_token] {
+        let body: serde_json::Value = post_json!(
+            fixture.client,
+            "/v1/auth/refresh",
+            json!({ "refresh_token": candidate })
+        )
+        .assert_status(StatusCode::UNAUTHORIZED)
+        .json();
+        assert_eq!(code_of(&body), "error.auth.session_expired");
+    }
+
+    // And an expired one, walked over deterministically rather than slept through.
+    fixture
+        .clock
+        .advance(SESSION_TTL + SignedDuration::from_secs(1));
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn refresh_refuses_a_token_whose_subject_does_not_own_the_session() {
+    // Unreachable while the signing key is the server's alone, which is exactly why it is worth
+    // a cheap check: the day it *is* reachable, it is a session takeover.
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+    let session = fixture
+        .tokens
+        .verify(&pair.refresh_token, TokenKind::Refresh)
+        .expect("verifies")
+        .session;
+
+    // A genuine token, signed by this server, naming somebody else's live session.
+    let impostor = fixture
+        .tokens
+        .issue(
+            &capsule_server::store::UserId::new("somebody-else"),
+            &session,
+            SESSION_TTL,
+        )
+        .expect("the server's signer signs");
+
+    post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": impostor.refresh_token })
+    )
+    .assert_status(StatusCode::UNAUTHORIZED);
+
+    assert!(
+        fixture
+            .sessions
+            .read_session(&session)
+            .await
+            .expect("store answers")
+            .is_some(),
+        "and the refusal did not close the session it failed to claim"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn refresh_answers_500_when_the_session_store_cannot_answer() {
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+    fixture.sessions.set_unavailable(true);
+
+    let body: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/refresh",
+        json!({ "refresh_token": pair.refresh_token })
+    )
+    .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+    .json();
+    assert_eq!(code_of(&body), "error.auth.unavailable");
+
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// POST /v1/auth/logout
+// ===========================================================================================
+
+#[tokio::test]
+async fn logout_closes_the_session_the_credential_names() {
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    assert!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .is_empty(),
+        "the session is gone from the record set and from the user's listing at once"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn logout_is_idempotent() {
+    // "There is no longer a session" is what the caller asked for, so a second attempt is a
+    // success rather than a 404 the client would have to special-case.
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    for _ in 0..2 {
+        fixture
+            .client
+            .post("/v1/auth/logout")
+            .header("authorization", &format!("Bearer {}", pair.access_token))
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn logout_without_a_usable_credential_is_401_and_says_what_to_send() {
+    let fixture = Fixture::working();
+
+    // Absent, wrongly framed, and present-but-unreadable are all 401 — a client that sent a
+    // broken token is not an anonymous client.
+    let attempts: [Option<&str>; 4] = [
+        None,
+        Some("Basic aGk6dGhlcmU="),
+        Some("Bearer"),
+        Some("Bearer not-a-token"),
+    ];
+
+    for attempt in attempts {
+        let mut request = fixture.client.post("/v1/auth/logout");
+        if let Some(header) = attempt {
+            request = request.header("authorization", header);
+        }
+        request
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED)
+            // Declared as a *required* response header, and sent, because the scheme supplies
+            // one string to both the wire and the document.
+            .assert_header("www-authenticate", "Bearer");
+    }
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn an_expired_access_token_is_401() {
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    fixture
+        .clock
+        .advance(ACCESS_TOKEN_TTL + SignedDuration::from_secs(1));
+
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_refresh_token_is_a_valid_credential_and_an_insufficient_one() {
+    // 403, not 401. Salvo answered 401 with `"Invalid scopes. Expected [AccessToken], got
+    // [RefreshToken]"`, which tells a client to re-authenticate when what it actually did was
+    // present the wrong one of two tokens it already holds.
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.refresh_token))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    assert_eq!(
+        fixture
+            .sessions
+            .sessions_for_user(&user())
+            .await
+            .expect("store answers")
+            .len(),
+        1,
+        "and the session it named was not closed"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn logout_answers_500_when_the_session_store_cannot_answer() {
+    // Reached *past* authentication: the credential verifies against a signer that still works,
+    // so the 500 is the store's and not a 401 wearing a different number.
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+    fixture.sessions.set_unavailable(true);
+
+    let body: serde_json::Value = fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(code_of(&body), "error.auth.unavailable");
+
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// Body rejections, which the `Json` extractor declares on both operations that take one
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_malformed_body_is_400_on_every_operation_that_takes_one() {
+    let fixture = Fixture::working();
+
+    for path in ["/v1/auth/login", "/v1/auth/refresh"] {
+        fixture
+            .client
+            .post(path)
+            .body("application/json", "{ this is not json")
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_body_of_the_wrong_shape_is_422_on_every_operation_that_takes_one() {
+    let fixture = Fixture::working();
+
+    // Well-formed JSON, wrong document: a bug in the client's model rather than its serializer,
+    // which is the distinction 400 and 422 draw.
+    fixture
+        .client
+        .post("/v1/auth/login")
+        .json(&json!({ "email": EMAIL }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    fixture
+        .client
+        .post("/v1/auth/refresh")
+        .json(&json!({ "refresh_token": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_body_in_the_wrong_media_type_is_415_on_every_operation_that_takes_one() {
+    let fixture = Fixture::working();
+
+    for path in ["/v1/auth/login", "/v1/auth/refresh"] {
+        fixture
+            .client
+            .post(path)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    fixture.client.assert_conformance();
+}

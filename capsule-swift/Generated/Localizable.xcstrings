@@ -10757,6 +10757,16 @@
         }
       }
     },
+    "error.auth.account_locked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This account is locked after too many failed sign-in attempts."
+          }
+        }
+      }
+    },
     "error.auth.invalid_credentials": {
       "localizations": {
         "ar": {
@@ -10937,6 +10947,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "Confirm with your account key to log out of all devices."
+          }
+        }
+      }
+    },
+    "error.auth.session_expired": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Your session has ended. Please sign in again."
+          }
+        }
+      }
+    },
+    "error.auth.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach your account just now. Please try again."
           }
         }
       }

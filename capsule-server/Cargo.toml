@@ -32,7 +32,17 @@ serde = { workspace = true }
 thiserror = { workspace = true }
 jiff = { workspace = true }
 tracing = { workspace = true }
-uuid = { workspace = true }
+# `v7` for the session ids this crate mints: a session id is a new identifier, and the
+# Identifiers row in design/dependencies.md makes UUIDv7 the default for one. `v4` rides along
+# from the workspace default.
+uuid = { workspace = true, features = ["v7"] }
+# The message catalog's stable `error.*` codes (slice `S-C27`, the i18n design doc). Every
+# rejection this server renders names one from `capsule_i18n::error_codes` rather than a string
+# literal, so a typo is a compile error and the code cannot drift from `locales/`.
+capsule-i18n = { path = "../capsule-i18n" }
+# EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`;
+# see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
+jsonwebtoken = { workspace = true }
 
 [dev-dependencies]
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
@@ -43,3 +53,8 @@ kynos = { workspace = true, features = ["test-util"] }
 # never parses JSON by hand.
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# Ed25519 key generation for the token tests. A dev-dependency and nothing more: the suite
+# mints a fresh key pair per signer rather than reading a checked-in PEM, because a private key
+# in the repository is a private key somebody eventually reuses. Already the workspace's
+# key-generation crate (`capsule-api-environment`'s `keygen`), so no new dependency row.
+ring = { workspace = true }

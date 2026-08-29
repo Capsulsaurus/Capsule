@@ -63,6 +63,18 @@
         "message": "Too many attempts. Please wait and try again.",
         "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
     },
+    "error.auth.account_locked": {
+        "message": "This account is locked after too many failed sign-in attempts.",
+        "context": "HTTP 423 on POST /v1/auth/login: the account is refusing attempts after too many failures, so a correct password is refused too. Distinct from `error.auth.invalid_credentials` precisely because retrying the password cannot help \u2014 the user needs to know the account, not the password, is the problem."
+    },
+    "error.auth.session_expired": {
+        "message": "Your session has ended. Please sign in again.",
+        "context": "HTTP 401 on POST /v1/auth/refresh: the presented refresh token did not verify, had expired, was the wrong kind of token, or named a session the server no longer holds. Every reason is surfaced identically so the endpoint is not an oracle; in all of them the client must re-authenticate interactively."
+    },
+    "error.auth.unavailable": {
+        "message": "Capsule couldn't reach your account just now. Please try again.",
+        "context": "HTTP 500 on the /v1/auth surface: the account directory or the session store could not answer, so the request neither succeeded nor was refused. Retryable, unlike every other failure on these routes."
+    },
     "error.auth.revoke_proof_required": {
         "message": "Confirm with your account key to log out of all devices.",
         "context": "HTTP 401 on POST /logout/all (slice S-C23): no readable master-key proof was presented. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."

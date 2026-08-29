@@ -6,4 +6,5 @@
 //! staging and the Postgres entities are migration *input*; the Salvo handlers, response
 //! writers, OpenAPI registration and configuration projections are not.
 
+pub mod auth;
 pub mod version;
