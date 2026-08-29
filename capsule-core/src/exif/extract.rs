@@ -345,8 +345,11 @@ mod tests {
     fn date_time_original_is_parsed_from_a_real_exif_segment() {
         let dir = tempfile::TempDir::new().expect("temp dir");
         let path = dir.path().join("fixture.jpg");
-        std::fs::write(&path, jpeg_with_date_time_original(b"2019:03:04 05:06:07\0"))
-            .expect("write fixture");
+        std::fs::write(
+            &path,
+            jpeg_with_date_time_original(b"2019:03:04 05:06:07\0"),
+        )
+        .expect("write fixture");
 
         let extracted = extract_exif(&path).expect("the fixture is a readable EXIF container");
 
