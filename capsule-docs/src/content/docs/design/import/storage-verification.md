@@ -149,7 +149,7 @@ Concretely, the gate applies to:
 The gate **does not** apply to:
 
 - **Intentional deletes** — trash/soft-delete and hard-purge are the *purpose* of the operation, not post-write cleanup; their safety is the [retention window](/design/organization/#retention-window) and provenance tombstone, not a durability check.
-- **Rebuildable cache** — thumbnails, previews, transcodes, and the SQLite index regenerate locally, so their eviction is always safe (see [Space Recovery](/design/filesystem/client/#space-recovery)).
+- **Rebuildable cache** — thumbnails, previews and transcodes regenerate locally, so their eviction is always safe (see [Space Recovery](/design/filesystem/client/#space-recovery)). **The SQLite catalog is not in this set.** It is reconstructible in principle but is not a disposable cache: it [migrates forward in place](/design/versioning/#client-catalog-migration) across schema changes, and a rebuild returns only what was written to disk — an importer-formed stack placement in a pre-`S-B15` library lives in the index and nowhere else. Evicting it is a repair action with consequences, not a reclamation.
 - **Re-fetchable server-origin blobs** — a fetched-but-unpinned original came *from* the server, so the server is already known to hold it; evicting it is safe because it transparently re-fetches.
 
 A non-`durable` verdict never triggers a destructive action: the client retains the local copy, retries verification with backoff, and surfaces the asset as "not yet confirmed on server" rather than silently dropping it.
