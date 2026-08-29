@@ -90,7 +90,6 @@ describe('ServerGateway — key-free shells', () => {
         expect(asset.id).toBe('photo');
         // Key-free: no renderable URL, no LQIP, placeholder dimensions.
         expect(asset.url).toBe('');
-        expect(asset.thumbhash).toBe('');
         expect(asset.width).toBe(1);
         expect(asset.height).toBe(1);
         // Real key-free facts: media kind from blob format, awaiting-original, protocol date.

@@ -11,7 +11,7 @@
  * album ids, per-album membership and counts, the derived awaiting-original state, blob
  * content addresses, and change recency (`sync_seq`). What lives in encrypted metadata and
  * is therefore ABSENT: display titles, cover art, capture dates, pixel dimensions, LQIP
- * thumbhashes, locations, durations, and any renderable imagery (blobs are ciphertext with
+ * placeholders, locations, durations, and any renderable imagery (blobs are ciphertext with
  * no in-browser decrypt path yet — gateway.ts defers that wasm boundary). Those display
  * fields are filled with safe placeholders and documented in the S-D6 report; they light up
  * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (retirement of the
@@ -170,8 +170,6 @@ function toAsset(record: AssetRecord): Asset {
         // Pixel dimensions live in encrypted metadata; 1×1 keeps justified layout finite.
         width: 1,
         height: 1,
-        // LQIP thumbhash lives in the encrypted metadata blob — absent key-free.
-        thumbhash: '',
         pending: record.originalHeld ? undefined : true,
     };
 }

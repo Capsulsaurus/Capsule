@@ -1230,6 +1230,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "base64 0.22.1",
+ "chromahash",
  "ciborium",
  "ed25519-dalek",
  "file-format",
@@ -1267,7 +1268,6 @@ dependencies = [
  "tar",
  "tempfile",
  "thiserror 2.0.20",
- "thumbhash",
  "tokio",
  "tracing",
  "tss-esapi",
@@ -1344,10 +1344,14 @@ name = "capsule-server"
 version = "0.1.0"
 dependencies = [
  "capsule-wire",
+ "jiff",
  "kynos",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
  "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1459,6 +1463,12 @@ dependencies = [
  "encoding_rs",
  "memchr",
 ]
+
+[[package]]
+name = "chromahash"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d257f302d9dd337d2e7eb6000db5e3f9aa8b6dedda42599743994f021ae8ed25"
 
 [[package]]
 name = "chrono"
@@ -7534,12 +7544,6 @@ checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "thumbhash"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b7726e0245a7331bd0c9a1fb4fd99fd695bcd478ca569f0eda2ff2cb14e7a00"
 
 [[package]]
 name = "time"
