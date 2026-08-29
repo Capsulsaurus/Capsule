@@ -240,6 +240,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | ready | found porting auth |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
+| S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | ready | `S-C1`/`S-C3`/`S-C10`/`S-C14` all consume it |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1387,6 +1388,33 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   description omits cannot be rendered. Fold the audit into the Stage 6 port of each surface.
 - **Done when:** every taxonomy's `undocumented()` is empty, and the regenerated schema is
   committed. **Tier:** Unit.
+
+### S-C35 — the blob store port, sharded
+
+- **Contract:** [Server Filesystem — blob store layout](capsule-docs/src/content/docs/design/filesystem/server.md);
+  AGENTS.md's Rust Architecture Decisions.
+- **Why it needs an ID:** four lane-C slices consume a blob store — `S-C1` (envelope gate), `S-C3`
+  (storage verification), `S-C10` (media serving), `S-C14` (integrity scrub) — and none of them owns
+  it. Like `S-C29`'s two storage ports, it is the foundation those surfaces are written against, so
+  it is a slice rather than an implementation detail of whichever one lands first.
+- **Layout:** `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, settled 2026-08-29. The reasoning shapes
+  the port: the sizing case is **not** lookup, which is a `stat` either way. It is the three
+  full-store enumerations — the integrity scrub, the refcount GC's orphan sweep, and the index
+  rebuild scan — so **enumeration is a first-class operation of the port**, not something callers
+  walk the tree to do themselves. That is the part a flat-to-sharded change would otherwise break
+  silently.
+- **Boundary:** Capsule-owned, narrow, over an arbitrary backend. `object_store` and generic
+  CAS/transfer crates are refused by AGENTS.md and `object_store` is on the architecture check's
+  retired list, so adopting one fails a gate rather than merely departing from the design.
+- **Four questions the layout decision does not settle**, each of which has a correctness
+  consequence: where the temp file lives (the finalizing `rename` is only atomic within a
+  filesystem, and `self-hosting.md` records the one-filesystem requirement); durability of a newly
+  created shard directory across a crash; whether `incoming/` and `quarantine/` shard too; and
+  tying the two-level split to the 64-char lowercase-hex invariant `is_content_hash` enforces, so a
+  future digest change fails a test rather than corrupting the layout silently.
+- **Done when:** one shared conformance suite passes for every adapter, enumeration is exercised
+  over a populated shard tree, and no caller reaches past the port to the filesystem.
+  **Tier:** Unit + conformance.
 
 ### S-C33 — request-size limits, because Kynos declares constraints it does not enforce
 
