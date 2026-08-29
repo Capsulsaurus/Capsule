@@ -2,6 +2,7 @@
 name = "capsule-sdk"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 # `lib` (rlib) keeps the rest of the workspace linking capsule-sdk unchanged.

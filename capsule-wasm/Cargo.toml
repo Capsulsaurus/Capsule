@@ -2,6 +2,7 @@
 name = "capsule-wasm"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 description = "Browser (wasm-bindgen) surface for the Capsule guest web client — the share-link client-side open path (slice S-E1) and the contribute-only guest drop sealing path (slice S-D3)."
 

@@ -4,7 +4,7 @@
     "title": "Capsule API",
     "description": "Capsule API Documentation",
     "license": {
-      "name": "GNU Affero General Public License v3.0 or later",
+      "name": "GNU Affero General Public License v3.0 only",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
     },
     "version": "0.1.0"

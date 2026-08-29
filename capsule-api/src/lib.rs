@@ -24,7 +24,7 @@ pub fn create_openapi_spec() -> OpenApi {
     let info = Info::new("Capsule API", "0.1.0")
         .description("Capsule API Documentation")
         .license(
-            License::new("GNU Affero General Public License v3.0 or later")
+            License::new("GNU Affero General Public License v3.0 only")
                 .url("https://www.gnu.org/licenses/agpl-3.0.html"),
         );
 
