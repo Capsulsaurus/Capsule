@@ -39,6 +39,36 @@ Required means required. The server refuses to start without `VALKEY_URL` — it
 - **`blobs/`**: the finalized store, **sharded two levels deep on the content hash's own hex prefix**: `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, the filename being the [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix. This is the re-ratification the 2026-07-12 amendment demanded, and it overturns that amendment's flat namespace. The amendment argued the flat layout from the wrong sizing case: *no hot path enumerates the directory* is true and beside the point, because lookup is a `stat` at a known content address and costs the same flat or sharded. The cost lands on the **enumerations**, of which there are three, each a full `readdir` + `stat` of the store — the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)'s blob→row pass, the [refcount GC](#deletion-and-garbage-collection)'s orphan sweep, and the [index rebuild](#recovering-the-index-from-blobs-alone) — and a multi-million-entry flat directory is precisely where those hurt. All three are integrity or recovery paths, so they must stay affordable exactly when a deployment is already in trouble. Timing settles the rest: no deployment holds blobs to move, so the shard is free **now** and a version-bumped data move behind `.server/version` forever after. The store in the tree today is still flat; the shard is the target `capsule-api::blob` is built to, not a migration it performs. Shard directories are created on demand at finalization and the rename stays inside `{blob_root}`, so finalization remains atomic. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
 
+### What the shard does not decide
+
+Sharding `blobs/` leaves four questions open, and each has a correctness consequence rather than a
+stylistic one. Settled with slice `S-C35`:
+
+- **Temp files live inside the target shard**, as `blobs/{aa}/{bb}/.{hash}.{uuid}.tmp`. Same
+  directory is a stronger guarantee than same filesystem and needs no configuration to stay true.
+  The alternative — `blobs/{hash}.tmp` beside a now-sharded tree — would be the one file outside
+  every shard, a permanent exception every enumeration has to carry. A crashed temp is then debris
+  *inside* a shard the scrub already walks. Note the upload path has no temp file at all:
+  `incoming/{upload_id}.bin` **is** the staging file and finalization renames it straight to the
+  content address.
+- **Directory creation is fsynced before the row is committed**, in order: the staged data, then
+  each shard directory this write actually created, then the rename, then the shard it landed in.
+  The asymmetry forces this rather than making it tunable — a lost directory entry underneath a
+  committed index row is a **dangling reference**, a loud integrity error that is never
+  auto-deleted, whereas the reverse is an orphan the refcount GC already reclaims. Directory fsync
+  is a Unix operation; other hosts are not supported deployments.
+- **Nothing else shards.** `incoming/` is bounded by concurrent sessions under the 24-hour cap, and
+  its enumeration is over that live set. `quarantine/` is bounded by failures, is empty in a healthy
+  store, and exists to be **read by a human** — sharding would hide the one inventory an operator
+  wants to list. Neither is content-addressed, so neither has a prefix to shard on without inventing
+  one.
+- **The layout is coupled to the digest**, deliberately and mechanically. The two-level split is
+  derived from the 64-character lowercase-hex address and nowhere else; a content address is
+  constructed only by parsing, so no loose string reaches a path. Changing the digest is therefore a
+  layout change — a `.server/version` bump and a data move — and fails a compile-time assertion
+  rather than silently misfiling blobs under shards that no longer derive from them.
+
+
 ## Uniform, Opaque Blobs
 
 A single asset produces a **bundle** of blobs (see [Import — Upload Protocol: What Gets Uploaded](/design/import/upload-protocol/#what-gets-uploaded)): the encrypted original, encrypted derivatives (thumbnails, previews), and the encrypted CBOR metadata blob (which carries the LQIP) — every one of them fully opaque, content-addressed ciphertext the store does not distinguish. Beside them, each write persists its signed **manifest envelope object** (see [Provenance — Physical placement](/design/cryptography/provenance/#asset-manifest)): a small, deliberately server-visible signed CBOR object, stored content-addressed like any blob, whose append-only sequence is the asset's provenance chain. The hot-path mapping from an asset to its blobs and their roles lives in PostgreSQL, with the envelope objects as its durable, key-free fallback.

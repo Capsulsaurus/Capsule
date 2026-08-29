@@ -239,9 +239,13 @@ You can lean on this for integrity:
   Takeout archive before you delete anything from Google, and keep that record:
 
   ```sh
-  find takeout-extracted -type f \( -iname '*.jpg' -o -iname '*.heic' \) \
-    | head -20 | xargs shasum -a 256
+  find takeout-extracted -type f \( -iname '*.jpg' -o -iname '*.heic' \) -print0 \
+    | head -z -n 20 | xargs -0 shasum -a 256
   ```
+
+  The null separators are not decoration: a Takeout export contains a directory
+  literally named `Google Photos`, and the whitespace-separated form splits every
+  path on that space and hashes nothing.
 
   Because Capsule imports the original bytes unchanged, these source hashes are
   your reference for confirming the same files are the ones that came across.
