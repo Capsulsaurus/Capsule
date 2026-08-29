@@ -57,6 +57,9 @@
     <string name="app_settings_diagnostics_toggle">Share On-Device Diagnostics</string>
     <string name="app_settings_report_button">Report a Problem…</string>
     <string name="app_settings_report_footer">Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.</string>
+    <string name="app_settings_security_place_names_footer">Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced.</string>
+    <string name="app_settings_security_place_names_header">Place Names</string>
+    <string name="app_settings_security_place_names_toggle">Look Up Place Names</string>
     <string name="app_settings_upload_footer">Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.</string>
     <string name="app_settings_upload_header">Self-Hosted Upload</string>
     <string name="app_settings_upload_toggle">Upload Reports</string>

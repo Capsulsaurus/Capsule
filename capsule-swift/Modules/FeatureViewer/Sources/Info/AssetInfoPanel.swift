@@ -21,10 +21,14 @@ struct AssetInfoPanel: View {
     /// Whether to open at full height, where the editable fields are reachable
     /// without a drag. Set by the Adjust button; Info opens at half.
     var startsExpanded = false
+    /// Turns the coordinate into a place name, when the device is permitted to.
+    /// Defaults to the resolver that never asks anyone anything.
+    var placeNames: any PlaceNameResolver = NoPlaceNameResolver()
 
     @Environment(\.dismiss) private var dismiss
     @State private var metadata = AssetExifMetadata()
     @State private var detent: PresentationDetent = .medium
+    @State private var placeName: String?
 
     var body: some View {
         NavigationStack {
@@ -59,6 +63,7 @@ struct AssetInfoPanel: View {
             metadata = await mediaLoader.metadata(for: asset)
         }
         .onAppear { detent = startsExpanded ? .large : .medium }
+        .onChange(of: asset.id) { _, _ in placeName = nil }
     }
 
     /// Weekday, date, time — and the filename beneath, the way a file browser
@@ -94,11 +99,13 @@ struct AssetInfoPanel: View {
     @ViewBuilder
     private var locationCard: some View {
         if let latitude = metadata.latitude, let longitude = metadata.longitude {
+            let coordinate = AssetCoordinate(latitude: latitude, longitude: longitude)
             AssetInfoLocationCard(
-                coordinate: AssetCoordinate(latitude: latitude, longitude: longitude),
-                placeName: nil,
+                coordinate: coordinate,
+                placeName: placeName,
                 onAdjust: nil
             )
+            .task(id: coordinate) { placeName = await placeNames.placeName(for: coordinate) }
         }
     }
 }

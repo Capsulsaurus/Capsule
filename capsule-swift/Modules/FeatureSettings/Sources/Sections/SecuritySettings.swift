@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsuleFoundation
 import CapsuleMock
 import CapsuleNavigation
 import CapsulePorts
@@ -110,6 +111,9 @@ public final class SecuritySettingsModel {
 
 /// Security & Privacy.
 public struct SecuritySettingsView: View {
+    /// Whether this device may resolve coordinates into place names.
+    private let placeNames = PlaceNamePreference()
+
     @State private var model: SecuritySettingsModel
 
     public init(model: SecuritySettingsModel) {
@@ -134,6 +138,7 @@ public struct SecuritySettingsView: View {
                 gateSection
                 methodSection
                 atRestSection
+                placeNamesSection
                 plaintextSection
             }
         )
@@ -219,6 +224,30 @@ public struct SecuritySettingsView: View {
         } footer: {
             Text(LocalizedStringKey(model.posture.summaryKey))
         }
+    }
+
+    /// The one setting on this screen that permits *outbound* traffic.
+    ///
+    /// It lives under Security rather than Appearance because what it controls
+    /// is not how something looks: turning it on sends the coordinates of every
+    /// photo you open the info panel on to Apple's geocoding service. Off by
+    /// default, per device, and phrased so the footer says what leaves rather
+    /// than what appears.
+    private var placeNamesSection: some View {
+        Section {
+            Toggle("app.settings.security.place_names.toggle", isOn: placeNamesBinding)
+        } header: {
+            Text("app.settings.security.place_names.header")
+        } footer: {
+            Text("app.settings.security.place_names.footer")
+        }
+    }
+
+    private var placeNamesBinding: Binding<Bool> {
+        Binding(
+            get: { placeNames.isEnabled },
+            set: { placeNames.isEnabled = $0 }
+        )
     }
 
     private var plaintextSection: some View {

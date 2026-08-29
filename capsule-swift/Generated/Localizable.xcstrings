@@ -15885,6 +15885,252 @@
         }
       }
     },
+    "app.settings.security.place_names.footer": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced."
+          }
+        }
+      }
+    },
+    "app.settings.security.place_names.header": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Place Names"
+          }
+        }
+      }
+    },
+    "app.settings.security.place_names.toggle": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Look Up Place Names"
+          }
+        }
+      }
+    },
     "app.settings.security.plaintext.body": {
       "localizations": {
         "en": {

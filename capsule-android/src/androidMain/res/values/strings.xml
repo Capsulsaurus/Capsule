@@ -1178,6 +1178,9 @@
     <string name="app_settings_security_method_header">How This Device Unlocks</string>
     <string name="app_settings_security_method_label">Unlock Method</string>
     <string name="app_settings_security_method_unavailable">Nothing set — these views can\'t be locked</string>
+    <string name="app_settings_security_place_names_footer">Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced.</string>
+    <string name="app_settings_security_place_names_header">Place Names</string>
+    <string name="app_settings_security_place_names_toggle">Look Up Place Names</string>
     <string name="app_settings_security_plaintext_body">Photos you\'re looking at, previews, and search indexes exist unsealed on this device — that\'s what makes them fast to open. Your server only ever receives sealed copies.</string>
     <string name="app_settings_security_plaintext_footer">Everything that leaves this device is sealed first.</string>
     <string name="app_settings_security_plaintext_header">What\'s Readable on This Device</string>

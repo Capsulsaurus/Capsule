@@ -16,6 +16,7 @@ public struct AssetViewerView: View {
     @State private var model: AssetViewerModel
     private let mediaLoader: ViewerMediaLoader
     private let captionStore: (any CaptionStore)?
+    private let placeNames: any PlaceNameResolver
     @Environment(\.dismiss) private var dismiss
     @State private var isAddToAlbumPresented = false
     /// Ties the bottom bar's glass groups together so they morph as one.
@@ -36,7 +37,8 @@ public struct AssetViewerView: View {
         provider: any AssetProvider,
         mediaLoader: ViewerMediaLoader,
         albumProvider: any AlbumProvider,
-        captionStore: (any CaptionStore)? = nil
+        captionStore: (any CaptionStore)? = nil,
+        placeNames: any PlaceNameResolver = NoPlaceNameResolver()
     ) {
         _model = State(wrappedValue: AssetViewerModel(
             assets: assets,
@@ -46,6 +48,7 @@ public struct AssetViewerView: View {
         ))
         self.mediaLoader = mediaLoader
         self.captionStore = captionStore
+        self.placeNames = placeNames
     }
 
     public var body: some View {
@@ -63,7 +66,8 @@ public struct AssetViewerView: View {
                     asset: asset,
                     mediaLoader: mediaLoader,
                     captionStore: captionStore,
-                    startsExpanded: infoPanelStartsExpanded
+                    startsExpanded: infoPanelStartsExpanded,
+                    placeNames: placeNames
                 )
             }
         }

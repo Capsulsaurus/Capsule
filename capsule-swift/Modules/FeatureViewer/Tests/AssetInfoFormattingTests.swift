@@ -1,3 +1,5 @@
+import AssetKit
+import CapsuleFoundation
 import Foundation
 import ImagePipeline
 import Testing
@@ -174,5 +176,61 @@ struct AssetInfoFormattingTests {
         // Every case is covered, so a new one fails to compile rather than
         // silently rendering nothing.
         #expect(HDRFormat.allCases.count == 3)
+    }
+}
+
+@Suite("Place-name lookup is opt-in")
+struct PlaceNameResolverTests {
+    private static let coordinate = AssetCoordinate(latitude: 43.75, longitude: -79.42)
+
+    /// The default resolver is the one that asks nobody anything.
+    ///
+    /// This is the assertion that keeps the privacy posture from decaying into
+    /// a convention: a viewer built without an explicit resolver makes no
+    /// network call, so a lookup can only happen where somebody deliberately
+    /// wired one in.
+    @Test("the default resolver never names anything")
+    func defaultResolverIsSilent() async {
+        let name = await NoPlaceNameResolver().placeName(for: Self.coordinate)
+        #expect(name == nil)
+    }
+
+    /// With the preference off, the system resolver returns before it builds a
+    /// request. The check is inside the resolver so a second call site cannot
+    /// skip it.
+    @Test("the system resolver answers nil while the preference is off")
+    func systemResolverRespectsThePreference() async {
+        let defaults = UserDefaults(suiteName: "capsule.tests.placenames.off")
+        defaults?.removePersistentDomain(forName: "capsule.tests.placenames.off")
+        let preference = PlaceNamePreference(defaults: defaults ?? .standard)
+        #expect(preference.isEnabled == false)
+
+        let name = await SystemPlaceNameResolver(preference: preference)
+            .placeName(for: Self.coordinate)
+        #expect(name == nil)
+    }
+
+    /// A fresh install has no stored value, and the absent case must read as
+    /// "not permitted" rather than as a default the user never chose.
+    @Test("an unset preference is off, not unset")
+    func absentPreferenceIsOff() {
+        let suite = "capsule.tests.placenames.fresh"
+        let defaults = UserDefaults(suiteName: suite)
+        defaults?.removePersistentDomain(forName: suite)
+        #expect(PlaceNamePreference(defaults: defaults ?? .standard).isEnabled == false)
+    }
+
+    @Test("the preference round-trips and stays per device")
+    func preferenceRoundTrips() {
+        let suite = "capsule.tests.placenames.roundtrip"
+        let defaults = UserDefaults(suiteName: suite)
+        defaults?.removePersistentDomain(forName: suite)
+        let preference = PlaceNamePreference(defaults: defaults ?? .standard)
+
+        preference.isEnabled = true
+        #expect(PlaceNamePreference(defaults: defaults ?? .standard).isEnabled)
+        preference.isEnabled = false
+        #expect(PlaceNamePreference(defaults: defaults ?? .standard).isEnabled == false)
+        defaults?.removePersistentDomain(forName: suite)
     }
 }

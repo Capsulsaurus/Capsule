@@ -4711,6 +4711,18 @@
     "message": "Nothing set — these views can't be locked",
     "context": "Unlock method when the device has no passcode set at all. Only the user can fix this, in the system settings, and they need to know."
   },
+  "app.settings.security.place_names.footer": {
+    "message": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced.",
+    "context": "iOS settings, Security: footer stating exactly what leaves the device when place-name lookup is on."
+  },
+  "app.settings.security.place_names.header": {
+    "message": "Place Names",
+    "context": "iOS settings, Security: header for the toggle that permits reverse geocoding."
+  },
+  "app.settings.security.place_names.toggle": {
+    "message": "Look Up Place Names",
+    "context": "iOS settings, Security: toggle that lets the app turn photo coordinates into a place name."
+  },
   "app.settings.security.plaintext.body": {
     "message": "Photos you're looking at, previews, and search indexes exist unsealed on this device — that's what makes them fast to open. Your server only ever receives sealed copies.",
     "context": "Note explaining what is readable locally, so nobody assumes local storage is opaque to the device itself."

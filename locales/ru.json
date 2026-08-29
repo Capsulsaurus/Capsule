@@ -227,6 +227,18 @@
     "message": "Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.",
     "context": "Machine-translated seed pending human review."
   },
+  "app.settings.security.place_names.footer": {
+    "message": "Off by default. When on, the coordinates of a photo you open the info panel on are sent to Apple to be named. This setting applies to this device only and is never synced.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.security.place_names.header": {
+    "message": "Place Names",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.settings.security.place_names.toggle": {
+    "message": "Look Up Place Names",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.settings.upload.footer": {
     "message": "Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.",
     "context": "Machine-translated seed pending human review."
