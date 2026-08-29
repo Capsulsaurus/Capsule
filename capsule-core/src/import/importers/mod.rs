@@ -13,6 +13,13 @@
 //! fold happens at extraction, so the planner's determinism contract holds: a given export yields
 //! the same [`ScanResult`] on every run.
 //!
+//! The folded record is not planner input only. The
+//! [executor](crate::import::executor::execute_with_source_metadata) writes it into the **signed
+//! sidecar** at import through [`enrichment`](crate::import::enrichment) (`S-B10`) — capture time
+//! and GPS as fallbacks behind the file's own EXIF, and the exporter-authoritative constructs
+//! (description, favorites, album membership) unconditionally — so a migrated library keeps what
+//! the exporting service carried instead of discarding it once the plan is built.
+//!
 //! The committed adapter is [`takeout::TakeoutAdapter`] (Google Takeout, `S-B6`); the iCloud
 //! (`S-B7`), Immich (`S-B8`), and tethered-camera (`S-B9`) adapters are post-v1 and land on this
 //! same seam.
@@ -81,7 +88,9 @@ pub struct GeoPoint {
 }
 
 /// The out-of-band metadata an adapter folds for one media entry, with the precedence already
-/// resolved. This is the artifact the [Takeout mapping table] validates, one field per rule.
+/// resolved. This is the artifact the [Takeout mapping table] validates, one field per rule, and
+/// what [`sidecar_enrichment`](crate::import::enrichment::sidecar_enrichment) maps onto the
+/// signed sidecar's fields at import.
 ///
 /// [Takeout mapping table]: https://docs/design/import/pipeline/#validation
 #[derive(Debug, Clone, PartialEq)]

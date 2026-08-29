@@ -67,7 +67,7 @@ use crate::federation::AlbumGroupAssertion;
 use crate::library::Library;
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
-use crate::sidecar::sidecar_v1::{SidecarV1, StackMembership, StackRole};
+use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
@@ -226,8 +226,44 @@ impl StackPlacement {
     }
 }
 
-/// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack)
-/// reproduce the standalone [`Workspace::import_asset`] behaviour.
+/// Out-of-band metadata a third-party [source adapter](crate::import::importers) folded for one
+/// media file, in the shape the signed sidecar stores it (slice `S-B10`).
+///
+/// The [precedence rule] is resolved in two places, and this type is what keeps the two halves
+/// apart:
+///
+/// - [`capture_time`](Self::capture_time) and [`gps`](Self::gps) are **fallbacks**. The file's
+///   own embedded EXIF wins wherever it yields a value; these are consulted only where it does
+///   not. Because the adapter already folded EXIF-over-exporter at extraction, the value carried
+///   here is the *winner* of that fold — so an EXIF capture time the write site cannot resolve
+///   to a UTC instant by itself (a floating `DateTimeOriginal` carrying no offset) still beats
+///   the exporter's record instead of silently losing to it.
+/// - [`caption`](Self::caption), [`rating`](Self::rating) and [`tags`](Self::tags) are
+///   **exporter-authoritative** — constructs the file bytes never carried — so they are written
+///   unconditionally, stamped `(now, device_id)` like any other register write.
+///
+/// Every field left empty writes nothing, so an import carrying no exporter record produces a
+/// sidecar byte-identical to a plain filesystem import's. The provider-specific mapping that
+/// fills this in lives in [`import::enrichment`](crate::import::enrichment).
+///
+/// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SidecarEnrichment {
+    /// The adapter's folded capture time — used only when the file's own EXIF resolves none.
+    pub capture_time: Option<Timestamp>,
+    /// The adapter's folded GPS fix — used only when the file's own EXIF carries none.
+    pub gps: Option<Gps>,
+    /// The exporter's user-typed description, bounded to the schema's caption limit.
+    pub caption: Option<String>,
+    /// The exporter's favorite/star flag, already mapped onto the sidecar's star scale.
+    pub rating: Option<u8>,
+    /// Exporter-authoritative user tags (Takeout's album membership); each becomes one
+    /// `tags_user` OR-set add with its own `add_id`.
+    pub tags: Vec<String>,
+}
+
+/// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack,
+/// no exporter metadata) reproduce the standalone [`Workspace::import_asset`] behaviour.
 #[derive(Debug, Clone, Default)]
 pub struct SignedImportOptions {
     /// Delete the source file after a durable commit (Move mode).
@@ -243,6 +279,11 @@ pub struct SignedImportOptions {
     /// [`Workspace::set_stack_membership`] performs — and projected from there onto the index
     /// row. `None` imports a standalone asset and leaves the register wire-absent.
     pub stack: Option<StackMembership>,
+    /// Folded third-party exporter metadata for this file (`S-B10`), attached by the
+    /// [executor](crate::import::executor::execute_with_source_metadata) when the import came
+    /// from a [source adapter](crate::import::importers). `None` — a plain filesystem import —
+    /// leaves every enriched field exactly as it was before the slice.
+    pub enrichment: Option<SidecarEnrichment>,
 }
 
 /// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**

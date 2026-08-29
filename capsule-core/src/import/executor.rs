@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::db::rows::{AssetStackRow, StackMemberRow};
 use crate::domain::{ImportMode, MemberRole, StackType};
 use crate::import::default_album::resolve_default_album;
+use crate::import::enrichment::{SourceMetadataIndex, sidecar_enrichment};
 use crate::import::executor_cancellation::CancellationToken;
 use crate::import::planner::{ImportActionPlan, ImportConfig, ImportDecision};
 use crate::import::progress::{ImportExecutionSummary, ImportOutcome, ImportProgressEvent};
@@ -38,14 +39,50 @@ type ExecError = Box<dyn std::error::Error + Send + Sync>;
 /// `config.album` through [`resolve_default_album`] — the explicit pick, else the owner's
 /// `default_album_id` pointer, else the workspace's derived de facto album — which must already
 /// exist in the workspace.
-#[tracing::instrument(
-    skip_all,
-    fields(candidates = plan.actions.len(), mode = ?config.import_mode)
-)]
+///
+/// This is a plain filesystem import: no exporter metadata is attached. A third-party import
+/// calls [`execute_with_source_metadata`] instead.
 pub fn execute(
     plan: &ImportActionPlan,
     workspace: &mut Workspace,
     config: &ImportConfig,
+    on_event: impl Fn(ImportProgressEvent),
+    cancel: &CancellationToken,
+) -> Result<ImportExecutionSummary, ExecError> {
+    execute_with_source_metadata(
+        plan,
+        workspace,
+        config,
+        &SourceMetadataIndex::empty(),
+        on_event,
+        cancel,
+    )
+}
+
+/// [`execute`], with the folded metadata a third-party [source adapter] extracted attached to
+/// each file it covers (slice `S-B10`).
+///
+/// The adapter resolved the [precedence rule] at extraction; the executor is what makes the
+/// result *durable* — each member's record is mapped onto sidecar fields by
+/// [`sidecar_enrichment`] and written inside the signed sidecar at import, rather than being
+/// discarded once the plan was built. A file the index does not cover imports exactly as it
+/// does through [`execute`].
+///
+/// [source adapter]: crate::import::importers
+/// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
+#[tracing::instrument(
+    skip_all,
+    fields(
+        candidates = plan.actions.len(),
+        mode = ?config.import_mode,
+        source_metadata = source.len(),
+    )
+)]
+pub fn execute_with_source_metadata(
+    plan: &ImportActionPlan,
+    workspace: &mut Workspace,
+    config: &ImportConfig,
+    source: &SourceMetadataIndex,
     on_event: impl Fn(ImportProgressEvent),
     cancel: &CancellationToken,
 ) -> Result<ImportExecutionSummary, ExecError> {
@@ -75,6 +112,7 @@ pub fn execute(
     });
 
     let mut summary = ImportExecutionSummary::default();
+    let mut enriched_candidates = 0u64;
 
     for (i, (candidate, decision)) in plan.actions.iter().enumerate() {
         if cancel.is_cancelled() {
@@ -89,7 +127,11 @@ pub fn execute(
         });
 
         let outcomes = match decision {
-            ImportDecision::Import => execute_candidate(candidate, workspace, config, album_id)?,
+            ImportDecision::Import => {
+                enriched_candidates +=
+                    u64::from(source.get(candidate.primary_path().as_path()).is_some());
+                execute_candidate(candidate, workspace, config, album_id, source)?
+            }
             ImportDecision::SkipDuplicate { existing_uuid } => {
                 vec![(
                     primary_path,
@@ -127,6 +169,9 @@ pub fn execute(
         // the second a genuine decode failure of a format we do support.
         derivatives_deferred = summary.deferred_derivative_count(),
         derivatives_decode_failed = summary.decode_failed_count(),
+        // How much of this run carried third-party exporter metadata into the signed sidecars
+        // (`S-B10`); zero for a plain filesystem import.
+        enriched_candidates,
         "import: execution complete"
     );
     Ok(summary)
@@ -141,6 +186,7 @@ fn execute_candidate(
     workspace: &mut Workspace,
     config: &ImportConfig,
     album_id: Uuid,
+    source: &SourceMetadataIndex,
 ) -> Result<Vec<(PathBuf, ImportOutcome)>, ExecError> {
     let move_source = matches!(config.import_mode, ImportMode::Move);
     // One stack id per multi-file candidate; the primary member stays visible, the rest hidden.
@@ -152,12 +198,29 @@ fn execute_candidate(
     for (seq, (path, role)) in candidate.members.iter().enumerate() {
         let is_primary = *role == MemberRole::Primary || seq == 0;
         let membership = stack_membership(stack, *role, is_primary, seq);
+        let enrichment = source.get(path.as_path()).and_then(|folded| {
+            // The fold decision itself, per member, so a surprising capture time or location in
+            // a sidecar can be traced back to the side it came from. User content (the
+            // description text, the album titles) stays out: sizes and counts are enough.
+            tracing::debug!(
+                path = %path.display(),
+                taken_time = ?folded.taken_time,
+                taken_time_source = ?folded.taken_time_source,
+                gps_source = ?folded.gps_source,
+                description_bytes = folded.description.as_ref().map_or(0, String::len),
+                favorite = folded.favorite,
+                albums = folded.albums.len(),
+                "import: exporter metadata folded for member"
+            );
+            sidecar_enrichment(folded)
+        });
         // Offline import: release the Move source on the local durable commit. The online /
         // streaming path (S-B3) sets `defer_source_release` and gates on the server verdict.
         let opts = SignedImportOptions {
             move_source,
             defer_source_release: false,
             stack: membership,
+            enrichment,
         };
 
         match workspace.import_asset_with(album_id, path, &opts) {

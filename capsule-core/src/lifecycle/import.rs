@@ -26,7 +26,7 @@ use crate::crypto::verify_asset::{
 use crate::db::{AssetRow, CachedRepresentationRow};
 use crate::exif::extract::extract_exif;
 use crate::exif::timezone::resolve_timezone;
-use crate::metadata::crdt::Lww;
+use crate::metadata::crdt::{Lww, OrSet};
 #[cfg(not(feature = "media"))]
 use crate::sidecar::sidecar_v1::Dimensions;
 use crate::sidecar::sidecar_v1::{
@@ -55,6 +55,48 @@ fn stack_membership_register(
         register.set(membership, now_rfc3339(), device_id);
     }
     register
+}
+
+/// Which side the sidecar's `capture_timestamp` was taken from — logged so an import decision
+/// can be reconstructed after the fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureSource {
+    /// This file's own EXIF, resolved to a UTC instant at the write site.
+    Embedded,
+    /// The adapter's folded value (`S-B10`): an EXIF time the write site could not resolve on
+    /// its own, else the exporter's taken-time. Which of the two is recorded by the executor's
+    /// `taken_time_source` log line for the same file.
+    Folded,
+    /// Neither side carried a capture time — the import's own clock.
+    ImportTime,
+}
+
+impl CaptureSource {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Embedded => "embedded-exif",
+            Self::Folded => "adapter-fold",
+            Self::ImportTime => "import-time",
+        }
+    }
+}
+
+/// Capture-time [precedence] at the write site: the file's own embedded EXIF wins; the
+/// adapter's folded value is the fallback; the import clock is the last resort.
+///
+/// [precedence]: https://docs/design/import/pipeline/#third-party-importers
+fn folded_capture(embedded_utc: Option<i64>, folded: Option<Timestamp>) -> (i64, CaptureSource) {
+    match (embedded_utc, folded) {
+        (Some(secs), _) => (secs, CaptureSource::Embedded),
+        (None, Some(t)) => (t.as_second(), CaptureSource::Folded),
+        (None, None) => (Timestamp::now().as_second(), CaptureSource::ImportTime),
+    }
+}
+
+/// GPS [precedence](folded_capture) at the write site: this file's own EXIF fix wins over the
+/// exporter's record, which fills in only where the bytes carried none.
+fn folded_gps(embedded: Option<Gps>, folded: Option<&Gps>) -> Option<Gps> {
+    embedded.or_else(|| folded.cloned())
 }
 
 fn content_type_for(ext: &str) -> String {
@@ -248,6 +290,7 @@ impl Workspace {
             move_source: true,
             defer_source_release: false,
             stack: None,
+            enrichment: None,
         };
         let imported = self.import_asset_with(album_id, &staged, &opts);
         if imported.is_err() {
@@ -288,17 +331,58 @@ impl Workspace {
         // degrade cleanly (capture → now; dimensions/GPS → absent).
         let exif = extract_exif(src).unwrap_or_default();
         let tz = resolve_timezone(&exif);
-        let capture_utc = tz
-            .capture_utc
-            .unwrap_or_else(|| Timestamp::now().as_second());
+        // `S-B10`: a third-party import arrives with the adapter's folded exporter record. Its
+        // capture time and GPS are *fallbacks* — the file's own EXIF wins wherever it yields a
+        // value, which is the pipeline doc's precedence rule applied at the write site.
+        let enrichment = opts.enrichment.as_ref();
+        let (capture_utc, capture_source) =
+            folded_capture(tz.capture_utc, enrichment.and_then(|e| e.capture_time));
         // EXIF GPS is the near-universal WGS-84 camera datum (metadata doc, Geolocation);
         // stored verbatim, so the wire-absent default datum applies.
-        let gps = exif.gps_lat.zip(exif.gps_lon).map(|(lat, lon)| Gps {
+        let embedded_gps = exif.gps_lat.zip(exif.gps_lon).map(|(lat, lon)| Gps {
             lat,
             lon,
             source: GpsSource::Exif,
             datum: crate::domain::GpsDatum::Wgs84,
         });
+        let gps = folded_gps(embedded_gps, enrichment.and_then(|e| e.gps.as_ref()));
+
+        // Exporter-authoritative registers (`S-B10`): the description, favorite flag, and album
+        // membership the file bytes never carried. Each is stamped `(now, device_id)` exactly as
+        // the `stack_membership` register is, so a later edit on any device converges under the
+        // same LWW rule; each album title gets its own `add_id` so it stays individually
+        // removable. Nothing folded ⇒ every register stays at its default, and the sidecar
+        // encodes byte-identically to a plain filesystem import's.
+        let device_id = self.account.device.device_id;
+        let stamp = now_rfc3339();
+        let mut caption = Lww::new();
+        if let Some(text) = enrichment.and_then(|e| e.caption.as_deref()) {
+            caption.set(text.to_string(), stamp.clone(), device_id);
+        }
+        let mut rating = Lww::new();
+        if let Some(stars) = enrichment.and_then(|e| e.rating) {
+            rating.set(stars, stamp.clone(), device_id);
+        }
+        let mut tags_user = OrSet::new();
+        for tag in enrichment.map_or(&[][..], |e| e.tags.as_slice()) {
+            let add_id = self.counter.issue();
+            tags_user.add(tag.clone(), add_id);
+        }
+        // Logged for *every* import, enriched or not: which side each contested field came from
+        // is what makes a surprising capture time or location explainable after the fact. User
+        // content stays out — sizes and counts are what a decision has to be reconstructed from,
+        // not the caption text or the album titles.
+        tracing::debug!(
+            asset_id = %asset_id,
+            enriched = enrichment.is_some(),
+            capture_source = capture_source.as_str(),
+            capture_utc,
+            gps_source = ?gps.as_ref().map(|g| g.source),
+            caption_bytes = enrichment.and_then(|e| e.caption.as_ref()).map_or(0, String::len),
+            rating = ?enrichment.and_then(|e| e.rating),
+            tags = enrichment.map_or(0, |e| e.tags.len()),
+            "import: sidecar metadata resolved"
+        );
 
         // Still-derived sidecar metadata (dimensions + LQIP) and the derivatives to persist
         // after the commit. Behind `media` this decodes the still once and generates the signed
@@ -345,10 +429,10 @@ impl Workspace {
             content_type: content_type_for(&ext),
             dimensions,
             lqip,
-            tags_user: Default::default(),
+            tags_user,
             tags_ai: Default::default(),
-            caption: Default::default(),
-            rating: Default::default(),
+            caption,
+            rating,
             // `S-B15`: an importer-formed stack is written into the signed sidecar exactly as
             // the manual `set_stack_membership` path writes it, stamped with this device id +
             // now so it converges under the same `(ts, device_id)` LWW rule. A standalone
@@ -480,6 +564,8 @@ impl Workspace {
             move_source,
             defer_source_release: true,
             stack,
+            // Streaming import (`S-B3`) does not yet carry adapter metadata; see `S-B10`.
+            enrichment: None,
         };
         let asset_id = self.import_asset_with(album_id, src, &opts)?.asset_id;
         let asset = self
@@ -514,6 +600,71 @@ mod tests {
     use super::super::fast_workspace;
     use super::*;
     use crate::crypto::keys::HybridSigningKey;
+
+    // ── Write-site precedence (S-B10) ───────────────────────────────────────
+    //
+    // The [precedence rule] the pipeline doc fixes: embedded EXIF wins over an exporter-side
+    // record for capture time and GPS. The adapter resolves it once at extraction; these two
+    // helpers are where the *write* path honours it, and they are the reason an exporter
+    // record can never overwrite what the file bytes themselves say.
+    //
+    // [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
+
+    fn ts(secs: i64) -> Timestamp {
+        Timestamp::from_second(secs).expect("in-range timestamp")
+    }
+
+    fn point(lat: f64, lon: f64, source: GpsSource) -> Gps {
+        Gps {
+            lat,
+            lon,
+            source,
+            datum: crate::domain::GpsDatum::Wgs84,
+        }
+    }
+
+    /// Both sides present and disagreeing — the case that was unreachable while `extract_exif`
+    /// returned `None` for every well-formed EXIF file (`S-B16`).
+    #[test]
+    fn embedded_exif_capture_wins_over_the_folded_record() {
+        assert_eq!(
+            folded_capture(Some(1_622_505_600), Some(ts(1_000_000_000))),
+            (1_622_505_600, CaptureSource::Embedded)
+        );
+    }
+
+    #[test]
+    fn the_folded_record_fills_capture_when_the_bytes_resolve_none() {
+        assert_eq!(
+            folded_capture(None, Some(ts(1_609_502_400))),
+            (1_609_502_400, CaptureSource::Folded)
+        );
+    }
+
+    #[test]
+    fn capture_falls_back_to_import_time_when_neither_side_has_one() {
+        let before = Timestamp::now().as_second();
+        let (secs, source) = folded_capture(None, None);
+        assert_eq!(source, CaptureSource::ImportTime);
+        assert!(secs >= before, "the import clock, not the epoch");
+    }
+
+    #[test]
+    fn embedded_exif_gps_wins_over_the_folded_record() {
+        let embedded = point(48.8584, 2.2945, GpsSource::Exif);
+        let exporter = point(40.0, -70.0, GpsSource::Manual);
+        assert_eq!(
+            folded_gps(Some(embedded.clone()), Some(&exporter)),
+            Some(embedded)
+        );
+    }
+
+    #[test]
+    fn the_folded_record_fills_gps_when_the_bytes_carry_none() {
+        let exporter = point(21.3, -157.8, GpsSource::Manual);
+        assert_eq!(folded_gps(None, Some(&exporter)), Some(exporter));
+        assert_eq!(folded_gps(None, None), None);
+    }
 
     /// `import_bytes` is the platform-app entry point (PhotoKit / MediaStore hand over a
     /// buffer, not a path). It must land an asset indistinguishable from a file import — same
