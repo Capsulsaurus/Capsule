@@ -1819,6 +1819,24 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   reads that a design doc gates.
 - **Done when:** the FFI trash listing refuses without a grant and serves with one, mirroring
   `gated_hidden_query_refuses_without_grant_and_serves_with_one`. **Tier:** Unit.
+- **Landed 2026-08-29.** `query_trash` routes through `GateKeeper`; a `gate.rs` boundary projection
+  mirrors `GatedView`/`LocalAuthError` and exports a `LocalAuthGate` for the platform adapter. The
+  mirror is forced by the `S-F1` invariant, not chosen: this crate depends on `capsule-core` with
+  `ffi` **off**, so core's own uniffi types are not in this namespace. The full `Catalog` surface was
+  audited; the default projections already excluded deleted and hidden rows and are now pinned by a
+  test rather than trusted.
+- **Owed, with the estimate corrected.** `query_expired_trash` is a second, **ungated** trash
+  enumeration — `older_than_secs: 0` returns essentially the whole trash, and an `AssetRecord`
+  carries full metadata for deleted assets. It stays ungated on purpose (it is the unattended
+  retention sweep's input; no user is present to authenticate) and is pinned by
+  `retention_sweep_stays_ungated`. Narrowing its return to uuids would cut the exposure, and it was
+  first estimated as cheap because it has no production caller. **It is not cheap:** the return type
+  crosses uniffi into a Swift `AssetCatalog` protocol method, its `MockCatalog` implementation, and
+  a `MockCatalogTests` case asserting on `CatalogAsset` properties — five files in a lane whose
+  tests do not run locally. Worth doing, but as scoped work in the iOS lane rather than a drive-by.
+- **Owed to the capsule-swift lane:** `RecentlyDeletedView.swift` has no authentication at all;
+  `HiddenView.swift` is the only Swift file touching `LocalAuthentication`. The trash list will not
+  populate until it supplies an `LAContext`-backed gate and calls `unlockView`.
 
 ### S-D23 — Client SQLite schema has no upgrade path
 
