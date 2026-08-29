@@ -296,7 +296,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I3 | `xtask translate-readme` + CI drift check | i18n | S-I2 | M | ACTIVE | done | |
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
-| S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | ready | 130 strings across 13 locales |
+| S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
@@ -2546,6 +2546,24 @@ lands on Kynos rather than on Salvo.
   on this machine — so that half is **owed-CI** and must be flagged rather than claimed.
 - **Done when:** no `strings.xml` contains ICU syntax, plural keys render through `<plurals>`, and a
   generator test asserts both. **Tier:** Unit (generator) + owed-CI (call sites).
+- **Landed 2026-08-29.** Raw ICU remaining: **zero**. The regex is deleted rather than repaired, and
+  the `S-I4` Apple machinery is generalised rather than forked — argument specs carry a kind and a
+  dialect supplies the spelling, so both platforms number positions from the source locale. Apple
+  output is byte-identical, checked with `git diff --quiet`.
+- **Unselectable arms are dropped, not emitted.** Android resolves `<item quantity>` with the same
+  CLDR rules ICU uses, so an arm a language can never select is unreachable — a `few` authored for
+  English, or the `one` the three CJK catalogs carry. Lossless, because `other` is selectable
+  everywhere and the parser already requires it. A language with no rules entry fails the generator
+  rather than guessing.
+- **The call-site half evaporated, which is the useful finding.** The repo has nine
+  `stringResource` calls across six files, all byte-identical before and after; none is a plural,
+  and no `getQuantityString` exists anywhere. The ten plural keys have no Kotlin consumer yet, so
+  the owed-CI exposure is resource *compilation*, not source compatibility.
+- **Still unverified:** `aapt2` has not run — Gradle does not build here — so the `<plurals>`
+  elements and the escaping changes are unproven against the real resource compiler.
+- **Escaping was thinner than it looked**, and that was a latent bug of its own: `android_escape`
+  handled five characters and missed backslash, newline, tab, and a leading `@`/`?`, which Android
+  reads as a resource reference.
 
 ### S-N1 — OIDC relying party (server)
 
