@@ -154,7 +154,7 @@ struct AppEnvironment {
         // anything that is not a system asset — which is everything in this
         // lane, so the viewer showed a spinner and never a photo. The renderer
         // that draws the grid draws the viewer's pixels too.
-        mediaLoader = ViewerMediaLoader(fallback: renderer)
+        mediaLoader = ViewerMediaLoader(fallback: renderer, metadataSource: MockMetadataSource())
         importer = Self.makeImporter()
 
         serverDiscovery = PreviewServerDiscovery(environment: mock)
