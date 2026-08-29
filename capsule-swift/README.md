@@ -107,11 +107,27 @@ and cancels fetches that scroll out of margin. A cell with no page loaded yet is
 not blank: it renders the asset's dominant colour, then its LQIP, then the
 thumbnail.
 
-`TimelineLayout` and `AssetWindowStore` are built and tested; binding them to
-the `UICollectionView`/`NSCollectionView` island — which today still uses the
-prototype's simpler grid — is the next step. The intent is one grid
-implementation behind every surface: album detail, search results, person,
-place, the culling filmstrip.
+`TimelineLayout` and `AssetWindowStore` are built and tested but **not yet
+load-bearing**, and the reason changed: binding them was assumed to be the
+prerequisite for a continuous, headerless library grid, and measurement says
+otherwise. One 250 000-item uniform section resolves in a compositional layout in
+**8.7 ms**, with viewport queries in tens of microseconds at either end of a
+4 000 000 pt scroll; the *sectioned* shape it replaced — 3 650 day sections —
+cost **426 ms**. Section boundaries are the expense, not the tiles. So the
+shipping grid is `PhotoGridView` over one unsectioned run, and
+`UniformGridLayoutTests` keeps the measurement as an assertion.
+
+The virtualized engine still earns its place for what `PhotoGridView` cannot do:
+render a library the app has not materialised. `TimelineViewModel` builds an
+`[Asset]` from the paged snapshot, which is cheap enough today because
+`PagedLibrarySnapshot` answers unloaded indices with provisional rows, but it is
+the ceiling. Binding the engine is also entangled with how hiding is stored —
+the timeline filters `HiddenStore` client-side out of that array, which cannot
+survive virtualization without moving hiding onto `OrganizePort.setHidden`.
+That is a data-layer change, not a UI one.
+
+The intent remains one grid implementation behind every surface: album detail,
+search results, person, place, the culling filmstrip.
 
 ### Mock scenarios
 

@@ -314,10 +314,10 @@ row's remainder now lives.
 | S-U2 | Rust-free build lane (`TUIST_FFI` gate) | apple-ui | — | M | ACTIVE | done | |
 | S-U3 | Three-platform graph + platform shim | apple-ui | — | M | ACTIVE | done | |
 | S-U4 | Adaptive shell + `Route`/router/deep links | apple-ui | S-U3 | L | ACTIVE | done | |
-| S-U5 | Virtualized timeline engine | apple-ui | S-U1 | L | ACTIVE | done\* | collection-view binding + progressive ladder → `S-U7` |
+| S-U5 | Virtualized timeline engine | apple-ui | S-U1 | L | ACTIVE | done\* | engine unused: the headerless grid did not need it (see slice note) |
 | S-U6 | Capsule-state design system | apple-ui | S-U3 | M | ACTIVE | done | |
-| S-U7 | Library, timeline, selection, culling | apple-ui | S-U5, S-U6 | L | ACTIVE | ready | |
-| S-U8 | Viewer and asset detail | apple-ui | S-U5, S-U6 | L | ACTIVE | ready | |
+| S-U7 | Library, timeline, selection, culling | apple-ui | S-U5, S-U6 | L | ACTIVE | done\* | uniform grid + pinch zoom + zoom transition landed; culling review outstanding |
+| S-U8 | Viewer and asset detail | apple-ui | S-U5, S-U6 | L | ACTIVE | done\* | info panel + caption editing landed; provenance, verdict detail, superseded captions outstanding |
 | S-U9 | Albums + smart-album builder | apple-ui | S-U6 | L | ACTIVE | ready | |
 | S-U10 | Search, people, places | apple-ui | S-U9 | L | ACTIVE | ready | |
 | S-U11 | Import pipeline | apple-ui | S-U6 | L | ACTIVE | ready | |
@@ -2379,10 +2379,23 @@ host — see the environment table above. This lane does not ride CI.
 - **Done when:** against the 250 000-asset scenario, layout construction stays under
   50 ms, `indexRange` under 100 µs, page count stays inside the LRU cap, and memory is
   flat across a full-library scroll. **Tier:** Unit + Perf.
-- **Landed:** `TimelineLayout` and `AssetWindowStore` are built and under test,
-  including the residency cap across a full sweep of a 250 000-row collection. The
-  binding into the collection-view island is **owed to `S-U7`** — the grid on screen
-  today is still the prototype's, so the engine is proven but not yet load-bearing.
+- **Landed, and still unused — for a reason that changed.** `TimelineLayout` and
+  `AssetWindowStore` are built and under test, including the residency cap across a
+  full sweep of a 250 000-row collection. The binding was assumed to be the
+  prerequisite for `S-U7`'s continuous grid. **Measurement says it is not:** one
+  250 000-item uniform section resolves in a compositional layout in 8.7 ms, with
+  viewport queries in tens of microseconds at either end of a 4 000 000 pt scroll,
+  while the 3 650-day-section shape it replaced cost 426 ms. Section boundaries are
+  the expense, not the tiles, so going headerless was a ~50× win on the existing
+  grid and the engine was not needed to get it. `UniformGridLayoutTests` keeps the
+  measurement as an assertion.
+- **What the engine is still owed for:** rendering a library the app has not
+  materialised. `TimelineViewModel` still builds an `[Asset]` from the paged
+  snapshot. That is the ceiling, and clearing it is entangled with **how hiding is
+  stored** — the timeline filters `HiddenStore` client-side out of that array, which
+  cannot survive virtualization without moving hiding onto `OrganizePort.setHidden`
+  and re-pointing the Hidden screen at the `userHidden` slice. That is a data-layer
+  change and does not belong in a UI slice.
 
 ### S-U6 — Capsule-state design system
 
