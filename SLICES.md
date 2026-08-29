@@ -202,7 +202,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B11 | CLI `import --provider takeout` + real-archive run | media/import | S-B10 | S | ACTIVE | blocked | |
 | S-B12 | Base default-album resolution (`resolve_default_album`) | media/import | — | M | ACTIVE | done | scope-override + source-kind rows → post-v1 |
 | S-B13 | Codec stubs → typed `UnsupportedFormat` (no panics) | media/import | — | M | RETIRED | ready | |
-| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | ready | ThumbHash retires with it |
+| S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
@@ -833,6 +833,21 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
   `capsule-web/package.json`; an encode is asserted to be exactly 32 bytes; a signed sidecar
   round-trips with a chromahash payload; and the same input produces the same bytes from the
   CLI, the FFI and `capsule-wasm`. **Tier:** Unit.
+- **Landed 2026-08-29.** ThumbHash is gone from `Cargo.lock` and `package.json`; `cargo tree -i
+  thumbhash` matches no packages. The four forced decisions resolved as: a named `RgbaImage` rather
+  than the retiring `ImageBuffer`; **no feature gate at all**, because chromahash has zero runtime
+  dependencies and builds clean for `wasm32-unknown-unknown` (verified before designing, not after
+  — it enabled the design rather than constraining it); a Capsule-owned `Gamut` mirror so a pre-1.0
+  dependency cannot reshape an FFI-facing type, with `Linear → Srgb` because `Linear` names a
+  transfer function and over-saturating is worse than under-saturating; and the 100px pre-resize
+  deleted, guarded by a 200×200 KAT well above the old threshold.
+- **The totality condition was made falsifiable rather than trusted.** Two *real* ThumbHash payloads
+  were captured from the retired path before it was deleted and pinned as constants. One is exactly
+  21 bytes — `COMPACT_TIER`'s length — which is the concrete proof that byte length cannot
+  discriminate a stale payload. Both are rejected by `from_bytes` and render as the solid
+  dominant-colour fill, never noise.
+- **Owed:** no `wasm_bindgen` export exists. wasm links and compiles the identical encoder, but the
+  browser has no decrypted `lqip` to decode yet, so the entry point belongs to that slice.
 
 ### S-B15 — Importer-formed stacks exist only in the index
 
