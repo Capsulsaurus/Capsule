@@ -205,6 +205,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B14 | LQIP on Chromahash 0.7.1 in `capsule-core::lqip` | media/import | — | M | ACTIVE | done | wasm entry point owed to the browser-`lqip` slice |
 | S-B15 | Importer-formed stacks exist only in the index | media/import | S-D21 | M | ACTIVE | done | rebuild guard kept as pre-`S-B15` compatibility |
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
+| S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | ready | duplicate-blob field → `S-C22`; device floor → `S-C20` |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
@@ -896,6 +897,36 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
 - **Audited while here:** the module's four other `display_value()` reads are safe — the GPS
   hemisphere refs are substring checks and make/model pass through `strip_quotes`. Only the date
   had a format contract to get wrong.
+
+### S-B17 — repair the capture timestamps written before `S-B16`
+
+- **Contract:** [Client Filesystem — date bucketing](capsule-docs/src/content/docs/design/filesystem/client.md);
+  [Maintenance — Repair](capsule-docs/src/content/docs/design/filesystem/maintenance.md).
+- **Gap:** fixing the parser does not fix the data. `import_asset_with` does
+  `capture_utc = tz.capture_utc.unwrap_or_else(|| Timestamp::now().as_second())`, and that value is
+  written to `capture_timestamp` **inside the signed sidecar** and used to pick the
+  `media/{YYYY}/{YYYY-MM}` bucket. Every asset imported before `S-B16` therefore carries import time
+  as its capture time, permanently and under signature — the correct value is still recoverable
+  from the original file's EXIF, but nothing will go and get it.
+- **Why this is a slice and not a migration script:** the wrong value is in signed bytes, so
+  correcting it is a `metadata-update` issued by a key-holding client, not an edit. It cannot be
+  done server-side and it cannot be done by rebuild, which reconstructs from those same sidecars
+  and would faithfully preserve the error.
+- **The design already accommodates the outcome**, which is what makes this tractable: the bucket
+  is fixed at import and a later capture-date correction deliberately does **not** relocate the
+  bundle — the sidecar is authoritative for date and the path is only a shard, so post-correction
+  drift is expected and maintenance repairs it opportunistically. So the repair is a metadata
+  correction, not a file move.
+- **Deliverable:** a repair pass that re-extracts EXIF from each original, and where a real
+  `DateTimeOriginal` exists and disagrees with the recorded capture time, issues a signed
+  `metadata-update`. Detection must not simply compare capture to import time — an asset genuinely
+  imported the moment it was taken is not broken.
+- **Scope note:** every library in existence today is developer-recreated (see `S-D23`), so this is
+  cheap now and becomes a real user-data migration the moment it is not. That is the argument for
+  doing it before v1 rather than after.
+- **Done when:** a library imported under the old parser, containing originals with EXIF capture
+  dates, reports correct capture timestamps after the pass, and the pass is a no-op on a library
+  imported after `S-B16`. **Tier:** Unit + Smoke.
 
 ## Lane C — server (key-free surfaces)
 
