@@ -17,7 +17,7 @@ use super::{
 use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::keys::albumstore::AlbumStore;
-use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
+use crate::crypto::keys::directory::{DekPublic, DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{
     Account, AccountFile, DeviceDirectory, HardwareKeyAgreement, HybridVerifyingKey, Signer,
 };
@@ -650,7 +650,11 @@ impl Workspace {
             devices: vec![DeviceEntry {
                 device_id: account.device.device_id,
                 dsk_public,
-                dek_public: None,
+                // The published half of this device's encryption key, so a peer can encapsulate
+                // to it using the directory alone. `public_bytes()` is the single seam for both
+                // compositions and the recipient tells them apart by length (S-F8), which is why
+                // nothing here says which one it is holding.
+                dek_public: Some(DekPublic(account.device.dek.public_bytes())),
                 added_at: DEVICE_ADDED_AT.into(),
                 revoked_at: None,
             }],
