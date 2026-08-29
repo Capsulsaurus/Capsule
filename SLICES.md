@@ -233,11 +233,13 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
-| S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | ready | |
+| S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
-| S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29` |
+| S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
+| S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | ready | found porting auth |
+| S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | ready | `openapi-check` still points at Salvo |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1385,6 +1387,43 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   description omits cannot be rendered. Fold the audit into the Stage 6 port of each surface.
 - **Done when:** every taxonomy's `undocumented()` is empty, and the regenerated schema is
   committed. **Tier:** Unit.
+
+### S-C33 — request-size limits, because Kynos declares constraints it does not enforce
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md);
+  [Threat Model — Validation Invariants](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-29 while porting the auth surface): Kynos 0.1.0 renders
+  `#[schema(min_length / max_length)]` into the emitted document but does **not** enforce it on the
+  request path — verified directly: a request with an empty password reaches the handler. A
+  published document that promises validation the server does not perform is worse than one that
+  promises nothing, because a generated client will trust it.
+- **Handled for now by removing the constraints** rather than shipping the lie. That is the honest
+  state, not the desired one.
+- **Deliverable:** a request body-size limit as middleware — the control that actually belongs at
+  the transport layer — plus a decision on whether per-field constraints are re-declared once
+  upstream enforces them, or stay a handler concern.
+- **Done when:** an oversized body is refused before it reaches a handler, and no schema constraint
+  appears in the document that the server will not apply. **Tier:** Unit.
+
+### S-C34 — nothing gates the Kynos OpenAPI document
+
+- **Gap** (found 2026-08-29 while porting the auth surface): `mise run openapi-check` runs
+  `capsule-api`'s `gen_openapi --bin --check` against `capsule-sdk/openapi.json` — it verifies the
+  **Salvo** document. `capsule_server::openapi()` has **no gate at all**. Its correctness is
+  currently protected only by `capsule-server`'s own conformance tests, which assert that the
+  document matches the code but not that it matches anything committed.
+- **Why it matters now rather than later:** the whole point of the rebuild is that the document is
+  derived from types and cannot drift. That property is worth nothing to a *client* until the
+  document is committed and something fails when it changes — otherwise a surface can be ported,
+  the emitted document can change shape, and nothing anywhere notices.
+- **The trap:** the two documents must not both be committed as the contract at once, and the
+  changeover is not a config edit. `capsule-sdk/build.rs` generates from the committed file, four
+  operations are narrowed out of it because the Salvo document is structurally invalid, and those
+  narrowings should disappear rather than carry over — Kynos cannot express either defect.
+- **Deliverable:** re-point `openapi-check` at `capsule_server::openapi()` when the Kynos surface
+  reaches parity, committing its document as the contract and dropping the `OmitRule` narrowings.
+- **Done when:** changing a Kynos route's response set fails `openapi-check` until the committed
+  document is regenerated. **Tier:** gate.
 
 ### S-C29 — The two storage ports, and the generic blob store they replace
 
