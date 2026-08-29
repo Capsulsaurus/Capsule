@@ -297,6 +297,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
+| S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | ready | latent; convention is the only guard |
+| S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
 | S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
@@ -2573,6 +2575,44 @@ lands on Kynos rather than on Salvo.
 - **Escaping was thinner than it looked**, and that was a latent bug of its own: `android_escape`
   handled five characters and missed backslash, newline, tab, and a leading `@`/`?`, which Android
   reads as a resource reference.
+
+### S-I7 — the Rust runtime formatter cannot do ICU plurals
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md).
+- **Gap** (found 2026-08-29 while widening `i18n-guard` for `S-I5`): `capsule_i18n::format_message`
+  substitutes only `{identifier}` placeholders. Anything else — an ICU `plural` block — is **copied
+  through verbatim**, which its doc comment states plainly. Traced rather than assumed: the scan
+  reconstructs each `{…}` segment with its braces, so the output equals the input exactly. It does
+  not mangle; it prints the message source.
+- **Latent, not live.** Ten keys in the Rust bundle carry ICU plurals — `common.item_count`,
+  `drop.upload.button`, and eight `ios.*` — and **no Rust code resolves any of them** today. The only
+  thing standing between this and a user seeing `{count, plural, one {# item} other {# items}}` is
+  convention: `S-I5` deliberately used the `asset(s)` spelling for the CLI rather than a plural.
+- **Third instance of one class.** Apple had it (fixed by `S-I4`), Android had it and was *live*
+  (fixed by `S-I6`), and Rust has it now. Each renderer independently decided what to do with a
+  construct it could not express, and two of three chose to emit it.
+- **Deliverable, and the cheap half comes first:** make the formatter **fail** on a construct it
+  cannot render rather than emit it, so the next plural in a Rust-consumed key is a test failure
+  instead of user-visible ICU. Implementing plural selection is the larger, separate question — it
+  needs CLDR rules in the runtime, which is what the per-platform renderers avoided by compiling
+  ahead of time.
+- **Done when:** a Rust-consumed key containing a plural fails a test rather than reaching a user.
+  **Tier:** Unit.
+
+### S-I8 — clap `--help` text is unreachable from the catalogs
+
+- **Gap** (found 2026-08-29 while widening `i18n-guard` for `S-I5`): the CLI's usage and help output
+  comes from doc comments and `#[arg]` attributes that clap renders itself. There is no seam to
+  route a catalog key through, so `--help` is English regardless of locale — and the widened guard
+  deliberately does **not** flag it, because an allowlist entry per flag would misrepresent a
+  structural gap as a backlog of individual strings.
+- **Why it is filed rather than absorbed:** "no hardcoded user-facing strings" is a stated contract,
+  and this is a hole in it that no gate can see. Recording it is the difference between a known
+  limitation and an invisible one.
+- **Deliverable:** decide whether localized help is in scope at all — many CLIs deliberately keep it
+  English — and if so, resolve keys at parser-construction time. If not, say so in `i18n.md` so the
+  contract stops overstating itself.
+- **Done when:** the design doc states the decision either way. **Tier:** docs or Unit.
 
 ### S-N1 — OIDC relying party (server)
 
