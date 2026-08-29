@@ -25,6 +25,7 @@
 //! deterministic in-memory adapters; no generic CAS, transfer or TTL abstraction is planned.
 
 pub mod routes;
+pub mod store;
 
 use kynos::prelude::*;
 use kynos::router::service::Service;

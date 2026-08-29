@@ -23,6 +23,16 @@ kynos = { workspace = true }
 # outlives whichever framework renders it.
 capsule-wire = { path = "../capsule-wire" }
 serde = { workspace = true }
+# The state ports (slice `S-C29`). `thiserror` because these are a library surface;
+# `jiff` because every record and every TTL is a time and chrono is banned; `tracing` because
+# the ports are on the critical path of every authenticated request and every upload chunk;
+# `uuid` so a session's asserted `device_id` is parsed once at the port boundary instead of
+# being re-normalized as a string at each call site. All four are already workspace
+# dependencies with a row in design/dependencies.md.
+thiserror = { workspace = true }
+jiff = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
