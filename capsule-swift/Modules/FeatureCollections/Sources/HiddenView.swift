@@ -92,7 +92,8 @@ struct HiddenView: View {
             return
         }
         let success = (try? await context.evaluatePolicy(
-            .deviceOwnerAuthentication, localizedReason: "View your hidden photos"
+            .deviceOwnerAuthentication,
+            localizedReason: String(localized: "ios.auth.reason.hidden")
         )) ?? false
         unlocked = success
         if success { await loadHidden() }

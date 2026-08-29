@@ -19,6 +19,18 @@ import Foundation
 /// **descending**, excluding any asset that is soft-deleted (`isDeleted`) or
 /// hidden as a non-cover stack member (`isStackHidden`). A ``TimelineFilter``
 /// capture-time window bounds that same instant, inclusive at both ends.
+///
+/// ### Gated views (SR1)
+/// ``trash(offset:limit:)`` is the *Recently Deleted view* and is gated: it
+/// throws `CatalogError.ViewLocked` until ``unlockView(_:using:)`` mints a
+/// grant, which then covers a short grace window (5 minutes, per-view). Grants
+/// never cross views — one for Hidden does not open Recently Deleted.
+/// ``expiredTrash(olderThanSeconds:)`` is deliberately *ungated*: it is the
+/// unattended retention sweep's input, with no user present to authenticate.
+/// Do not build a user-facing listing on it.
+///
+/// The gate is view-time UX protection against a borrowed-unlocked-phone snoop;
+/// it is **not** a cryptographic boundary.
 public protocol AssetCatalog: Sendable {
     /// The `PRAGMA user_version` of the open catalog.
     func schemaVersion() async throws -> UInt32
@@ -54,6 +66,10 @@ public protocol AssetCatalog: Sendable {
 
     /// A windowed page of the trash — every soft-deleted asset, most-recently-
     /// deleted first. The Recently Deleted listing.
+    ///
+    /// **Gated (SR1).** Throws `CatalogError.ViewLocked` unless
+    /// ``unlockView(_:using:)`` has minted a live ``GatedView/recentlyDeleted``
+    /// grant. See *Gated views* below.
     func trash(offset: Int, limit: Int) async throws -> [CatalogAsset]
 
     /// Permanently remove an asset row. The on-disk file is the caller's concern.
@@ -98,6 +114,28 @@ public protocol AssetCatalog: Sendable {
 
     /// A windowed page of an album's assets, ordered as the timeline is.
     func albumAssets(albumID: String, offset: Int, limit: Int) async throws -> [CatalogAsset]
+
+    // MARK: Gated views
+
+    /// Challenge `gate` and, on success, mint a fresh-local-auth grant for `view`.
+    ///
+    /// A grant already live within its grace window is reused without a second
+    /// challenge, and is **not** slid forward — the window is measured from the
+    /// original mint, so re-entering a view cannot hold it open indefinitely.
+    /// A refusal mints nothing, leaves the view locked, and throws the
+    /// platform's `LocalAuthError` unchanged.
+    func unlockView(_ view: GatedView, using gate: any LocalAuthGate) async throws
+
+    /// Whether `view` currently holds a live grant. A pure state check — it
+    /// never challenges the platform.
+    func isViewUnlocked(_ view: GatedView) async -> Bool
+
+    /// Revoke the grant for one view.
+    func relockView(_ view: GatedView) async
+
+    /// Revoke every grant — for the app being backgrounded or the device
+    /// locking. The next ``unlockView(_:using:)`` re-authenticates.
+    func lockViews() async
 }
 
 public extension AssetCatalog {

@@ -15,11 +15,11 @@ public enum DateRangeOption: String, CaseIterable, Sendable, Equatable, Identifi
     /// The label shown in the filter control.
     public var title: String {
         switch self {
-        case .anytime: "Any Time"
-        case .today: "Today"
-        case .thisWeek: "This Week"
-        case .thisMonth: "This Month"
-        case .thisYear: "This Year"
+        case .anytime: String(localized: "ios.search.date_range.anytime")
+        case .today: String(localized: "ios.search.date_range.today")
+        case .thisWeek: String(localized: "ios.search.date_range.this_week")
+        case .thisMonth: String(localized: "ios.search.date_range.this_month")
+        case .thisYear: String(localized: "ios.search.date_range.this_year")
         }
     }
 

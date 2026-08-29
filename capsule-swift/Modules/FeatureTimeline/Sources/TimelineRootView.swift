@@ -103,11 +103,20 @@ public struct TimelineRootView: View {
             if isSelecting { selectionActionBar }
         }
         .confirmationDialog(
-            "Delete \(selectedIDs.count) Items?",
+            String(
+                localized: "ios.timeline.delete_selected.title",
+                defaultValue: "Delete \(selectedIDs.count) Items?"
+            ),
             isPresented: $isDeleteConfirmPresented,
             titleVisibility: .visible
         ) {
-            Button("Delete \(selectedIDs.count) Items", role: .destructive) {
+            Button(
+                String(
+                    localized: "ios.timeline.delete_selected.confirm",
+                    defaultValue: "Delete \(selectedIDs.count) Items"
+                ),
+                role: .destructive
+            ) {
                 Task { await deleteSelected() }
             }
         }
@@ -245,15 +254,26 @@ public struct TimelineRootView: View {
     private static func importSummary(_ result: ImportResult) -> String {
         var lines: [String] = []
         if result.importedCount > 0 {
-            lines.append("\(result.importedCount) imported into Capsule.")
+            lines.append(String(
+                localized: "ios.timeline.import.imported",
+                defaultValue: "\(result.importedCount) imported into Capsule."
+            ))
         }
         if result.duplicateCount > 0 {
-            lines.append("\(result.duplicateCount) already in your library.")
+            lines.append(String(
+                localized: "ios.timeline.import.duplicates",
+                defaultValue: "\(result.duplicateCount) already in your library."
+            ))
         }
         if result.failureCount > 0 {
-            lines.append("\(result.failureCount) couldn't be imported.")
+            lines.append(String(
+                localized: "ios.timeline.import.failed",
+                defaultValue: "\(result.failureCount) couldn't be imported."
+            ))
         }
-        return lines.isEmpty ? "Nothing to import." : lines.joined(separator: "\n")
+        return lines.isEmpty
+            ? String(localized: "ios.timeline.import.nothing")
+            : lines.joined(separator: "\n")
     }
 }
 
@@ -265,7 +285,12 @@ private extension TimelineRootView {
     }
 
     var selectionTitle: String {
-        selectedIDs.isEmpty ? "Select Items" : "\(selectedIDs.count) Selected"
+        selectedIDs.isEmpty
+            ? String(localized: "ios.timeline.selection.empty")
+            : String(
+                localized: "ios.timeline.selection.count",
+                defaultValue: "\(selectedIDs.count) Selected"
+            )
     }
 
     var selectionActionBar: some View {

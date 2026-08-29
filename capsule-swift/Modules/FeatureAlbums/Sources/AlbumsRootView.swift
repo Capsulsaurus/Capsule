@@ -98,7 +98,10 @@ public struct AlbumsRootView: View {
                     .frame(width: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.title)
-                    Text("^[\(album.count) Photo](inflect: true)")
+                    Text(String(
+                localized: "ios.albums.photo_count",
+                defaultValue: "\(album.count) Photo"
+            ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

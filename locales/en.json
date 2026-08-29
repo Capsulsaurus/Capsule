@@ -1950,5 +1950,153 @@
     "drop.error.passphrase": {
         "message": "This upload needs the link's password. Unlock the page and try again.",
         "context": "Per-file guest-drop upload failure when the passphrase gate rejected the request."
+    },
+    "ios.auth.reason.hidden": {
+        "message": "View your hidden photos.",
+        "context": "iOS Face ID / passcode prompt reason shown when opening the Hidden album (SR1 view gate)."
+    },
+    "ios.auth.reason.recently_deleted": {
+        "message": "View your recently deleted photos.",
+        "context": "iOS Face ID / passcode prompt reason shown when opening Recently Deleted (SR1 view gate)."
+    },
+    "ios.recently_deleted.locked.description": {
+        "message": "Authenticate to view your recently deleted photos.",
+        "context": "iOS Recently Deleted locked-state description prompting biometric auth."
+    },
+    "ios.recently_deleted.unlock": {
+        "message": "Unlock",
+        "context": "iOS button to authenticate and unlock the Recently Deleted view."
+    },
+    "ios.infoplist.photo_library_usage": {
+        "message": "Capsule shows and organizes the photos and videos in your library.",
+        "context": "iOS NSPhotoLibraryUsageDescription \u2014 system permission prompt explaining why Capsule reads the photo library."
+    },
+    "ios.infoplist.face_id_usage": {
+        "message": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
+        "context": "iOS NSFaceIDUsageDescription \u2014 system permission prompt explaining why Capsule uses Face ID."
+    },
+    "ios.timeline.selection.empty": {
+        "message": "Select Items",
+        "context": "iOS Library multi-select toolbar title before anything is selected."
+    },
+    "ios.timeline.selection.count": {
+        "message": "{count, plural, one {# Selected} other {# Selected}}",
+        "context": "iOS Library multi-select toolbar title. {count} is how many items are selected."
+    },
+    "ios.timeline.delete_selected.title": {
+        "message": "{count, plural, one {Delete # Item?} other {Delete # Items?}}",
+        "context": "iOS Library delete confirmation dialog title. {count} is how many items are selected."
+    },
+    "ios.timeline.delete_selected.confirm": {
+        "message": "{count, plural, one {Delete # Item} other {Delete # Items}}",
+        "context": "iOS Library delete confirmation destructive button. {count} is how many items are selected."
+    },
+    "ios.timeline.import.imported": {
+        "message": "{count, plural, one {# imported into Capsule.} other {# imported into Capsule.}}",
+        "context": "iOS import-summary line counting newly imported files. {count} is how many were imported."
+    },
+    "ios.timeline.import.duplicates": {
+        "message": "{count, plural, one {# already in your library.} other {# already in your library.}}",
+        "context": "iOS import-summary line counting skipped duplicates. {count} is how many were already present."
+    },
+    "ios.timeline.import.failed": {
+        "message": "{count, plural, one {# couldn't be imported.} other {# couldn't be imported.}}",
+        "context": "iOS import-summary line counting failures. {count} is how many files failed."
+    },
+    "ios.timeline.import.nothing": {
+        "message": "Nothing to import.",
+        "context": "iOS import-summary shown when the import produced no imports, duplicates, or failures."
+    },
+    "ios.timeline.load_failed.description": {
+        "message": "Couldn't load your photo library.",
+        "context": "iOS Library load-failure description, under the load_failed title."
+    },
+    "ios.timeline.section.today": {
+        "message": "Today",
+        "context": "iOS Library day-section header for the current day."
+    },
+    "ios.timeline.section.yesterday": {
+        "message": "Yesterday",
+        "context": "iOS Library day-section header for the previous day."
+    },
+    "ios.albums.photo_count": {
+        "message": "{count, plural, one {# Photo} other {# Photos}}",
+        "context": "iOS album cover-card subtitle counting the album's photos. {count} is the photo count."
+    },
+    "ios.albums.untitled": {
+        "message": "Album",
+        "context": "iOS fallback name for a system album that reports no title."
+    },
+    "ios.search.clear_facet": {
+        "message": "Clear {facet}",
+        "context": "iOS Search accessibility label on the button clearing one active filter chip. {facet} is that chip's label."
+    },
+    "ios.search.category.photos": {
+        "message": "Photos",
+        "context": "iOS Search category chip filtering to photos."
+    },
+    "ios.search.category.videos": {
+        "message": "Videos",
+        "context": "iOS Search category chip filtering to videos."
+    },
+    "ios.search.category.live_photos": {
+        "message": "Live Photos",
+        "context": "iOS Search category chip filtering to Live Photos."
+    },
+    "ios.search.date_range.anytime": {
+        "message": "Any Time",
+        "context": "iOS Search date-range filter: no date restriction."
+    },
+    "ios.search.date_range.today": {
+        "message": "Today",
+        "context": "iOS Search date-range filter: photos captured today."
+    },
+    "ios.search.date_range.this_week": {
+        "message": "This Week",
+        "context": "iOS Search date-range filter: photos captured this week."
+    },
+    "ios.search.date_range.this_month": {
+        "message": "This Month",
+        "context": "iOS Search date-range filter: photos captured this month."
+    },
+    "ios.search.date_range.this_year": {
+        "message": "This Year",
+        "context": "iOS Search date-range filter: photos captured this year."
+    },
+    "ios.media_type.photo": {
+        "message": "Photo",
+        "context": "iOS media-type display name for a still photo."
+    },
+    "ios.media_type.video": {
+        "message": "Video",
+        "context": "iOS media-type display name for a video."
+    },
+    "ios.media_type.live_photo": {
+        "message": "Live Photo",
+        "context": "iOS media-type display name for a Live Photo."
+    },
+    "ios.collections.people.title": {
+        "message": "People & Pets",
+        "context": "iOS Collections row opening the People & Pets screen."
+    },
+    "ios.collections.memories.title": {
+        "message": "Memories",
+        "context": "iOS Collections row opening the Memories screen."
+    },
+    "ios.collections.people.coming_soon": {
+        "message": "People & Pets grouping is coming soon.",
+        "context": "iOS Collections placeholder message for the unbuilt People & Pets screen."
+    },
+    "ios.collections.memories.coming_soon": {
+        "message": "Auto-curated Memories are coming soon.",
+        "context": "iOS Collections placeholder message for the unbuilt Memories screen."
+    },
+    "ios.collections.duplicates.title": {
+        "message": "Duplicates",
+        "context": "iOS Collections row opening the Duplicates screen."
+    },
+    "ios.collections.duplicates.coming_soon": {
+        "message": "Find and merge duplicate photos. Coming soon.",
+        "context": "iOS Collections placeholder message for the unbuilt Duplicates screen."
     }
 }

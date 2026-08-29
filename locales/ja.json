@@ -1776,5 +1776,153 @@
     "drop.error.passphrase": {
         "message": "This upload needs the link's password. Unlock the page and try again.",
         "context": "Machine-translated seed pending human review."
+    },
+    "ios.auth.reason.hidden": {
+        "message": "View your hidden photos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.auth.reason.recently_deleted": {
+        "message": "View your recently deleted photos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.recently_deleted.locked.description": {
+        "message": "Authenticate to view your recently deleted photos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.recently_deleted.unlock": {
+        "message": "Unlock",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.infoplist.photo_library_usage": {
+        "message": "Capsule shows and organizes the photos and videos in your library.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.infoplist.face_id_usage": {
+        "message": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.selection.empty": {
+        "message": "Select Items",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.selection.count": {
+        "message": "{count, plural, one {# Selected} other {# Selected}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.delete_selected.title": {
+        "message": "{count, plural, one {Delete # Item?} other {Delete # Items?}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.delete_selected.confirm": {
+        "message": "{count, plural, one {Delete # Item} other {Delete # Items}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.import.imported": {
+        "message": "{count, plural, one {# imported into Capsule.} other {# imported into Capsule.}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.import.duplicates": {
+        "message": "{count, plural, one {# already in your library.} other {# already in your library.}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.import.failed": {
+        "message": "{count, plural, one {# couldn't be imported.} other {# couldn't be imported.}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.import.nothing": {
+        "message": "Nothing to import.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.load_failed.description": {
+        "message": "Couldn't load your photo library.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.section.today": {
+        "message": "Today",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.timeline.section.yesterday": {
+        "message": "Yesterday",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.albums.photo_count": {
+        "message": "{count, plural, one {# Photo} other {# Photos}}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.albums.untitled": {
+        "message": "Album",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.clear_facet": {
+        "message": "Clear {facet}",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.category.photos": {
+        "message": "Photos",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.category.videos": {
+        "message": "Videos",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.category.live_photos": {
+        "message": "Live Photos",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.date_range.anytime": {
+        "message": "Any Time",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.date_range.today": {
+        "message": "Today",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.date_range.this_week": {
+        "message": "This Week",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.date_range.this_month": {
+        "message": "This Month",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.search.date_range.this_year": {
+        "message": "This Year",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.media_type.photo": {
+        "message": "Photo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.media_type.video": {
+        "message": "Video",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.media_type.live_photo": {
+        "message": "Live Photo",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.people.title": {
+        "message": "People & Pets",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.memories.title": {
+        "message": "Memories",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.people.coming_soon": {
+        "message": "People & Pets grouping is coming soon.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.memories.coming_soon": {
+        "message": "Auto-curated Memories are coming soon.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.duplicates.title": {
+        "message": "Duplicates",
+        "context": "Machine-translated seed pending human review."
+    },
+    "ios.collections.duplicates.coming_soon": {
+        "message": "Find and merge duplicate photos. Coming soon.",
+        "context": "Machine-translated seed pending human review."
     }
 }

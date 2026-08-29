@@ -196,9 +196,9 @@ enum CollectionCategory: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .places: "Places"
-        case .people: "People & Pets"
-        case .memories: "Memories"
+        case .places: String(localized: "ios.places.title")
+        case .people: String(localized: "ios.collections.people.title")
+        case .memories: String(localized: "ios.collections.memories.title")
         }
     }
 
@@ -210,11 +210,14 @@ enum CollectionCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The placeholder body. ``places`` has a real screen, so its arm is
+    /// unreachable and borrows the Places empty state rather than carrying a
+    /// dead string through thirteen translations.
     var comingSoonMessage: String {
         switch self {
-        case .places: "See where your photos were taken on a map."
-        case .people: "People & Pets grouping is coming soon."
-        case .memories: "Auto-curated Memories are coming soon."
+        case .places: String(localized: "ios.places.empty.description")
+        case .people: String(localized: "ios.collections.people.coming_soon")
+        case .memories: String(localized: "ios.collections.memories.coming_soon")
         }
     }
 }
@@ -231,10 +234,10 @@ enum UtilityCategory: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .recentlyDeleted: "Recently Deleted"
-        case .hidden: "Hidden"
-        case .imports: "Imports"
-        case .duplicates: "Duplicates"
+        case .recentlyDeleted: String(localized: "ios.recently_deleted.title")
+        case .hidden: String(localized: "ios.hidden.title")
+        case .imports: String(localized: "ios.imports.title")
+        case .duplicates: String(localized: "ios.collections.duplicates.title")
         }
     }
 
@@ -247,12 +250,15 @@ enum UtilityCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The placeholder body. Only ``duplicates`` still reaches a placeholder —
+    /// the other three have real screens, so their arms borrow those screens'
+    /// empty states rather than carrying dead strings through the catalogs.
     var comingSoonMessage: String {
         switch self {
-        case .recentlyDeleted: "Restore or permanently remove deleted photos. Coming soon."
-        case .hidden: "Photos you've hidden, behind Face ID. Coming soon."
-        case .imports: "Photos recently imported into Capsule. Coming soon."
-        case .duplicates: "Find and merge duplicate photos. Coming soon."
+        case .recentlyDeleted: String(localized: "ios.recently_deleted.empty.description")
+        case .hidden: String(localized: "ios.hidden.empty.description")
+        case .imports: String(localized: "ios.imports.empty.description")
+        case .duplicates: String(localized: "ios.collections.duplicates.coming_soon")
         }
     }
 }

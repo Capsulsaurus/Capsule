@@ -59,7 +59,10 @@ public struct PlacesMapView: View {
 
     private func clusterPin(_ cluster: PhotoCluster) -> some View {
         Button { selectedCluster = cluster } label: {
-            Text("\(cluster.assets.count)")
+            // A bare count, not translatable text — but still locale-sensitive, so it
+            // goes through a number format rather than string interpolation (which
+            // would pin Western digits in every locale).
+            Text(cluster.assets.count, format: .number)
                 .font(.caption.bold())
                 .foregroundStyle(.white)
                 .padding(.horizontal, CapsuleTheme.Spacing.small)

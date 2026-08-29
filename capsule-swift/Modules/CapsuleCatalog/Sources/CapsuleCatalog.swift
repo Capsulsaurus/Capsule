@@ -12,6 +12,12 @@ import Foundation
 ///
 /// - Important: ``init(openingCatalogAt:)`` runs schema migration synchronously;
 ///   construct it off the main actor (e.g. inside a `Task`).
+/// - Important: ``unlockView(_:using:)`` occupies this actor for as long as the
+///   platform's authentication prompt is on screen — the UniFFI gate seam is a
+///   synchronous callback, so there is no way to yield while it waits. Catalog
+///   reads queue behind it. That is the point of the actor (the prompt runs off
+///   the main thread and the UI keeps rendering), but do not issue a gate
+///   challenge on a path that also needs a concurrent catalog read.
 public actor CapsuleCatalog: AssetCatalog {
     private let catalog: Catalog
 
@@ -99,6 +105,27 @@ public actor CapsuleCatalog: AssetCatalog {
         CapsuleLog.catalog.trace("trash offset=\(offset) limit=\(limit)")
         return try catalog.queryTrash(offset: pageValue(offset), limit: pageValue(limit))
             .map(CatalogAsset.init)
+    }
+
+    // MARK: Gated views
+
+    public func unlockView(_ view: GatedView, using gate: any LocalAuthGate) throws {
+        CapsuleLog.catalog.debug("unlockView \(String(describing: view), privacy: .public)")
+        try catalog.unlockView(view: view, auth: gate)
+    }
+
+    public func isViewUnlocked(_ view: GatedView) -> Bool {
+        catalog.isViewUnlocked(view: view)
+    }
+
+    public func relockView(_ view: GatedView) {
+        CapsuleLog.catalog.debug("relockView \(String(describing: view), privacy: .public)")
+        catalog.relockView(view: view)
+    }
+
+    public func lockViews() {
+        CapsuleLog.catalog.debug("lockViews")
+        catalog.lockViews()
     }
 
     public func purgeAsset(id: String) throws {

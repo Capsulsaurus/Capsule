@@ -20,7 +20,11 @@
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
 //!   A migrated call passes a catalog KEY (`Text("ios.settings.title")`); a literal
-//!   (`Text("Settings")`) is not a key, so it fails.
+//!   (`Text("Settings")`) is not a key, so it fails. Slice `S-I4` added two more Swift
+//!   detectors: *interpolated* literals in those same positions (`Text("Delete \(n)")`),
+//!   which `S-I1` had to skip because they had no catalog mechanism yet, and the key
+//!   argument of `String(localized:)`, the mechanism for strings outside a
+//!   `LocalizedStringKey` position.
 //! - **Compose** (`capsule-android/src/**/*.kt`): the string argument of `Text("…")`
 //!   and `contentDescription = "…"`. Migrated code uses
 //!   `stringResource(R.string.…)`; a bare literal is not a key, so it fails.
@@ -240,8 +244,19 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Detect string-literal arguments to user-facing SwiftUI APIs.
+/// Detect hardcoded user-facing strings in a SwiftUI source: plain literals in a watched
+/// API position, *interpolated* literals in the same positions, and the key argument of
+/// `String(localized:)`.
 pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
+    let mut findings = swift_literal_findings(content);
+    findings.extend(swift_interpolation_findings(content));
+    findings.extend(swift_localized_key_findings(content));
+    findings.sort_by_key(|f| f.line);
+    findings
+}
+
+/// Detect string-literal arguments to user-facing SwiftUI APIs.
+fn swift_literal_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
     // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
     // `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
@@ -259,6 +274,41 @@ pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
         .expect("static regex is valid")
     });
     matched_findings(content, re, "swift-literal")
+}
+
+/// Detect *interpolated* literals in the same watched positions — `Text("Delete \(n)")`.
+///
+/// Slice `S-I1` had to skip these: with no way to pass ICU arguments from a catalog key,
+/// an interpolated string had nowhere to go, so [`swift_literal_findings`]'s `[^"\\]*`
+/// deliberately walks past a `\(`. Slice `S-I4` gave them a mechanism
+/// (`String(localized:defaultValue:)` against an ICU catalog message), so the blind spot
+/// closes. Every hit is a violation without consulting the catalog: a key can never
+/// contain an interpolation, and a migrated call site passes `String(...)`, not a literal.
+fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert|confirmationDialog)\(\s*"([^"]*\\\([^"]*)""#,
+        )
+        .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-interpolation")
+}
+
+/// Detect the key argument of `String(localized:)`, the mechanism outside SwiftUI's
+/// `LocalizedStringKey` positions (`LAContext` reasons, view-model strings, enum labels).
+///
+/// The capture is the *key*, checked against the catalog by the runner, so
+/// `String(localized: "Photos")` fails while `String(localized: "ios.media_type.photo")`
+/// passes. The `defaultValue:` argument is deliberately not captured — it is the English
+/// source text the ICU arguments hang off, and is expected to be a literal.
+fn swift_localized_key_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"String\(\s*localized:\s*"([^"\\]*[A-Za-z][^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-localized-key")
 }
 
 /// Detect string-literal arguments to user-facing Compose APIs.
@@ -391,13 +441,54 @@ mod tests {
     #[test]
     fn swift_ignores_helper_names_ending_in_a_watched_name() {
         // `barButton` ends in `Button` but is a custom helper taking an SF Symbol
-        // name — the word boundary keeps it out. Interpolations (`\(count)`) are a
-        // documented blind spot and must not match either.
+        // name — the word boundary keeps it out, for the interpolation detector as
+        // much as for the literal one.
         let src = r#"barButton("square.and.arrow.up", action: share)
             myText("not.matched")
-            Button("Delete \(count) Items", role: .destructive) {}
+            barButton("Delete \(count) Items", role: .destructive) {}
         "#;
         assert_eq!(swift_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_flags_an_interpolated_literal_in_a_watched_position() {
+        // The `S-I1` blind spot, closed by `S-I4`.
+        let src = r#"Text("Delete \(count) Items")
+            .confirmationDialog("Delete \(count) Items?", isPresented: $flag) {}
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&r"Delete \(count) Items"), "{t:?}");
+        assert!(t.contains(&r"Delete \(count) Items?"), "{t:?}");
+    }
+
+    #[test]
+    fn swift_ignores_a_migrated_interpolated_call_site() {
+        // The migrated shape passes `String(localized:defaultValue:)`, so the watched
+        // position holds no literal at all and the `defaultValue:` text is not captured.
+        let src = r#"Button(
+                String(
+                    localized: "ios.timeline.delete_selected.confirm",
+                    defaultValue: "Delete \(count) Items"
+                ),
+                role: .destructive
+            ) {}
+        "#;
+        let f = swift_findings(src);
+        // Only the catalog key is captured; the runner then matches it against the catalog.
+        assert_eq!(texts(&f), vec!["ios.timeline.delete_selected.confirm"]);
+    }
+
+    #[test]
+    fn swift_flags_a_string_localized_key_that_is_not_a_catalog_key() {
+        let src = r#"String(localized: "Photos")
+            String(localized: "ios.media_type.photo")
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        // Both are captured; the runner keeps only the one that is not a catalog key.
+        assert!(t.contains(&"Photos"));
+        assert!(t.contains(&"ios.media_type.photo"));
     }
 
     #[test]
