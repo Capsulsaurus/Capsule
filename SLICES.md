@@ -2672,13 +2672,6 @@ the current transport.
 - **Area:** `ACTIVE` — entirely inside `capsule-core::ml` and the `capsule-core::db`
   vector index, so it is **unaffected by the server rebuild** and can be written now.
   The module map says so explicitly in case 10's own wording.
-
-## Lane X — MLS
-
-Area: `ACTIVE` throughout. `master` filed `S-X1`–`S-X3` under `blocked-external` on the
-grounds that the target ciphersuite had no IANA codepoint and no shipping OpenMLS backend.
-**That is stale.** The X-Wing codepoint is `0x004D`, OpenMLS 0.8.1 ships it via libcrux,
-and all three slices are `done` in `capsule-core`.
 - **Landed 2026-08-29, and the audit's framing needed correcting.** The case was not unowned: a test
   existed, doc-labelled "Module Map E2E case **#10**", and a search for `E2E case 10` missed it
   because of the `#`. That is the cosmetic half.
@@ -2695,6 +2688,13 @@ and all three slices are `done` in `capsule-core`.
   time; an entry is stale iff its recorded `model_version` differs from the registry's canonical
   one, so `knn` excludes stale rows structurally and the complementary query *is* the work-list.
   That is why the loop keeps no cursor and a kill mid-run re-derives the tail.
+
+## Lane X — MLS
+
+Area: `ACTIVE` throughout. `master` filed `S-X1`–`S-X3` under `blocked-external` on the
+grounds that the target ciphersuite had no IANA codepoint and no shipping OpenMLS backend.
+**That is stale.** The X-Wing codepoint is `0x004D`, OpenMLS 0.8.1 ships it via libcrux,
+and all three slices are `done` in `capsule-core`.
 
 ### S-X1 — OpenMLS backend → `OpenMlsAuthority`
 
