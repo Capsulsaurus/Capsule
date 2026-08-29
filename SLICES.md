@@ -285,7 +285,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-G3 | Plaintext server entity quarantine | legacy-retire | — | M | RETIRED | done | legacy route deletion → `S-C17` |
 | S-G4 | Legacy import-executor quarantine | legacy-retire | — | S | RETIRED | done | |
 | S-H1 | Embeddings + sqlite-vec index | ML | — | L | ACTIVE | done | |
-| S-H2 | Model registry + version regen | ML | S-H1 | M | ACTIVE | done\* | E2E case 10 → `S-Q6` |
+| S-H2 | Model registry + version regen | ML | S-H1 | M | ACTIVE | done | E2E case 10 landed as `S-Q6` |
 | S-H3 | Semantic/face features | ML | S-H1 | L | MIXED | done\* | real runner → post-v1 (ai.md note) |
 | S-H4 | Group-scoped evaluations (best shot/framing/exposure) | ML | S-H3 | M | MIXED | post-v1 | |
 | S-I1 | Hardcoded-string migration to catalog keys | i18n | — | M | ACTIVE | done\* | Swift plural/InfoPlist gaps → `S-I4`; review → gates |
@@ -308,7 +308,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Q3 | E2E case 7: full lifecycle chain | e2e | — | M | MIXED | ready | |
 | S-Q4 | E2E case 12: cross-device enrollment | e2e | — | M | MIXED | ready | |
 | S-Q5 | Live-browser smokes (gRPC-web, share, drop) | e2e | S-P7 | M | MIXED | ready | |
-| S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | ready | |
+| S-Q6 | E2E case 10: model regen after version bump | e2e | — | M | ACTIVE | done | the case was untestable, not untested |
 | S-X1 | OpenMLS backend → `OpenMlsAuthority` | crypto/mls | — | L | ACTIVE | done | |
 | S-X2 | MLS membership + Welcome/history delivery | crypto/mls | S-X1 | L | ACTIVE | done | |
 | S-X3 | Album upgrade ceremony + MLS resilience | crypto/mls | S-X2 | L | ACTIVE | done\* | server halves → `S-C24` |
@@ -2628,6 +2628,22 @@ Area: `ACTIVE` throughout. `master` filed `S-X1`–`S-X3` under `blocked-externa
 grounds that the target ciphersuite had no IANA codepoint and no shipping OpenMLS backend.
 **That is stale.** The X-Wing codepoint is `0x004D`, OpenMLS 0.8.1 ships it via libcrux,
 and all three slices are `done` in `capsule-core`.
+- **Landed 2026-08-29, and the audit's framing needed correcting.** The case was not unowned: a test
+  existed, doc-labelled "Module Map E2E case **#10**", and a search for `E2E case 10` missed it
+  because of the `#`. That is the cosmetic half.
+- **The substantive half: it was not end-to-end and could not have been.** It ran on
+  `DeterministicEmbedder`, which synthesizes a vector from the asset-id *string*, so it proved the
+  loop's bookkeeping while never touching an original. The contract's central claim — the index is
+  derived state rebuilt by re-running inference over the originals — was asserted nowhere. Two
+  things made it inexpressible and both had to be built: `RunnerEmbedder`, because `regenerate_stale`
+  only ever accepted an `Embedder` and no implementor read an asset; and version sensitivity in
+  `FixtureRunner`, which hashed only input bytes, so a "v2" fixture reproduced v1's vectors exactly
+  and a model swap was **unobservable** — regeneration was indistinguishable from copying the stale
+  vector forward, and a test could have passed while doing nothing.
+- **Design point worth keeping:** invalidation is *derived*, not written. Nothing is flagged at bump
+  time; an entry is stale iff its recorded `model_version` differs from the registry's canonical
+  one, so `knn` excludes stale rows structurally and the complementary query *is* the work-list.
+  That is why the loop keeps no cursor and a kill mid-run re-derives the tail.
 
 ### S-X1 — OpenMLS backend → `OpenMlsAuthority`
 
