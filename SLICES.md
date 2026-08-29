@@ -268,7 +268,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D24 | Migrate unsigned sidecars, then delete the reader | sdk/clients | S-D21 | L | ACTIVE | blocked | needs a design decision first |
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
-| S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done | two copies of `MockServer` had it |
+| S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -2180,8 +2180,17 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   Connections now live in a `JoinSet` owned by the accept task, so aborting the task drops the set
   and the set aborts everything in it. Found in **two** places — `testmock.rs` and a second,
   near-identical `MockServer` in `verify/tests.rs` — which is worth knowing: the duplication meant
-  fixing the reported one would have left the same defect live. A full `test-rust` run now reports
-  0 leaky across 2,259 tests.
+  fixing the reported one would have left the same defect live.
+- **Corrected: `0 leaky` is not a reliable green, and the row said otherwise.** A later full run
+  reported one leak on `peering::tests::delta_is_the_symmetric_difference` — a plain `#[test]` doing
+  `BTreeSet` arithmetic, with no async, no socket and no subprocess. It cannot hold a handle, and it
+  is clean in isolation. So nextest's detector also fires under parallel load by attributing a stray
+  handle to whichever process happens to be finishing, and earlier sightings on an FFI test and two
+  `exif` tests fit the same shape.
+- **The fix was still correct** — detached connection tasks outliving their server genuinely leak
+  sockets — but the *metric* cannot be used as a pass/fail gate. Treat a `LEAK` line as a prompt to
+  check whether the named test could plausibly hold a resource, not as a defect on its own. `done*`
+  because the real source is closed and the signal is not.
 
 ## Lane E — federation / sharing
 
