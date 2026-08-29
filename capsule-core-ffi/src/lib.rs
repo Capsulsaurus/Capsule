@@ -23,7 +23,11 @@
 //!   [`AlbumRecord`] — catalog row mirrors.
 //! - [`AssetSidecarRecord`] / [`serialize_sidecar`] / [`deserialize_sidecar`] —
 //!   the canonical CBOR sidecar format, with unknown fields preserved verbatim.
+//! - [`GatedView`] / [`LocalAuthGate`] / [`LocalAuthError`] — the fresh-local-auth seam
+//!   the platform implements, and the views it unlocks ([Local Gallery — SR1]).
 //! - [`CatalogError`] — the single error type crossing the boundary.
+//!
+//! [Local Gallery — SR1]: https://docs/design/local-gallery/#security-requirements
 
 uniffi::setup_scaffolding!();
 
@@ -35,11 +39,13 @@ use capsule_sdk as _;
 
 mod catalog;
 mod error;
+mod gate;
 mod records;
 mod sidecar;
 
 pub use catalog::Catalog;
 pub use error::CatalogError;
+pub use gate::{GatedView, LocalAuthError, LocalAuthGate};
 pub use records::{AlbumRecord, AssetRecord, AssetStackRecord, StackMemberRecord};
 pub use sidecar::{AssetSidecarRecord, StackHintRecord, deserialize_sidecar, serialize_sidecar};
 
