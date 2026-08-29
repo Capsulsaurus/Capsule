@@ -15,9 +15,12 @@
 //!   check and the wire is transparently recovered.
 //!
 //! It is hand-rolled over `reqwest` (rustls only) against the real
-//! [`capsule-api-auth`] endpoints (`POST /login`, `/refresh`, `/logout`); the typed
-//! REST client (spargen, `S-D8`) is still parked, so this slice does not depend on
-//! it. Auth requests are [`crate::net::RetryClass::Interactive`]; the full backoff
+//! [`capsule-api-auth`] endpoints (`POST /login`, `/refresh`, `/logout`). It does not
+//! route through the generated client, but the reason is no longer that spargen is
+//! parked — spargen ships and `S-D8` generates the typed surface today. What lives here
+//! is token *orchestration*: the pre-flight refresh, the `401`-retry-once replay, and
+//! the session store they mutate. That is deliberately outside generated code, which
+//! owns parsing and serialization and nothing else. Auth requests are [`crate::net::RetryClass::Interactive`]; the full backoff
 //! ladder lands with `S-D10`, but the `401`-retry-once and pre-flight refresh here
 //! are the parts the session store owns.
 //!

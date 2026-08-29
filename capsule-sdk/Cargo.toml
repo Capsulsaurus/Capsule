@@ -94,7 +94,7 @@ uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [build-dependencies]
 tonic-prost-build = { workspace = true }
-# spargen (in-house) generates the typed REST client from the committed OpenAPI 3.1 schema
+# spargen (in-house) generates the typed REST client from the committed OpenAPI 3.2 schema
 # at build time (slice `S-D8`); see `build.rs`. `default-features = false` drops its `cli`
 # (clap) and the `uuid`/`time` `format`-mapping features — the current schema emits neither,
 # and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
