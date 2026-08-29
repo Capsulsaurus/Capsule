@@ -66,7 +66,11 @@ pub mod models;
 pub mod sidecar;
 #[cfg(feature = "native")]
 pub mod utils;
-#[cfg(feature = "native")]
+// Deliberately **not** `native`-gated: these are pure, key-less structural checks over
+// `crypto::{encryption, hash, primitives, provenance}` and nothing else. Gating them behind
+// `native` forced `capsule-server` — a key-free server that touches no SQLite and no MLS — to link
+// `rusqlite`, `sqlite-vec`, OpenMLS and libcrux in order to call the refuse-by-default invariants
+// it exists to enforce.
 pub mod validation;
 
 /// uniffi-generated bindings surface for Kotlin/Swift (`ffi` feature). The exported API is a

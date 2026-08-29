@@ -27,7 +27,10 @@ kynos = { workspace = true }
 # digest crate. A workspace member, already in the lock file through `capsule-api`, so this
 # adds no external dependency and needs no design/dependencies.md row. The `native` default is
 # not optional: `validation` is gated behind it.
-capsule-core = { path = "../capsule-core" }
+# `default-features = false`: the server needs only `capsule_core::validation` — the pure, key-less
+# refuse-by-default invariants — and the crypto types they read. The default `native` feature pulls
+# SQLite, sqlite-vec, OpenMLS and libcrux, none of which a key-free server touches.
+capsule-core = { path = "../capsule-core", default-features = false }
 # The framework-free wire contracts (slice `S-C27`). The response taxonomy lives here so it
 # outlives whichever framework renders it.
 capsule-wire = { path = "../capsule-wire" }
