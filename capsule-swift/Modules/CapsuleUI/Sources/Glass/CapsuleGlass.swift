@@ -119,3 +119,74 @@ public extension View {
         backgroundExtensionEffect()
     }
 }
+
+// MARK: - Scroll edges
+
+public extension View {
+    /// Let scrolling content dissolve under the bar at `edge` instead of being
+    /// cut off by an opaque strip.
+    ///
+    /// This is the iOS 26 answer to the problem the app previously solved by
+    /// hand: a `safeAreaInset` filled with `.background(.bar)`, which is an
+    /// opaque band that content slides *behind* and vanishes at. The scroll edge
+    /// effect instead fades and blurs the content into the bar, so the bar reads
+    /// as floating over a continuous surface — the same relationship glass has
+    /// with everything else it sits on.
+    ///
+    /// `.soft` is the default here rather than `.hard` because a hard edge draws
+    /// a visible boundary line, which re-creates the band this exists to remove.
+    func capsuleScrollEdgeEffect(
+        _ style: ScrollEdgeEffectStyle = .soft,
+        for edges: Edge.Set
+    ) -> some View {
+        scrollEdgeEffectStyle(style, for: edges)
+    }
+}
+
+// MARK: - Search
+
+public extension View {
+    /// Let the search field collapse into the toolbar until it is reached for.
+    ///
+    /// The `#if` is a capability branch: macOS puts search in the window toolbar,
+    /// where there is nothing to minimise into, so the modifier does not exist
+    /// there.
+    @ViewBuilder
+    func capsuleSearchToolbarBehavior() -> some View {
+        #if os(iOS)
+            searchToolbarBehavior(.minimize)
+        #else
+            self
+        #endif
+    }
+}
+
+// MARK: - Zoom transitions
+
+public extension View {
+    /// Mark this view as the thing a zoom transition grows *out of*.
+    ///
+    /// Pair with ``capsuleZoomTransition(id:in:)`` on the presented view, using
+    /// the same `id` and namespace. Without both halves the presentation falls
+    /// back to a cross-fade — which is what the app did everywhere before this
+    /// existed, despite the iOS 26 floor being justified partly by this API.
+    func capsuleZoomSource(id: some Hashable, in namespace: Namespace.ID) -> some View {
+        matchedTransitionSource(id: id, in: namespace)
+    }
+
+    /// Present this view by growing it from the matching
+    /// ``capsuleZoomSource(id:in:)``, and shrink it back on dismissal.
+    ///
+    /// The `#if` is a capability branch: `.zoom` is unavailable on macOS, where
+    /// a detail presentation is a window or a sheet rather than a view that
+    /// takes over the screen, so there is no tile for it to grow from. The Mac
+    /// keeps the system's own presentation animation.
+    @ViewBuilder
+    func capsuleZoomTransition(id: some Hashable, in namespace: Namespace.ID) -> some View {
+        #if os(iOS)
+            navigationTransition(.zoom(sourceID: id, in: namespace))
+        #else
+            self
+        #endif
+    }
+}

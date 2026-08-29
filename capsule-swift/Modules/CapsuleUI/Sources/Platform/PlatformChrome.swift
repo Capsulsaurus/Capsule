@@ -6,12 +6,13 @@ import SwiftUI
 ///
 /// Feature views call these unconditionally so no view body carries an
 /// `#if os(...)`; the branch lives here once, next to the reason for it. The
-/// pattern mirrors `capsuleTabBarMinimizeOnScroll()` in `CapsuleUI`.
+/// pattern mirrors `capsuleTabBarMinimizeOnScroll()` in ``CapsuleGlass``.
 ///
-/// These live in `FeatureViewer` because it is the one module every other
-/// feature module already depends on. They are chrome, not viewer concerns, and
-/// belong in `CapsuleUI` as soon as that module owns cross-platform chrome —
-/// moving them is a rename of the import, nothing more.
+/// These live in `CapsuleUI` because they are chrome rather than any one
+/// feature's concern, and because the timeline and the viewer both need them.
+/// The directory name is load-bearing: `.swiftlint.yml`'s `no_platform_ui_import`
+/// rule exempts `Platform/` and `PlatformCollection/`, which is the same reason
+/// the collection-view island lives where it does.
 public extension View {
     /// Render the navigation title inline rather than large.
     ///
@@ -75,7 +76,65 @@ public extension View {
             )
         #endif
     }
+
+    /// A sheet that rests at `detents`, shows a grab handle, and lets whatever
+    /// it covers stay visible behind it.
+    ///
+    /// The variant a sheet over *media* wants. ``capsuleSheetDetents()`` gives a
+    /// sheet the system's opaque background, which is right over a list and
+    /// wrong over a photograph: the photo is the context for everything the
+    /// sheet says, so it has to remain on screen. The drag indicator is here for
+    /// the same reason — a sheet the user is expected to resize has to look
+    /// resizable, and a sheet over a photo has no navigation bar to hint it.
+    ///
+    /// On macOS this degrades to ``capsuleSheetDetents()``'s fixed panel: a Mac
+    /// sheet is neither draggable nor detented, and faking either would be a
+    /// worse answer than the platform's own.
+    func capsuleMediaSheet(
+        detents: Set<PresentationDetent>,
+        selection: Binding<PresentationDetent>? = nil
+    ) -> some View {
+        #if os(iOS)
+            modifier(CapsuleMediaSheetModifier(detents: detents, selection: selection))
+        #else
+            capsuleSheetDetents()
+        #endif
+    }
 }
+
+#if os(iOS)
+
+    /// The presentation modifiers ``SwiftUI/View/capsuleMediaSheet(detents:selection:)``
+    /// applies, in one place.
+    ///
+    /// A `ViewModifier` rather than an inline chain because `presentationDetents`
+    /// has two spellings — with and without a selection binding — and branching
+    /// between them inside a `some View` chain otherwise needs an `AnyView` or a
+    /// duplicated body.
+    private struct CapsuleMediaSheetModifier: ViewModifier {
+        let detents: Set<PresentationDetent>
+        let selection: Binding<PresentationDetent>?
+
+        func body(content: Content) -> some View {
+            applyDetents(to: content)
+                .presentationDragIndicator(.visible)
+                // `.thinMaterial` rather than an opaque background: the sheet is
+                // over a photograph, and the photograph is the subject.
+                .presentationBackground(.thinMaterial)
+                .presentationCornerRadius(CapsuleTheme.Radius.large)
+        }
+
+        @ViewBuilder
+        private func applyDetents(to content: Content) -> some View {
+            if let selection {
+                content.presentationDetents(detents, selection: selection)
+            } else {
+                content.presentationDetents(detents)
+            }
+        }
+    }
+
+#endif
 
 #if !os(iOS)
 

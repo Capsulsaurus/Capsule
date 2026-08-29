@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleUI
 import ImagePipeline
 import MapKit
 import SwiftUI

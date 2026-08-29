@@ -1,4 +1,4 @@
-import FeatureViewer
+import CapsuleUI
 import Foundation
 import SwiftUI
 

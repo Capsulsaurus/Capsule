@@ -1,5 +1,5 @@
 import AssetKit
-import FeatureViewer
+import CapsuleUI
 import SwiftUI
 
 /// Recently Deleted — Capsule-managed soft-deleted assets, with swipe-to-recover

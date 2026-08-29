@@ -50,6 +50,10 @@ struct RootShell: View {
             }
         }
         .environment(router)
+        // One tint for the whole scene. Set here rather than per screen because
+        // an accent is a property of the app, and thirty screens each choosing
+        // their own is how an app ends up with three blues.
+        .tint(CapsuleTheme.Colors.accent)
         // Menu commands live outside every view hierarchy, so they read the
         // router from the *focused* scene rather than the environment. This is
         // what makes a command act on the window you are looking at.
