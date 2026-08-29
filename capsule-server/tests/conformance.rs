@@ -100,6 +100,7 @@ async fn every_declared_response_is_exercised() {
         ("PATCH", "/v1/upload/anything"),
         ("HEAD", "/v1/upload/anything"),
         ("DELETE", "/v1/upload/anything"),
+        ("GET", "/v1/sync"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -562,6 +563,55 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.uploads.set_unavailable(false);
+
+    // ── GET /v1/sync ───────────────────────────────────────────────────────────────────────
+    // 401 first: the framework's, with the `WWW-Authenticate` challenge the operation declares.
+    client
+        .get("/v1/sync")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 403: a refresh token is a valid credential and an insufficient one. Declared by the
+    // `Auth<AccessToken>` scheme rather than by this surface — which is the point of the
+    // covered-check: the framework declared a status the handler never thinks about, and the
+    // assertion made someone establish that it is reachable.
+    client
+        .get("/v1/sync")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 400: the one cursor rejection. Malformed and foreign are deliberately the same answer.
+    client
+        .get("/v1/sync?cursor=not-a-cursor")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500: the index could not answer.
+    fixture.index.set_unavailable(true);
+    client
+        .get("/v1/sync")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.index.set_unavailable(false);
+
+    // 200, on an empty library: a client with nothing to sync still gets a cursor.
+    client
+        .get("/v1/sync")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

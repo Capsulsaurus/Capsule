@@ -35,12 +35,18 @@ use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
     QuarantineReason, QuarantinedBlob,
 };
+use capsule_server::index::memory::InMemoryAssetIndex;
+use capsule_server::index::{
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, PendingAsset,
+    Reservation,
+};
 use capsule_server::store::memory::{InMemoryAuthState, InMemoryUploadSessions, ManualClock};
 use capsule_server::store::{
-    AcceptedChunk, AlbumId, AuthStateStore, Clock, FinalizeClaim, OwnerId, SessionId,
+    AcceptedChunk, AlbumId, AssetId, AuthStateStore, Clock, FinalizeClaim, OwnerId, SessionId,
     SessionRecord, StoreError, StoreFuture, UploadId, UploadSessionRecord, UploadSessionStatus,
     UploadSessionStore, UserId,
 };
+use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
@@ -65,6 +71,13 @@ pub(crate) const PASSWORD: &str = "correct horse battery staple";
 
 /// What a broken collaborator says. Asserted against, so a 500 body that leaked it would fail.
 const REFUSAL: &str = "the double refuses on purpose";
+
+/// The sync-cursor MAC key the fixture builds every server with.
+///
+/// A constant, so a test can build a second codec over the same key and mint a cursor the
+/// server accepts — and a *different* key is how the "cursor from another server" case is
+/// written without reaching inside the codec.
+pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 
 // ===========================================================================================
 // Account directory double
@@ -700,6 +713,108 @@ impl WriteAuthority for TestAuthority {
 // The fixture
 // ===========================================================================================
 
+/// The asset index, with a switch that makes it refuse.
+///
+/// Delegation, not reimplementation: with the switch off this *is* the adapter the shared
+/// conformance suite passes, so an assertion about a published asset is an assertion about the
+/// real thing.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableIndex {
+    inner: InMemoryAssetIndex,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableIndex {
+    /// A working index.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "asset-index",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl AssetIndex for SwitchableIndex {
+    fn reserve(&self, asset: PendingAsset) -> IndexFuture<'_, Reservation> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reserve(asset)
+    }
+
+    fn read<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.read(asset)
+    }
+
+    fn record_blob<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        blob: BlobRecord,
+    ) -> IndexFuture<'a, BlobOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.record_blob(asset, blob)
+    }
+
+    fn tombstone<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        at: Timestamp,
+    ) -> IndexFuture<'a, Option<AssetRow>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.tombstone(asset, at)
+    }
+
+    fn find_by_address<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        address: &'a ContentAddress,
+    ) -> IndexFuture<'a, Option<AssetId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.find_by_address(owner, address)
+    }
+
+    fn feed_page<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        after: u64,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<FeedEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.feed_page(owner, after, limit)
+    }
+
+    fn head_seq<'a>(&'a self, owner: &'a OwnerId) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.head_seq(owner)
+    }
+}
+
 /// A built server, plus handles on everything behind it.
 ///
 /// The handles matter: an assertion about a session is made against the store the server just
@@ -722,6 +837,11 @@ pub(crate) struct Fixture {
     pub(crate) blobs: Arc<SwallowingBlobs>,
     /// The album and device facts invariants 6 and 7 were decided against.
     pub(crate) authority: Arc<TestAuthority>,
+    /// The durable asset index the feed reads from.
+    pub(crate) index: Arc<SwitchableIndex>,
+    /// The cursor codec the server mints with — the *same* one, so a test can mint a cursor
+    /// the server will accept, or one it must not.
+    pub(crate) cursors: Arc<CursorCodec>,
 }
 
 impl Fixture {
@@ -744,6 +864,9 @@ impl Fixture {
         // every manifest timestamp the suite writes is at or after it.
         authority.add_device(&user(), device(), clock.now());
 
+        let index = Arc::new(SwitchableIndex::new());
+        let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
+
         let app = App::with_auth(
             sessions.clone(),
             accounts.clone(),
@@ -756,6 +879,7 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
+            SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
         );
 
         Self {
@@ -767,6 +891,8 @@ impl Fixture {
             uploads,
             blobs,
             authority,
+            index,
+            cursors,
         }
     }
 
@@ -784,6 +910,7 @@ impl Fixture {
         authority.allow_album(&owner(), &album(), PROTOCOL_VERSION);
         authority.add_device(&user(), device(), clock.now());
 
+        let blobs = Arc::new(SwallowingBlobs::new());
         let app = App::with_auth(
             Arc::new(SwitchableSessions::new(clock.clone())),
             accounts,
@@ -791,10 +918,15 @@ impl Fixture {
             clock.clone(),
             UploadContext::new(
                 Arc::new(SwitchableUploads::new(clock.clone())),
-                Arc::new(SwallowingBlobs::new()),
+                blobs.clone(),
                 authority,
                 clock.clone(),
                 UploadPolicy::default(),
+            ),
+            SyncContext::new(
+                Arc::new(SwitchableIndex::new()),
+                blobs,
+                Arc::new(CursorCodec::new(&CURSOR_KEY)),
             ),
         );
         (app, clock)

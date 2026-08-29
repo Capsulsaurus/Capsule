@@ -67,6 +67,14 @@ tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
 # Already a workspace dependency with a row in design/dependencies.md, and already here as a
 # dev-dependency.
 serde_json = { workspace = true }
+# The sync cursor's HMAC-SHA256 (slice `S-C2`, validation invariant 22). `ring` is already the
+# workspace's key-generation crate and was already here as a dev-dependency; this promotes it.
+# The alternative was the RustCrypto `hmac` + `sha2` pair, which would have put a second HMAC
+# implementation in one binary for one 41-byte token.
+ring = { workspace = true }
+# base64url for that cursor, which is a query parameter and therefore has to survive a URL.
+# Already a workspace dependency with a row in design/dependencies.md.
+base64 = { workspace = true }
 
 # `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
 # and this mirrors it deliberately: two committed documents, two identical drift guards, so the
@@ -83,8 +91,11 @@ kynos = { workspace = true, features = ["test-util"] }
 # `#[tokio::test]` attribute and a runtime to drive it. Test-only, so the served binary carries
 # neither.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-# Ed25519 key generation for the token tests. A dev-dependency and nothing more: the suite
-# mints a fresh key pair per signer rather than reading a checked-in PEM, because a private key
-# in the repository is a private key somebody eventually reuses. Already the workspace's
-# key-generation crate (`capsule-api-environment`'s `keygen`), so no new dependency row.
-ring = { workspace = true }
+# The feed's manifest bytes arrive base64-encoded, and a test that asserts byte equality has to
+# decode them. A normal dependency of the crate since `S-C2`; listed here because the suite
+# uses it directly.
+base64 = { workspace = true }
+# Ed25519 key generation for the token tests: the suite mints a fresh key pair per signer
+# rather than reading a checked-in PEM, because a private key in the repository is a private
+# key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);
+# it stays listed here only so the intent of the test usage is recorded.

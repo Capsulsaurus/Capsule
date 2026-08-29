@@ -31,6 +31,7 @@ pub mod index;
 pub mod limits;
 pub mod routes;
 pub mod store;
+pub mod sync;
 pub mod upload;
 
 use kynos::middleware::catch_panic::Propagate;
@@ -66,6 +67,7 @@ pub fn router() -> ServerRouter {
             routes::upload::append_chunk,
             routes::upload::head_upload,
             routes::upload::cancel_upload,
+            routes::sync::sync_feed,
         ])
 }
 

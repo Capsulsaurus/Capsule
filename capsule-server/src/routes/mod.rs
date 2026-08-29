@@ -7,5 +7,6 @@
 //! writers, OpenAPI registration and configuration projections are not.
 
 pub mod auth;
+pub mod sync;
 pub mod upload;
 pub mod version;

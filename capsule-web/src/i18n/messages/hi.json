@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।",
   "error.sync.cursor_invalid": "सिंक सत्र पुराना है। Capsule शुरू से फिर से सिंक करेगा।",
   "error.sync.unauthenticated": "सिंक जारी रखने के लिए कृपया फिर से साइन इन करें।",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "आपके पास इस एल्बम में फ़ोटो जोड़ने की अनुमति नहीं है।",
   "error.upload.amk_regressed": "यह परिवर्तन सर्वर द्वारा दर्ज की गई एल्बम कुंजी से पुरानी कुंजी को संदर्भित करता है।",
   "error.upload.checksum_mismatch": "अपलोड डेटा ट्रांज़िट में ख़राब हो गया। फिर से प्रयास किया जा रहा है…",

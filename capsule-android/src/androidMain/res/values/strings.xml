@@ -209,6 +209,7 @@
     <string name="error_storage_invalid_request">The storage-verification request was malformed.</string>
     <string name="error_sync_cursor_invalid">The sync session is out of date. Capsule will resync from the start.</string>
     <string name="error_sync_unauthenticated">Please sign in again to continue syncing.</string>
+    <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">You don\'t have permission to add photos to this album.</string>
     <string name="error_upload_amk_regressed">This change references an older album key than the server has recorded.</string>
     <string name="error_upload_checksum_mismatch">Upload data was corrupted in transit. Retrying…</string>

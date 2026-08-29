@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "La demande de vérification du stockage est mal formée.",
   "error.sync.cursor_invalid": "La session de synchronisation est obsolète. Capsule va resynchroniser depuis le début.",
   "error.sync.unauthenticated": "Veuillez vous reconnecter pour continuer la synchronisation.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "Vous n'avez pas la permission d'ajouter des photos à cet album.",
   "error.upload.amk_regressed": "Cette modification référence une clé d'album plus ancienne que celle enregistrée par le serveur.",
   "error.upload.checksum_mismatch": "Les données de téléversement ont été corrompues en transit. Nouvelle tentative…",

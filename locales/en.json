@@ -65,7 +65,7 @@
     },
     "error.auth.account_locked": {
         "message": "This account is locked after too many failed sign-in attempts.",
-        "context": "HTTP 423 on POST /v1/auth/login: the account is refusing attempts after too many failures, so a correct password is refused too. Distinct from `error.auth.invalid_credentials` precisely because retrying the password cannot help \u2014 the user needs to know the account, not the password, is the problem."
+        "context": "HTTP 423 on POST /v1/auth/login: the account is refusing attempts after too many failures, so a correct password is refused too. Distinct from `error.auth.invalid_credentials` precisely because retrying the password cannot help — the user needs to know the account, not the password, is the problem."
     },
     "error.auth.session_expired": {
         "message": "Your session has ended. Please sign in again.",
@@ -193,11 +193,15 @@
     },
     "error.sync.cursor_invalid": {
         "message": "The sync session is out of date. Capsule will resync from the start.",
-        "context": "gRPC INVALID_ARGUMENT (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, or lifted from another context. The client discards it and resyncs from an empty cursor."
+        "context": "HTTP 400 on GET /v1/sync (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, issued to another owner, or minted under a rotated key. The client discards it and resyncs from an empty cursor."
     },
     "error.sync.unauthenticated": {
         "message": "Please sign in again to continue syncing.",
-        "context": "gRPC UNAUTHENTICATED on the sync feed: the request carried no valid access token in the `authorization` call metadata."
+        "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it (slice S-C36)."
+    },
+    "error.sync.unavailable": {
+        "message": "Capsule could not reach the server to sync. It will try again.",
+        "context": "HTTP 500 on GET /v1/sync (slice S-C2): the asset index or the blob store could not answer, so the page was neither served nor refused on its merits. Transient by nature — the client retries with backoff and keeps its cursor, which is still valid."
     },
     "error.upload.malformed_request": {
         "message": "The upload request was malformed.",
@@ -321,7 +325,7 @@
     },
     "error.upload.unavailable": {
         "message": "The upload couldn't be completed. Please try again.",
-        "context": "HTTP 500: a collaborator the upload needs \u2014 the session store, the blob store, or the album/device authority \u2014 could not answer. Server-side, never the client's fault; the client retries the same request."
+        "context": "HTTP 500: a collaborator the upload needs — the session store, the blob store, or the album/device authority — could not answer. Server-side, never the client's fault; the client retries the same request."
     },
     "error.upload.invalid_action": {
         "message": "This change uses an action the album doesn't allow.",
@@ -380,7 +384,7 @@
         "context": "CLI `capsule auth register` interactive prompt for the login handle."
     },
     "cli.auth.register.in_progress": {
-        "message": "Creating your Capsule account\u2026",
+        "message": "Creating your Capsule account…",
         "context": "CLI status line printed while `capsule auth register` creates the account."
     },
     "cli.auth.register.success": {
@@ -452,7 +456,7 @@
         "context": "CLI failure line for `capsule list`. {reason} is an error detail."
     },
     "cli.push.in_progress": {
-        "message": "Pushing {assets} asset(s) to {endpoint}\u2026",
+        "message": "Pushing {assets} asset(s) to {endpoint}…",
         "context": "CLI status line printed while `capsule push` uploads. {assets} is a count; {endpoint} is the upload server URL."
     },
     "cli.push.dry_run_notice": {
@@ -2033,11 +2037,11 @@
     },
     "ios.infoplist.photo_library_usage": {
         "message": "Capsule shows and organizes the photos and videos in your library.",
-        "context": "iOS NSPhotoLibraryUsageDescription \u2014 system permission prompt explaining why Capsule reads the photo library."
+        "context": "iOS NSPhotoLibraryUsageDescription — system permission prompt explaining why Capsule reads the photo library."
     },
     "ios.infoplist.face_id_usage": {
         "message": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
-        "context": "iOS NSFaceIDUsageDescription \u2014 system permission prompt explaining why Capsule uses Face ID."
+        "context": "iOS NSFaceIDUsageDescription — system permission prompt explaining why Capsule uses Face ID."
     },
     "ios.timeline.selection.empty": {
         "message": "Select Items",

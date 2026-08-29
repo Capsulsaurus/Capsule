@@ -116,6 +116,23 @@ pub enum WireBlobRole {
     Backup,
 }
 
+/// The outbound direction, for the sync feed's blob list.
+///
+/// Both directions are written out rather than one derived from the other: a `From` in one
+/// direction and a `TryFrom` back would let the two disagree about a role the wire has and the
+/// port does not, and this enum is closed on both sides.
+impl From<BlobRole> for WireBlobRole {
+    fn from(role: BlobRole) -> Self {
+        match role {
+            BlobRole::Original => Self::Original,
+            BlobRole::Derivative => Self::Derivative,
+            BlobRole::Metadata => Self::Metadata,
+            BlobRole::Provenance => Self::Provenance,
+            BlobRole::Backup => Self::Backup,
+        }
+    }
+}
+
 impl From<WireBlobRole> for BlobRole {
     fn from(role: WireBlobRole) -> Self {
         match role {

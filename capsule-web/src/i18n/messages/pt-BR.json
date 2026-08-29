@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "A solicitação de verificação de armazenamento está malformada.",
   "error.sync.cursor_invalid": "A sessão de sincronização está desatualizada. O Capsule vai sincronizar novamente do início.",
   "error.sync.unauthenticated": "Faça login novamente para continuar a sincronização.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "Você não tem permissão para adicionar fotos a este álbum.",
   "error.upload.amk_regressed": "Esta alteração faz referência a uma chave de álbum mais antiga do que a registrada pelo servidor.",
   "error.upload.checksum_mismatch": "Os dados de envio foram corrompidos em trânsito. Tentando novamente…",

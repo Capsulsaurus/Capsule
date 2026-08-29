@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "طلب التحقق من التخزين مُشوَّه.",
   "error.sync.cursor_invalid": "جلسة المزامنة قديمة. سيعيد Capsule المزامنة من البداية.",
   "error.sync.unauthenticated": "يُرجى تسجيل الدخول مرة أخرى لمتابعة المزامنة.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "ليست لديك صلاحية لإضافة صور إلى هذا الألبوم.",
   "error.upload.amk_regressed": "يشير هذا التغيير إلى مفتاح ألبوم أقدم مما سجّله الخادم.",
   "error.upload.checksum_mismatch": "تلِفت بيانات الرفع أثناء النقل. جارٍ إعادة المحاولة…",

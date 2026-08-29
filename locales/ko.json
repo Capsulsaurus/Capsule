@@ -171,6 +171,10 @@
         "message": "동기화를 계속하려면 다시 로그인해 주세요.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.sync.unavailable": {
+        "message": "Capsule could not reach the server to sync. It will try again.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.upload.malformed_request": {
         "message": "업로드 요청의 형식이 올바르지 않습니다.",
         "context": "Machine-translated seed pending human review."

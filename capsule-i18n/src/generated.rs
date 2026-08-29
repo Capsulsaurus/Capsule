@@ -164,6 +164,9 @@ pub mod error_codes {
     /// `error.sync.unauthenticated`
     pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
 
+    /// `error.sync.unavailable`
+    pub const SYNC_UNAVAILABLE: &str = "error.sync.unavailable";
+
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
 

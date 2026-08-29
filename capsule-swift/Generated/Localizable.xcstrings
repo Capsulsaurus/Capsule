@@ -14303,6 +14303,88 @@
         }
       }
     },
+    "error.sync.unavailable": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule could not reach the server to sync. It will try again."
+          }
+        }
+      }
+    },
     "error.upload.album_access_denied": {
       "localizations": {
         "ar": {

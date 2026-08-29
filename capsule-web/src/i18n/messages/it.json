@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "La richiesta di verifica dello spazio di archiviazione è malformata.",
   "error.sync.cursor_invalid": "La sessione di sincronizzazione non è aggiornata. Capsule risincronizzerà dall'inizio.",
   "error.sync.unauthenticated": "Accedi di nuovo per continuare la sincronizzazione.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "Non hai il permesso di aggiungere foto a questo album.",
   "error.upload.amk_regressed": "Questa modifica fa riferimento a una chiave dell'album più vecchia di quella registrata dal server.",
   "error.upload.checksum_mismatch": "I dati di caricamento si sono danneggiati durante il trasferimento. Nuovo tentativo…",

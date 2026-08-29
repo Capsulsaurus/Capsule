@@ -163,6 +163,7 @@
     <string name="error_storage_invalid_request">La solicitud de verificación de almacenamiento está mal formada.</string>
     <string name="error_sync_cursor_invalid">La sesión de sincronización está desactualizada. Capsule volverá a sincronizar desde el principio.</string>
     <string name="error_sync_unauthenticated">Vuelve a iniciar sesión para continuar la sincronización.</string>
+    <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">No tienes permiso para añadir fotos a este álbum.</string>
     <string name="error_upload_amk_regressed">Este cambio hace referencia a una clave de álbum más antigua que la registrada por el servidor.</string>
     <string name="error_upload_checksum_mismatch">Los datos de subida se dañaron en tránsito. Reintentando…</string>

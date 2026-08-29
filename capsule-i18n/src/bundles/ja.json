@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "ストレージ検証リクエストの形式が正しくありません。",
   "error.sync.cursor_invalid": "同期セッションが最新ではありません。Capsule は最初から再同期します。",
   "error.sync.unauthenticated": "同期を続けるには、もう一度サインインしてください。",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "このアルバムに写真を追加する権限がありません。",
   "error.upload.amk_regressed": "この変更は、サーバーが記録しているものより古いアルバムキーを参照しています。",
   "error.upload.checksum_mismatch": "アップロードデータが転送中に破損しました。再試行しています…",

@@ -24,6 +24,7 @@ use kynos::security::Authenticates;
 
 use crate::auth::{AccessToken, AccountDirectory, AuthContext, SessionTokens};
 use crate::store::{AuthStateStore, Clock};
+use crate::sync::SyncContext;
 use crate::upload::UploadContext;
 
 /// Everything the server was built with.
@@ -37,6 +38,8 @@ pub struct App {
     auth: AuthContext,
     /// The upload module's collaborators.
     upload: UploadContext,
+    /// The sync feed's collaborators.
+    sync: SyncContext,
 }
 
 impl App {
@@ -44,8 +47,8 @@ impl App {
     ///
     /// Takes already-built module bundles rather than their parts, so that adding a
     /// collaborator to a module is not a change to this signature.
-    pub fn new(auth: AuthContext, upload: UploadContext) -> Self {
-        Self { auth, upload }
+    pub fn new(auth: AuthContext, upload: UploadContext, sync: SyncContext) -> Self {
+        Self { auth, upload, sync }
     }
 
     /// Assembles the application from the auth module's four collaborators and the upload
@@ -59,8 +62,13 @@ impl App {
         tokens: Arc<SessionTokens>,
         clock: Arc<dyn Clock>,
         upload: UploadContext,
+        sync: SyncContext,
     ) -> Self {
-        Self::new(AuthContext::new(sessions, accounts, tokens, clock), upload)
+        Self::new(
+            AuthContext::new(sessions, accounts, tokens, clock),
+            upload,
+            sync,
+        )
     }
 }
 

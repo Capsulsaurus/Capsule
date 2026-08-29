@@ -929,6 +929,112 @@
           }
         ]
       }
+    },
+    "/v1/sync": {
+      "get": {
+        "summary": "Returns the changes in the caller's library after `cursor`.",
+        "description": "Read-only and idempotent: two calls with the same cursor return the same page, because the\ncursor names a position rather than consuming one. That is what makes a lost response\nharmless and a retry free.",
+        "operationId": "sync_feed",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The opaque cursor a previous page returned. Absent means \"from the beginning\".",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "page_size",
+            "in": "query",
+            "description": "How many entries to return. Clamped into the range this server serves.\n\n`u32` and not `usize`: Kynos refuses to describe a platform-width integer, and it is\nright to — a schema whose bounds depend on the server's pointer size is a schema no\nclient can rely on.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "maximum": 4294967295.0,
+              "minimum": 0.0,
+              "format": "uint32"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncPageResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1272,6 +1378,133 @@
           "suggested_chunk_size"
         ],
         "description": "What a client needs to start sending bytes."
+      },
+      "WireChangeKind": {
+        "type": "string",
+        "enum": [
+          "created",
+          "updated",
+          "deleted"
+        ],
+        "description": "What an entry is, relative to the client that asked for it."
+      },
+      "SyncBlobRef": {
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/WireBlobRole",
+            "description": "The blob's role in the bundle."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Its ciphertext content address, lowercase hex."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Its size in bytes, so a client can budget a fetch before issuing one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "role",
+          "hash",
+          "size"
+        ],
+        "description": "One blob an asset holds."
+      },
+      "SyncEntry": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset that changed."
+          },
+          "album_id": {
+            "type": "string",
+            "description": "The album it belongs to. The client keeps its anti-rewind high-water mark per album."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The album's pinned protocol date. A client refuses an entry above its own maximum\nrather than applying it partially."
+          },
+          "sync_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The entry's position. Strictly increasing within a page, and therefore within any album\nthe page touches."
+          },
+          "change": {
+            "$ref": "#/components/schemas/WireChangeKind",
+            "description": "What this is to the client that asked."
+          },
+          "manifest_cbor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The signed manifest, base64 of the provenance blob's exact bytes (`S-C30`).\n\nAbsent on a tombstone, and absent — with a loud server-side log — when the index names a\nprovenance blob the store cannot produce."
+          },
+          "metadata_blob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The encrypted metadata blob's content address."
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/SyncBlobRef"
+            },
+            "type": "array",
+            "description": "The asset's original and derivative blobs."
+          },
+          "original_held": {
+            "type": "boolean",
+            "description": "Whether the original has landed. `false` is the derived `awaiting-original` state."
+          },
+          "changed_at": {
+            "type": "string",
+            "description": "When the change happened, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "album_id",
+          "protocol_version",
+          "sync_seq",
+          "change",
+          "blobs",
+          "original_held",
+          "changed_at"
+        ],
+        "description": "One change in a library."
+      },
+      "SyncPageResponse": {
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/SyncEntry"
+            },
+            "type": "array",
+            "description": "The changes, in `sync_seq` order."
+          },
+          "next_cursor": {
+            "type": "string",
+            "description": "The cursor that resumes after the last entry.\n\nAlways present, including on an empty page, where it re-mints the position the client\narrived with. A client therefore never has to decide whether to keep its old cursor."
+          },
+          "has_more": {
+            "type": "boolean",
+            "description": "Whether the server holds changes beyond this page.\n\nAnswered from the owner's high-water mark rather than by fetching one more entry, so a\ncaught-up client is told so without paying for a page it will not receive."
+          }
+        },
+        "type": "object",
+        "required": [
+          "entries",
+          "next_cursor",
+          "has_more"
+        ],
+        "description": "A page of the feed."
       }
     },
     "securitySchemes": {

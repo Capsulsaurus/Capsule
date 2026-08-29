@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "저장소 확인 요청의 형식이 올바르지 않습니다.",
   "error.sync.cursor_invalid": "동기화 세션이 오래되었습니다. Capsule이 처음부터 다시 동기화합니다.",
   "error.sync.unauthenticated": "동기화를 계속하려면 다시 로그인해 주세요.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "이 앨범에 사진을 추가할 권한이 없습니다.",
   "error.upload.amk_regressed": "이 변경은 서버에 기록된 것보다 오래된 앨범 키를 참조합니다.",
   "error.upload.checksum_mismatch": "업로드 데이터가 전송 중 손상되었습니다. 다시 시도하는 중…",

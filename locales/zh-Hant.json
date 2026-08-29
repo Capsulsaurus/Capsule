@@ -171,6 +171,10 @@
         "message": "請重新登入以繼續同步。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.sync.unavailable": {
+        "message": "Capsule could not reach the server to sync. It will try again.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.upload.malformed_request": {
         "message": "上傳請求格式不正確。",
         "context": "Machine-translated seed pending human review."

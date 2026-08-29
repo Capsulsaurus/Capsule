@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "Запрос на проверку хранилища имеет неверный формат.",
   "error.sync.cursor_invalid": "Сеанс синхронизации устарел. Capsule повторно синхронизируется с самого начала.",
   "error.sync.unauthenticated": "Войдите снова, чтобы продолжить синхронизацию.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "У вас нет разрешения добавлять фото в этот альбом.",
   "error.upload.amk_regressed": "Это изменение ссылается на более старый ключ альбома, чем записан на сервере.",
   "error.upload.checksum_mismatch": "Данные загрузки повреждены при передаче. Повторная попытка…",

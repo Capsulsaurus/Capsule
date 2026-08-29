@@ -210,6 +210,7 @@
   "error.storage.invalid_request": "The storage-verification request was malformed.",
   "error.sync.cursor_invalid": "The sync session is out of date. Capsule will resync from the start.",
   "error.sync.unauthenticated": "Please sign in again to continue syncing.",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "You don't have permission to add photos to this album.",
   "error.upload.amk_regressed": "This change references an older album key than the server has recorded.",
   "error.upload.checksum_mismatch": "Upload data was corrupted in transit. Retrying…",

@@ -163,6 +163,7 @@
     <string name="error_storage_invalid_request">儲存驗證請求格式不正確。</string>
     <string name="error_sync_cursor_invalid">同步工作階段已過期。Capsule 會從頭重新同步。</string>
     <string name="error_sync_unauthenticated">請重新登入以繼續同步。</string>
+    <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">您無權向此相簿新增照片。</string>
     <string name="error_upload_amk_regressed">此變更引用的相簿金鑰比伺服器記錄的更舊。</string>
     <string name="error_upload_checksum_mismatch">上傳資料在傳輸中損毀。正在重試…</string>

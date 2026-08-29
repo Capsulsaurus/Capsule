@@ -163,6 +163,7 @@
     <string name="error_storage_invalid_request">ストレージ検証リクエストの形式が正しくありません。</string>
     <string name="error_sync_cursor_invalid">同期セッションが最新ではありません。Capsule は最初から再同期します。</string>
     <string name="error_sync_unauthenticated">同期を続けるには、もう一度サインインしてください。</string>
+    <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">このアルバムに写真を追加する権限がありません。</string>
     <string name="error_upload_amk_regressed">この変更は、サーバーが記録しているものより古いアルバムキーを参照しています。</string>
     <string name="error_upload_checksum_mismatch">アップロードデータが転送中に破損しました。再試行しています…</string>

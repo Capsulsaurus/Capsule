@@ -164,6 +164,7 @@
   "error.storage.invalid_request": "存储验证请求格式不正确。",
   "error.sync.cursor_invalid": "同步会话已过期。Capsule 将从头重新同步。",
   "error.sync.unauthenticated": "请重新登录以继续同步。",
+  "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
   "error.upload.album_access_denied": "您无权向此相册添加照片。",
   "error.upload.amk_regressed": "此更改引用的相册密钥比服务器记录的更旧。",
   "error.upload.checksum_mismatch": "上传数据在传输中损坏。正在重试…",
