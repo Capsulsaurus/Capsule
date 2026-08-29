@@ -101,7 +101,7 @@ public struct LoginView: View {
             Button("app.auth.login.passkey") {
                 Task { await model.signInWithPasskey() }
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
             .accessibilityLabel("app.auth.login.passkey")
         }
         Button("app.auth.login.oidc") {

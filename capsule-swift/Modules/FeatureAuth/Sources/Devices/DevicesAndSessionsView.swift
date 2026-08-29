@@ -133,7 +133,7 @@ public struct DevicesAndSessionsView: View {
                     date: bundle.firstSeen.date
                 )
                 Button("app.devices.support_bundle.dismiss") { model.dismissSupportBundle() }
-                    .buttonStyle(.bordered)
+                    .capsuleGlassButtonStyle()
                     .accessibilityLabel("app.devices.support_bundle.dismiss")
             }
             .authCard()
@@ -149,7 +149,7 @@ public struct DevicesAndSessionsView: View {
     private var revokeAll: some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.small) {
             Button("app.devices.revoke_all", role: .destructive) { isConfirmingRevokeAll = true }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .disabled(model.isRevoking)
                 .accessibilityLabel("app.devices.revoke_all")
             if model.revokeAllRequiresMasterKeyProof {

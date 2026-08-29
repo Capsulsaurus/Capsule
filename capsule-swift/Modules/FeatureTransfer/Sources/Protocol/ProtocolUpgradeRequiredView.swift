@@ -64,7 +64,7 @@ public struct ProtocolUpgradeRequiredView: View {
             reassurance
             if let updateAction {
                 Button("app.transfer.recovery.update_app", action: updateAction)
-                    .buttonStyle(.borderedProminent)
+                    .capsuleGlassButtonStyle(prominent: true)
             } else {
                 Text("app.transfer.upgrade.no_channel")
                     .font(.footnote)

@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsuleUI
 import SwiftUI
 
 // MARK: - ScreenPhase
@@ -105,7 +106,7 @@ public struct PhasePlaceholderView: View {
         Button("app.transfer.action.retry") {
             Task { await retry() }
         }
-        .buttonStyle(.borderedProminent)
+        .capsuleGlassButtonStyle(prominent: true)
     }
 }
 

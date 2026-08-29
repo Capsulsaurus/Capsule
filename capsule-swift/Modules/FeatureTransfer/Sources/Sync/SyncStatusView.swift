@@ -170,11 +170,11 @@ struct StalenessPrompt: View {
         Button("app.sync.action.force_now") {
             Task { await model.forceSynchronizeNow() }
         }
-        .buttonStyle(.borderedProminent)
+        .capsuleGlassButtonStyle(prominent: true)
         Button("app.sync.action.snooze") {
             Task { await model.snoozeStalenessPrompt() }
         }
-        .buttonStyle(.bordered)
+        .capsuleGlassButtonStyle()
     }
 }
 

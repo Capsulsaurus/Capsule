@@ -1,5 +1,6 @@
 import CapsuleDomain
 import CapsuleMock
+import CapsuleUI
 import SwiftUI
 
 // MARK: - ImportScanProgressView
@@ -127,7 +128,7 @@ public struct ImportScanProgressView: View {
     private var continueButton: some View {
         if let scan = model.scan, model.canContinue {
             Button("app.import.scan.continue") { onScanned?(scan) }
-                .buttonStyle(.borderedProminent)
+                .capsuleGlassButtonStyle(prominent: true)
         }
     }
 

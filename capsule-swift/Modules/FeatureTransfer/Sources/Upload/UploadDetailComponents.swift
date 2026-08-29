@@ -88,7 +88,7 @@ struct UploadFailureRow: View {
                 Button(failure.option.buttonTitleKey) {
                     Task { await recover() }
                 }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
             }
         }
         .padding(.vertical, CapsuleTheme.Spacing.xxSmall)

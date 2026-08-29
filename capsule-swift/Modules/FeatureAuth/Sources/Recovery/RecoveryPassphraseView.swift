@@ -120,7 +120,7 @@ public struct RecoveryPassphraseView: View {
             ) {
                 copySecret()
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
             .accessibilityLabel("app.recovery.passphrase.copy")
 
             Text("app.recovery.passphrase.copy_note")

@@ -194,7 +194,7 @@ public struct RestoreFlowView: View {
                 )
             }
             Button("app.restore.commit.open", role: .destructive) { isConfirmingCommit = true }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .disabled(!model.hasCommittableDiff || model.isWorking)
                 .accessibilityLabel("app.restore.commit.open")
             Text("app.restore.commit.note")

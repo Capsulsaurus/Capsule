@@ -192,7 +192,7 @@ public struct ImportPlanConfirmView: View {
                 Text(verbatim: confirmTitle)
                     .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent)
+            .capsuleGlassButtonStyle(prominent: true)
             .controlSize(.large)
             .disabled(!model.canConfirm)
             blockedNote

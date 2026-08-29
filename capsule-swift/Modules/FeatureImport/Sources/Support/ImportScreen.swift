@@ -1,4 +1,5 @@
 import CapsuleDomain
+import CapsuleUI
 import SwiftUI
 
 // MARK: - ImportScreen
@@ -101,7 +102,7 @@ public struct ImportScreen<Content: View>: View {
         Button("app.import.state.retry") {
             Task { await retry() }
         }
-        .buttonStyle(.borderedProminent)
+        .capsuleGlassButtonStyle(prominent: true)
     }
 }
 

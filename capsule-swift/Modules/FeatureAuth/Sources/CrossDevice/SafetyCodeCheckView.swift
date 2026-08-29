@@ -98,7 +98,7 @@ struct SafetyCodeCheckView: View {
                 .accessibilityLabel("app.crossdevice.safety.confirm")
 
             Button("app.crossdevice.safety.mismatch", role: .destructive, action: abort)
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .accessibilityLabel("app.crossdevice.safety.mismatch")
 
             Text("app.crossdevice.safety.mismatch_note")

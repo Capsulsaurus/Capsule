@@ -227,7 +227,7 @@ public struct RecoveryVerificationPromptView: View {
                 Button(LocalizedStringKey(snooze.titleKey)) {
                     Task { await model.snooze(snooze) }
                 }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .accessibilityLabel(LocalizedStringKey(snooze.titleKey))
             }
         }

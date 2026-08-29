@@ -178,7 +178,7 @@ struct QuarantineActionRow: View {
             Button(role: option.isDestructive ? .destructive : nil, action: perform) {
                 Label(option.resolution.titleKey, systemImage: option.resolution.systemImage)
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
             .disabled(!option.isEnabled || isBusy)
             Text(option.resolution.explanationKey)
                 .font(.caption)

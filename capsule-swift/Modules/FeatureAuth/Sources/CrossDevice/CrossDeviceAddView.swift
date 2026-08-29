@@ -157,7 +157,7 @@ public struct CrossDeviceAddView: View {
                 tint: .orange
             )
             Button("app.crossdevice.issue_again") { Task { await model.issueCode() } }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .accessibilityLabel("app.crossdevice.issue_again")
         }
     }

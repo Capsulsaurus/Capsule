@@ -122,7 +122,7 @@ struct DeviceCohortCard: View {
             AuthLabeledDate(labelKey: "app.devices.device.last_seen", date: device.lastSeen.date)
             if device.isActive {
                 Button("app.devices.device.revoke", role: .destructive) { revokeDevice(device.id) }
-                    .buttonStyle(.bordered)
+                    .capsuleGlassButtonStyle()
                     .disabled(isRevoking)
                     .accessibilityLabel("app.devices.device.revoke")
             } else {
@@ -165,7 +165,7 @@ struct DeviceCohortCard: View {
             AuthLabeledDate(labelKey: "app.devices.session.expires", date: session.effectiveExpiry.date)
             if session.isLive(at: now) {
                 Button("app.devices.session.revoke", role: .destructive) { revokeSession(session.id) }
-                    .buttonStyle(.bordered)
+                    .capsuleGlassButtonStyle()
                     .disabled(isRevoking)
                     .accessibilityLabel("app.devices.session.revoke")
             }
@@ -200,7 +200,7 @@ struct DeviceCohortCard: View {
             Button("app.devices.support_bundle", systemImage: "doc.badge.gearshape") {
                 buildSupportBundle(hash)
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
             .accessibilityLabel("app.devices.support_bundle")
         }
     }

@@ -197,7 +197,7 @@ private struct ImportRunRow: View {
             ProgressView().controlSize(.small)
         } else if item.isRetryable {
             Button("app.import.run.retry", action: retry)
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .controlSize(.small)
         }
     }

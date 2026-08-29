@@ -177,7 +177,7 @@ public struct EnrollmentCeremonyView: View {
             Button("app.enrollment.failure.hardware.software_keys") {
                 Task { await model.continueWithSoftwareKeys() }
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
             .disabled(model.isRunning)
             .accessibilityLabel("app.enrollment.failure.hardware.software_keys")
 

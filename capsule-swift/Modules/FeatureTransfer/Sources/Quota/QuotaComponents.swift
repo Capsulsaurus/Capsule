@@ -169,7 +169,7 @@ struct QuotaStateBanner: View {
             } label: {
                 Label(LocalizedStringKey(remediation.titleKey), systemImage: remediation.systemImage)
             }
-            .buttonStyle(.bordered)
+            .capsuleGlassButtonStyle()
         }
     }
 }

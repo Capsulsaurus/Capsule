@@ -43,7 +43,7 @@ public struct AuthErrorBanner: View {
             }
             if let retry, error.isRetryable {
                 Button("app.auth.common.retry", action: retry)
-                    .buttonStyle(.bordered)
+                    .capsuleGlassButtonStyle()
                     .accessibilityLabel("app.auth.common.retry")
             }
         }

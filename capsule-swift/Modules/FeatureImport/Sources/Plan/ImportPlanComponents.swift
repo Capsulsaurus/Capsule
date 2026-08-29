@@ -168,11 +168,11 @@ struct ImportSpaceMeter: View {
             EmptyView()
         case .streamingRecommended:
             Button("app.import.plan.space.enable_streaming") { onEnableStreaming?() }
-                .buttonStyle(.bordered)
+                .capsuleGlassButtonStyle()
                 .disabled(onEnableStreaming == nil)
         case .insufficient:
             Button("app.import.plan.space.free_up") { onFreeUpSpace?() }
-                .buttonStyle(.borderedProminent)
+                .capsuleGlassButtonStyle(prominent: true)
                 .disabled(onFreeUpSpace == nil)
         }
     }
