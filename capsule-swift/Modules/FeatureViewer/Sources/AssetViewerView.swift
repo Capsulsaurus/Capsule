@@ -18,6 +18,17 @@ public struct AssetViewerView: View {
     private let captionStore: (any CaptionStore)?
     @Environment(\.dismiss) private var dismiss
     @State private var isAddToAlbumPresented = false
+    /// Ties the bottom bar's glass groups together so they morph as one.
+    @Namespace private var barNamespace
+    /// Whether the info panel should open expanded.
+    ///
+    /// What separates Info from Adjust. They present the same sheet, because
+    /// the caption and the location are *in* that sheet and a second surface
+    /// holding two fields would be a worse answer than a detent. Info opens it
+    /// at half height to read; Adjust opens it fully, where the editable fields
+    /// are reachable without a drag. Two buttons that presented the identical
+    /// thing would be one button drawn twice.
+    @State private var infoPanelStartsExpanded = false
 
     public init(
         assets: [Asset],
@@ -51,7 +62,8 @@ public struct AssetViewerView: View {
                 AssetInfoPanel(
                     asset: asset,
                     mediaLoader: mediaLoader,
-                    captionStore: captionStore
+                    captionStore: captionStore,
+                    startsExpanded: infoPanelStartsExpanded
                 )
             }
         }
@@ -175,36 +187,50 @@ public struct AssetViewerView: View {
 
     // MARK: Bottom chrome
 
-    /// What you can do to *this* photo, in the order the platform trained
-    /// people to expect: give it away, keep it, learn about it — and, held
-    /// apart, throw it away.
+    /// What you can do to *this* photo, in three glass groups.
     ///
-    /// Four slots rather than six. Slideshow and Add to Album moved to the
-    /// overflow menu because neither acts on the photo, and playback moved onto
-    /// the media itself; what is left is the set every photo viewer on the
-    /// platform puts here.
+    /// Share, then the trio that acts on the photo in place — keep it, learn
+    /// about it, change it — then, held well apart, throw it away. That is the
+    /// arrangement iOS 26's own Photos uses, and the grouping is the argument:
+    /// an equal-width run of five identical glyphs makes the destructive one
+    /// exactly as easy to hit by accident as the others, and a viewer is a place
+    /// where fingers move fast.
     ///
-    /// Delete sits in its own glass group with a gap before it. An equal-width
-    /// run of six identical glyphs makes the destructive one exactly as easy to
-    /// hit by accident as the others, and a viewer is a place where fingers
-    /// move fast. `CapsuleGlassContainer` groups them because glass cannot
-    /// sample glass.
+    /// Share leaves the pill for the same reason it is first: it sends the photo
+    /// somewhere else, which is a different kind of act from editing it in
+    /// place, and a `ShareLink` in an equal-width run stretches oddly against
+    /// its neighbours.
+    ///
+    /// `CapsuleGlassContainer` groups all three so they blend and morph as one —
+    /// glass cannot sample glass — and the glass is `.clear` because these are
+    /// small controls floating over media, which is the case that variant was
+    /// written for and had never been used in.
     private var bottomBar: some View {
         CapsuleGlassContainer(spacing: CapsuleTheme.Spacing.medium) {
             HStack(spacing: CapsuleTheme.Spacing.medium) {
+                shareButton
+                    .fixedSize()
+                    .padding(CapsuleTheme.Spacing.medium)
+                    .capsuleGlass(.clear, in: Circle())
+                    .capsuleGlassID(BarGroup.share, in: barNamespace)
+
                 HStack(spacing: 0) {
-                    shareButton
                     barButton(favoriteSymbol, tint: favoriteTint) {
                         Task { await model.toggleFavorite() }
                     }
                     .accessibilityLabel("app.viewer.favorite")
-                    barButton("info.circle") { model.isInfoPanelPresented = true }
+                    barButton("info.circle") { presentInfoPanel(expanded: false) }
                         .accessibilityLabel("app.viewer.info")
+                        .accessibilityIdentifier("viewer.info")
+                    barButton("slider.horizontal.3") { presentInfoPanel(expanded: true) }
+                        .accessibilityLabel("app.viewer.info.adjust")
+                        .accessibilityIdentifier("viewer.adjust")
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, CapsuleTheme.Spacing.medium)
                 .padding(.horizontal, CapsuleTheme.Spacing.small)
-                .capsuleGlass(in: Capsule())
+                .capsuleGlass(.clear, in: Capsule())
+                .capsuleGlassID(BarGroup.actions, in: barNamespace)
 
                 barButton("trash") {
                     Task {
@@ -215,11 +241,20 @@ public struct AssetViewerView: View {
                 .accessibilityIdentifier("viewer.delete")
                 .fixedSize()
                 .padding(CapsuleTheme.Spacing.medium)
-                .capsuleGlass(in: Circle())
+                .capsuleGlass(.clear, in: Circle())
+                .capsuleGlassID(BarGroup.delete, in: barNamespace)
             }
         }
         .padding(.horizontal, CapsuleTheme.Spacing.large)
         .padding(.bottom, CapsuleTheme.Spacing.small)
+    }
+
+    /// The bar's three glass groups, named so they can morph rather than
+    /// cross-fade when the bar changes shape.
+    private enum BarGroup: Hashable {
+        case share
+        case actions
+        case delete
     }
 
     /// The share affordance.
@@ -233,14 +268,21 @@ public struct AssetViewerView: View {
         if let asset = model.currentAsset {
             let shareable = ShareableAsset(asset: asset, mediaLoader: mediaLoader)
             ShareLink(item: shareable, preview: SharePreview(shareable.previewTitle)) {
-                barLabel("square.and.arrow.up")
+                Image(systemName: "square.and.arrow.up")
+                    .font(CapsuleTheme.Typography.controlGlyph)
+                    .foregroundStyle(CapsuleTheme.Colors.onMedia)
             }
         }
     }
 
+    private func presentInfoPanel(expanded: Bool) {
+        infoPanelStartsExpanded = expanded
+        model.isInfoPanelPresented = true
+    }
+
     private func barButton(
         _ symbol: String,
-        tint: Color = .white,
+        tint: Color = CapsuleTheme.Colors.onMedia,
         action: @escaping () -> Void
     ) -> some View {
         Button(action: action) {
@@ -248,9 +290,9 @@ public struct AssetViewerView: View {
         }
     }
 
-    private func barLabel(_ symbol: String, tint: Color = .white) -> some View {
+    private func barLabel(_ symbol: String, tint: Color = CapsuleTheme.Colors.onMedia) -> some View {
         Image(systemName: symbol)
-            .font(.title3)
+            .font(CapsuleTheme.Typography.controlGlyph)
             .foregroundStyle(tint)
             .frame(maxWidth: .infinity)
     }
@@ -260,7 +302,7 @@ public struct AssetViewerView: View {
     }
 
     private var favoriteTint: Color {
-        isCurrentFavorite ? .red : .white
+        isCurrentFavorite ? CapsuleTheme.Colors.favorite : CapsuleTheme.Colors.onMedia
     }
 
     private var isCurrentFavorite: Bool {

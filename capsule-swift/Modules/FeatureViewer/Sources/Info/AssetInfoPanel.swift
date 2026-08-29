@@ -18,6 +18,9 @@ struct AssetInfoPanel: View {
     /// Where the caption is read and written. `nil` in a lane with no caption
     /// store, which simply omits the field rather than showing a dead one.
     let captionStore: (any CaptionStore)?
+    /// Whether to open at full height, where the editable fields are reachable
+    /// without a drag. Set by the Adjust button; Info opens at half.
+    var startsExpanded = false
 
     @Environment(\.dismiss) private var dismiss
     @State private var metadata = AssetExifMetadata()
@@ -55,6 +58,7 @@ struct AssetInfoPanel: View {
         .task(id: asset.id) {
             metadata = await mediaLoader.metadata(for: asset)
         }
+        .onAppear { detent = startsExpanded ? .large : .medium }
     }
 
     /// Weekday, date, time — and the filename beneath, the way a file browser
