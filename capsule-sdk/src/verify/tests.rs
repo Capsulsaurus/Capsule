@@ -70,12 +70,17 @@ impl MockServer {
         let addr = listener.local_addr().unwrap();
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
+            // Connections live in a `JoinSet` owned by this task, so aborting it on drop aborts
+            // them too. Detached `tokio::spawn` tasks would outlive the abort holding their
+            // sockets — a leak `nextest` only reports under a loaded parallel run (`S-D27`).
+            let mut connections = tokio::task::JoinSet::new();
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
+                while connections.try_join_next().is_some() {}
                 let handler = handler.clone();
-                tokio::spawn(async move { handle_conn(stream, handler).await });
+                connections.spawn(async move { handle_conn(stream, handler).await });
             }
         });
         MockServer { addr, handle }
