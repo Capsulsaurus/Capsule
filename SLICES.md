@@ -229,7 +229,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C20 | Invariant-7 floor grounded in the device directory | server | S-C9 | M | RETIRED | done\* | the account-creation fallback is gone, not kept |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
-| S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | ready | the anchor `S-C42` establishes is what a candidate IK is checked against |
+| S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done\* | the ceremony lands; already-issued access tokens outlive it by up to their TTL → `S-C48` |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
@@ -250,10 +250,11 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
-| S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | ready | found by `S-C11`; quota only ever goes up |
+| S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
 | S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
+| S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | ready | found by `S-C23`; revocation is only as fast as the access-token TTL, and `touch_session` has no caller |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1742,6 +1743,43 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   including the caller; missing/invalid proof refused with its `error.*` code).
 - **Tier:** Unit + Smoke.
 - **Landed in retired code; re-scoped onto Kynos.** The IK signing half is `ACTIVE` core.
+- **Landed 2026-08-31 (`done\*`).** `POST /v1/auth/logout/all/challenge` issues a single-use
+  challenge and `POST /v1/auth/logout/all` redeems a proof over it.
+- **The asymmetry is the slice.** The challenge is issued to a *session token*; the revoke takes
+  **no `Auth` at all**. That is not inconsistent: a challenge is worthless without the identity
+  key, so handing one to a stolen token costs nothing, while issuing them unauthenticated would
+  make the endpoint an oracle for whether an account exists. The revoke itself must not accept a
+  session token, because an attacker holding one could otherwise invoke "log out of all devices"
+  and lock the owner out of every device they own — the exact escalation the ceremony exists to
+  refuse.
+- **The proof is verified against the anchor `S-C42` established**, never against a key the
+  request supplied. A proof checked against a caller-supplied key proves only that the caller
+  can sign something, which is not a fact about the account. This is what `S-C42` unblocked, and
+  it is simpler than the pre-`S-C42` formulation the catalog described ("accept a candidate IK
+  only if it verifies the stored directory"): the anchor is now an explicit field.
+- **The signed message lives in `capsule_core::crypto::revoke`**, shared by both ends for the
+  `S-C46` reason with one difference that makes it cheaper — the message is a byte string rather
+  than a CBOR map, so there is no key-ordering trap. What remains is the domain separator, and
+  a shared constant is exactly what removes it: the IK also signs the device-directory core, and
+  a signature over a bare short challenge is a signature over anything else of that shape.
+- **The challenge is burned on every attempt**, successful or not, which is what stops an
+  attacker grinding signatures against a live one and costs a legitimate user one round trip.
+  `ChallengeStore` has deliberately no read-only sibling.
+- **One answer for every failed proof.** Unknown, spent or expired challenge; an account with no
+  anchored directory; an unreadable stored anchor; a bad signature — all `401
+  error.auth.revoke_proof_invalid`. The endpoint takes no credential, so an answer that
+  distinguished "no directory" from "wrong key" would report which accounts have published one
+  to anybody who can name a challenge. A malformed *request* (`revoke_proof_required`) is
+  separate, because "your base64 is not base64" is an oracle about nothing.
+- **The count is honest.** `close_all_for_user` returns the records it removed, and `S-C29` made
+  the record and its per-user listing entry one fact — so the Salvo over-count, where
+  `revoke_session` left the sid in `capsule:user_sessions:<user>` and the tally inflated by one
+  per prior refresh, is unrepresentable rather than fixed.
+- **Owed, and it is the reason for the asterisk: `S-C48`.** A revoke closes every session
+  *record*, so no refresh token can mint anything — immediately, and the test asserts it. But
+  the bearer scheme verifies a signature and a deadline and never reads the ledger, so an access
+  token minted before the revoke stays usable for the remainder of its fifteen minutes. The
+  suite asserts that window rather than wishing it away.
 
 ### S-C24 — Album-upgrade server halves
 
@@ -2455,6 +2493,20 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** delete an asset, run the purge past its retention floor, run the sweep, and
   assert the uploader's `GET /v1/quota` reports the bytes back; and that a blob a second asset
   still references credits nothing. **Tier:** Unit.
+- **Landed 2026-08-31 (`done`).** `QuotaStore::release_attribution(address)` credits whoever the
+  ledger holds the bytes against and returns them, and the sweep calls it **after** the blob is
+  removed. The user-scoped `release` stays exactly as it was: cancellation is one account
+  undoing its own reservation, and refusing another account's attribution there is the point.
+  Two operations rather than a nullable-user variant of one, because the two want opposite
+  things from the same word.
+- **Both releases go through one `credit` helper**, which is not tidiness: a second copy would
+  eventually forget to clear `over_since`, leaving an account back under its limit still
+  carrying the clock that decides when a soft limit becomes a hard one. There is a test for
+  exactly that on the collector's path.
+- **`CollectionReport` gained `credited`.** Reported rather than merely done, because "I emptied
+  the trash and my usage did not move" is the complaint this slice exists to answer, and an
+  operator has to be able to say what a pass gave back and to whom. A dry run credits nothing
+  and reports nothing, which is what keeps it readable without being a transaction.
 
 ### S-C45 — two scrub checks need the server to read signed CBOR
 
@@ -2578,6 +2630,38 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   behaviour nobody chose.
 - **Done when:** the decision is recorded in `moderation.md`, and a test exercises a
   legal-hold-plus-expired-retention asset against it either way. **Tier:** Unit.
+
+### S-C48 — the bearer scheme never reads the session ledger
+
+- **Contract:** [Authentication — Explicit Revocation](capsule-docs/src/content/docs/design/authentication.md#explicit-revocation)
+  (*"Revoke any single session by invalidating its session token"*, and a sessions listing
+  *"with last-used timestamp"*).
+- **Gap** (found 2026-08-31 landing `S-C23`): `Authenticator<AccessToken>` verifies the JWT's
+  signature, issuer, kind and deadline and **never touches** `AuthStateStore`. Two consequences
+  follow, and the second is the tell:
+  - Closing a session — one, or all of them — kills refresh immediately and leaves every
+    already-issued access token usable for the remainder of its fifteen minutes. Revocation is
+    therefore only as fast as the TTL, which is why the TTL is short, but it is still a window
+    and the ceremony's whole purpose is denying an attacker *now*.
+  - **`AuthStateStore::touch_session` has no production caller at all.** The port defines it,
+    the conformance suite exercises it, and no request path uses it — so `last_active_at` never
+    moves, and the "last-used timestamp" the sessions listing is specified to show would be the
+    sign-in time forever. A method the design needs and nothing calls is the clearest evidence
+    that the ledger was meant to be on the request path.
+- **Deliverable:** the scheme reads the session record, refuses a token whose session is gone,
+  and touches `last_active_at` on the way through.
+- **The decision it needs first, and why this is not a one-liner:** what a request does when the
+  store cannot answer. Failing **open** turns a cache outage into an authentication bypass;
+  failing **closed** turns it into a total outage — and `AuthRejection` is Kynos's type with
+  `401`/`403` and no `503`, so the closed answer needs a status the scheme cannot currently
+  render. There is also a cost: every authenticated request becomes a Valkey round trip, which
+  is the price of real revocation and should be paid deliberately rather than discovered.
+- **Watch out:** `touch_session` on every request is a *write* on every request. It probably
+  wants coalescing (touch at most once per minute per session), and a coalescing window is a
+  staleness window in the user-visible listing — say which it is rather than picking one.
+- **Done when:** a closed session's access token is refused before its TTL expires, the sessions
+  listing shows a `last_active_at` that moves, and the store-unavailable answer is a status the
+  document declares. **Tier:** Unit + Smoke.
 
 ### S-D1 — SDK upload client
 
