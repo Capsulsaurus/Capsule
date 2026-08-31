@@ -220,7 +220,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
-| S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1 | M | RETIRED | ready | |
+| S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3 | M | RETIRED | ready | |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
@@ -251,6 +251,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | ready | found by `S-C9`; half of invariant 23 is unenforced, and it bricks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | ready | found by `S-C11`; quota only ever goes up |
+| S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1351,6 +1352,28 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Depends on:** S-C1. **Done when:** the maintenance doc's seeded-corruption matrix
   passes against testcontainer Postgres + a real blob tree; clean-store idempotency holds.
 - **Tier:** Unit + Smoke. **Landed in retired code; re-scoped onto Kynos.**
+- **Ported 2026-08-31 (`done\*`).** `capsule-server/src/scrub` — 8 cases, and every one of them
+  also asserts the store and index are unchanged afterwards. That property is what the whole
+  design rests on, so it is checked rather than assumed.
+- **Four of the doc's six checks pass**: row→blob presence with the `awaiting-original`
+  carve-out, blob→row orphans, byte integrity under a deep pass, and the debris/quarantine
+  inventory. A fifth is *partial* and reported as its own class — the chain head resolving to a
+  stored provenance blob, which is a strictly weaker claim than the envelope-chain agreement the
+  doc asks for. The other two are `S-C45`.
+- **Classified, never adjudicated.** A dangling reference looks identical whether the blob was
+  lost or the row was written in error, and the two call for opposite actions — so the report
+  names the check and both sides' evidence and stops there. Misassigned fault is how a "repair"
+  deletes the last good copy, and keeping the check off every write path is what stops a
+  hot-path bug from also being a bug in the check that would catch it.
+- **A truncated deep pass is not clean.** The budget stops the re-hash rather than the pass, and
+  `is_clean()` is false when it fired: a clean report from a run that did not finish looking is
+  the one output that would actively mislead an operator alerting on the finding count.
+- **The `awaiting-original` carve-out is present and currently unreachable.** `S-C40` records why
+  this port cannot produce that state; the arm is written anyway, because the *contract* has it
+  and closing `S-C40` must not also require remembering to add it here.
+- **Owed:** the `scrub` operator binary, which needs the adapters to have anything to connect to
+  — it lands with them, like `gc`'s. Non-zero exit on any finding is the binary's job and is
+  already expressible: `ScrubReport::is_clean`.
 
 ### S-C15 — Custody receipts + signed storage attestation
 
@@ -2250,6 +2273,38 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** delete an asset, run the purge past its retention floor, run the sweep, and
   assert the uploader's `GET /v1/quota` reports the bytes back; and that a blob a second asset
   still references credits nothing. **Tier:** Unit.
+
+### S-C45 — two scrub checks need the server to read signed CBOR
+
+- **Contract:** [Maintenance — Server-Side Integrity Scrub](capsule-docs/src/content/docs/design/filesystem/maintenance.md),
+  checks 4 (*envelope chain ⇄ index agreement*) and 5 (*mirrored-fact agreement*).
+- **Gap** (found 2026-08-31 porting `S-C14`): both compare the manifest **inside** the
+  provenance blob against the projection the index holds — the chain walking forward from
+  `create` with every `prior_provenance_hash` matching its predecessor, and the mirrored facts
+  (`amk_version`, `action`, `retention_until`, `client_version`, declared sizes) agreeing with
+  their envelope copies. The scrub does neither, because doing either means **decoding signed
+  CBOR**, and this server does not.
+- **It is the same open question `S-C30` left, arriving from the other side.** That slice
+  recorded that the server gates publication on a provenance blob's *presence* and never on its
+  agreement with the validated envelope, because it does not parse the bytes — detection, not
+  prevention. This is the detection half asking to exist: the scrub is exactly where a
+  disagreement between the signed copy and the projection *should* surface, and it is the one
+  place reading signed CBOR would be defensible, because the scrub is read-only, off the hot
+  path, and never acts on what it finds.
+- **What landed instead, and why it is named separately:** the scrub checks that an asset's
+  chain head resolves to a **stored** provenance blob. That catches a lost or never-written
+  manifest and catches nothing about the manifest's contents, so it is reported as
+  `chain_head_unresolvable` rather than folded into a check it does not perform. A weaker check
+  wearing a stronger check's name is worse than no check.
+- **Deliverable, and the decision it needs first:** whether the scrub may decode. If yes, it
+  reads the provenance blob, walks the chain and compares the mirrored facts, and the decoding
+  surface is confined to a read-only operator path that acts on nothing. If no, the checks are
+  struck from the contract and the doc says so, rather than listing two checks nothing performs.
+- **Watch out:** decoding here creates a second implementation of manifest parsing, which is the
+  thing `capsule_core::validation` being shared exists to prevent. Whatever lands must go through
+  core rather than beside it.
+- **Done when:** an asset whose stored manifest disagrees with its index projection is reported
+  with both values — or the contract no longer claims it is. **Tier:** Unit.
 
 ## Lane D — SDK / clients
 
