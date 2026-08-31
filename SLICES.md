@@ -251,13 +251,14 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | done | the manifest is the act, and the projection's `ciphertext_hash` conflation is why |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
-| S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
+| S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | done\* | the scrub may decode; check 4 is unperformable for a structural reason → `S-C52` |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | done\* | fails closed as `401`; the honest `503` needs the seam `S-C36` wants |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
+| S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | ready | found by `S-C45`; a lifecycle write orphans the manifest it supersedes |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -2828,33 +2829,79 @@ manifest applies anything, and the other two never reach `apply_op` at all.
 
 - **Contract:** [Maintenance — Server-Side Integrity Scrub](capsule-docs/src/content/docs/design/filesystem/maintenance.md),
   checks 4 (*envelope chain ⇄ index agreement*) and 5 (*mirrored-fact agreement*).
-- **Gap** (found 2026-08-31 porting `S-C14`): both compare the manifest **inside** the
-  provenance blob against the projection the index holds — the chain walking forward from
-  `create` with every `prior_provenance_hash` matching its predecessor, and the mirrored facts
-  (`amk_version`, `action`, `retention_until`, `client_version`, declared sizes) agreeing with
-  their envelope copies. The scrub does neither, because doing either means **decoding signed
-  CBOR**, and this server does not.
-- **It is the same open question `S-C30` left, arriving from the other side.** That slice
-  recorded that the server gates publication on a provenance blob's *presence* and never on its
-  agreement with the validated envelope, because it does not parse the bytes — detection, not
-  prevention. This is the detection half asking to exist: the scrub is exactly where a
-  disagreement between the signed copy and the projection *should* surface, and it is the one
-  place reading signed CBOR would be defensible, because the scrub is read-only, off the hot
-  path, and never acts on what it finds.
-- **What landed instead, and why it is named separately:** the scrub checks that an asset's
-  chain head resolves to a **stored** provenance blob. That catches a lost or never-written
-  manifest and catches nothing about the manifest's contents, so it is reported as
-  `chain_head_unresolvable` rather than folded into a check it does not perform. A weaker check
-  wearing a stronger check's name is worse than no check.
-- **Deliverable, and the decision it needs first:** whether the scrub may decode. If yes, it
-  reads the provenance blob, walks the chain and compares the mirrored facts, and the decoding
-  surface is confined to a read-only operator path that acts on nothing. If no, the checks are
-  struck from the contract and the doc says so, rather than listing two checks nothing performs.
-- **Watch out:** decoding here creates a second implementation of manifest parsing, which is the
-  thing `capsule_core::validation` being shared exists to prevent. Whatever lands must go through
-  core rather than beside it.
-- **Done when:** an asset whose stored manifest disagrees with its index projection is reported
-  with both values — or the contract no longer claims it is. **Tier:** Unit.
+- **Gap** (found 2026-08-31 porting `S-C14`): both compare the manifest **inside** the provenance
+  blob against the projection the index holds, and the scrub did neither, because doing either
+  means decoding signed CBOR.
+- **Landed `done*` 2026-08-31.** Check 5 is performed. Check 4 is not, and the reason turned out
+  to be a finding rather than a gap.
+
+**The decision the row asked for: yes, the scrub may decode — and the question was easier than it
+sounded.** The provenance blob is **deliberately server-visible** signed CBOR that carries no
+plaintext secrets by construction (upload-protocol, *What Gets Uploaded*), so reading it is not a
+confidentiality question at all. What remained were two real constraints, and both are honoured:
+it decodes through `capsule_core`'s own `AssetManifest` and never through a shape defined beside
+it — a second implementation of manifest parsing is exactly what sharing `capsule_core::validation`
+exists to prevent — and it happens on the scrub, which is read-only, off the hot path, and acts on
+nothing it finds. The write path still validates against the JSON projection, because a hot-path
+parser would be a second *authority* on what a manifest says. This is a witness.
+
+**Check 4 cannot be performed, and that is `S-C52`.** It asks the scrub to walk an asset's chain
+forward from `create`. The server holds **one** manifest per asset, not a sequence: a lifecycle
+write re-points the provenance role through `set_singular`, which leaves the superseded manifest
+unreferenced and therefore collectable. So the chain the doc assumes is in the blob store is not
+there to walk — and, worse, the takedown rebuttal in `storage-verification.md` (*"the server's
+legitimate rebuttal is the asset's own provenance chain it already holds"*) depends on exactly
+that retention. The doc now says so, and the retention question is filed rather than approximated.
+
+**What check 5 compares, and what it says it does not.** Every fact the index mirrors and can
+therefore drift from: `file_id`, `album_id`, `crypto_suite_id`, `protocol_version`, `amk_version`,
+`retention_until`, and the addresses the manifest commits to for the blobs the index points at.
+`client_version` and `plaintext_size` are in the manifest and mirrored **nowhere**, so there is
+nothing to compare them against — the doc listed them, and now says plainly that they are not
+checked rather than implying they are. A blob under the provenance role that does not decode at
+all is one `manifest_unreadable`, not a cascade of mismatches.
+
+**It changed a fixture, and the change is the interesting part.** The scrub's test harness stored
+`"{asset}-provenance"` as a provenance blob. Every "clean store" case was therefore clean only
+because nothing looked. Making the fixture sign a real manifest whose facts match the row is what
+turns those cases back into assertions — and it immediately caught the bit-rot case, which had
+been putting rotten bytes at an address the asset's manifest never committed to.
+
+- **Done when:** ✅ `a_mirrored_fact_that_disagrees_with_the_signed_manifest_is_reported` and
+  `a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assumed_to_agree`. Check 4's
+  half is **not met** and is `S-C52`'s. **Tier:** Unit.
+
+### S-C52 — the server keeps one manifest per asset, not the chain it is documented to hold
+
+- **Contract:** [Maintenance — Server-Side Integrity Scrub](capsule-docs/src/content/docs/design/filesystem/maintenance.md)
+  check 4 (*"the chain walks forward from `create`"*), and
+  [Storage Verification — no authorized purge](capsule-docs/src/content/docs/design/import/storage-verification.md)
+  — *"the server's legitimate rebuttal is the asset's own provenance chain **it already holds**"*.
+- **Gap** (found 2026-08-31 landing `S-C45`): it does not hold it. An asset row points at **one**
+  provenance blob, and every lifecycle write re-points that role through `set_singular` — which
+  leaves the manifest it superseded referenced by nothing, and therefore collectable by the
+  refcount GC on its ordinary schedule.
+- **Why this is worse than a missing scrub check.** Two documented capabilities rest on the
+  retention, not one:
+  - the scrub's check 4 has nothing to walk, so an implementation bug that forked an asset's chain
+    would be undetectable server-side;
+  - and the takedown rebuttal is *evidentiary*. A server accused of losing an asset answers with
+    the user's own signed `delete` manifest and its elapsed `retention_until`. If that manifest
+    was superseded by a later write and collected, the rebuttal is gone — and it is gone exactly
+    in the case where it is most likely to be needed, because a chain that has moved on is a chain
+    with history worth disputing.
+- **The design question it needs first.** Whether the server retains every manifest is a **cost**
+  decision, not an oversight to code around: manifests are small (signed CBOR carrying hashes) and
+  unbounded in count. Retaining them means an asset's provenance blobs are never orphaned, which
+  changes what the GC may sweep and what a rebuild reads. The alternative — retain nothing and
+  strike both claims from the docs — is coherent and loses the rebuttal, so it should be decided
+  rather than defaulted into by a `set_singular` call nobody re-read.
+- **Watch out:** whatever lands has to survive `S-C43`. A replace re-points the original *and* the
+  manifest, so a naive "keep the provenance blob referenced" fix has to keep it referenced by
+  something that is not the singular role, or the next replace will conflict on it.
+- **Done when:** an asset with three lifecycle writes behind it has all three manifests resolvable
+  from the server, the scrub's check 4 walks them, and a superseded manifest survives a GC pass —
+  or the two documents no longer claim any of that. **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

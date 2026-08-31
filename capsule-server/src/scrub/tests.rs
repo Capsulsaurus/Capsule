@@ -26,6 +26,70 @@ struct Harness {
     blobs: Arc<InMemoryBlobStore>,
 }
 
+/// The album every scrub fixture files under, as the manifest's `album_id` must be a UUID.
+const SCRUB_ALBUM: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e70";
+
+/// A stable UUID for a fixture's asset name.
+///
+/// The index keys assets by an opaque string and a manifest's `file_id` is a `Uuid`, so a
+/// fixture that wants the two to agree — which check 5 requires of every clean store — has to
+/// pick ids that are both.
+fn asset_uuid(name: &str) -> uuid::Uuid {
+    uuid::Uuid::from_u128(u128::from_be_bytes(
+        hash_bytes(name.as_bytes()).0[..16]
+            .try_into()
+            .expect("sixteen bytes"),
+    ))
+}
+
+/// The asset id `publish` files `name` under.
+fn asset_id(name: &str) -> AssetId {
+    AssetId::new(asset_uuid(name).to_string())
+}
+
+/// A signed manifest whose facts are the ones `publish` writes into the index.
+///
+/// Really signed, over freshly generated keys: the scrub never verifies the signatures — it
+/// decodes — but a fixture that hand-rolled a struct with placeholder signature bytes would be
+/// asserting against a shape rather than against the artifact.
+fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
+    use capsule_core::crypto::keys::AmkVersion;
+    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::provenance::action::Action;
+    use capsule_core::crypto::provenance::manifest::{
+        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore,
+    };
+
+    let core = ManifestCore {
+        version: ASSET_MANIFEST_VERSION.to_owned(),
+        crypto_suite_id: 1,
+        protocol_version: "2026-01-01".to_owned(),
+        file_id: asset_uuid(name),
+        album_id: uuid::Uuid::parse_str(SCRUB_ALBUM).expect("a uuid"),
+        amk_version: AmkVersion(0),
+        ciphertext_hash: hash_bytes(format!("{name}-original").as_bytes()),
+        plaintext_size: 1024,
+        chunk_size: 65_536,
+        nonce_prefix: [0; 7],
+        key_mode: KeyMode::Derived,
+        wrapped_file_key: None,
+        metadata_blob_hash: Some(
+            capsule_core::crypto::hash::Hash32::from_hex(metadata.as_str()).expect("a digest"),
+        ),
+        created_by_user: uuid::Uuid::from_u128(7),
+        created_by_device: uuid::Uuid::from_u128(8),
+        client_version: "capsule-cli/0.1.0".to_owned(),
+        timestamp: "2026-01-01T00:00:00Z".to_owned(),
+        action: Action::Create,
+        prior_provenance_hash: None,
+        retention_until: None,
+    };
+    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
+    let manifest = core.sign(&device, &write_tier).expect("a manifest signs");
+    capsule_core::cbor::to_canonical_vec(&manifest).expect("a manifest encodes")
+}
+
 impl Harness {
     fn new() -> Self {
         let index = Arc::new(InMemoryAssetIndex::new());
@@ -50,13 +114,18 @@ impl Harness {
     }
 
     /// Publish `asset` with its index tier, and return its provenance address.
+    ///
+    /// The provenance blob is a **real signed manifest** whose facts match the row, not a
+    /// placeholder: check 5 decodes it and compares (`S-C45`), so a fixture that stored
+    /// arbitrary bytes there would be seeding a corruption in every case that is supposed to be
+    /// clean.
     async fn publish(&self, asset: &str) -> ContentAddress {
-        let id = AssetId::new(asset);
+        let id = asset_id(asset);
         self.index
             .reserve(PendingAsset {
                 asset_id: id.clone(),
                 owner_id: OwnerId::new("scrub-owner"),
-                album_id: AlbumId::new("scrub-album"),
+                album_id: AlbumId::new(SCRUB_ALBUM),
                 protocol_version: "2026-01-01".to_owned(),
                 crypto_suite_id: 1,
                 created_at: Timestamp::UNIX_EPOCH,
@@ -64,9 +133,9 @@ impl Harness {
             .await
             .expect("the index reserves");
 
-        let provenance = self.store(format!("{asset}-provenance").as_bytes()).await;
-        self.record(&id, BlobRole::Provenance, &provenance).await;
         let metadata = self.store(format!("{asset}-metadata").as_bytes()).await;
+        let provenance = self.store(&manifest_bytes(asset, &metadata)).await;
+        self.record(&id, BlobRole::Provenance, &provenance).await;
         self.record(&id, BlobRole::Metadata, &metadata).await;
         provenance
     }
@@ -197,11 +266,14 @@ async fn an_unreferenced_blob_is_an_orphan_and_is_left_alone() {
 #[tokio::test]
 async fn bit_rot_is_found_only_by_a_deep_pass() {
     let h = Harness::new();
-    let id = AssetId::new("rotten");
+    let id = asset_id("rotten");
     h.publish("rotten").await;
 
-    // A blob whose bytes do not hash to its name — what bit rot looks like from outside.
-    let honest = hash_bytes(b"the bytes this address names").to_hex();
+    // A blob whose bytes do not hash to its name — what bit rot looks like from outside. The
+    // *address* is the one the asset's manifest commits to, because rot is bytes going bad under
+    // a correct name; an address nothing committed to would be a different fault, and since
+    // `S-C45` the scrub would report that one too.
+    let honest = hash_bytes(b"rotten-original").to_hex();
     let address = ContentAddress::parse(&honest).expect("an address");
     h.blobs
         .put(&address, b"different bytes entirely")
@@ -280,4 +352,119 @@ async fn the_report_counts_by_class() {
     let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
     assert_eq!(report.counts(), vec![("orphan", 2)]);
     assert!(!report.is_clean());
+}
+
+// ===========================================================================================
+// Check 5: mirrored-fact agreement (`S-C45`)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_mirrored_fact_that_disagrees_with_the_signed_manifest_is_reported() {
+    // The check the maintenance doc has always listed and neither server performed, because
+    // performing it means decoding signed CBOR. It is decodable *here* for a reason that turned
+    // out to be simpler than the question sounded: the provenance blob is deliberately
+    // server-visible signed CBOR carrying no plaintext secrets by construction, and the scrub is
+    // read-only and acts on nothing it finds.
+    let h = Harness::new();
+    h.publish("mirrored").await;
+    let id = asset_id("mirrored");
+
+    // Move the index's copy of a fact the manifest signed. In production this is an
+    // implementation bug or a hand-edited row; the scrub's job is that neither is silent.
+    h.index
+        .apply_op(crate::index::LifecycleOp {
+            asset_id: id.clone(),
+            owner_id: OwnerId::new("scrub-owner"),
+            album_id: AlbumId::new(SCRUB_ALBUM),
+            action: crate::index::OpAction::MetadataUpdate,
+            manifest_hash: hash_bytes(b"a manifest the store does not hold"),
+            prior_provenance_hash: h
+                .index
+                .read(&id)
+                .await
+                .expect("read")
+                .expect("the row exists")
+                .chain_head,
+            amk_version: 9,
+            provenance: h
+                .index
+                .read(&id)
+                .await
+                .expect("read")
+                .expect("the row exists")
+                .address_for(BlobRole::Provenance)
+                .cloned()
+                .expect("a provenance blob"),
+            metadata: None,
+            original: None,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    let mismatches: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| finding.class() == "mirrored_fact_mismatch")
+        .collect();
+    assert_eq!(mismatches.len(), 1, "{:?}", report.findings);
+    assert!(
+        matches!(
+            mismatches[0],
+            Finding::MirroredFactMismatch { fact: "amk_version", index, manifest, .. }
+                if index == "9" && manifest == "0"
+        ),
+        "the report carries both sides and adjudicates neither: {:?}",
+        mismatches[0]
+    );
+}
+
+#[tokio::test]
+async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assumed_to_agree() {
+    let h = Harness::new();
+    let id = asset_id("unreadable");
+    h.publish("unreadable").await;
+
+    // Re-point the provenance role at bytes that are not a manifest, the only way a lifecycle
+    // write legitimately moves that role — which is what makes this reachable at all.
+    let junk = h.store(b"not CBOR, not a manifest, not anything").await;
+    h.index
+        .apply_op(crate::index::LifecycleOp {
+            asset_id: id.clone(),
+            owner_id: OwnerId::new("scrub-owner"),
+            album_id: AlbumId::new(SCRUB_ALBUM),
+            action: crate::index::OpAction::MetadataUpdate,
+            manifest_hash: hash_bytes(b"whatever"),
+            prior_provenance_hash: h
+                .index
+                .read(&id)
+                .await
+                .expect("read")
+                .expect("the row exists")
+                .chain_head,
+            amk_version: 0,
+            provenance: junk.clone(),
+            metadata: None,
+            original: None,
+            retention_until: None,
+            at: Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index applies");
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(
+        report.count("manifest_unreadable"),
+        1,
+        "{:?}",
+        report.findings
+    );
+    assert_eq!(
+        report.count("mirrored_fact_mismatch"),
+        0,
+        "a blob that does not decode has no facts to disagree with, so it is one finding rather \
+         than a cascade of them"
+    );
 }

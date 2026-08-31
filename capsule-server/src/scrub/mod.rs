@@ -123,6 +123,33 @@ pub enum Finding {
         /// The `error.*` code naming what failed.
         code: String,
     },
+    /// An asset's provenance blob is not a manifest this server can read (`S-C45`).
+    ///
+    /// Reported rather than treated as agreement. The provenance blob is deliberately
+    /// server-visible signed CBOR — it carries no plaintext secrets by construction — so a blob
+    /// under that role that does not decode is the store holding something that is not what the
+    /// index says it is.
+    ManifestUnreadable {
+        /// The asset.
+        asset: AssetId,
+        /// The address the row points at.
+        address: ContentAddress,
+    },
+    /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest (`S-C45`).
+    ///
+    /// Check 5. Both sides' values, because a report saying "they disagree" tells an operator to
+    /// go looking rather than telling them what to look at — and the scrub deliberately does not
+    /// adjudicate which side is wrong.
+    MirroredFactMismatch {
+        /// The asset.
+        asset: AssetId,
+        /// Which mirrored fact.
+        fact: &'static str,
+        /// What the index holds.
+        index: String,
+        /// What the signed manifest says.
+        manifest: String,
+    },
     /// A staged upload with no live session behind it.
     StaleStage {
         /// The upload the stage belongs to.
@@ -138,6 +165,8 @@ impl Finding {
             Self::Orphan { .. } => "orphan",
             Self::ByteMismatch { .. } => "byte_mismatch",
             Self::ChainHeadUnresolvable { .. } => "chain_head_unresolvable",
+            Self::ManifestUnreadable { .. } => "manifest_unreadable",
+            Self::MirroredFactMismatch { .. } => "mirrored_fact_mismatch",
             Self::Debris { .. } => "debris",
             Self::Quarantined { .. } => "quarantined",
             Self::StaleStage { .. } => "stale_stage",
@@ -229,6 +258,7 @@ pub async fn scrub(context: &ScrubContext, depth: Depth) -> Result<ScrubReport, 
     let mut report = ScrubReport::default();
 
     rows_resolve_to_blobs(context, &mut report).await?;
+    mirrored_facts_agree(context, &mut report).await?;
     blobs_are_referenced(context, depth, &mut report).await?;
     inventory(context, &mut report).await?;
 
@@ -303,6 +333,170 @@ async fn rows_resolve_to_blobs(
             }
         }
         after = rows.last().map(|row| row.asset_id.clone());
+    }
+}
+
+/// Check 5: the facts the index mirrors out of the signed manifest still agree with it
+/// (`S-C45`).
+///
+/// # The decision this slice needed, and the answer
+///
+/// *May the scrub decode signed CBOR?* Yes, and the question turns out to be easier than it
+/// looked: the provenance blob is **deliberately server-visible** signed CBOR that carries no
+/// plaintext secrets by construction (upload-protocol, *What Gets Uploaded*). Reading it is not a
+/// privacy question at all. What is a real constraint is *how*: it decodes through
+/// `capsule_core`'s own `AssetManifest`, never through a shape defined here, because a second
+/// implementation of manifest parsing is exactly what sharing `capsule_core::validation` exists
+/// to prevent.
+///
+/// It is also the one place where reading it is clearly *safe*: the scrub is read-only, off the
+/// hot path, and acts on nothing it finds. A hot-path parser would be a second authority on what
+/// a manifest says; this is a witness.
+///
+/// # What is compared, and what is not
+///
+/// Every fact the index mirrors and can therefore drift from: the asset and album the manifest
+/// names, the suite and protocol it was written under, the epoch, the retention floor, and the
+/// addresses the manifest commits to for the blobs the index points at. `client_version` and
+/// `plaintext_size` are *in* the manifest and mirrored **nowhere**, so there is nothing to
+/// compare them against — the maintenance doc lists them and this says plainly that it does not
+/// check them rather than pretending to.
+///
+/// # Why check 4 is not here
+///
+/// The doc's envelope-chain check asks the scrub to walk the chain forward from `create`. This
+/// server cannot: it holds **one** manifest per asset, not a sequence. A lifecycle write
+/// re-points the provenance role, which leaves the superseded manifest unreferenced and
+/// therefore collectable — so the chain the doc assumes is in the blob store is not. That is a
+/// finding about the *design*, not about a store, and it is filed as `S-C52` rather than
+/// approximated here.
+async fn mirrored_facts_agree(
+    context: &ScrubContext,
+    report: &mut ScrubReport,
+) -> Result<(), StoreError> {
+    let mut after: Option<AssetId> = None;
+    loop {
+        let rows = context.index.rows(after.as_ref(), 256).await?;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        for row in &rows {
+            // A pending row's bundle has not landed; there is nothing to disagree with yet.
+            if row.state == AssetState::Pending {
+                continue;
+            }
+            let Some(address) = row.address_for(BlobRole::Provenance).cloned() else {
+                // Already reported as an unresolvable chain head by check 1's other half.
+                continue;
+            };
+            let Some(stat) = context.blobs.stat(&address).await.map_err(blob_failure)? else {
+                // Likewise: a missing provenance blob is a dangling reference, reported there.
+                continue;
+            };
+            // A manifest is small by construction — it is signed CBOR carrying hashes, never
+            // bytes — so it is read whole rather than windowed like the deep re-hash.
+            let span = usize::try_from(stat.size).unwrap_or(usize::MAX);
+            let Some(bytes) = context
+                .blobs
+                .read_at(&address, 0, span)
+                .await
+                .map_err(blob_failure)?
+            else {
+                continue;
+            };
+            let Ok(manifest) = capsule_core::cbor::from_slice::<
+                capsule_core::crypto::provenance::manifest::AssetManifest,
+            >(&bytes) else {
+                report.findings.push(Finding::ManifestUnreadable {
+                    asset: row.asset_id.clone(),
+                    address,
+                });
+                continue;
+            };
+            compare(row, &manifest.core, report);
+        }
+        after = rows.last().map(|row| row.asset_id.clone());
+    }
+}
+
+/// Every mirrored fact, compared field by field.
+///
+/// Split out so the list of what is checked reads as a list. Each entry is a pair of strings on
+/// purpose: the report carries both sides' evidence and adjudicates neither, so rendering them
+/// the same way is what keeps a finding readable without knowing the field's type.
+fn compare(
+    row: &crate::index::AssetRow,
+    core: &capsule_core::crypto::provenance::manifest::ManifestCore,
+    report: &mut ScrubReport,
+) {
+    let mut mismatch = |fact: &'static str, index: String, manifest: String| {
+        if index != manifest {
+            report.findings.push(Finding::MirroredFactMismatch {
+                asset: row.asset_id.clone(),
+                fact,
+                index,
+                manifest,
+            });
+        }
+    };
+
+    mismatch(
+        "file_id",
+        row.asset_id.as_str().to_owned(),
+        core.file_id.to_string(),
+    );
+    mismatch(
+        "album_id",
+        row.album_id.as_str().to_owned(),
+        core.album_id.to_string(),
+    );
+    mismatch(
+        "crypto_suite_id",
+        row.crypto_suite_id.to_string(),
+        core.crypto_suite_id.to_string(),
+    );
+    mismatch(
+        "protocol_version",
+        row.protocol_version.clone(),
+        core.protocol_version.clone(),
+    );
+    mismatch(
+        "amk_version",
+        row.amk_version.to_string(),
+        core.amk_version.0.to_string(),
+    );
+    mismatch(
+        "retention_until",
+        row.retention_until
+            .map(|at| at.to_string())
+            .unwrap_or_default(),
+        core.retention_until.clone().unwrap_or_default(),
+    );
+
+    // The addresses the manifest commits to, against the ones the index points at. Only where
+    // the manifest carries them: the presence-by-action rule is core's, and an absent optional
+    // is an absent claim rather than a claim of absence.
+    if let Some(committed) = &core.metadata_blob_hash {
+        mismatch(
+            "metadata_blob_hash",
+            row.address_for(BlobRole::Metadata)
+                .map(|address| address.as_str().to_owned())
+                .unwrap_or_default(),
+            committed.to_hex(),
+        );
+    }
+    if core.action.is_create()
+        || core.action == capsule_core::crypto::provenance::action::Action::Replace
+    {
+        // The two actions that carry an original. A `create` whose original has not landed yet
+        // is the staged-upload carve-out, and holds nothing to compare.
+        if let Some(held) = row.address_for(BlobRole::Original) {
+            mismatch(
+                "ciphertext_hash",
+                held.as_str().to_owned(),
+                core.ciphertext_hash.to_hex(),
+            );
+        }
     }
 }
 
