@@ -26,7 +26,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`escrow`], [`gc`], [`index`], [`quota`], [`scrub`], [`serve`], [`store`], [`sync`], [`upload`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`quota`], [`scrub`], [`serve`], [`store`],
+//! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
 //! workers ([`gc`], [`scrub`]) have no wire surface at all and cost nothing to exercise.
 //!
@@ -47,6 +48,7 @@ pub mod blob;
 pub mod body;
 pub mod directory;
 pub mod discovery;
+pub mod enrollment;
 pub mod escrow;
 pub mod gc;
 pub mod index;
@@ -84,7 +86,7 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Three `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // Four `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
         // next addition obvious rather than a puzzle. Each group is well under the cap, so a
@@ -103,6 +105,15 @@ pub fn router() -> ServerRouter {
             routes::directory::fetch_device_directory,
             routes::escrow::store_escrow,
             routes::escrow::fetch_escrow,
+            routes::auth::reauthenticate,
+        ])
+        // The cross-device add: one code, one channel, and the two devices' mailboxes.
+        .mount(kynos::routes![
+            routes::enroll::issue_enrollment_code,
+            routes::enroll::redeem_enrollment_code,
+            routes::enroll::relay_enrollment_payload,
+            routes::enroll::drain_enrollment_channel,
+            routes::enroll::close_enrollment_channel,
         ])
         // The library's own surfaces, and the public record anybody may read.
         .mount(kynos::routes![

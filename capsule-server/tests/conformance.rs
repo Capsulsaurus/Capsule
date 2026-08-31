@@ -121,6 +121,12 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/escrow"),
         ("GET", "/v1/auth/devices"),
         ("DELETE", "/v1/auth/devices/anything"),
+        ("POST", "/v1/auth/reauthenticate"),
+        ("POST", "/v1/auth/devices/enroll"),
+        ("POST", "/v1/auth/devices/enroll/redeem"),
+        ("POST", "/v1/auth/devices/enroll/channel/anything"),
+        ("GET", "/v1/auth/devices/enroll/channel/anything"),
+        ("DELETE", "/v1/auth/devices/enroll/channel/anything"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1385,6 +1391,294 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.revocations.set_unavailable(false);
+
+    // ── Re-authentication and the cross-device add (`S-C7`) ────────────────────────────────
+    // Before the ledger block, because a re-authentication is what reopens the freshness window
+    // the enrollment gate reads.
+    //
+    // A fresh sign-in first: `bearer`'s own session was closed by the logout block above, and
+    // re-authentication is the one operation here that needs a *live session record* rather
+    // than a merely valid token — it moves a field on one. That the two differ is `S-C48`.
+    let enrolling: capsule_server::routes::auth::TokenResponse = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "email": support::EMAIL, "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let bearer = format!("Bearer {}", enrolling.access_token);
+
+    client
+        .post("/v1/auth/reauthenticate")
+        .json(&serde_json::json!({ "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .json(&serde_json::json!({ "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({ "password": 7 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 423: the account is locked. Locked and unlocked around the one request, so nothing after
+    // this block inherits the state.
+    fixture.accounts.lock(support::EMAIL);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({ "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::LOCKED);
+    fixture.accounts.unlock(support::EMAIL);
+
+    fixture.accounts.set_unavailable(true);
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({ "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.accounts.set_unavailable(false);
+
+    client
+        .post("/v1/auth/reauthenticate")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "password": support::PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // Enrollment: 401 and 500 first, then the 403 the freshness gate produces, then a 200 with
+    // the window reopened.
+    client
+        .post("/v1/auth/devices/enroll")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/auth/devices/enroll")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.sessions.set_unavailable(true);
+    client
+        .post("/v1/auth/devices/enroll")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.sessions.set_unavailable(false);
+
+    let enrolled: serde_json::Value = client
+        .post("/v1/auth/devices/enroll")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let code = enrolled["code"].as_str().expect("a code").to_owned();
+
+    // Redeem: the body rejections, the 404, the 500, then the 200 that opens the channel.
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .json(&serde_json::json!({ "code": 7 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .json(&serde_json::json!({ "code": "never issued" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    let opened: serde_json::Value = client
+        .post("/v1/auth/devices/enroll/redeem")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "code": code }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let channel = opened["channel_id"].as_str().expect("a channel").to_owned();
+    let relay_path = format!("/v1/auth/devices/enroll/channel/{channel}");
+
+    // The relay's own answers.
+    client
+        .post(&relay_path)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post(&relay_path)
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post(&relay_path)
+        .json(&serde_json::json!({ "direction": 7, "payload": "x" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/v1/auth/devices/enroll/channel/no-such-channel")
+        .json(&serde_json::json!({ "direction": "to_enrollee", "payload": "x" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .post(&relay_path)
+        .json(&serde_json::json!({ "direction": "to_enrollee", "payload": "x" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The drain: a bad direction, a missing channel, a 400 from the `Path` extractor, then 200.
+    client
+        .get(&format!("{relay_path}?direction=sideways"))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .get("/v1/auth/devices/enroll/channel/no-such-channel?direction=to_enrollee")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .get(&format!("{relay_path}?direction=to_enrollee"))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // The close: unauthenticated, insufficient, a 400 from the `Path` extractor, a 404 for a
+    // channel that is not this account's, then the 204.
+    client
+        .delete(&relay_path)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .delete(&relay_path)
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete("/v1/auth/devices/enroll/channel/%FF")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .delete("/v1/auth/devices/enroll/channel/no-such-channel")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete(&relay_path)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The two extractor `400`s the relay and drain paths still owe, reached the only way a
+    // `String` path parameter can be.
+    client
+        .post("/v1/auth/devices/enroll/channel/%FF")
+        .json(&serde_json::json!({ "direction": "to_enrollee", "payload": "x" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .get("/v1/auth/devices/enroll/channel/%FF?direction=to_enrollee")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500 on all three relay operations: the channel store cannot answer.
+    fixture.channels.set_unavailable(true);
+    client
+        .post(&relay_path)
+        .json(&serde_json::json!({ "direction": "to_enrollee", "payload": "x" }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get(&format!("{relay_path}?direction=to_enrollee"))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete(&relay_path)
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.channels.set_unavailable(false);
+
+    // 500 on redeem: the enrollment store cannot answer.
+    fixture.enrollments.set_unavailable(true);
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .json(&serde_json::json!({ "code": "anything" }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.enrollments.set_unavailable(false);
 
     // ── The session ledger (`S-C13`, `S-N3`) ───────────────────────────────────────────────
     // Before the escrow block, and before the global sign-out at the end, because a revoke

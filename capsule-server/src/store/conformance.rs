@@ -115,6 +115,7 @@ fn session(case: &str, tag: &str, user: &str, offset: i64) -> SessionRecord {
         session_id: SessionId::new(format!("{case}-sid-{tag}")),
         user_id: UserId::new(format!("{case}-{user}")),
         created_at,
+        authenticated_at: created_at,
         last_active_at: created_at,
         user_agent: Some(format!("agent-{tag}")),
         ip_address: Some("203.0.113.7".to_owned()),

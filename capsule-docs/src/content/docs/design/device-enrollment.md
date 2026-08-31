@@ -31,7 +31,9 @@ Two design points:
 
 ## Cross-Device Add
 
-**Status note.** The server surface (code issue/redeem, relay channel, directory update) is contract-complete and returns with the planned `capsule-api::auth::devices` module; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
+**Status note.** The server surface (code issue/redeem, relay channel, directory update) is **served today** by the Kynos surface, with slice `S-C7`; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
+
+**What the server can enforce about step 1, exactly.** A server cannot verify a biometric. What it verifies is that the account holder **proved a credential recently** — a five-minute window against the session's `authenticated_at`, which is set at sign-in and deliberately *not* reset by a token refresh, so an attacker holding only a stolen token cannot reopen it by refreshing. The local-authorization half stays the client's, unverifiable and asserted. Because the window is short and a refresh does not reopen it, a signed-in user adding a device is asked for their password again through `POST /v1/auth/reauthenticate`, which proves a credential on the session that already exists rather than opening a second one.
 
 When an existing signed-in device adds a new device to the same account:
 

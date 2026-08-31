@@ -370,6 +370,9 @@ pub async fn login_user(
         session_id: session_id.clone(),
         user_id: user.clone(),
         created_at: now,
+        // A sign-in *is* a credential presentation, so this is the moment a freshness gate
+        // measures from. A refresh will carry it forward untouched.
+        authenticated_at: now,
         last_active_at: now,
         // Both always `None` here, as in Salvo. See the module docs.
         user_agent: None,
@@ -486,6 +489,10 @@ pub async fn refresh_token(
         session_id: rotated.clone(),
         user_id: record.user_id.clone(),
         created_at: now,
+        // **Carried forward, not reset.** A refresh proves possession of a refresh token, which
+        // is not a credential presentation — resetting this would make every re-authentication
+        // gate satisfiable by waiting fifteen minutes, which is the same as not having one.
+        authenticated_at: record.authenticated_at,
         last_active_at: now,
         user_agent: record.user_agent,
         ip_address: record.ip_address,
@@ -550,6 +557,107 @@ pub async fn logout(
     }
 
     Ok(NoContent)
+}
+
+/// A password, re-presented on a session that already exists.
+#[derive(Schema, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ReauthenticateRequest {
+    /// The account's password.
+    pub password: String,
+}
+
+/// `Debug` is hand-written so a password never reaches a log line.
+impl fmt::Debug for ReauthenticateRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReauthenticateRequest")
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// When the re-authenticated session's freshness window last opened.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ReauthenticateResponse {
+    /// The moment the credential was accepted, RFC 3339.
+    ///
+    /// Returned so a client can decide locally whether a gated operation will be admitted,
+    /// rather than discovering it from a `403` in the middle of a ceremony.
+    pub authenticated_at: String,
+}
+
+/// Prove a credential again on the current session, without opening a new one.
+///
+/// **The only way to satisfy the freshness gate `S-C7` enforces**, and it exists because
+/// without it the gate is unusable: `authenticated_at` is deliberately *not* reset by a refresh,
+/// so a user signed in an hour ago would otherwise have to sign out entirely to add a device —
+/// and the session they abandoned would linger in their own devices listing.
+///
+/// It does not mint tokens and does not rotate the session. The caller keeps the credential
+/// they already hold; what changes is one timestamp on the record behind it.
+///
+/// # Errors
+///
+/// The same refusals as a sign-in, for the same reasons: a wrong password is
+/// `401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory
+/// failing is `500`. A caller that guessed a password here learns exactly what it would learn
+/// at `/v1/auth/login`, and no more.
+#[kynos::post(
+    "/v1/auth/reauthenticate",
+    operation_id = "reauthenticate",
+    tag = AuthTag
+)]
+pub async fn reauthenticate(
+    Inject(auth): Inject<AuthContext>,
+    Auth(credential): Auth<AccessToken>,
+    Json(request): Json<ReauthenticateRequest>,
+) -> Result<Json<ReauthenticateResponse>, LoginRejection> {
+    let user = UserId::new(credential.user.as_str());
+
+    // The account is the credential's, never a request field: this operation must not be usable
+    // to test another account's password.
+    let outcome = auth
+        .accounts()
+        .authenticate_user(&user, &request.password)
+        .await
+        .map_err(|error: DirectoryError| {
+            tracing::error!(%error, %user, "the account directory could not answer a re-auth");
+            LoginRejection::unavailable()
+        })?;
+
+    match outcome {
+        Authentication::Granted(_) => {}
+        Authentication::Locked => {
+            tracing::warn!(%user, "a re-authentication was refused: the account is locked");
+            return Err(LoginRejection::account_locked());
+        }
+        Authentication::Refused => {
+            tracing::info!(%user, "a re-authentication was refused: the password did not match");
+            return Err(LoginRejection::invalid_credentials());
+        }
+    }
+
+    let now = auth.clock().now();
+    let updated = auth
+        .sessions()
+        .mark_authenticated(&credential.session, now)
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "mark a session re-authenticated");
+            LoginRejection::unavailable()
+        })?;
+
+    // A token whose session record is gone verifies but names nothing. Answered as a refused
+    // credential rather than as a server fault: from the caller's side the session is over.
+    let Some(updated) = updated else {
+        tracing::info!(%user, "a re-authentication found no live session");
+        return Err(LoginRejection::invalid_credentials());
+    };
+
+    tracing::info!(%user, session_id = %credential.session, "a session re-authenticated");
+    Ok(Json(ReauthenticateResponse {
+        authenticated_at: updated.authenticated_at.to_string(),
+    }))
 }
 
 /// The challenge a global sign-out is signed over.

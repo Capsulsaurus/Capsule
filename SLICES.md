@@ -213,7 +213,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
 | S-C6 | Quota service | server | S-C25, S-C37 | M | RETIRED | done\* | federated-receive and purge-reclaim accounting owed to `S-C11`/federation |
-| S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | ready | |
+| S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | done\* | the freshness gate needed `authenticated_at` and a re-auth verb; redemption rate limiting → `S-C32` |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
@@ -1183,6 +1183,45 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** the enrollment doc's code-lifecycle Validation bullets (expiry,
   single-use, local-auth gate) pass. **Tier:** Unit + Smoke; E2E case 12 is `S-Q4`.
 - **Landed in retired code; re-scoped onto Kynos.**
+- **Landed 2026-08-31 (`done\*`).** Five operations: issue, redeem, relay, drain, close — plus
+  `POST /v1/auth/reauthenticate`, which is not decoration (below).
+- **Three surfaces, three authentication models, and they cannot be unified.** Device B has no
+  account, no session and no key material — it is a phone that has just scanned a QR code — so
+  redemption takes the code as its credential and the relay takes the channel handle. Only issue
+  and close take a session. Giving them one model would break the ceremony in one direction or
+  make the close a denial of service in the other.
+- **The gate needed a field that did not exist, and finding that out is most of the slice.**
+  The catalog specifies "the access token is not fresh enough", but nothing on the session
+  record could carry that: **a refresh stamps a new `created_at` every fifteen minutes**, so a
+  gate reading it would have been satisfied by an attacker doing nothing but refreshing — which
+  is the exact adversary step 1 exists to stop. `SessionRecord::authenticated_at` is set at
+  sign-in and **carried forward unchanged by a refresh**, and
+  `a_stolen_session_token_cannot_start_a_device_add` asserts both halves.
+- **And a gate needs a way to be satisfied.** `authenticated_at` deliberately does not move on a
+  refresh, so a user signed in an hour ago could otherwise only add a device by signing out
+  entirely — leaving an abandoned session in their own devices listing. `reauthenticate` proves
+  a credential on the session that already exists: no new tokens, no rotation, one timestamp.
+  Its account comes from the credential and never from a request field, so it cannot be used to
+  test another account's password from inside any authenticated session.
+- **What the gate can mean, stated rather than implied.** A server cannot verify a biometric.
+  It can refuse to act on a session whose owner has not proved anything in five minutes; the
+  local-authorization half stays the client's, unverifiable and asserted. Writing that down is
+  the point — a gate whose strength is misunderstood is worse than one that is absent.
+- **The relay is a dumb pipe by design.** Anyone with the handle may post in either direction,
+  because design/device-enrollment.md puts channel integrity on the safety-code check
+  *precisely* so the relay need not be trusted. The server stores opaque payloads, delivers them
+  once, and asserts nothing about who wrote them. Close is the exception: it ends the ceremony,
+  so leaving it on the handle would make an abandoned QR code a denial of service.
+- **Redemption's `404` is one answer for unknown, spent and expired**, asserted by comparing the
+  two problem documents rather than by reading the code — the operation takes no credential, so
+  a distinguishing answer would tell an anonymous caller that a guessed code was once real.
+- **Owed: redemption rate limiting.** The contract requires it and the catalog carries
+  `error.enrollment.rate_limited`, but the per-user counter has no port (`S-C32`), so the status
+  is **not declared** rather than declared and unreachable (`S-C28`). Single-use, a ten-minute
+  TTL and ≥64 bits of entropy bound the window meanwhile — which is a real bound, not a promise.
+- **Owed: `first_device_setup` and the MLS group join.** Both are client-side and neither has a
+  server surface; the directory-update path a completed add ends with is `S-C9`'s
+  `POST /v1/auth/devices/directory`, which already exists and is anchored by `S-C42`.
 
 ### S-C8 — Moderation hooks
 

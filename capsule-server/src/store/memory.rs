@@ -251,6 +251,25 @@ impl AuthStateStore for InMemoryAuthState {
         })
     }
 
+    fn mark_authenticated<'a>(
+        &'a self,
+        session: &'a SessionId,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Option<SessionRecord>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            let Some(entry) = state.sessions.get_mut(session) else {
+                tracing::trace!(%session, "re-authentication found no live session");
+                return Ok(None);
+            };
+            entry.record.authenticated_at = at;
+            tracing::info!(%session, "a session re-authenticated");
+            Ok(Some(entry.record.clone()))
+        })
+    }
+
     fn close_session<'a>(
         &'a self,
         session: &'a SessionId,

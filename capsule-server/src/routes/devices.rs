@@ -54,8 +54,18 @@ pub struct SessionsTag;
 pub struct SessionView {
     /// The session's identifier — what a revoke names.
     pub session_id: String,
-    /// When the session was opened, RFC 3339.
+    /// When this session *record* was minted, RFC 3339.
+    ///
+    /// A refresh rotates the session, so after one this is the rotation time and not the
+    /// sign-in. `authenticated_at` is the field that answers "when did you last sign in".
     pub created_at: String,
+    /// When the user last proved a credential on this session's lineage, RFC 3339.
+    ///
+    /// Carried forward across refreshes, so it is the one timestamp here that means what a
+    /// user reading a devices list expects "signed in" to mean. It is also what the
+    /// cross-device add's freshness gate reads (`S-C7`), so a client can show why an add is
+    /// about to ask for a password again.
+    pub authenticated_at: String,
     /// When it was last seen, RFC 3339.
     ///
     /// Equal to `created_at` until `S-C48` puts the session ledger on the request path. A
@@ -283,6 +293,7 @@ fn view(record: SessionRecord, current: &SessionId) -> SessionView {
         current: record.session_id == *current,
         session_id: record.session_id.to_string(),
         created_at: record.created_at.to_string(),
+        authenticated_at: record.authenticated_at.to_string(),
         last_active_at: record.last_active_at.to_string(),
         user_agent: record.user_agent,
         ip_address: record.ip_address,

@@ -50,6 +50,7 @@ use capsule_server::discovery::revocation::{
     InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
+use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
@@ -62,7 +63,8 @@ use capsule_server::quota::{
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::store::memory::{
-    InMemoryAuthState, InMemoryChallenges, InMemoryCohorts, InMemoryUploadSessions, ManualClock,
+    InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
+    InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
     AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
@@ -241,6 +243,13 @@ impl InMemoryAccounts {
         }
     }
 
+    /// Take it back out, so a case can produce a `423` without poisoning the rest of a walk.
+    pub(crate) fn unlock(&self, email: &str) {
+        if let Some(account) = self.accounts().get_mut(email) {
+            account.locked = false;
+        }
+    }
+
     /// Make every subsequent lookup fail, or stop.
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
@@ -266,6 +275,33 @@ impl AccountDirectory for InMemoryAccounts {
 
             let accounts = self.accounts();
             let Some(account) = accounts.get(email) else {
+                return Ok(Authentication::Refused);
+            };
+            if account.locked {
+                return Ok(Authentication::Locked);
+            }
+            if account.password == password {
+                Ok(Authentication::Granted(account.user_id.clone()))
+            } else {
+                Ok(Authentication::Refused)
+            }
+        })
+    }
+
+    fn authenticate_user<'a>(
+        &'a self,
+        user: &'a UserId,
+        password: &'a str,
+    ) -> DirectoryFuture<'a, Authentication> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+
+            let accounts = self.accounts();
+            let Some(account) = accounts.values().find(|held| &held.user_id == user) else {
                 return Ok(Authentication::Refused);
             };
             if account.locked {
@@ -319,6 +355,152 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// An enrollment-code store that can be made to fail on demand.
+#[derive(Debug)]
+pub(crate) struct SwitchableEnrollments {
+    inner: InMemoryEnrollments,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableEnrollments {
+    /// A working store on `clock`, with the ceremony's own TTL.
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryEnrollments::new(clock, ENROLLMENT_CODE_TTL),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "enrollment",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl EnrollmentStore for SwitchableEnrollments {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn issue(&self, record: PendingEnrollment) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.issue(record)
+    }
+
+    fn is_taken<'a>(&'a self, code: &'a EnrollmentCode) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.is_taken(code)
+    }
+
+    fn redeem<'a>(
+        &'a self,
+        code: &'a EnrollmentCode,
+    ) -> StoreFuture<'a, Option<PendingEnrollment>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.redeem(code)
+    }
+}
+
+/// A relay-channel store that can be made to fail on demand.
+#[derive(Debug)]
+pub(crate) struct SwitchableChannels {
+    inner: InMemoryChannels,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableChannels {
+    /// A working store on `clock`, with the ceremony's own TTL.
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryChannels::new(clock, RELAY_CHANNEL_TTL),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "relay-channel",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ChannelStore for SwitchableChannels {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn open<'a>(&'a self, channel: &'a ChannelId, record: RelayChannel) -> StoreFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.open(channel, record)
+    }
+
+    fn lookup<'a>(&'a self, channel: &'a ChannelId) -> StoreFuture<'a, Option<RelayChannel>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.lookup(channel)
+    }
+
+    fn enqueue<'a>(
+        &'a self,
+        channel: &'a ChannelId,
+        direction: Direction,
+        payload: RelayPayload,
+    ) -> StoreFuture<'a, RelayOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.enqueue(channel, direction, payload)
+    }
+
+    fn drain<'a>(
+        &'a self,
+        channel: &'a ChannelId,
+        direction: Direction,
+    ) -> StoreFuture<'a, DrainOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.drain(channel, direction)
+    }
+
+    fn close<'a>(&'a self, channel: &'a ChannelId) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.close(channel)
     }
 }
 
@@ -523,6 +705,17 @@ impl AuthStateStore for SwitchableSessions {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.touch_session(session, last_active_at)
+    }
+
+    fn mark_authenticated<'a>(
+        &'a self,
+        session: &'a SessionId,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Option<SessionRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.mark_authenticated(session, at)
     }
 
     fn close_session<'a>(
@@ -1432,6 +1625,10 @@ pub(crate) struct Fixture {
     pub(crate) escrows: Arc<SwitchableEscrow>,
     /// The durable device-cohort map.
     pub(crate) cohorts: Arc<SwitchableCohorts>,
+    /// The pending cross-device enrollment codes.
+    pub(crate) enrollments: Arc<SwitchableEnrollments>,
+    /// The enrollment relay channels.
+    pub(crate) channels: Arc<SwitchableChannels>,
 }
 
 impl Fixture {
@@ -1479,6 +1676,8 @@ impl Fixture {
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
         let cohorts = Arc::new(SwitchableCohorts::new());
+        let enrollments = Arc::new(SwitchableEnrollments::new(clock.clone()));
+        let channels = Arc::new(SwitchableChannels::new(clock.clone()));
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1512,6 +1711,11 @@ impl Fixture {
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
             escrow: EscrowContext::new(escrows.clone(), clock.clone()),
+            enrollment: EnrollmentContext::new(
+                enrollments.clone(),
+                channels.clone(),
+                clock.clone(),
+            ),
         });
 
         Self {
@@ -1535,6 +1739,8 @@ impl Fixture {
             challenges,
             escrows,
             cohorts,
+            enrollments,
+            channels,
         }
     }
 
@@ -1611,6 +1817,11 @@ impl Fixture {
                 Arc::new(SwitchableRevocations::new(clock.clone())),
             ),
             escrow: EscrowContext::new(Arc::new(SwitchableEscrow::new()), clock.clone()),
+            enrollment: EnrollmentContext::new(
+                Arc::new(InMemoryEnrollments::new(clock.clone(), ENROLLMENT_CODE_TTL)),
+                Arc::new(InMemoryChannels::new(clock.clone(), RELAY_CHANNEL_TTL)),
+                clock.clone(),
+            ),
         });
         (app, clock)
     }

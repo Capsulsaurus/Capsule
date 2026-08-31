@@ -106,4 +106,21 @@ pub trait AccountDirectory: fmt::Debug + Send + Sync {
         email: &'a str,
         password: &'a str,
     ) -> DirectoryFuture<'a, Authentication>;
+
+    /// The same decision, for an account already identified (`S-C7`).
+    ///
+    /// Re-authentication happens on a session that already names its account, so the account
+    /// comes from the credential and never from the request. That distinction is the whole
+    /// reason this is a second method rather than the caller passing an email it was handed: an
+    /// operation that took one would be usable to test another account's password from inside
+    /// any authenticated session.
+    ///
+    /// Every other obligation of [`Self::authenticate`] applies unchanged — constant-time
+    /// comparison, timing-equalized miss, failed-attempt bookkeeping — because a caller who can
+    /// guess here has exactly what a caller who can guess at sign-in has.
+    fn authenticate_user<'a>(
+        &'a self,
+        user: &'a UserId,
+        password: &'a str,
+    ) -> DirectoryFuture<'a, Authentication>;
 }

@@ -45,8 +45,21 @@ pub struct SessionRecord {
     pub session_id: SessionId,
     /// The account the session authenticates.
     pub user_id: UserId,
-    /// When the session was opened.
+    /// When this session *record* was minted.
+    ///
+    /// A refresh rotates the session, so this moves every time — it is the age of the record,
+    /// not of the sign-in. [`Self::authenticated_at`] is the one that answers "when did this
+    /// user last prove a credential", and the two are deliberately separate because conflating
+    /// them makes any freshness check vacuous: a rotation every fifteen minutes would keep
+    /// resetting it.
     pub created_at: Timestamp,
+    /// When the user last presented a credential on this session's lineage.
+    ///
+    /// Set at sign-in and **carried forward unchanged by a refresh**. This is what a
+    /// re-authentication gate reads (`S-C7`): starting a cross-device add requires a fresh local
+    /// device authorization, and while the server cannot verify a biometric, it can refuse to
+    /// act on a session whose owner has not proved anything in hours.
+    pub authenticated_at: Timestamp,
     /// When the session was last seen. Refreshed by [`AuthStateStore::touch_session`].
     pub last_active_at: Timestamp,
     /// The `User-Agent` the opening ceremony carried, for the devices listing.
@@ -106,6 +119,18 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
         &'a self,
         session: &'a SessionId,
         last_active_at: Timestamp,
+    ) -> StoreFuture<'a, Option<SessionRecord>>;
+
+    /// Record that the user proved a credential on `session` at `at`.
+    ///
+    /// Moves [`SessionRecord::authenticated_at`] and nothing else, returning the updated record
+    /// or `None` if there was no live session. Distinct from [`Self::touch_session`], which
+    /// records *activity*: activity is a request arriving, and this is a password crossing the
+    /// wire again. A gate that could not tell them apart would be satisfied by traffic.
+    fn mark_authenticated<'a>(
+        &'a self,
+        session: &'a SessionId,
+        at: Timestamp,
     ) -> StoreFuture<'a, Option<SessionRecord>>;
 
     /// Close one session, returning the record that was removed.

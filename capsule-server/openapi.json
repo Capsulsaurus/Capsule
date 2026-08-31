@@ -951,6 +951,517 @@
         ]
       }
     },
+    "/v1/auth/reauthenticate": {
+      "post": {
+        "summary": "Prove a credential again on the current session, without opening a new one.",
+        "description": "**The only way to satisfy the freshness gate `S-C7` enforces**, and it exists because\nwithout it the gate is unusable: `authenticated_at` is deliberately *not* reset by a refresh,\nso a user signed in an hour ago would otherwise have to sign out entirely to add a device —\nand the session they abandoned would linger in their own devices listing.\n\nIt does not mint tokens and does not rotate the session. The caller keeps the credential\nthey already hold; what changes is one timestamp on the record behind it.\n\n# Errors\n\nThe same refusals as a sign-in, for the same reasons: a wrong password is\n`401 error.auth.invalid_credentials`, a locked account is `403`, and the account directory\nfailing is `500`. A caller that guessed a password here learns exactly what it would learn\nat `/v1/auth/login`, and no more.",
+        "operationId": "reauthenticate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReauthenticateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReauthenticateResponse"
+                }
+              }
+            }
+          },
+          "423": {
+            "description": "Account locked",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/enroll": {
+      "post": {
+        "summary": "Issue a one-time enrollment code for the caller's account.",
+        "description": "Gated on a recent credential presentation, not merely on a valid session — a stolen token\nmust not be able to enroll a rogue device. See [`crate::enrollment`] for exactly how much\nthat gate can mean.",
+        "operationId": "issue_enrollment_code",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentCodeResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/enroll/redeem": {
+      "post": {
+        "summary": "Redeem a code for a relay channel.",
+        "description": "**Unauthenticated, necessarily.** Device B has no account, no session and no key material —\nit is a phone that has just scanned a QR code. The code is the only thing it holds, so the\ncode is the credential.",
+        "operationId": "redeem_enrollment_code",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RedeemRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Code refused",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/v1/auth/devices/enroll/channel/{channel_id}": {
+      "get": {
+        "summary": "Take everything pending in one of a channel's mailboxes.",
+        "description": "Destructive: a relayed payload is delivered once. Draining one direction leaves the other\nuntouched, so the two devices do not consume each other's mail.",
+        "operationId": "drain_enrollment_channel",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "The handle a redeemed code returned.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "`to_initiator` or `to_enrollee`.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DrainResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      },
+      "post": {
+        "summary": "Append a payload to one of a channel's two mailboxes.",
+        "description": "Unauthenticated and gated by the handle alone. The relay is a dumb pipe by design — see\n[`crate::enrollment`] — and the safety-code check is what defends the ceremony.",
+        "operationId": "relay_enrollment_payload",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "The handle a redeemed code returned.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelayRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Close a channel and drop both mailboxes with it.",
+        "description": "**The initiator's, and authenticated.** A close is the one relay operation that is not\nidempotent from the other device's point of view — it ends the ceremony — so leaving it on\nthe handle alone would make an abandoned QR code a denial of service. The account is checked\nagainst the channel's recorded initiator, and a channel belonging to another account answers\nexactly as an unknown one does.",
+        "operationId": "close_enrollment_channel",
+        "parameters": [
+          {
+            "name": "channel_id",
+            "in": "path",
+            "description": "The handle a redeemed code returned.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "404": {
+            "description": "Channel not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/albums": {
       "post": {
         "summary": "Bind an album id to the authenticated caller.",
@@ -2762,7 +3273,11 @@
           },
           "created_at": {
             "type": "string",
-            "description": "When the session was opened, RFC 3339."
+            "description": "When this session *record* was minted, RFC 3339.\n\nA refresh rotates the session, so after one this is the rotation time and not the\nsign-in. `authenticated_at` is the field that answers \"when did you last sign in\"."
+          },
+          "authenticated_at": {
+            "type": "string",
+            "description": "When the user last proved a credential on this session's lineage, RFC 3339.\n\nCarried forward across refreshes, so it is the one timestamp here that means what a\nuser reading a devices list expects \"signed in\" to mean. It is also what the\ncross-device add's freshness gate reads (`S-C7`), so a client can show why an add is\nabout to ask for a password again."
           },
           "last_active_at": {
             "type": "string",
@@ -2805,6 +3320,7 @@
         "required": [
           "session_id",
           "created_at",
+          "authenticated_at",
           "last_active_at",
           "current"
         ],
@@ -2889,6 +3405,120 @@
           "replaced"
         ],
         "description": "What storing an escrow did."
+      },
+      "ReauthenticateRequest": {
+        "properties": {
+          "password": {
+            "type": "string",
+            "description": "The account's password."
+          }
+        },
+        "type": "object",
+        "required": [
+          "password"
+        ],
+        "description": "A password, re-presented on a session that already exists."
+      },
+      "ReauthenticateResponse": {
+        "properties": {
+          "authenticated_at": {
+            "type": "string",
+            "description": "The moment the credential was accepted, RFC 3339.\n\nReturned so a client can decide locally whether a gated operation will be admitted,\nrather than discovering it from a `403` in the middle of a ceremony."
+          }
+        },
+        "type": "object",
+        "required": [
+          "authenticated_at"
+        ],
+        "description": "When the re-authenticated session's freshness window last opened."
+      },
+      "EnrollmentCodeResponse": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "The full-entropy code the QR payload carries."
+          },
+          "text_fallback": {
+            "type": "string",
+            "description": "The shorter transcribable numeric fallback.\n\nDeliberately weaker than the QR payload and safe because it never stands alone:\nredemption is single-use and expires, and channel integrity rests on the safety-code\ncheck rather than on this value."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When both spellings stop being redeemable, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "text_fallback",
+          "expires_at"
+        ],
+        "description": "A freshly issued enrollment code."
+      },
+      "RedeemRequest": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Either spelling of the issued code."
+          }
+        },
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "description": "The code a device presents."
+      },
+      "ChannelResponse": {
+        "properties": {
+          "channel_id": {
+            "type": "string",
+            "description": "The handle both devices relay through. Possession of it *is* the capability."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When the channel closes on its own, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "channel_id",
+          "expires_at"
+        ],
+        "description": "The channel a redeemed code opens."
+      },
+      "RelayRequest": {
+        "properties": {
+          "direction": {
+            "type": "string",
+            "description": "Which mailbox to append to: `to_initiator` or `to_enrollee`."
+          },
+          "payload": {
+            "type": "string",
+            "description": "The opaque payload. The server never inspects it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "direction",
+          "payload"
+        ],
+        "description": "One relayed payload."
+      },
+      "DrainResponse": {
+        "properties": {
+          "payloads": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "The payloads in arrival order, removed by this call. Possibly empty."
+          }
+        },
+        "type": "object",
+        "required": [
+          "payloads"
+        ],
+        "description": "Everything pending in one mailbox."
       },
       "ProvisionAlbumRequest": {
         "properties": {
