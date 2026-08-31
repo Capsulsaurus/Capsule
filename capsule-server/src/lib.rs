@@ -93,6 +93,8 @@ pub fn router() -> ServerRouter {
             routes::auth::login_user,
             routes::auth::refresh_token,
             routes::auth::logout,
+            routes::auth::revoke_all_challenge,
+            routes::auth::revoke_all,
             routes::directory::publish_device_directory,
             routes::directory::fetch_device_directory,
             routes::albums::provision_album,

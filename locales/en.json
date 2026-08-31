@@ -81,11 +81,11 @@
     },
     "error.auth.revoke_proof_required": {
         "message": "Confirm with your account key to log out of all devices.",
-        "context": "HTTP 401 on POST /logout/all (slice S-C23): no readable master-key proof was presented. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
+        "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): no readable master-key proof was presented — the field was absent, not base64, or not a decodable hybrid signature. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
     },
     "error.auth.revoke_proof_invalid": {
         "message": "That didn't confirm as you. Nothing was logged out.",
-        "context": "HTTP 401 on POST /logout/all (slice S-C23): a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory to anchor the identity key; a key that does not sign that directory; or a bad signature. Every reason is surfaced identically so the endpoint is not an oracle, and no session is revoked."
+        "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory, and so no identity anchor (S-C42) to check against; or a signature that does not verify under that anchor. Every reason is surfaced identically so the endpoint is not an oracle over which accounts have published a directory, and no session is revoked."
     },
     "error.protocol.version_unsupported": {
         "message": "This version of Capsule is no longer supported. Please update the app.",

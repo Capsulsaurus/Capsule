@@ -25,6 +25,7 @@ pub mod primitives;
 pub mod provenance;
 pub mod pwkdf;
 pub mod receipts;
+pub mod revoke;
 pub mod rng;
 pub mod verify_asset;
 

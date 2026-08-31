@@ -115,6 +115,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/.well-known/capsule/server-info"),
         ("GET", "/.well-known/capsule/deprecation"),
         ("GET", "/.well-known/capsule/revoked-jti"),
+        ("POST", "/v1/auth/logout/all/challenge"),
+        ("POST", "/v1/auth/logout/all"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1378,6 +1380,122 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.revocations.set_unavailable(false);
+
+    // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
+    // Last, because a successful revoke closes every session this walk has been using. The
+    // directory block above anchored the account to `account_ik`, which is the key the proof
+    // has to be made under — that dependency is the ceremony, not test order.
+    client
+        .post("/v1/auth/logout/all/challenge")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/auth/logout/all/challenge")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    fixture.challenges.set_unavailable(true);
+    client
+        .post("/v1/auth/logout/all/challenge")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.challenges.set_unavailable(false);
+
+    let issued: serde_json::Value = client
+        .post("/v1/auth/logout/all/challenge")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let challenge = issued["challenge"]
+        .as_str()
+        .expect("a challenge")
+        .to_owned();
+
+    // The revoke's body rejections: 415 for the wrong media type, 400 for JSON that does not
+    // parse, 422 for JSON that parses and is not this request.
+    client
+        .post("/v1/auth/logout/all")
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/logout/all")
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/logout/all")
+        .json(&serde_json::json!({ "challenge": 7 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 401: a proof that does not verify. Burns a challenge, so this one is asked for on its own.
+    let doomed: serde_json::Value = client
+        .post("/v1/auth/logout/all/challenge")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/logout/all")
+        .json(&serde_json::json!({
+            "challenge": doomed["challenge"],
+            "proof": support::revoke_proof(&support::identity_key(), "not this challenge"),
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // 500: the challenge store cannot answer. The proof decodes first, so this reaches the
+    // store rather than stopping at the body.
+    fixture.challenges.set_unavailable(true);
+    client
+        .post("/v1/auth/logout/all")
+        .json(&serde_json::json!({
+            "challenge": challenge,
+            "proof": support::revoke_proof(&account_ik, &challenge),
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.challenges.set_unavailable(false);
+
+    // 200: the whole ceremony, against the directory the block above anchored.
+    let final_challenge: serde_json::Value = client
+        .post("/v1/auth/logout/all/challenge")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let final_challenge = final_challenge["challenge"].as_str().expect("a challenge");
+    client
+        .post("/v1/auth/logout/all")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "challenge": final_challenge,
+            "proof": support::revoke_proof(&account_ik, final_challenge),
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

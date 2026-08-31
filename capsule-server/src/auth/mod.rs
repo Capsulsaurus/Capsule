@@ -51,12 +51,13 @@ use crate::store::{AuthStateStore, Clock};
 pub struct AuthContext {
     sessions: Arc<dyn AuthStateStore>,
     accounts: Arc<dyn AccountDirectory>,
+    challenges: Arc<dyn crate::store::ChallengeStore>,
     tokens: Arc<SessionTokens>,
     clock: Arc<dyn Clock>,
 }
 
 impl AuthContext {
-    /// Assembles the module from its four collaborators.
+    /// Assembles the module from its five collaborators.
     ///
     /// `clock` is passed separately rather than read back out of `tokens` because the session
     /// records and the token deadlines must be stamped from the *same* instant source; handing
@@ -65,12 +66,14 @@ impl AuthContext {
     pub fn new(
         sessions: Arc<dyn AuthStateStore>,
         accounts: Arc<dyn AccountDirectory>,
+        challenges: Arc<dyn crate::store::ChallengeStore>,
         tokens: Arc<SessionTokens>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             sessions,
             accounts,
+            challenges,
             tokens,
             clock,
         }
@@ -84,6 +87,11 @@ impl AuthContext {
     /// The account directory.
     pub fn accounts(&self) -> &dyn AccountDirectory {
         self.accounts.as_ref()
+    }
+
+    /// The single-use revoke-all challenges (`S-C23`, `S-C29`).
+    pub fn challenges(&self) -> &dyn crate::store::ChallengeStore {
+        self.challenges.as_ref()
     }
 
     /// The token signer.

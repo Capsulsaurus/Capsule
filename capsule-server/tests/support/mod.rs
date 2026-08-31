@@ -60,11 +60,13 @@ use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
-use capsule_server::store::memory::{InMemoryAuthState, InMemoryUploadSessions, ManualClock};
+use capsule_server::store::memory::{
+    InMemoryAuthState, InMemoryChallenges, InMemoryUploadSessions, ManualClock,
+};
 use capsule_server::store::{
-    AcceptedChunk, AlbumId, AssetId, AuthStateStore, Clock, FinalizeClaim, OwnerId, SessionId,
-    SessionRecord, StoreError, StoreFuture, UploadId, UploadSessionRecord, UploadSessionStatus,
-    UploadSessionStore, UserId,
+    AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, Clock,
+    FinalizeClaim, OwnerId, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
+    UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
 };
 use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
@@ -145,6 +147,18 @@ pub(crate) fn signed_directory_by(ik: &HybridSigningKey, version: u64) -> Vec<u8
     }
     .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// The base64 revoke-all proof `ik` makes over `challenge` (`S-C23`).
+///
+/// Built through `capsule_core::crypto::revoke`, the same path a client takes: a test that
+/// assembled the signed bytes itself would pass while the two ends disagreed.
+pub(crate) fn revoke_proof(ik: &HybridSigningKey, challenge: &str) -> String {
+    let signature = ik.sign(&capsule_core::crypto::revoke::revoke_all_signing_bytes(
+        challenge,
+    ));
+    base64::engine::general_purpose::STANDARD
+        .encode(capsule_core::cbor::to_canonical_vec(&signature).expect("a signature encodes"))
 }
 
 /// The `X-Capsule-Identity-Key` header value for `ik`.
@@ -301,6 +315,71 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// A revoke-all challenge store that can be made to fail on demand.
+///
+/// Delegating to the real in-memory one, so a case that walks the ceremony is walking the
+/// adapter the conformance suite covers. The switch exists because the `500` on both revoke-all
+/// operations is otherwise unreachable, and a declared status nothing can reach is the `S-C28`
+/// defect this rebuild exists to make impossible.
+#[derive(Debug)]
+pub(crate) struct SwitchableChallenges {
+    inner: InMemoryChallenges,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableChallenges {
+    /// A working store on `clock`, with the ceremony's own TTL.
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryChallenges::with_default_ttl(clock),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "revoke-all-challenge",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ChallengeStore for SwitchableChallenges {
+    fn ttl(&self) -> SignedDuration {
+        self.inner.ttl()
+    }
+
+    fn issue<'a>(
+        &'a self,
+        token: &'a ChallengeToken,
+        record: RevokeAllChallenge,
+    ) -> StoreFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.issue(token, record)
+    }
+
+    fn consume<'a>(
+        &'a self,
+        token: &'a ChallengeToken,
+    ) -> StoreFuture<'a, Option<RevokeAllChallenge>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.consume(token)
     }
 }
 
@@ -1228,6 +1307,8 @@ pub(crate) struct Fixture {
     pub(crate) attestation_key: Arc<LocalAttestationKey>,
     /// The federation capability revocations this server publishes.
     pub(crate) revocations: Arc<SwitchableRevocations>,
+    /// The single-use revoke-all challenges.
+    pub(crate) challenges: Arc<SwitchableChallenges>,
 }
 
 impl Fixture {
@@ -1272,6 +1353,7 @@ impl Fixture {
             capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
+        let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1279,6 +1361,7 @@ impl Fixture {
             auth: AuthContext::new(
                 sessions.clone(),
                 accounts.clone(),
+                challenges.clone(),
                 tokens.clone(),
                 clock.clone(),
             ),
@@ -1322,6 +1405,7 @@ impl Fixture {
             receipts,
             attestation_key,
             revocations,
+            challenges,
         }
     }
 
@@ -1346,6 +1430,7 @@ impl Fixture {
             auth: AuthContext::new(
                 Arc::new(SwitchableSessions::new(clock.clone())),
                 accounts,
+                Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
                 tokens.clone(),
                 clock.clone(),
             ),

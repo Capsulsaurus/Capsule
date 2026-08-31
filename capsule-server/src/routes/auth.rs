@@ -44,6 +44,8 @@
 
 use std::fmt;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_i18n::error_codes;
 use kynos::prelude::*;
 use kynos::response::status::NoContent;
@@ -55,7 +57,9 @@ use crate::auth::{
     AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, TokenKind,
     VerifiedToken,
 };
-use crate::store::{SessionId, SessionRecord, StoreError};
+use crate::store::{
+    ChallengeToken, RevokeAllChallenge, SessionId, SessionRecord, StoreError, UserId,
+};
 
 /// The operations that establish and end a session.
 #[derive(Tag)]
@@ -530,6 +534,249 @@ pub async fn logout(
     }
 
     Ok(NoContent)
+}
+
+/// The challenge a global sign-out is signed over.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RevokeChallengeResponse {
+    /// The single-use token. Burned on the first attempt, successful or not.
+    pub challenge: String,
+    /// When it stops being redeemable, RFC 3339.
+    pub expires_at: String,
+}
+
+/// A master-key proof over an issued challenge.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct RevokeAllRequest {
+    /// The challenge that was issued.
+    pub challenge: String,
+    /// The account identity key's hybrid signature over
+    /// [`revoke_all_signing_bytes`](capsule_core::crypto::revoke::revoke_all_signing_bytes),
+    /// canonical CBOR, base64.
+    pub proof: String,
+}
+
+/// What a global sign-out closed.
+#[derive(Schema, Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RevokeAllResponse {
+    /// How many sessions were closed — the caller's own among them.
+    ///
+    /// Counted from the records the store actually removed, never from a separately maintained
+    /// index. The Salvo implementation read a per-user set that `revoke_session` did not clean
+    /// up, so this number inflated by one for every prior refresh; `S-C29` made the record and
+    /// its listing entry one fact, so there is nothing left to disagree.
+    pub revoked: u64,
+}
+
+/// Why a global sign-out did not happen.
+///
+/// **Nothing partial happens on any of these.** A refused revoke closes no session, so a client
+/// has nothing to clear locally and can retry the whole ceremony.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum RevokeAllRejection {
+    /// No readable proof was presented.
+    ///
+    /// Separate from [`RevokeAllRejection::ProofInvalid`] because the client's remedy differs:
+    /// this one is a malformed request, and telling a caller "your base64 is not base64" is not
+    /// an oracle about anything.
+    #[error("a readable master-key proof is required")]
+    #[problem(status = 401, title = "Master-key proof required")]
+    ProofRequired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A proof was presented and did not establish the account.
+    ///
+    /// One answer for every reason: an unknown, spent or expired challenge; an account with no
+    /// published directory to anchor an identity key; or a signature that does not verify. A
+    /// caller learns only that it failed, which is what stops the endpoint being an oracle over
+    /// which accounts have published a directory.
+    #[error("the master-key proof did not verify")]
+    #[problem(status = 401, title = "Master-key proof invalid")]
+    ProofInvalid {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A store could not answer.
+    #[error("the global sign-out could not be completed")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+/// Issue a single-use challenge for a global sign-out.
+///
+/// **Authenticated by a session token, unlike the revoke itself.** That is not a contradiction
+/// of the ceremony's asymmetry: a challenge is worthless without the identity key, so handing
+/// one to a stolen token costs nothing — while issuing them unauthenticated would make this an
+/// oracle for whether an account exists. The account comes from the credential and never from a
+/// request field, so a caller cannot ask for somebody else's challenge.
+#[kynos::post(
+    "/v1/auth/logout/all/challenge",
+    operation_id = "revoke_all_challenge",
+    tag = AuthTag
+)]
+pub async fn revoke_all_challenge(
+    Inject(auth): Inject<AuthContext>,
+    Auth(credential): Auth<AccessToken>,
+) -> Result<Json<RevokeChallengeResponse>, RevokeAllRejection> {
+    let user = UserId::new(credential.user.as_str());
+    // Full-entropy and unguessable: a challenge that could be predicted would let an attacker
+    // who has separately obtained a signature pre-compute a proof.
+    let token = ChallengeToken::new(Uuid::new_v4().to_string());
+    let issued_at = auth.clock().now();
+
+    auth.challenges()
+        .issue(
+            &token,
+            RevokeAllChallenge {
+                user_id: user.clone(),
+                issued_at,
+            },
+        )
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "issue a revoke-all challenge");
+            RevokeAllRejection::Unavailable {
+                code: error_codes::AUTH_UNAVAILABLE,
+            }
+        })?;
+
+    tracing::info!(user_id = %user, "issued a revoke-all challenge");
+    Ok(Json(RevokeChallengeResponse {
+        challenge: token.as_str().to_owned(),
+        expires_at: crate::store::deadline(issued_at, auth.challenges().ttl()).to_string(),
+    }))
+}
+
+/// Close every session for the account the proof establishes.
+///
+/// **No `Auth`, deliberately.** design/authentication.md gates this on proof of master-key
+/// possession *instead of* a session token, and the reason is the damage scenario: an attacker
+/// holding a stolen token could otherwise invoke "log out of all devices" and lock the
+/// legitimate user out of every device they own. Requiring the identity key means a stolen
+/// token can revoke only itself. The account is established by the burned challenge, so there
+/// is no account field for a caller to aim at either.
+///
+/// The caller's own session goes with the rest. That is the ceremony, not an oversight.
+#[kynos::post("/v1/auth/logout/all", operation_id = "revoke_all", tag = AuthTag)]
+pub async fn revoke_all(
+    Inject(auth): Inject<AuthContext>,
+    Inject(directories): Inject<crate::directory::DeviceDirectoryContext>,
+    Json(request): Json<RevokeAllRequest>,
+) -> Result<Json<RevokeAllResponse>, RevokeAllRejection> {
+    let proof_bytes = BASE64.decode(request.proof.trim()).map_err(|error| {
+        tracing::info!(%error, "a revoke-all proof was not base64");
+        RevokeAllRejection::ProofRequired {
+            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED,
+        }
+    })?;
+    let Ok(signature) =
+        capsule_core::cbor::from_slice::<capsule_core::crypto::keys::HybridSignature>(&proof_bytes)
+    else {
+        tracing::info!("a revoke-all proof was not a decodable hybrid signature");
+        return Err(RevokeAllRejection::ProofRequired {
+            code: error_codes::AUTH_REVOKE_PROOF_REQUIRED,
+        });
+    };
+
+    // Burned first, and burned whatever happens next. A challenge that survived a failed
+    // attempt would let an attacker grind signatures against a live one; this costs a
+    // legitimate user one extra round trip and is the whole reason `consume` has no read-only
+    // sibling.
+    let token = ChallengeToken::new(request.challenge.clone());
+    let claimed = auth.challenges().consume(&token).await.map_err(|error| {
+        store_unavailable(&error, "consume a revoke-all challenge");
+        RevokeAllRejection::Unavailable {
+            code: error_codes::AUTH_UNAVAILABLE,
+        }
+    })?;
+
+    let Some(claimed) = claimed else {
+        tracing::info!("a revoke-all presented an unknown, spent or expired challenge");
+        return Err(RevokeAllRejection::invalid());
+    };
+
+    // The anchor, not a key the request supplied (`S-C42`). A proof checked against a
+    // caller-supplied key would prove only that the caller can sign something, which is not a
+    // fact about the account.
+    let published = directories
+        .store()
+        .fetch(&claimed.user_id)
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "read a device directory for a revoke-all");
+            RevokeAllRejection::Unavailable {
+                code: error_codes::AUTH_UNAVAILABLE,
+            }
+        })?;
+
+    let Some(published) = published else {
+        // An account with no published directory has no anchor and therefore cannot use this
+        // ceremony. Answered identically to a bad signature so the endpoint does not report
+        // which accounts have published.
+        tracing::info!(user_id = %claimed.user_id, "a revoke-all found no anchored directory");
+        return Err(RevokeAllRejection::invalid());
+    };
+
+    let Ok(identity_key) =
+        capsule_core::crypto::keys::HybridVerifyingKey::from_bytes(&published.identity_key)
+    else {
+        tracing::error!(
+            user_id = %claimed.user_id,
+            "a stored identity anchor could not be read; the account cannot revoke globally"
+        );
+        return Err(RevokeAllRejection::invalid());
+    };
+
+    if !capsule_core::crypto::revoke::verify_revoke_all_proof(
+        &identity_key,
+        &request.challenge,
+        &signature,
+    ) {
+        tracing::warn!(
+            user_id = %claimed.user_id,
+            "a revoke-all proof did not verify under the account's identity anchor"
+        );
+        return Err(RevokeAllRejection::invalid());
+    }
+
+    let closed = auth
+        .sessions()
+        .close_all_for_user(&claimed.user_id)
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "close every session for a revoke-all");
+            RevokeAllRejection::Unavailable {
+                code: error_codes::AUTH_UNAVAILABLE,
+            }
+        })?;
+
+    tracing::info!(
+        user_id = %claimed.user_id,
+        revoked = closed.len(),
+        "a global sign-out closed every session for an account"
+    );
+    Ok(Json(RevokeAllResponse {
+        revoked: closed.len() as u64,
+    }))
+}
+
+impl RevokeAllRejection {
+    /// The one answer every failed proof gets.
+    fn invalid() -> Self {
+        Self::ProofInvalid {
+            code: error_codes::AUTH_REVOKE_PROOF_INVALID,
+        }
+    }
 }
 
 // ===========================================================================================

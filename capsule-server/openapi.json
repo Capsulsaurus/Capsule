@@ -261,6 +261,155 @@
         ]
       }
     },
+    "/v1/auth/logout/all/challenge": {
+      "post": {
+        "summary": "Issue a single-use challenge for a global sign-out.",
+        "description": "**Authenticated by a session token, unlike the revoke itself.** That is not a contradiction\nof the ceremony's asymmetry: a challenge is worthless without the identity key, so handing\none to a stolen token costs nothing — while issuing them unauthenticated would make this an\noracle for whether an account exists. The account comes from the credential and never from a\nrequest field, so a caller cannot ask for somebody else's challenge.",
+        "operationId": "revoke_all_challenge",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeChallengeResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/logout/all": {
+      "post": {
+        "summary": "Close every session for the account the proof establishes.",
+        "description": "**No `Auth`, deliberately.** design/authentication.md gates this on proof of master-key\npossession *instead of* a session token, and the reason is the damage scenario: an attacker\nholding a stolen token could otherwise invoke \"log out of all devices\" and lock the\nlegitimate user out of every device they own. Requiring the identity key means a stolen\ntoken can revoke only itself. The account is established by the burned challenge, so there\nis no account field for a caller to aim at either.\n\nThe caller's own session goes with the rest. That is the ceremony, not an oversight.",
+        "operationId": "revoke_all",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeAllRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeAllResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Master-key proof required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
     "/v1/auth/devices/directory": {
       "post": {
         "summary": "Publish the caller's signed device directory.",
@@ -2227,6 +2376,57 @@
           "refresh_token"
         ],
         "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      },
+      "RevokeChallengeResponse": {
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "The single-use token. Burned on the first attempt, successful or not."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "When it stops being redeemable, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "challenge",
+          "expires_at"
+        ],
+        "description": "The challenge a global sign-out is signed over."
+      },
+      "RevokeAllRequest": {
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "The challenge that was issued."
+          },
+          "proof": {
+            "type": "string",
+            "description": "The account identity key's hybrid signature over\n[`revoke_all_signing_bytes`](capsule_core::crypto::revoke::revoke_all_signing_bytes),\ncanonical CBOR, base64."
+          }
+        },
+        "type": "object",
+        "required": [
+          "challenge",
+          "proof"
+        ],
+        "description": "A master-key proof over an issued challenge."
+      },
+      "RevokeAllResponse": {
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "How many sessions were closed — the caller's own among them.\n\nCounted from the records the store actually removed, never from a separately maintained\nindex. The Salvo implementation read a per-user set that `revoke_session` did not clean\nup, so this number inflated by one for every prior refresh; `S-C29` made the record and\nits listing entry one fact, so there is nothing left to disagree."
+          }
+        },
+        "type": "object",
+        "required": [
+          "revoked"
+        ],
+        "description": "What a global sign-out closed."
       },
       "PublishDirectoryResponse": {
         "properties": {
