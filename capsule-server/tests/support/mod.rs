@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
 use capsule_server::App;
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
@@ -51,8 +52,8 @@ use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
-    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, LifecycleOp, OpOutcome,
-    PendingAsset, Reservation,
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
+    LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
 use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
@@ -127,7 +128,6 @@ pub(crate) fn op_bundle(
 /// The key is generated per call: the server does not verify the signature (`S-C42`), so a
 /// stable key here would imply a check that is not there.
 pub(crate) fn signed_directory(version: u64) -> Vec<u8> {
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
     use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
 
     let directory: DeviceDirectory = DirectoryCore {
@@ -1098,6 +1098,17 @@ impl AssetIndex for SwitchableIndex {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.rows(after, limit)
+    }
+
+    fn set_hold<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        hold: Option<ServingHold>,
+    ) -> IndexFuture<'a, HoldOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.set_hold(asset, hold)
     }
 
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {

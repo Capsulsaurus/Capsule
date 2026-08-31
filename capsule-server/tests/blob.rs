@@ -11,7 +11,7 @@ mod support;
 
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::index::{AssetIndex, BlobRecord, HoldOutcome, PendingAsset, ServingHold};
 use capsule_server::store::{AssetId, BlobRole};
 use jiff::Timestamp;
 use kynos::http::StatusCode;
@@ -506,6 +506,113 @@ async fn a_blob_awaiting_collection_is_gone_while_its_bytes_are_still_there() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+}
+
+/// A taken-down asset stops serving, keeps its bytes, and serves again when the hold is lifted.
+///
+/// `S-C17`. The three assertions are the whole of design/moderation.md's takedown contract:
+/// `410` rather than `404` (a takedown signals removal of content the fetcher already knows
+/// about, unlike capability-URL serving, which must not confirm a URL ever existed); the blob
+/// is preserved, because the user owns the data and a takedown is a serving constraint rather
+/// than a destruction; and it is reversible by default.
+#[tokio::test]
+async fn a_taken_down_asset_stops_serving_but_keeps_its_bytes() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "takedown", &bytes).await;
+    let asset = AssetId::new("takedown");
+
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    assert_eq!(
+        fixture
+            .index
+            .set_hold(&asset, Some(ServingHold::Takedown))
+            .await
+            .expect("the hold is placed"),
+        HoldOutcome::Applied
+    );
+
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::GONE);
+    assert!(
+        fixture.blobs.stat(&address).await.expect("stat").is_some(),
+        "a takedown is a serving constraint, not a destruction: the user's bytes stay",
+    );
+
+    fixture
+        .index
+        .set_hold(&asset, None)
+        .await
+        .expect("the hold is lifted");
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+}
+
+/// A legal hold refuses the same way, and every blob of the asset goes with it.
+#[tokio::test]
+async fn a_legal_hold_covers_every_blob_of_the_asset() {
+    // The hold is the *asset's*, not a blob's, which is what keeps content addressing from
+    // making a takedown either leaky or over-broad: two assets legitimately share a thumbnail,
+    // so holding an address would take down somebody else's photo.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let asset = publish(&fixture, "legal-hold").await;
+    let original = ciphertext();
+    let original_address = store(&fixture, &original).await;
+    reference(
+        &fixture,
+        &asset,
+        BlobRole::Original,
+        &original_address,
+        original.len() as u64,
+    )
+    .await;
+    // The same bytes `publish` stored, so the same content address — which is the point: a hold
+    // reaches every blob of the asset, not only the one somebody thought to name.
+    let metadata_address = store(&fixture, b"legal-hold-metadata").await;
+
+    fixture
+        .index
+        .set_hold(&asset, Some(ServingHold::LegalHold))
+        .await
+        .expect("the hold is placed");
+
+    for address in [&original_address, &metadata_address] {
+        fixture
+            .client
+            .get(&format!("/v1/blob/{address}"))
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::GONE);
+    }
+    assert!(
+        fixture
+            .blobs
+            .stat(&original_address)
+            .await
+            .expect("stat")
+            .is_some(),
+        "a legal hold preserves the bytes; it is a constraint on serving them",
+    );
 }
 
 /// Every fetch needs a credential; ciphertext is not public just because it is opaque.

@@ -10,7 +10,7 @@ mod support;
 
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::gc::CollectionStore;
-use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
+use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset, ServingHold};
 use capsule_server::store::{AssetId, BlobRole, OwnerId};
 use jiff::Timestamp;
 use kynos::http::StatusCode;
@@ -334,6 +334,62 @@ async fn a_blob_awaiting_collection_is_stored_but_not_retrievable() {
          copy would be releasing it into a window that closes"
     );
     assert_eq!(body["verdicts"][0]["durable"], false);
+}
+
+/// A held asset is stored and **not** retrievable, which is the honest pair.
+///
+/// `S-C17`. This is the decision the whole surface exists to inform: a client asks before it
+/// releases its only local copy. A taken-down asset's bytes are present and staying present —
+/// so `stored` is true and lying about it would be caught — but the server will not hand them
+/// over, so `retrievable` must be false. Reporting durable here would tell a client it may drop
+/// the last copy of a photo it can never fetch back.
+#[tokio::test]
+async fn a_held_asset_is_stored_but_not_retrievable() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "held").await;
+    fixture
+        .index
+        .set_hold(&asset, Some(ServingHold::Takedown))
+        .await
+        .expect("the hold is placed");
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])] }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"]
+        .as_array()
+        .expect("per-blob detail");
+    for blob in blobs {
+        assert_eq!(
+            blob["stored"], true,
+            "a takedown preserves the bytes; the server still holds them"
+        );
+        assert_eq!(
+            blob["retrievable"], false,
+            "and will not serve them, so a client must not be told it can fetch them back"
+        );
+    }
+    assert_eq!(body["verdicts"][0]["durable"], false);
+
+    // Reversible by default: lifting restores the promise as well as the serving.
+    fixture
+        .index
+        .set_hold(&asset, None)
+        .await
+        .expect("the hold is lifted");
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])] }),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(body["verdicts"][0]["durable"], true);
 }
 
 /// Declaring nothing must not be a vacuous yes.

@@ -354,6 +354,14 @@ pub async fn purge_expired(
             report.retained.push(row.asset_id);
             continue;
         }
+        // A moderation hold does **not** stop the purge, and that is a decision rather than an
+        // omission — see `S-C47`. The retention floor is *signed by the user's own delete
+        // manifest*, so honoring it is honoring a deletion the user asked for; a server that
+        // kept the bytes anyway would be retaining data against an explicit request, which is
+        // the promise this whole path exists to keep. The competing reading — that a legal hold
+        // is a preservation obligation and must outlast a delete — is a legal question about
+        // what a hold obliges an operator to do, not an engineering one, and guessing it in
+        // either direction here would be worse than recording that it is open.
         tracing::info!(
             asset = %row.asset_id,
             %retention_until,

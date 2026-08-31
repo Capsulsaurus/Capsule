@@ -31,8 +31,8 @@ use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, LifecycleOp, OpAction, OpOutcome,
-    PendingAsset, Reservation,
+    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, HoldOutcome, LifecycleOp,
+    OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
 use crate::blob::ContentAddress;
 use crate::blob::address::CONTENT_ADDRESS_LEN;
@@ -1208,6 +1208,101 @@ pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
 }
 
 /// Run every case against `index`, in order.
+/// A serving hold is placed, reported on every reference, and lifted.
+///
+/// `S-C17`. Three separate claims, and the third is the one a takedown's reversibility rests
+/// on: a lifted hold leaves the row exactly as it was, because the hold never touched the
+/// state, the blobs or the feed position in the first place.
+pub async fn a_serving_hold_is_placed_reported_and_lifted(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "takedown", 1).await;
+    let metadata = address("takedownm1");
+    record(index, &asset, blob(BlobRole::Original, "takedowno1")).await;
+
+    let before = ok(index.read(&asset).await, "read the row").expect("the asset exists");
+    assert_eq!(before.hold, None, "a published asset is under no hold");
+
+    assert_eq!(
+        ok(
+            index.set_hold(&asset, Some(ServingHold::Takedown)).await,
+            "place a takedown",
+        ),
+        HoldOutcome::Applied
+    );
+    assert_eq!(
+        ok(
+            index.set_hold(&asset, Some(ServingHold::Takedown)).await,
+            "re-place the same takedown",
+        ),
+        HoldOutcome::Unchanged,
+        "re-applying a takedown is not a second takedown, and a moderation log must not say it was",
+    );
+
+    // Every blob of the asset carries the hold, because the hold is the asset's.
+    for held in [&metadata, &address("takedowno1")] {
+        let reference = ok(index.find_reference(held).await, "look up a held blob")
+            .expect("a hold does not remove the reference");
+        assert_eq!(reference.hold, Some(ServingHold::Takedown));
+    }
+
+    let during = ok(index.read(&asset).await, "read the held row").expect("the asset exists");
+    assert_eq!(
+        during.state, before.state,
+        "a hold is a serving constraint; it must not move the asset's lifecycle state",
+    );
+    assert_eq!(
+        during.blobs, before.blobs,
+        "a takedown is not a destruction: every blob reference survives it",
+    );
+    assert_eq!(
+        during.sync_seq, before.sync_seq,
+        "a hold publishes nothing; it is invisible to the feed",
+    );
+
+    // A legal hold replaces a takedown rather than stacking with it.
+    assert_eq!(
+        ok(
+            index.set_hold(&asset, Some(ServingHold::LegalHold)).await,
+            "escalate to a legal hold",
+        ),
+        HoldOutcome::Applied
+    );
+
+    assert_eq!(
+        ok(index.set_hold(&asset, None).await, "lift the hold"),
+        HoldOutcome::Applied
+    );
+    assert_eq!(
+        ok(index.set_hold(&asset, None).await, "lift it again"),
+        HoldOutcome::Unchanged
+    );
+
+    let after = ok(index.read(&asset).await, "read the freed row").expect("the asset exists");
+    assert_eq!(after.hold, None);
+    assert_eq!(
+        after.blobs, before.blobs,
+        "lifting restores serving and nothing else, because nothing else changed",
+    );
+    let reference = ok(
+        index.find_reference(&metadata).await,
+        "look up a freed blob",
+    )
+    .expect("the reference is still live");
+    assert_eq!(reference.hold, None);
+}
+
+/// A hold on an asset that does not exist is `NotFound`, not a silently created row.
+pub async fn holding_an_unknown_asset_is_not_found(index: &dyn AssetIndex) {
+    assert_eq!(
+        ok(
+            index
+                .set_hold(&AssetId::new("hold-nobody"), Some(ServingHold::Takedown))
+                .await,
+            "hold a stranger",
+        ),
+        HoldOutcome::NotFound
+    );
+}
+
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
     a_disagreeing_reservation_is_refused_without_disclosure(index).await;
@@ -1237,6 +1332,8 @@ pub async fn run_all(index: &dyn AssetIndex) {
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
     a_restore_clears_the_retention_floor(index).await;
+    a_serving_hold_is_placed_reported_and_lifted(index).await;
+    holding_an_unknown_asset_is_not_found(index).await;
 }
 
 #[cfg(test)]

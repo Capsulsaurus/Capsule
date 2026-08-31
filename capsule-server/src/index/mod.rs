@@ -88,6 +88,54 @@ pub enum AssetState {
     Tombstoned,
 }
 
+/// Why the server refuses to serve an asset whose bytes it still holds (`S-C17`).
+///
+/// Orthogonal to [`AssetState`] rather than a fourth variant of it, and deliberately: a hold is
+/// **reversible**, and lifting one has to restore whatever state the asset was already in. A
+/// state machine that swallowed `Visible` on takedown would have to remember what to put back,
+/// which is a second copy of a fact the row already holds.
+///
+/// A hold never deletes bytes. design/moderation.md is explicit that a takedown is a serving
+/// constraint and not a destruction — the user owns the data and can still restore from their
+/// own backup — so this changes what the server hands out and nothing else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ServingHold {
+    /// An admin takedown. Reversible at admin discretion.
+    Takedown,
+    /// A legal hold: unservable while the law requires it.
+    ///
+    /// Distinguished from [`ServingHold::Takedown`] because who may lift it differs — a legal
+    /// hold ends when the obligation does, not when an admin decides. The distinction is
+    /// carried here rather than in an admin surface's policy code so that a store, a log line
+    /// and an audit record all say the same thing about why an asset stopped serving.
+    LegalHold,
+}
+
+impl ServingHold {
+    /// The name this hold travels under, for a log field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Takedown => "takedown",
+            Self::LegalHold => "legal_hold",
+        }
+    }
+}
+
+/// What applying a hold did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldOutcome {
+    /// The row's hold is now what was asked for, and was not before.
+    Applied,
+    /// The row already carried exactly that hold, or already carried none. Nothing was written.
+    ///
+    /// Distinguished from [`HoldOutcome::Applied`] so a moderation action that is a no-op is
+    /// visible as one: re-applying a takedown must not append a second provenance record
+    /// claiming the asset was taken down twice.
+    Unchanged,
+    /// No such asset.
+    NotFound,
+}
+
 /// One blob the asset holds, as the index knows it: a role and an address, never bytes.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BlobRef {
@@ -161,6 +209,12 @@ pub struct AssetRow {
     /// separate album table would be a second home for the same fact, and the two would
     /// eventually disagree about an album whose newest asset was rolled back.
     pub amk_version: u64,
+    /// The serving hold moderation has placed on the asset, if any (`S-C17`).
+    ///
+    /// `None` is the ordinary case. A held row keeps every one of its blobs and its place in
+    /// the feed; what changes is that the serving path and storage verification both refuse to
+    /// hand the bytes over or to promise they can be fetched.
+    pub hold: Option<ServingHold>,
     /// The instant the asset's signed `delete` manifest fixed as its retention floor.
     ///
     /// `None` until a delete carries one. The purge worker reads it here rather than from a
@@ -314,6 +368,12 @@ pub struct BlobReference {
     /// Whether that asset's original has landed, which is what tells a missing original apart
     /// from a dangling reference.
     pub original_held: bool,
+    /// The serving hold on the asset the reference belongs to (`S-C17`), if any.
+    ///
+    /// Carried on the reference rather than looked up separately, so the serving path decides
+    /// a takedown from the *same read* that found the reference — one round trip, and no window
+    /// in which a hold applied between the two reads is missed.
+    pub hold: Option<ServingHold>,
 }
 
 /// A lifecycle write that does not move blob bytes (`S-C16`).
@@ -530,6 +590,21 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// it can both chain onto the same head — which is the double-apply invariant 17 exists to
     /// catch. An adapter owes atomicity across the whole sequence.
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome>;
+
+    /// Place, replace or lift `asset`'s serving hold (`S-C17`).
+    ///
+    /// `None` lifts. A hold is a property of the asset rather than of its blobs, because
+    /// content addressing means two assets can share a thumbnail and taking one down must not
+    /// take the other's bytes with it — the same reason
+    /// [`AssetIndex::find_reference`] prefers a live reference over a tombstoned one.
+    ///
+    /// The bytes are never touched. design/moderation.md: a takedown is a serving constraint,
+    /// not a destruction, and is reversible by default.
+    fn set_hold<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        hold: Option<ServingHold>,
+    ) -> IndexFuture<'a, HoldOutcome>;
 
     /// How many asset rows reference `address`.
     ///

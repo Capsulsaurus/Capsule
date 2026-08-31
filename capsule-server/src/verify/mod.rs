@@ -42,6 +42,12 @@
 //!   cannot turn it into an I/O-amplification attack"*, and the per-user counter that would
 //!   enforce that has no port (`S-C32`). Shipping the re-hash without the limiter would ship
 //!   the amplification, so the two halves land together — see `S-C41`.
+//! - **Moderation holds** landed with `S-C17`: an asset under a
+//!   [`ServingHold`](crate::index::ServingHold) reports every blob `stored` and **not**
+//!   `retrievable`. The bytes are present and staying present; the server simply will not hand
+//!   them over. Reporting `retrievable` would tell a client it may release its only local copy
+//!   of something it can never fetch back, which is the exact decision this surface exists to
+//!   inform.
 //! - **GC state** landed with `S-C11`: a blob the collector has marked is `stored` and **not**
 //!   `retrievable`, which is the combination that matters most here. Its bytes are on disk
 //!   right now and on their way out, so a client that read `stored` alone and released its copy
@@ -259,7 +265,8 @@ async fn verify_one(
             })?
             .is_some();
 
-        // The one place `retrievable` is not `stored`: a marked blob is on disk and on its way
+        // The second place `retrievable` is not `stored`, and the one that matters most for a
+        // client about to release its only local copy: a marked blob is on disk and on its way
         // out (`S-C11`).
         let collectable = context
             .marks()
@@ -276,7 +283,11 @@ async fn verify_one(
             role: Some(held.role),
             stored,
             indexed: true,
-            retrievable: stored && !collectable,
+            // A held asset's bytes are present and will stay present — but the server will not
+            // hand them over, so promising `retrievable` would be telling a client it can drop
+            // its only copy of something it can never fetch back. `stored` stays true, which is
+            // the honest pair: *we have your bytes, and we will not serve them.* (`S-C17`)
+            retrievable: stored && !collectable && row.hold.is_none(),
         });
     }
 

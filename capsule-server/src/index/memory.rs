@@ -17,8 +17,9 @@ use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, IndexFuture,
-    LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, entry_for,
+    AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, HoldOutcome,
+    IndexFuture, LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, ServingHold,
+    entry_for,
 };
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
@@ -162,6 +163,10 @@ impl AssetIndex for InMemoryAssetIndex {
                 sync_seq: None,
                 chain_head: None,
                 amk_version: 0,
+                // A newly reserved asset is under no moderation hold. A hold is placed by an
+                // admin action and never by a write path, which is what keeps `S-C17` from
+                // becoming something an upload can accidentally set.
+                hold: None,
                 retention_until: None,
                 created_at: asset.created_at,
                 updated_at: asset.created_at,
@@ -310,6 +315,7 @@ impl AssetIndex for InMemoryAssetIndex {
                     .map_or(BlobRole::Original, |blob| blob.role),
                 state: row.state,
                 original_held: row.original_held(),
+                hold: row.hold,
             };
             let live = inner
                 .rows
@@ -431,6 +437,33 @@ impl AssetIndex for InMemoryAssetIndex {
                 row: Box::new(row),
                 sync_seq,
             })
+        })
+    }
+
+    fn set_hold<'a>(
+        &'a self,
+        asset: &'a AssetId,
+        hold: Option<ServingHold>,
+    ) -> IndexFuture<'a, HoldOutcome> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(row) = inner.rows.get_mut(asset) else {
+                return Ok(HoldOutcome::NotFound);
+            };
+            if row.hold == hold {
+                return Ok(HoldOutcome::Unchanged);
+            }
+            row.hold = hold;
+            if let Some(hold) = hold {
+                tracing::info!(
+                    %asset,
+                    hold = hold.as_str(),
+                    "an asset was placed under a serving hold; its bytes are untouched"
+                );
+            } else {
+                tracing::info!(%asset, "an asset's serving hold was lifted");
+            }
+            Ok(HoldOutcome::Applied)
         })
     }
 

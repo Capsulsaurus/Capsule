@@ -13,6 +13,13 @@
 //! | [`ServeResolution::NotFound`] | `404` | no live reference names the address, or it is malformed |
 //! | [`ServeResolution::Gone`] | `410` | referenced but not retrievable per policy — **permanent**, so the client degrades to a lower representation |
 //!
+//! Three distinct facts collapse into that one `410` — a deleted asset, a blob awaiting
+//! collection, and a moderation hold — and they collapse deliberately. The client's action is
+//! identical in all three (stop asking, degrade), and a status that told an anonymous fetcher
+//! *which* it was would turn this path into a moderation oracle: whether a given asset was
+//! taken down is exactly what a takedown does not owe a peer. The distinction is in the log
+//! line and, for the owner, in the audit record — not on the wire.
+//!
 //! # The `409 error.blob.pending_upload` arm is absent, and that is a finding
 //!
 //! The Salvo surface rendered a fourth status: an original that is legitimately still uploading
@@ -58,8 +65,10 @@
 //!
 //! # What is missing, and owned elsewhere
 //!
-//! - **Moderation takedown** (`served = false` → `410` before any byte is touched) is `S-C17`;
-//!   there is no `served` flag on an asset row yet.
+//! - **Moderation takedown** landed with `S-C17`: an asset under a
+//!   [`ServingHold`](crate::index::ServingHold) is refused `410` before any byte is touched.
+//!   The bytes stay exactly where they are — a takedown is a serving constraint and not a
+//!   destruction — so this answer can only come from the index, never from the store.
 //! - **GC state** landed with `S-C11`: a blob the collector has marked is refused `410` while
 //!   its bytes are still on disk, because those bytes are on their way out and a client that
 //!   fetched them would be caching something about to vanish. Checked *before* the store is
@@ -176,6 +185,21 @@ pub async fn resolve(
         tracing::debug!("no live reference names the address");
         return Ok(ServeResolution::NotFound);
     };
+
+    // Moderation takedown (`S-C17`). First among the refusals and **before any read**: a held
+    // asset's bytes are on disk and completely intact — the hold is a serving constraint, not a
+    // destruction — so nothing about the store can produce this answer and it has to come from
+    // the index. `410` rather than `404` is the moderation doc's explicit per-surface rule:
+    // capability-URL serving answers `404` because it must not confirm a URL ever existed,
+    // while a takedown signals removal of content the fetcher already knows about.
+    if let Some(hold) = reference.hold {
+        tracing::info!(
+            asset = %reference.asset_id,
+            hold = hold.as_str(),
+            "a blob under a serving hold was refused; its bytes are untouched"
+        );
+        return Ok(ServeResolution::Gone);
+    }
 
     // A deleted asset's blobs are gone, not unknown: the client that already has the asset must
     // learn to stop asking, and `410` is what tells it to.
