@@ -209,7 +209,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
-| S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
+| S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
 | S-C6 | Quota service | server | — | M | RETIRED | ready | |
@@ -247,6 +247,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
+| S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1074,6 +1075,32 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   bullets pass. (The signed `StorageAttestation` extension is owned by `S-C15`.)
 - **Tier:** Unit + Smoke. **Blocks:** S-D4, S-C15.
 - **Landed in retired code; re-scoped onto Kynos.**
+- **Ported 2026-08-30, structural half (`done\*`).** `POST /v1/storage/verify` in
+  `capsule-server/src/routes/storage.rs` over a `capsule-server/src/verify` engine; 12 cases in
+  `capsule-server/tests/storage.rs`. Four of the doc's six unsigned-verdict bullets pass —
+  durable, partial/missing, wrong-hash declaration, and the quarantine half of mid-GC. The
+  verify-before-destroy bullet is the client's (`S-D4`), and the deep-scan bullet is `S-C41`.
+- **The failure directions are not symmetric, and the surface is built around that.** A wrong
+  `durable = false` costs a client some disk; a wrong `durable = true` costs a user their
+  photograph. So a collaborator that cannot answer is a coded `500` and never a verdict —
+  conflating an outage with a real finding would train a user to ignore the state that means
+  their photos are gone.
+- **Two tightenings on the retired surface.** It is **owner-scoped**: the Salvo endpoint
+  answered about any `asset_id` a caller sent, and this one answers only about the caller's own,
+  with somebody else's asset indistinguishable from one that never existed
+  (`another_owners_asset_is_not_verifiable` asserts the two responses are *equal*, not merely
+  both negative). And an **empty declaration is a `400`**: `durable` is a conjunction over the
+  declared hashes, so declaring none makes it vacuously `true` — and the worst possible answer
+  to a client with that bug is "yes, safe to delete".
+- **Why `indexed` is checked before `stored`.** A hash the asset does not hold reports
+  `stored = false` *even when the store holds those bytes*, because the store is never asked
+  about it. Content addressing means one blob serves many assets, so answering would turn a
+  durability query into a cross-account existence oracle. The contract already fixes the shape;
+  this is the reason behind it.
+- **Owed:** the `deep` re-hash and its limiter → `S-C41`; `collectable_since` (a blob inside the
+  GC grace window is referenced and *not* retrievable) → `S-C11`; the signed
+  `StorageAttestation` → `S-C15`, which wraps this engine rather than replacing it — which is
+  why `AssetVerdict` is public.
 
 ### S-C4 — Share-link serving
 
@@ -1915,6 +1942,38 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** `an_originals_absence_is_indistinguishable_from_a_dangling_reference` in
   `capsule-server/tests/blob.rs` is rewritten to assert `409` — it exists so that closing this
   slice **fails a test** rather than quietly moving an unwatched status. **Tier:** Unit.
+
+### S-C41 — the `deep` re-hash, with the limiter that makes it safe
+
+- **Contract:** [Storage Verification](capsule-docs/src/content/docs/design/import/storage-verification.md)
+  — the `deep` option, and its **Deep scan** validation bullet: *"corrupt a stored blob's bytes
+  on disk; assert the structural check still reports `stored = true` but `deep = true` reports a
+  hash mismatch."*
+- **Gap** (found 2026-08-30 porting `S-C3`): the Kynos surface has **no `deep` flag**, and its
+  absence is a scoping decision rather than an oversight. The option's own contract is
+  *"rate-limited per user and coalesced, so a client cannot turn it into an I/O-amplification
+  attack"* — the limiter is not a refinement of the feature, it is half of it. The per-user
+  counter that would enforce it has no port (`S-C32`).
+- **Why the halves were not split.** Shipping the re-hash without the limiter would ship the
+  amplification: one authenticated account could make the server read and hash its entire blob
+  store, repeatedly, for the price of a small JSON body. That is a worse state than not having
+  the feature, so the field is absent from the wire contract rather than present and refused —
+  which also means there is no unreachable status to declare (`S-C28`). The retired surface's
+  `429 error.storage.deep_rate_limited` priced exactly this and is deleted with it.
+- **The `S-C3` port left the shape ready:** `MAX_ASSETS_PER_REQUEST` and `MAX_BLOBS_PER_ASSET`
+  already bound what one request can buy, which is a different property from bounding how many
+  requests an account may make. This slice adds the second.
+- **Deliverable:** `deep: bool` on the request, a re-hash over `BlobStore::read_at` that never
+  holds a whole blob in memory, per-user rate limiting on `S-C32`'s counter port, and coalescing
+  so concurrent deep requests for one blob share a single re-hash.
+- **Watch out:** coalescing is a cache, and a cached "deep verdict" is a durability claim with
+  an age. Whatever window it uses has to appear in the verdict, or a client can be handed a
+  minute-old integrity result as a current one and delete on the strength of it.
+- **Done when:** the doc's deep-scan bullet passes, and a test proves the limiter refuses past
+  the budget without sleeping — the clock is already a seam (`Clock`), so it is provable rather
+  than timed. **Tier:** Unit.
+- **Blocked on `S-C32`**, which owns the counter port. Genuinely blocked, not stale: there is
+  nothing to rate-limit against until it exists.
 
 ## Lane D — SDK / clients
 
