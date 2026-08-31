@@ -60,6 +60,7 @@
 pub mod conformance;
 pub mod memory;
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use crate::blob::ContentAddress;
@@ -143,6 +144,23 @@ pub struct AssetRow {
     /// `None` while the row is [`AssetState::Pending`] — a row nothing can see yet has no place
     /// in the feed, which is what keeps an abandoned half-bundle from consuming a number.
     pub sync_seq: Option<u64>,
+    /// The content hash of the last manifest accepted for this asset — invariant 17's
+    /// *stored chain head*.
+    ///
+    /// `None` until a lifecycle manifest has been accepted. Stored explicitly rather than
+    /// derived from the provenance blob's content address: with `crypto_suite_id = 1` the two
+    /// are digests of the same byte string and therefore equal, but they are **not** the same
+    /// identifier — a content address is whatever digest the suite selects, while
+    /// `prior_provenance_hash` is fixed at SHA-256. `S-C31` records that trap; relying on the
+    /// coincidence here would set it.
+    pub chain_head: Option<Hash32>,
+    /// The album-key epoch the last accepted manifest was written under — invariant 18's
+    /// subject.
+    ///
+    /// Per **row**, with the album's high-water mark taken as the maximum over its rows. A
+    /// separate album table would be a second home for the same fact, and the two would
+    /// eventually disagree about an album whose newest asset was rolled back.
+    pub amk_version: u64,
     /// When the row was reserved.
     pub created_at: Timestamp,
     /// When it last changed.
@@ -291,6 +309,105 @@ pub struct BlobReference {
     pub original_held: bool,
 }
 
+/// A lifecycle write that does not move blob bytes (`S-C16`).
+///
+/// The closed set is the authorization doc's: everything a `POST /albums/{id}/ops` may carry.
+/// `create` and `replace` are absent because they move bytes and are therefore uploads —
+/// `create` is `S-C1`'s and `replace` is `S-C43`'s.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum OpAction {
+    /// Soft-delete: the asset is tombstoned and recoverable until its retention window closes.
+    Delete,
+    /// The inverse of a delete, before that window closes.
+    TrashRestore,
+    /// A new encrypted metadata blob for an asset that keeps its bytes.
+    MetadataUpdate,
+    /// A derivative whose bytes the server already holds is attached, or re-pointed.
+    Derivative,
+}
+
+impl OpAction {
+    /// The stable wire token.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Delete => "delete",
+            Self::TrashRestore => "trash-restore",
+            Self::MetadataUpdate => "metadata-update",
+            Self::Derivative => "derivative",
+        }
+    }
+}
+
+/// One accepted lifecycle write, as the index applies it.
+///
+/// Every field is a fact the gate has already checked. The index decides the two *stateful*
+/// invariants it alone can answer — 17's chain and 18's epoch — and applies the change with its
+/// sequence number in one critical section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LifecycleOp {
+    /// The asset the manifest names.
+    pub asset_id: AssetId,
+    /// The caller, so the index checks ownership rather than trusting it.
+    pub owner_id: OwnerId,
+    /// The album the op was addressed to.
+    pub album_id: AlbumId,
+    /// What is being done.
+    pub action: OpAction,
+    /// The content hash of the manifest being applied. Becomes the new chain head, and is the
+    /// idempotency key — a byte-identical resubmission has the same hash.
+    pub manifest_hash: Hash32,
+    /// What the manifest claims its predecessor's hash was — invariant 17's subject.
+    pub prior_provenance_hash: Option<Hash32>,
+    /// The album epoch it was written under — invariant 18's subject.
+    pub amk_version: u64,
+    /// The stored provenance blob holding the signed manifest, so the feed serves those exact
+    /// bytes (`S-C30`) for a lifecycle write as it does for an upload.
+    pub provenance: ContentAddress,
+    /// The stored metadata blob, when the action carries one.
+    pub metadata: Option<ContentAddress>,
+    /// When the server accepted it.
+    pub at: Timestamp,
+}
+
+/// What applying a lifecycle write did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpOutcome {
+    /// Applied, with the feed position it minted.
+    Applied {
+        /// The row as it now stands.
+        row: Box<AssetRow>,
+        /// The sequence number this change occupies.
+        sync_seq: u64,
+    },
+    /// This exact manifest has already been applied. Nothing was written, and the number is the
+    /// one the original application minted.
+    ///
+    /// Which is what makes the response byte-identical without remembering any bytes: the body
+    /// is a pure function of `(asset_id, action, sync_seq)` and all three are stored facts. The
+    /// retired implementation kept the serialized response in a table — a second copy of
+    /// something derivable, and therefore a second thing that can be wrong.
+    Replayed {
+        /// The sequence number the first application minted.
+        sync_seq: u64,
+    },
+    /// Invariant 17: `prior_provenance_hash` is not this asset's chain head.
+    StaleChain {
+        /// What the head actually is, so the owner can re-read and rebase rather than retry a
+        /// losing manifest forever. Reached only by the asset's owner, so it discloses nothing.
+        head: Option<Hash32>,
+    },
+    /// Invariant 18: the epoch regresses against the album's high-water mark.
+    AmkRegressed {
+        /// The album's highest accepted epoch.
+        stored: u64,
+    },
+    /// No such asset, not this caller's, or not in that album.
+    ///
+    /// One value for all three, as [`Reservation::Conflict`] is: the asset id is client-chosen,
+    /// so a guess must buy nothing.
+    NotFound,
+}
+
 /// One entry of the sync feed.
 ///
 /// Carries addresses, never bytes. The route that serves a page reads the provenance blob
@@ -391,6 +508,16 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         &'a self,
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<BlobReference>>;
+
+    /// Apply one lifecycle write, with the two stateful invariants and the sequence mint in one
+    /// critical section.
+    ///
+    /// They are decided **here** rather than by the caller for the reason
+    /// [`crate::directory`]'s monotonic guard is: a caller that reads the chain head, compares
+    /// and then writes has a window in which a concurrent op lands, and two ops racing through
+    /// it can both chain onto the same head — which is the double-apply invariant 17 exists to
+    /// catch. An adapter owes atomicity across the whole sequence.
+    fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome>;
 
     /// Up to `limit` feed entries for `owner` after sequence number `after`, in sequence order.
     ///

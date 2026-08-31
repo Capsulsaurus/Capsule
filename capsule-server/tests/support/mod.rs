@@ -41,8 +41,8 @@ use capsule_server::directory::{
 };
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
-    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, PendingAsset,
-    Reservation,
+    AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, LifecycleOp, OpOutcome,
+    PendingAsset, Reservation,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::store::memory::{InMemoryAuthState, InMemoryUploadSessions, ManualClock};
@@ -68,6 +68,47 @@ use uuid::Uuid;
 /// exercises a realistic "the refresh token dies with its record" window rather than a shorter
 /// one that would hide the arrangement.
 pub(crate) const SESSION_TTL: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// The asset the conformance suite's lifecycle ops act on.
+pub(crate) const OPS_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
+
+/// A well-formed `POST /albums/{id}/ops` bundle for `action`, chaining onto `prior`.
+///
+/// The manifest bytes are deliberately not valid CBOR: this surface stores them verbatim and
+/// never parses them, so feeding it something parseable would test less than the contract says.
+pub(crate) fn op_bundle(
+    clock: &ManualClock,
+    action: &str,
+    seed: &str,
+    prior: Option<&str>,
+) -> serde_json::Value {
+    use base64::Engine as _;
+
+    let manifest = format!("signed-lifecycle-manifest-{seed}").into_bytes();
+    serde_json::json!({
+        "manifest_envelope": {
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "album_id": album().as_str(),
+            "file_id": OPS_ASSET,
+            "amk_version": 1,
+            "ciphertext_hash": checksum(b"the asset's original ciphertext"),
+            "plaintext_size": 4096,
+            "chunk_size": 65_536,
+            "key_mode": "derived",
+            "metadata_blob_hash": serde_json::Value::Null,
+            "created_by_user": user().as_str(),
+            "created_by_device": device().to_string(),
+            "client_version": "capsule-cli/0.1.0",
+            "timestamp": clock.now().to_string(),
+            "action": action,
+            "prior_provenance_hash": prior,
+            "retention_until": serde_json::Value::Null,
+        },
+        "manifest_cbor": base64::engine::general_purpose::STANDARD.encode(&manifest),
+        "metadata_blob": serde_json::Value::Null,
+    })
+}
 
 /// A freshly signed device directory for the seeded account at `version`.
 ///
@@ -855,6 +896,13 @@ impl AssetIndex for SwitchableIndex {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.tombstone(asset, at)
+    }
+
+    fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply_op(op)
     }
 
     fn find_reference<'a>(

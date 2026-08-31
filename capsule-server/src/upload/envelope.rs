@@ -236,6 +236,74 @@ pub fn check_finalize(
     run_battery(&core, context)
 }
 
+/// The gate for a **lifecycle write** (`S-C16`): everything a `POST /albums/{id}/ops` manifest
+/// must satisfy before the index is asked to apply it.
+///
+/// Returns the action, so the caller does not re-parse a string the gate has already resolved.
+///
+/// # Which invariants this decides, and which it deliberately does not
+///
+/// It decides 1, 2, 6, 7, 8, the 15 family, and **16** — the last by refusing every action that
+/// moves blob bytes, because those are uploads by definition (`create` is `S-C1`'s surface and
+/// `replace` is `S-C43`'s).
+///
+/// It does **not** decide **17** or **18**, and the way it does not is worth stating plainly:
+/// the shared battery is handed the manifest's *own* claims as the stored values, so both
+/// predicates pass here unconditionally. That is not a hole, it is the layering. Those two are
+/// the only invariants whose answer depends on stored state, so answering them from a read
+/// taken outside the index's critical section would be answering them on facts that can change
+/// before the write lands — which is exactly the double-apply the chain check exists to catch.
+/// [`crate::index::AssetIndex::apply_op`] decides them where the comparison and the write are
+/// one operation.
+///
+/// # Errors
+///
+/// Returns the first [`GateReject`] the manifest fails.
+pub fn check_op(
+    envelope: &ManifestEnvelope,
+    context: &GateContext<'_>,
+) -> Result<Action, GateReject> {
+    match protocol_gate(
+        &envelope.protocol_version,
+        context.policy.protocol_min(),
+        context.policy.protocol_max(),
+    ) {
+        Ok(()) => {}
+        Err(HandshakeReject::ProtocolOutOfRange) => return Err(GateReject::ProtocolOutOfRange),
+        Err(_) => return Err(GateReject::ProtocolMalformed),
+    }
+
+    // Invariant 2, which `check_create` gets from the top-level declaration a lifecycle write
+    // does not carry.
+    check_suite(envelope.crypto_suite_id).map_err(|_| GateReject::UnknownCryptoSuite)?;
+
+    let core = build_manifest_core(envelope)?;
+    // Invariant 16, this surface's half. `create` and `replace` both move blob bytes and are
+    // therefore uploads; every other action in the closed enum belongs here. Written as an
+    // allow-list so that a new action added to core's enum fails here rather than silently
+    // becoming a lifecycle op nobody decided it was.
+    if !matches!(
+        core.action,
+        Action::Delete
+            | Action::TrashRestore
+            | Action::MetadataUpdate
+            | Action::DerivativeAdd
+            | Action::DerivativeReplace
+    ) {
+        return Err(GateReject::ActionNotAllowed);
+    }
+
+    let device_added_at = as_rfc3339(context.device_added_at);
+    let server_clock = as_rfc3339(context.server_clock);
+    let mut ctx = envelope_context(context, &device_added_at, &server_clock);
+    // The pass-through described above. Written as an assignment rather than folded into
+    // `envelope_context` so that it is visible at the one call site it applies to.
+    ctx.stored_chain_head = core.prior_provenance_hash;
+    ctx.stored_amk_version = Some(core.amk_version.0);
+    map_reject(check_manifest_envelope(&core, &ctx))?;
+    Ok(core.action)
+}
+
 /// The 15-family check: the strict top-level fields must not contradict the envelope.
 ///
 /// A contradiction is a client bug that would otherwise be silently resolved in the server's

@@ -13,11 +13,12 @@
 use std::collections::BTreeMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
     AssetIndex, AssetRow, AssetState, BlobOutcome, BlobRecord, BlobRef, FeedEntry, IndexFuture,
-    PendingAsset, Reservation, entry_for,
+    LifecycleOp, OpAction, OpOutcome, PendingAsset, Reservation, entry_for,
 };
 use crate::blob::ContentAddress;
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
@@ -40,6 +41,41 @@ fn is_singular(role: BlobRole) -> bool {
     )
 }
 
+/// The chain head a provenance blob at `address` establishes, when the server can know it.
+///
+/// A create's manifest is uploaded as a provenance blob and never re-declared, so its content
+/// address is the only handle the server has on it — and invariant 17's `prior_provenance_hash`
+/// is a **SHA-256** digest of those same bytes. Under the one crypto suite that ships, the
+/// content address *is* that digest, so the two coincide and the head is knowable.
+///
+/// They are not the same identifier, and `S-C31` records why: a content address is whatever
+/// digest the suite selects. The day a suite picks a different one this returns `None`, which
+/// is the honest answer — the server would have no way to compute a SHA-256 it was never given,
+/// and invariant 17 would need the client to declare the manifest hash explicitly. Returning
+/// `None` there makes the first lifecycle op fail visibly rather than chain onto a wrong value.
+fn chain_head_from(address: &ContentAddress) -> Option<Hash32> {
+    Hash32::from_hex(address.as_str()).ok()
+}
+
+/// Point `role` at `address`, replacing whatever it held.
+///
+/// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
+/// re-point one because an upload doing so would swap bytes under a signature that still
+/// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
+/// and it arrives with a manifest chaining onto the one it supersedes.
+fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+    row.blobs.retain(|blob| blob.role != role);
+    row.blobs.push(BlobRef {
+        role,
+        address: address.clone(),
+        // Size is not a fact this path learns: the bytes were stored by whoever put them in the
+        // blob store, and re-`stat`ing here would make the index depend on the store.
+        size: 0,
+    });
+    row.blobs
+        .sort_by(|a, b| (a.role, a.address.as_str()).cmp(&(b.role, b.address.as_str())));
+}
+
 /// Everything the double holds, behind one lock.
 ///
 /// One lock rather than two maps with two locks, because the sequence counter and the row it
@@ -47,6 +83,11 @@ fn is_singular(role: BlobRole) -> bool {
 #[derive(Debug, Default)]
 struct Inner {
     rows: BTreeMap<AssetId, AssetRow>,
+    /// The sequence number each already-applied lifecycle manifest minted, by its content hash.
+    ///
+    /// The whole idempotency store: a replay needs the number the first application minted, and
+    /// everything else in the response is derivable from the manifest itself.
+    applied: BTreeMap<Hash32, u64>,
     /// The highest sequence number each owner has minted. Absent means none.
     minted: BTreeMap<OwnerId, u64>,
 }
@@ -56,6 +97,18 @@ impl Inner {
     ///
     /// Callable only with the lock held, which is what makes allocation order equal publication
     /// order. Starts at 1 so that `after = 0` means "I have seen nothing".
+    /// The highest album-key epoch any row of `album` has been accepted under.
+    ///
+    /// Derived rather than stored, so it cannot disagree with the rows it summarizes.
+    fn album_epoch(&self, album: &AlbumId) -> u64 {
+        self.rows
+            .values()
+            .filter(|row| &row.album_id == album)
+            .map(|row| row.amk_version)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn mint(&mut self, owner: &OwnerId) -> u64 {
         let next = self
             .minted
@@ -107,6 +160,8 @@ impl AssetIndex for InMemoryAssetIndex {
                 blobs: Vec::new(),
                 first_seq: None,
                 sync_seq: None,
+                chain_head: None,
+                amk_version: 0,
                 created_at: asset.created_at,
                 updated_at: asset.created_at,
             };
@@ -151,6 +206,16 @@ impl AssetIndex for InMemoryAssetIndex {
             // port contracts role-then-address order and a `Vec` will not sort itself.
             row.blobs.sort();
             row.updated_at = blob.finalized_at;
+
+            // A create's provenance blob is the asset's first accepted manifest, so it is also
+            // the chain the first lifecycle op must name (invariant 17). Set here rather than
+            // declared by the route because this is where the manifest becomes durable, and a
+            // head recorded before the bytes landed would point at a manifest nobody holds.
+            if let Some(provenance) = row.address_for(BlobRole::Provenance).cloned()
+                && row.chain_head.is_none()
+            {
+                row.chain_head = chain_head_from(&provenance);
+            }
 
             // The publishable check runs over the *bundle*, so a blob completing the index tier
             // and a blob arriving after it are the same code path — which is what keeps
@@ -259,6 +324,106 @@ impl AssetIndex for InMemoryAssetIndex {
                 .filter(|row| row.state == AssetState::Tombstoned)
                 .find(holds)
                 .map(reference))
+        })
+    }
+
+    fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+
+            // Idempotency first, before any invariant: a byte-identical resubmission of an op
+            // that has already been applied is not a stale chain, it is the same op arriving
+            // twice. Checking 17 first would answer `409` to a client whose only fault was
+            // losing an acknowledgement.
+            if let Some(sync_seq) = inner.applied.get(&op.manifest_hash).copied() {
+                tracing::info!(
+                    asset = %op.asset_id,
+                    action = op.action.as_str(),
+                    sync_seq,
+                    "a lifecycle write was replayed; nothing was written"
+                );
+                return Ok(OpOutcome::Replayed { sync_seq });
+            }
+
+            let Some(row) = inner.rows.get(&op.asset_id).cloned() else {
+                return Ok(OpOutcome::NotFound);
+            };
+            // Not this caller's asset, or not in the album the op was addressed to. Both are
+            // the same answer, and neither is distinguishable from an asset that never existed.
+            if row.owner_id != op.owner_id || row.album_id != op.album_id {
+                tracing::info!(
+                    asset = %op.asset_id,
+                    "a lifecycle write was refused: the asset is not this caller's"
+                );
+                return Ok(OpOutcome::NotFound);
+            }
+            // A row nothing can see yet has no chain to extend. Treated as absent rather than
+            // as a stale chain: an op against a half-finished upload is a client bug about
+            // *which* asset, not about which manifest.
+            if row.state == AssetState::Pending {
+                return Ok(OpOutcome::NotFound);
+            }
+
+            // Invariant 17.
+            if op.prior_provenance_hash != row.chain_head {
+                tracing::info!(
+                    asset = %op.asset_id,
+                    action = op.action.as_str(),
+                    "a lifecycle write was refused: it does not chain onto the stored head"
+                );
+                return Ok(OpOutcome::StaleChain {
+                    head: row.chain_head,
+                });
+            }
+
+            // Invariant 18, over the album's high-water mark rather than this row's: an epoch
+            // is an album-wide fact, so an op on a stale asset must not be able to re-admit an
+            // epoch the album has already moved past.
+            let stored = inner.album_epoch(&op.album_id);
+            if op.amk_version < stored {
+                tracing::info!(
+                    asset = %op.asset_id,
+                    stored,
+                    submitted = op.amk_version,
+                    "a lifecycle write was refused: the album epoch regresses"
+                );
+                return Ok(OpOutcome::AmkRegressed { stored });
+            }
+
+            let mut row = row;
+            row.state = match op.action {
+                OpAction::Delete => AssetState::Tombstoned,
+                // A restore returns the asset to the live set. Every other action leaves the
+                // state alone — a metadata update to a tombstoned asset is still a tombstone.
+                OpAction::TrashRestore => AssetState::Visible,
+                OpAction::MetadataUpdate | OpAction::Derivative => row.state,
+            };
+            // The provenance blob is re-pointed on every op, which is the one place a singular
+            // role legitimately moves: the chain *is* a succession of manifests, so the newest
+            // one is what the feed must serve.
+            set_singular(&mut row, BlobRole::Provenance, &op.provenance);
+            if let Some(metadata) = &op.metadata {
+                set_singular(&mut row, BlobRole::Metadata, metadata);
+            }
+            row.chain_head = Some(op.manifest_hash);
+            row.amk_version = op.amk_version;
+            row.updated_at = op.at;
+
+            let owner = row.owner_id.clone();
+            let sync_seq = inner.mint(&owner);
+            row.sync_seq = Some(sync_seq);
+            inner.applied.insert(op.manifest_hash, sync_seq);
+            inner.rows.insert(op.asset_id.clone(), row.clone());
+            tracing::info!(
+                asset = %op.asset_id,
+                action = op.action.as_str(),
+                sync_seq,
+                "a lifecycle write was applied"
+            );
+            Ok(OpOutcome::Applied {
+                row: Box::new(row),
+                sync_seq,
+            })
         })
     }
 

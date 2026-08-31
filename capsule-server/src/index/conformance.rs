@@ -27,10 +27,12 @@
 //! Every case scopes its owners and assets to itself, so cases may share one index and
 //! [`run_all`] does.
 
+use capsule_core::crypto::hash::Hash32;
 use jiff::Timestamp;
 
 use super::{
-    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, PendingAsset, Reservation,
+    AssetIndex, AssetState, BlobOutcome, BlobRecord, ChangeKind, LifecycleOp, OpAction, OpOutcome,
+    PendingAsset, Reservation,
 };
 use crate::blob::ContentAddress;
 use crate::blob::address::CONTENT_ADDRESS_LEN;
@@ -773,6 +775,308 @@ pub async fn a_live_holder_outranks_a_deleted_one(index: &dyn AssetIndex) {
     assert_eq!(reference.state, AssetState::Visible);
 }
 
+// ---------------------------------------------------------------------------------------
+// Lifecycle writes
+// ---------------------------------------------------------------------------------------
+
+/// A manifest hash from a seed, so a case can name one readably.
+fn manifest(seed: u8) -> Hash32 {
+    Hash32([seed; 32])
+}
+
+/// The chain head `asset` currently carries.
+async fn head_of(index: &dyn AssetIndex, asset: &AssetId) -> Option<Hash32> {
+    ok(index.read(asset).await, "read a row").and_then(|row| row.chain_head)
+}
+
+/// A lifecycle op for `case`'s asset `n`, chaining onto `prior` and producing `hash`.
+fn op(case: &str, n: u32, action: OpAction, prior: Option<Hash32>, hash: Hash32) -> LifecycleOp {
+    LifecycleOp {
+        asset_id: AssetId::new(format!("{case}-asset-{n}")),
+        owner_id: OwnerId::new(format!("{case}-owner")),
+        album_id: AlbumId::new(format!("{case}-album")),
+        action,
+        manifest_hash: hash,
+        prior_provenance_hash: prior,
+        amk_version: 1,
+        provenance: address(&format!("{case}prov{n}")),
+        metadata: None,
+        at: Timestamp::UNIX_EPOCH,
+    }
+}
+
+/// Publication establishes a chain head, and each op must name the one before it.
+///
+/// The head a `create` establishes is its **provenance blob's** content address: the manifest
+/// is uploaded as that blob and never re-declared, so its address is the only handle the server
+/// has on it. Every case here therefore starts from `publish`'s provenance seed rather than
+/// from `None` — which is also what a real first lifecycle op does.
+pub async fn a_lifecycle_write_extends_the_chain(index: &dyn AssetIndex) {
+    let (asset, published) = publish(index, "op-chain", 1).await;
+    let created = head_of(index, &asset).await;
+    assert!(
+        created.is_some(),
+        "a published asset must carry the chain its first lifecycle op has to name"
+    );
+    let first = manifest(1);
+
+    let OpOutcome::Applied { row, sync_seq } = ok(
+        index
+            .apply_op(op("op-chain", 1, OpAction::MetadataUpdate, created, first))
+            .await,
+        "apply the first op",
+    ) else {
+        panic!("a well-formed first op was not applied")
+    };
+    assert!(
+        sync_seq > published,
+        "a change must sit above the publication it changes, or a caught-up reader misses it"
+    );
+    assert_eq!(row.chain_head, Some(first));
+
+    // A second op must name the first as its predecessor — naming the *create* again is the
+    // shape a replayed old manifest takes.
+    let second = manifest(2);
+    let stale = ok(
+        index
+            .apply_op(op("op-chain", 1, OpAction::MetadataUpdate, created, second))
+            .await,
+        "apply an unchained op",
+    );
+    assert_eq!(
+        stale,
+        OpOutcome::StaleChain { head: Some(first) },
+        "an op that does not name the stored head is invariant 17's stale revival",
+    );
+
+    let OpOutcome::Applied { row, .. } = ok(
+        index
+            .apply_op(op(
+                "op-chain",
+                1,
+                OpAction::MetadataUpdate,
+                Some(first),
+                second,
+            ))
+            .await,
+        "apply the chained op",
+    ) else {
+        panic!("an op chaining onto the head was not applied")
+    };
+    assert_eq!(row.chain_head, Some(second));
+    let _ = asset;
+}
+
+/// The same manifest twice is one application and one sequence number.
+pub async fn re_applying_a_manifest_is_a_replay(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-replay", 1).await;
+    let created = head_of(index, &asset).await;
+    let hash = manifest(3);
+    let OpOutcome::Applied { sync_seq, .. } = ok(
+        index
+            .apply_op(op("op-replay", 1, OpAction::Delete, created, hash))
+            .await,
+        "apply",
+    ) else {
+        panic!("a well-formed op was not applied")
+    };
+
+    // The replay names the head it chained onto, which is *no longer* the head — which is
+    // exactly why the idempotency check must run before invariant 17.
+    assert_eq!(
+        ok(
+            index
+                .apply_op(op("op-replay", 1, OpAction::Delete, created, hash))
+                .await,
+            "replay",
+        ),
+        OpOutcome::Replayed { sync_seq },
+        "a lost acknowledgement must not cost a second sequence number, and must not be \
+         answered as a stale chain — the client's only fault was not hearing the first answer",
+    );
+    assert_eq!(
+        ok(
+            index.head_seq(&OwnerId::new("op-replay-owner")).await,
+            "head"
+        ),
+        sync_seq,
+        "a replay minted a number"
+    );
+}
+
+/// A delete tombstones, a restore un-tombstones, and both reach the feed.
+pub async fn delete_and_restore_are_both_publishable_changes(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-cycle", 1).await;
+    let created = head_of(index, &asset).await;
+    let owner = OwnerId::new("op-cycle-owner");
+    let deleted = manifest(4);
+    let restored = manifest(5);
+
+    let OpOutcome::Applied {
+        row,
+        sync_seq: at_delete,
+    } = ok(
+        index
+            .apply_op(op("op-cycle", 1, OpAction::Delete, created, deleted))
+            .await,
+        "delete",
+    )
+    else {
+        panic!("a delete was not applied")
+    };
+    assert_eq!(row.state, AssetState::Tombstoned);
+
+    let OpOutcome::Applied {
+        row,
+        sync_seq: at_restore,
+    } = ok(
+        index
+            .apply_op(op(
+                "op-cycle",
+                1,
+                OpAction::TrashRestore,
+                Some(deleted),
+                restored,
+            ))
+            .await,
+        "restore",
+    )
+    else {
+        panic!("a restore was not applied")
+    };
+    assert_eq!(row.state, AssetState::Visible);
+    assert!(at_restore > at_delete);
+
+    // A reader who saw the asset before the delete sees the restore as an update, not as a
+    // resurrection it has to guess at.
+    let page = ok(index.feed_page(&owner, at_delete, 10).await, "page");
+    assert_eq!(page.len(), 1);
+    assert_eq!(page[0].sync_seq, at_restore);
+    assert_eq!(page[0].change, ChangeKind::Updated);
+}
+
+/// An epoch below the album's high-water mark is refused, whichever asset it arrives on.
+pub async fn an_epoch_that_regresses_the_album_is_refused(index: &dyn AssetIndex) {
+    let (first_asset, _) = publish(index, "op-epoch", 1).await;
+    let (second_asset, _) = publish(index, "op-epoch", 2).await;
+
+    let mut forward = op(
+        "op-epoch",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &first_asset).await,
+        manifest(6),
+    );
+    forward.amk_version = 9;
+    let OpOutcome::Applied { .. } = ok(index.apply_op(forward).await, "advance the epoch") else {
+        panic!("an advancing epoch was refused")
+    };
+
+    // A *different* asset in the same album may not re-admit the epoch the album left behind.
+    let mut backward = op(
+        "op-epoch",
+        2,
+        OpAction::MetadataUpdate,
+        head_of(index, &second_asset).await,
+        manifest(7),
+    );
+    backward.amk_version = 8;
+    assert_eq!(
+        ok(index.apply_op(backward).await, "regress the epoch"),
+        OpOutcome::AmkRegressed { stored: 9 },
+        "invariant 18 is an album rule, so a stale asset must not be a way back to a retired \
+         epoch",
+    );
+}
+
+/// An op against somebody else's asset, a missing one, or an unpublished one is one answer.
+pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-scope", 1).await;
+    let created = head_of(index, &asset).await;
+
+    let mut theirs = op("op-scope", 1, OpAction::Delete, created, manifest(8));
+    theirs.owner_id = OwnerId::new("op-scope-other-owner");
+    assert_eq!(
+        ok(index.apply_op(theirs).await, "apply as another owner"),
+        OpOutcome::NotFound,
+    );
+
+    let mut elsewhere = op("op-scope", 1, OpAction::Delete, created, manifest(9));
+    elsewhere.album_id = AlbumId::new("op-scope-other-album");
+    assert_eq!(
+        ok(
+            index.apply_op(elsewhere).await,
+            "apply against another album"
+        ),
+        OpOutcome::NotFound,
+        "the album is part of the address, not decoration",
+    );
+
+    let mut absent = op("op-scope", 99, OpAction::Delete, created, manifest(10));
+    absent.asset_id = AssetId::new("op-scope-no-such-asset");
+    assert_eq!(
+        ok(index.apply_op(absent).await, "apply against nothing"),
+        OpOutcome::NotFound,
+    );
+
+    // A reserved-but-unpublished row is also not found: an op against a half-finished upload is
+    // a client bug about which asset, not about which manifest.
+    let pending = pending("op-scope-pending", 1);
+    let pending_id = pending.asset_id.clone();
+    ok(index.reserve(pending).await, "reserve");
+    let mut half = op("op-scope-pending", 1, OpAction::Delete, None, manifest(11));
+    half.asset_id = pending_id;
+    assert_eq!(
+        ok(index.apply_op(half).await, "apply against a pending row"),
+        OpOutcome::NotFound,
+    );
+    let _ = asset;
+}
+
+/// A lifecycle write re-points the provenance blob, which is the one authorized way a singular
+/// role moves.
+pub async fn a_lifecycle_write_repoints_the_provenance_blob(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-prov", 1).await;
+    let before = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a provenance blob");
+
+    let mut update = op(
+        "op-prov",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &asset).await,
+        manifest(12),
+    );
+    update.metadata = Some(address("op-prov-newmeta"));
+    ok(index.apply_op(update).await, "apply");
+
+    let row = ok(index.read(&asset).await, "read").expect("the row exists");
+    let after = row
+        .address_for(BlobRole::Provenance)
+        .expect("the op landed a provenance blob");
+    assert_ne!(
+        after, &before,
+        "the feed must serve the newest manifest, so the provenance reference moves with the \
+         chain rather than being frozen at publication"
+    );
+    assert_eq!(
+        row.address_for(BlobRole::Metadata),
+        Some(&address("op-prov-newmeta")),
+        "a metadata update that did not re-point the metadata blob updated nothing"
+    );
+    assert_eq!(
+        ok(
+            index.find_reference(&before).await,
+            "look up the superseded manifest"
+        ),
+        None,
+        "the superseded manifest is no longer referenced, which is what makes it collectable"
+    );
+}
+
 /// Run every case against `index`, in order.
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
@@ -794,6 +1098,12 @@ pub async fn run_all(index: &dyn AssetIndex) {
     the_serving_lookup_ignores_unpublished_rows(index).await;
     the_serving_lookup_reports_state_and_original_holding(index).await;
     a_live_holder_outranks_a_deleted_one(index).await;
+    a_lifecycle_write_extends_the_chain(index).await;
+    re_applying_a_manifest_is_a_replay(index).await;
+    delete_and_restore_are_both_publishable_changes(index).await;
+    an_epoch_that_regresses_the_album_is_refused(index).await;
+    an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
+    a_lifecycle_write_repoints_the_provenance_blob(index).await;
 }
 
 #[cfg(test)]

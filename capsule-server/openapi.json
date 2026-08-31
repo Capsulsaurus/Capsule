@@ -1562,6 +1562,144 @@
           }
         ]
       }
+    },
+    "/v1/albums/{album_id}/ops": {
+      "post": {
+        "summary": "Apply one signed lifecycle manifest to an album's asset.",
+        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
+        "operationId": "album_lifecycle_op",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Upgrade required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale revival",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2164,6 +2302,61 @@
           "directory_version"
         ],
         "description": "The accepted version, echoed so a client knows what is now in force."
+      },
+      "OpRequest": {
+        "properties": {
+          "manifest_envelope": {
+            "$ref": "#/components/schemas/ManifestEnvelope",
+            "description": "The server-visible projection of the signed manifest's fields, exactly as\n`POST /v1/upload` carries it. Its `album_id` must equal the path segment and its\n`action` must be one this surface accepts."
+          },
+          "manifest_cbor": {
+            "type": "string",
+            "description": "The signed manifest itself, base64 of the canonical CBOR.\n\nStored verbatim as the asset's new provenance blob, so the feed serves the exact bytes\nthe client signed (`S-C30`) for a lifecycle write as it already does for an upload. The\nserver does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`."
+          },
+          "metadata_blob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The encrypted metadata blob, base64, present exactly when the action carries one.\n\nIts content hash must equal the manifest's committed `metadata_blob_hash`\n(invariant 25). The server holds no key and never reads it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "manifest_envelope",
+          "manifest_cbor"
+        ],
+        "description": "The signed manifest bundle a lifecycle write carries."
+      },
+      "OpResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the op chained onto."
+          },
+          "sync_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The feed position it occupies. On a replay, the position the *first* application took."
+          },
+          "action": {
+            "type": "string",
+            "description": "The action that was applied."
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "Whether this response is a replay of an already-applied manifest.\n\nAdvisory, and deliberately not something a correct client needs: the other three fields\nare identical either way, which is what \"byte-identical prior response\" means."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "sync_seq",
+          "action",
+          "replayed"
+        ],
+        "description": "What a lifecycle write did."
       }
     },
     "securitySchemes": {

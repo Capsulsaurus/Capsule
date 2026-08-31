@@ -76,6 +76,7 @@ pub fn router() -> ServerRouter {
             routes::storage::verify_storage,
             routes::directory::publish_device_directory,
             routes::directory::fetch_device_directory,
+            routes::ops::apply_op,
         ])
 }
 

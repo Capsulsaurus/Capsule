@@ -107,6 +107,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/storage/verify"),
         ("POST", "/v1/auth/devices/directory"),
         ("GET", "/v1/auth/devices/directory/anyone"),
+        ("POST", "/v1/albums/anything/ops"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -951,6 +952,162 @@ async fn every_declared_response_is_exercised() {
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
         .body("application/cbor", support::signed_directory(1))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // ── POST /v1/albums/{album_id}/ops ─────────────────────────────────────────────────────
+    // The asset every arm below acts on, published through the ports.
+    let provenance = payload(b'p', 64);
+    let created = checksum(&provenance);
+    let provenance_address =
+        capsule_server::blob::ContentAddress::parse(&created).expect("a content address");
+    fixture
+        .blobs
+        .put(&provenance_address, &provenance)
+        .await
+        .expect("the store accepts");
+    let asset = capsule_server::store::AssetId::new(support::OPS_ASSET);
+    fixture
+        .index
+        .reserve(capsule_server::index::PendingAsset {
+            asset_id: asset.clone(),
+            owner_id: support::owner(),
+            album_id: support::album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+            created_at: jiff::Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    for (role, at) in [
+        (
+            capsule_server::store::BlobRole::Provenance,
+            provenance_address.clone(),
+        ),
+        (
+            capsule_server::store::BlobRole::Metadata,
+            capsule_server::blob::ContentAddress::parse(&checksum(b"ops-metadata"))
+                .expect("a content address"),
+        ),
+    ] {
+        fixture
+            .index
+            .record_blob(
+                &asset,
+                capsule_server::index::BlobRecord {
+                    role,
+                    address: at,
+                    size: 64,
+                    finalized_at: jiff::Timestamp::UNIX_EPOCH,
+                },
+            )
+            .await
+            .expect("the index records");
+    }
+    let ops_path = format!("/v1/albums/{}/ops", support::album());
+
+    // 401 and 403 (no capability on an album this caller does not hold).
+    client
+        .post(&ops_path)
+        .json(&support::op_bundle(
+            &fixture.clock,
+            "delete",
+            "c1",
+            Some(&created),
+        ))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    let elsewhere = support::second_album();
+    let mut unwritable = support::op_bundle(&fixture.clock, "delete", "c1", Some(&created));
+    unwritable["manifest_envelope"]["album_id"] = json!(elsewhere.as_str());
+    client
+        .post(&format!("/v1/albums/{elsewhere}/ops"))
+        .header("authorization", &bearer)
+        .json(&unwritable)
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 422 are the `Json` extractor's; 400 is a manifest that fails the battery.
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .json(&json!({ "manifest_envelope": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .json(&support::op_bundle(
+            &fixture.clock,
+            "create",
+            "c1",
+            Some(&created),
+        ))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 426: a protocol version outside the accepted window.
+    let mut ancient = support::op_bundle(&fixture.clock, "delete", "c1", Some(&created));
+    ancient["manifest_envelope"]["protocol_version"] = json!("1999-01-01");
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .json(&ancient)
+        .send()
+        .await
+        .assert_status(StatusCode::UPGRADE_REQUIRED);
+
+    // 500: the index could not answer.
+    fixture.index.set_unavailable(true);
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .json(&support::op_bundle(
+            &fixture.clock,
+            "delete",
+            "c1",
+            Some(&created),
+        ))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.index.set_unavailable(false);
+
+    // 200, then 409 for a manifest that no longer chains.
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&support::op_bundle(
+            &fixture.clock,
+            "delete",
+            "c1",
+            Some(&created),
+        ))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .post(&ops_path)
+        .header("authorization", &bearer)
+        .json(&support::op_bundle(
+            &fixture.clock,
+            "trash-restore",
+            "c2",
+            Some(&created),
+        ))
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
