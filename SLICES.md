@@ -238,7 +238,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | done\* | server half stores and serves verbatim; client producer owed to `S-D1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
-| S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
+| S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | done\* | the port lands with three of its consumers; the per-source half needs a trusted client address |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
 | S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | wired by `S-C1`, which also found a missing operation |
@@ -247,7 +247,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
-| S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
+| S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | ready | the counter `S-C32` owed it now exists |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
@@ -1150,11 +1150,14 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   deployment reads revocation state directly and the cache is a no-op"* — because this port
   resolves authoritatively per request. It becomes real with the first multi-replica deployment,
   and the fail-closed rule above is what it has to be written to.
-- **Owed: the two rate limiters.** Per source IP and per `{opaque-id}`, both needing `S-C32`'s
-  counter. The `429` is **not declared** rather than declared and unreachable (`S-C28`). What
-  still holds without them is the defense the contract calls *independent of rate limiting*: 128
-  bits of opaque id, checked at issue, so a structured or short id is refused rather than
-  throttled later.
+- **The per-link limiter landed with `S-C32`** later the same day: all three public operations
+  charge one budget, because enumeration does not care which of them it probes with, and the
+  refusal is a `429` rather than the indistinguishable `404` — a `404` that was really a
+  throttle would teach a legitimate viewer that a live link is dead. **The per-source-address
+  half is still owed**, and not for want of a counter: this server has no *trusted* client
+  address, and keying a limiter on an untrusted header throttles by a value the attacker picks.
+  What holds regardless is the defense the contract calls *independent of rate limiting*: 128
+  bits of opaque id, checked at issue.
 - **Owed: the home-server pointer.** A share is served only by the album's home server, and a
   peer answers a structured `{ home_server }` JSON pointer. There are no peers on this port —
   every request reaches the home server by construction — so the pointer has no situation to be
@@ -1210,9 +1213,11 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   inbox row while pointing the manifest at any address the store happens to hold. The create
   battery (invariants 1–8, 6, 7) runs unchanged — a drop that skipped it would be the one write
   on this server entering an album unvalidated.
-- **Owed: invariant 31's two limiters**, the same pair `S-C4` owes and the same counter port
-  (`S-C32`). The `429` is **not declared** rather than declared and unreachable. The caps bound
-  total damage but not request rate, and the two are not substitutes.
+- **Invariant 31's per-link limiter landed with `S-C32`** later the same day, charged before the
+  link is resolved so probing costs the prober. The caps bound total damage and the limiter
+  bounds request rate; a link with a generous byte cap and no limiter is a free amplifier, which
+  is why they are not substitutes. **The per-source-address half is owed** for the same reason
+  `S-C4`'s is — there is no trusted client address on this port.
 - **Found on the way: the conformance walk overflowed its stack.** One `async fn` driving 46
   operations builds one generator larger than a test thread's stack. Each large block is now a
   `Box::pin`'d sub-future on the *same* client, so the response recorder still sees everything.
@@ -1300,10 +1305,12 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Redemption's `404` is one answer for unknown, spent and expired**, asserted by comparing the
   two problem documents rather than by reading the code — the operation takes no credential, so
   a distinguishing answer would tell an anonymous caller that a guessed code was once real.
-- **Owed: redemption rate limiting.** The contract requires it and the catalog carries
-  `error.enrollment.rate_limited`, but the per-user counter has no port (`S-C32`), so the status
-  is **not declared** rather than declared and unreachable (`S-C28`). Single-use, a ten-minute
-  TTL and ≥64 bits of entropy bound the window meanwhile — which is a real bound, not a promise.
+- **Redemption rate limiting landed with `S-C32`** later the same day, keyed on the *presented
+  string* and charged on every attempt whatever the outcome — a limiter that only counted
+  failures would let a caller who guesses right on the last try escape it. This is the limiter
+  design/device-enrollment.md names as the reason the shorter transcribable fallback is safe to
+  offer at all: it trades entropy for transcribability, and what keeps the trade honest is that
+  the code cannot be ground through inside its ten-minute life.
 - **Owed: `first_device_setup` and the MLS group join.** Both are client-side and neither has a
   server surface; the directory-update path a completed add ends with is `S-C9`'s
   `POST /v1/auth/devices/directory`, which already exists and is anchored by `S-C42`.
@@ -2407,6 +2414,44 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** no counter reaches storage through `AuthStateStore`; a conformance case proves an
   increment is never lost under concurrency; and the in-memory adapter is a test double rather than
   a deployment mode. **Tier:** Unit + conformance.
+- **Landed 2026-08-31 (`done\*`).** `capsule-server/src/counter/` holds the port, and three
+  limiters that were owed by other slices now exist: enrollment redemption (`S-C7`), the share
+  serve path (`S-C4`), and drop-session creation (`S-C5`, invariant 31).
+- **`hit` returns a verdict, not a count**, and there is no operation that returns a number.
+  A caller that read a counter, compared it and then incremented would let every request in a
+  burst read the same under-limit value — which is the burst a limiter exists to stop, and the
+  reason read-then-write is a limiter in name only. Even `peek` answers a `Verdict`, because
+  handing back a number is handing back the read half of that mistake.
+- **The window belongs to the limit, never to the caller.** A `Budget` carries its own ceiling
+  and window and there is no per-call override, for the same reason the ceremony stores take no
+  TTL argument: a window two call sites can each supply is a window they eventually disagree
+  about, invisibly, until somebody is throttled at the wrong rate. Every budget is declared in
+  `counter::budgets` — including the two pairs the contracts explicitly call *the same two
+  limiters*, which would have drifted the first time one was tuned.
+- **The key is a closed enum, not a string.** The Salvo grab-bag namespaced counters by
+  hand-formatted keys, so two call sites that formatted differently silently kept two counters —
+  and the one that mattered was whichever the attacker did not hit.
+- **Every limiter fails closed.** A counter store that cannot answer is a refusal, never an
+  admission: a limiter an attacker turns off by loading the counter store is not a limiter.
+- **Charged before the subject is resolved.** Probing a share link or an upload link that does
+  not exist still costs the prober; a limiter that only ran for *real* ids would be a free
+  oracle for every id that is not one. Both paths have a test for exactly that.
+- **Fixed windows, and the trade is written down.** A window starts at its first hit and resets
+  when it passes, which admits up to twice the budget across a boundary. Sliding logs and token
+  buckets either store per-request state or need a background refill, both larger promises than
+  a v1 abuse gate needs; where the doubled burst would matter the budget is halved rather than
+  the algorithm changed.
+- **Owed: the per-source-address half** of `S-C4`'s and `S-C5`'s limiter pairs. This server has
+  no trusted client address — it is driven in-process by `TestClient` and sits behind a proxy in
+  production, where the address that matters is a header a deployment must be configured to
+  trust. Keying a limiter on an untrusted header is throttling by a value the attacker chooses,
+  which is worse than not throttling; `CounterKey::ShareSource` and `CounterKey::DropSource`
+  exist for when there is a trusted address to put in them.
+- **Owed: the login-attempt limiter.** `budgets::LOGIN_ATTEMPTS` is declared and unused: account
+  lockout is the `AccountDirectory` adapter's, which owns the failed-attempt bookkeeping that
+  makes `Authentication::Locked` eventually true, and the real adapter does not exist yet. The
+  budget is here so the policy is reviewable in one place when it does.
+- **Unblocks `S-C41`** (the deep re-hash), whose limiter is `budgets::DEEP_VERIFY`.
 
 ### S-C37 — the asset index port, one sequence instead of two
 
