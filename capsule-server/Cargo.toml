@@ -15,6 +15,19 @@ publish.workspace = true
 # One application, cohesive internal modules — not separate transports or services
 # (design/module-map.md, "Planned Server Modules").
 
+# Kynos's route attribute generates a `relative_uri` doc comment whose prose is indented four
+# spaces, which rustdoc reads as an indented Rust code block and then fails to parse. Every one
+# of this crate's doctests is that generated block, so `cargo test -p capsule-server` is red for
+# a reason no author here can fix. `cargo nextest` — what `mise run test-rust` runs — never
+# collects doctests, so the gate was green while the plain command was not, which is the worst
+# of the two states: a red command people learn to ignore.
+#
+# Turned off here rather than worked around, and revisited at the next Kynos repin: if the
+# generated doc stops being indented, delete this and the doctests come back. Nothing is lost
+# today because this crate has no doctest of its own.
+[lib]
+doctest = false
+
 [dependencies]
 # The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
 # and not a version, and for the repin-on-publish exit.
