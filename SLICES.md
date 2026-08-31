@@ -214,7 +214,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
 | S-C6 | Quota service | server | S-C25, S-C37 | M | RETIRED | done\* | federated-receive and purge-reclaim accounting owed to `S-C11`/federation |
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | done\* | the freshness gate needed `authenticated_at` and a re-auth verb; redemption rate limiting → `S-C32` |
-| S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
+| S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | part | suspension + the user's record land; federated intake and the blocklist need federation → `S-C49` |
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
@@ -255,6 +255,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | ready | found by `S-C23`; revocation is only as fast as the access-token TTL, and `touch_session` has no caller |
+| S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1232,6 +1233,38 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Depends on:** S-C2. **Done when:** the moderation doc's six Validation bullets pass.
 - **Tier:** Unit + Smoke. **Landed in retired code; re-scoped onto Kynos.**
 - **Owed:** blob-path 410 → `S-C17`; MLS block half → `S-X4`.
+- **Two of four halves landed 2026-08-31 (`part`).** `capsule-server/src/moderation/` holds
+  account standing and the moderation record; `POST /v1/upload` refuses a suspended account with
+  `403 error.moderation.account_suspended`; `GET /v1/moderation/record` is the user's own read.
+- **The actions have no wire surface, and that is a decision.** design/moderation.md names an
+  admin queue and an admin who acts on it, and specifies **no way for an admin to
+  authenticate**. Inventing one would be inventing the most sensitive authentication surface on
+  the server out of nothing, so moderation actions sit behind the port — the shape `S-C11`'s
+  collector and `S-C14`'s scrub already use for operator work, both of which have no HTTP
+  surface at all. `S-C49` is where an admin surface is decided if one is wanted.
+- **Applying an action and recording it are one port operation.** The contract's structural rule
+  is *no silent operations*: a takedown that applied and failed to record itself is exactly what
+  that forbids, and it fails in the direction that hides itself. `ModerationStore::apply` takes
+  the event and the new standing together, and passing `None` for the standing is how an
+  asset-scoped action is stopped from touching the account.
+- **This closes what `S-C17` owed.** A takedown now appears in the owner's record naming the
+  asset and the time, so a user whose photo stops loading is not left to guess.
+- **`reason` is optional and absent is a real answer.** The contract says "where policy
+  permits", not "always" — a legal hold may come with an obligation not to disclose it. Absent
+  reads as *we are not able to say*, which is honest; a fabricated reason would not be.
+- **The upload gate fails closed.** A moderation store that cannot answer "is this account
+  suspended" is a `500`, never an admission — otherwise an outage is a window in which every
+  suspension is lifted.
+- **Suspension is access-level and the tests hold the line.** A suspended account still reads
+  its library, still reads its quota, and — explicitly — can still `revoke_all_sessions`, which
+  is gated by master-key proof rather than by standing. A suspended user whose account may also
+  be compromised needs that most, so taking it away would hand an attacker the account the
+  moment an admin acted.
+- **Owed, and filed as `S-C49`:** federated report intake needs a peer signing key to verify
+  against and `S-C32`'s counter to rate-limit; the server-level blocklist operates at the
+  federation-capability layer. Neither exists on this port. Both are recorded rather than
+  stubbed, because a blocklist nothing consults is worse than an absent one — it reads as
+  protection.
 
 ### S-C9 — Device-directory publish/fetch
 
@@ -2754,6 +2787,33 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Done when:** a closed session's access token is refused before its TTL expires, the sessions
   listing shows a `last_active_at` that moves, and the store-unavailable answer is a status the
   document declares. **Tier:** Unit + Smoke.
+
+### S-C49 — moderation's federated halves have no federation to hang on
+
+- **Contract:** [Moderation — Federated Reporting](capsule-docs/src/content/docs/design/moderation.md),
+  [Federation — Federation Capabilities](capsule-docs/src/content/docs/design/federation.md).
+- **Gap** (found 2026-08-31 landing `S-C8`): two of that slice's four deliverables cannot be
+  built on this port, and neither is a matter of effort.
+  - **Federated report intake** must verify the reporting server's signature before the report
+    reaches an admin queue — *"an unsigned or invalid-signature report is dropped, never
+    surfaced"* — which needs a peer's published signing key. `S-C18` publishes *this* server's;
+    nothing fetches or pins another's. Its per-`(reporting_server, reported_user)` rate limit
+    needs `S-C32`'s counter besides.
+  - **The server-level blocklist** *"operates at the federation-capability layer"*, and this
+    port has no federation-capability layer: `S-C18` publishes a revocation list and a verifying
+    rule, and nothing mints, presents or checks a capability token.
+- **Why they were not stubbed.** A blocklist nothing consults is worse than an absent one: it
+  reads as protection to an operator who added a peer to it. An intake endpoint that accepted
+  unsigned reports would be a spam pipe into a human queue.
+- **Also owed here: an admin authentication model.** The contract names an admin throughout —
+  suspending, taking down, reading the report queue, publishing a blocklist — and specifies no
+  way for one to authenticate. `S-C8` put the actions behind an operator-driven port for exactly
+  that reason. Deciding whether admins get a *wire* surface, and what authenticates it, is the
+  first question this slice has to answer, because every other deliverable here lands on it.
+- **Deliverable:** the federation-capability layer's minting and verification, peer key
+  discovery and pinning, signed report intake with `S-C32`'s rate limit, the blocklist and its
+  enforcement point, and whatever admin authentication the above needs.
+- **Blocked on:** the federation layer (`S-E2`'s territory) and `S-C32`. **Tier:** Unit + Smoke.
 
 ### S-D1 — SDK upload client
 
