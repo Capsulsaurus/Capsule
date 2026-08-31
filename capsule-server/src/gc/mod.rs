@@ -103,6 +103,12 @@ pub struct CollectionReport {
     ///
     /// Never deleted, never marked, never counted as collectable. Surfaced for an operator.
     pub dangling: Vec<ContentAddress>,
+    /// Bytes credited back by the sweep, per account (`S-C44`).
+    ///
+    /// Reported rather than merely done, because "the trash emptied and my usage did not move"
+    /// is exactly the complaint this exists to answer, and an operator needs to be able to say
+    /// what the pass gave back and to whom.
+    pub credited: Vec<(crate::store::UserId, u64)>,
 }
 
 /// What one purge pass found.
@@ -149,6 +155,7 @@ pub struct CollectionContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
     marks: Arc<dyn CollectionStore>,
+    quotas: Arc<dyn crate::quota::QuotaStore>,
     clock: Arc<dyn crate::store::Clock>,
     grace_window: SignedDuration,
 }
@@ -159,6 +166,7 @@ impl CollectionContext {
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
         marks: Arc<dyn CollectionStore>,
+        quotas: Arc<dyn crate::quota::QuotaStore>,
         clock: Arc<dyn crate::store::Clock>,
         grace_window: SignedDuration,
     ) -> Self {
@@ -166,6 +174,7 @@ impl CollectionContext {
             index,
             blobs,
             marks,
+            quotas,
             clock,
             grace_window,
         }
@@ -279,6 +288,20 @@ async fn visit(
                 detail: error.to_string(),
             })?;
         context.marks.unmark(address).await?;
+        // The credit belongs **here**, to the sweep, and after the removal (`S-C44`).
+        //
+        // After, because crediting bytes that are still on disk would let a failed sweep refund
+        // storage the server is still paying for. And to the sweep rather than to the purge,
+        // because a purge drops one asset's references while the blob may still have others —
+        // two assets sharing a thumbnail, one deleted — so a refund there would give back bytes
+        // held for the surviving holder.
+        //
+        // The ledger names the account, because the collector cannot: attribution is global by
+        // content address, so this blob may be charged to somebody with no remaining connection
+        // to the asset whose deletion exposed it.
+        if let Some((user, size)) = context.quotas.release_attribution(address).await? {
+            report.credited.push((user, size));
+        }
     }
     report.swept.push(address.clone());
     Ok(())

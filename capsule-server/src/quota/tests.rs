@@ -223,3 +223,77 @@ async fn the_crossing_is_stamped_once_and_cleared_by_going_under() {
     quotas.release(&user, &address(5)).await.expect("release");
     assert_eq!(quotas.usage(&user).await.expect("usage").over_since, None);
 }
+
+#[tokio::test]
+async fn the_collector_releases_by_address_and_the_ledger_names_the_account() {
+    // `S-C44`. A sweep knows an address and nothing else — attribution is global by content
+    // address, so the blob it is deleting may be charged to an account with no remaining
+    // connection to the asset whose purge exposed it. The collector must not guess a user.
+    let ledger = InMemoryQuota::new();
+    let address = address(41);
+    ledger
+        .charge(
+            &user(),
+            &address,
+            1_024,
+            Timestamp::UNIX_EPOCH,
+            QuotaLimits::unlimited(),
+        )
+        .await
+        .expect("the ledger charges");
+
+    let released = ledger
+        .release_attribution(&address)
+        .await
+        .expect("the ledger answers")
+        .expect("the address was attributed");
+    assert_eq!(released, (user(), 1_024));
+    assert_eq!(ledger.usage(&user()).await.expect("usage").used, 0);
+}
+
+#[tokio::test]
+async fn releasing_an_unattributed_address_is_none_rather_than_an_error() {
+    // The ordinary case for a blob the ledger never saw. A sweep that treated it as a failure
+    // would stall on the first one.
+    let ledger = InMemoryQuota::new();
+    assert_eq!(
+        ledger
+            .release_attribution(&address(42))
+            .await
+            .expect("the ledger answers"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_collector_release_clears_the_over_limit_clock_like_a_user_release() {
+    // Both releases credit the same way, which is why they share one helper: a second copy
+    // would eventually forget `over_since`, leaving an account back under its limit still
+    // carrying the clock that decides when a soft limit becomes a hard one.
+    let ledger = InMemoryQuota::new();
+    let limits = QuotaLimits::new(1_000, 1_500, SignedDuration::from_hours(24));
+    ledger
+        .charge(&user(), &address(43), 2_000, Timestamp::UNIX_EPOCH, limits)
+        .await
+        .expect("the ledger charges");
+    assert!(
+        ledger
+            .usage(&user())
+            .await
+            .expect("usage")
+            .over_since
+            .is_some()
+    );
+
+    ledger
+        .release_attribution(&address(43))
+        .await
+        .expect("the ledger answers")
+        .expect("attributed");
+
+    assert_eq!(
+        ledger.usage(&user()).await.expect("usage").over_since,
+        None,
+        "back under the limit, so a later crossing gets a fresh window"
+    );
+}

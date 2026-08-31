@@ -961,6 +961,16 @@ impl QuotaStore for SwitchableQuota {
         }
         self.inner.release(user, address)
     }
+
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> StoreFuture<'a, Option<(UserId, u64)>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release_attribution(address)
+    }
 }
 
 /// An album store that can be made to fail on demand.

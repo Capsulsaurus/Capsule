@@ -45,12 +45,13 @@ impl crate::store::Clock for StepClock {
     }
 }
 
-/// The three collaborators plus the clock, assembled.
+/// The four collaborators plus the clock, assembled.
 struct Harness {
     context: CollectionContext,
     index: Arc<InMemoryAssetIndex>,
     blobs: Arc<InMemoryBlobStore>,
     marks: Arc<InMemoryCollection>,
+    quotas: Arc<crate::quota::InMemoryQuota>,
     clock: Arc<StepClock>,
 }
 
@@ -59,11 +60,13 @@ impl Harness {
         let index = Arc::new(InMemoryAssetIndex::new());
         let blobs = Arc::new(InMemoryBlobStore::new());
         let marks = Arc::new(InMemoryCollection::new());
+        let quotas = Arc::new(crate::quota::InMemoryQuota::new());
         let clock = StepClock::new();
         let context = CollectionContext::new(
             index.clone(),
             blobs.clone(),
             marks.clone(),
+            quotas.clone(),
             clock.clone(),
             DEFAULT_GRACE_WINDOW,
         );
@@ -72,6 +75,7 @@ impl Harness {
             index,
             blobs,
             marks,
+            quotas,
             clock,
         }
     }
@@ -155,6 +159,38 @@ impl Harness {
             .await
             .expect("the index applies");
         assert!(matches!(outcome, OpOutcome::Applied { .. }));
+    }
+}
+
+use crate::quota::QuotaStore as _;
+
+impl Harness {
+    /// Charge `address` to `user` so a later sweep has something to credit back.
+    async fn charge(&self, user: &str, address: &ContentAddress, size: u64) {
+        let outcome = self
+            .quotas
+            .charge(
+                &crate::store::UserId::new(user),
+                address,
+                size,
+                self.clock.now(),
+                crate::quota::QuotaLimits::unlimited(),
+            )
+            .await
+            .expect("the ledger charges");
+        assert!(matches!(
+            outcome,
+            crate::quota::ChargeOutcome::Charged { .. }
+        ));
+    }
+
+    /// What `user` currently owes.
+    async fn used(&self, user: &str) -> u64 {
+        self.quotas
+            .usage(&crate::store::UserId::new(user))
+            .await
+            .expect("the ledger answers")
+            .used
     }
 }
 
@@ -440,4 +476,133 @@ fn the_system_clock_is_a_clock() {
     // Guards the seam the workers take: a production pass reads the trusted server clock, and
     // the retention floor is meaningless compared against anything else.
     let _: &dyn crate::store::Clock = &SystemClock;
+}
+
+#[tokio::test]
+async fn a_swept_blob_credits_its_bytes_back_to_the_account_they_were_charged_to() {
+    // `S-C44`. Without this an account's usage only ever goes up: emptying the trash frees disk
+    // and frees nothing the user can see, and after enough cycles a quota reflects storage the
+    // server no longer holds.
+    let h = Harness::new();
+    let address = h.publish("credited", b"derivative bytes").await;
+    h.charge("uploader", &address, 16).await;
+    assert_eq!(h.used("uploader").await, 16);
+
+    h.delete("credited", Some(Timestamp::UNIX_EPOCH), 1).await;
+    purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("the purge runs");
+
+    // Marked, then swept once the grace window has passed.
+    collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector marks");
+    assert_eq!(
+        h.used("uploader").await,
+        16,
+        "a mark is not a sweep: the bytes are still on disk and still charged"
+    );
+
+    h.clock.advance(days(31));
+    let report = collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector sweeps");
+
+    assert!(report.swept.contains(&address));
+    assert!(
+        report
+            .credited
+            .contains(&(crate::store::UserId::new("uploader"), 16)),
+        "the pass must be able to say what it gave back and to whom: {:?}",
+        report.credited
+    );
+    assert_eq!(h.used("uploader").await, 0);
+}
+
+#[tokio::test]
+async fn a_blob_a_second_asset_still_references_credits_nothing() {
+    // The reason the credit belongs to the sweep and not to the purge. Two assets share a
+    // derivative, one is deleted and purged — refunding there would give back bytes the server
+    // is still storing for the surviving holder.
+    let h = Harness::new();
+    let shared = h.publish("shared-first", b"shared derivative").await;
+    let second = h.publish("shared-second", b"second asset").await;
+    h.record(
+        &AssetId::new("shared-second"),
+        BlobRole::Derivative,
+        &shared,
+    )
+    .await;
+    h.charge("uploader", &shared, 16).await;
+
+    h.delete("shared-first", Some(Timestamp::UNIX_EPOCH), 2)
+        .await;
+    purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("the purge runs");
+
+    h.clock.advance(days(31));
+    let report = collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector runs");
+
+    assert!(!report.swept.contains(&shared), "it is still referenced");
+    assert!(report.credited.is_empty());
+    assert_eq!(
+        h.used("uploader").await,
+        16,
+        "the surviving asset still holds these bytes, so the account still owes them"
+    );
+    // The second asset's own blobs are untouched, which is what makes the assertion above about
+    // sharing rather than about nothing having happened.
+    assert!(!report.swept.contains(&second));
+}
+
+#[tokio::test]
+async fn a_swept_blob_the_ledger_never_saw_credits_nothing_and_is_not_an_error() {
+    // The ordinary case for a blob that predates attribution, or one the ledger simply does not
+    // hold. `release_attribution` answers `None`, and a sweep that treated that as a failure
+    // would stall on the first such blob.
+    let h = Harness::new();
+    let address = h.publish("unattributed", b"never charged").await;
+    h.delete("unattributed", Some(Timestamp::UNIX_EPOCH), 3)
+        .await;
+    purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("the purge runs");
+    collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector marks");
+
+    h.clock.advance(days(31));
+    let report = collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector sweeps");
+
+    assert!(report.swept.contains(&address));
+    assert!(report.credited.is_empty());
+}
+
+#[tokio::test]
+async fn a_dry_run_credits_nothing() {
+    // A dry run must be readable without being a transaction. It reports what a real pass would
+    // sweep and moves no bytes and no ledger entry.
+    let h = Harness::new();
+    let address = h.publish("dry", b"dry-run bytes").await;
+    h.charge("uploader", &address, 16).await;
+    h.delete("dry", Some(Timestamp::UNIX_EPOCH), 4).await;
+    purge_expired(&h.context, Mode::Apply, 10)
+        .await
+        .expect("the purge runs");
+    collect(&h.context, Mode::Apply)
+        .await
+        .expect("the collector marks");
+    h.clock.advance(days(31));
+
+    let report = collect(&h.context, Mode::DryRun)
+        .await
+        .expect("the dry run runs");
+    assert!(report.swept.contains(&address));
+    assert!(report.credited.is_empty());
+    assert_eq!(h.used("uploader").await, 16);
 }

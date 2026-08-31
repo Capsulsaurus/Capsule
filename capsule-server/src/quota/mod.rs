@@ -199,6 +199,23 @@ pub trait QuotaStore: std::fmt::Debug + Send + Sync {
         user: &'a UserId,
         address: &'a ContentAddress,
     ) -> StoreFuture<'a, bool>;
+
+    /// Release `address` to whoever the ledger holds it against, returning them and the bytes.
+    ///
+    /// The collector's release (`S-C44`), and it is a **separate operation** rather than a
+    /// nullable-user variant of [`QuotaStore::release`] because the two want opposite things
+    /// from the same word. Cancellation is one account undoing its own reservation, and
+    /// refusing another account's attribution there is the point. A sweep knows an address and
+    /// nothing else: attribution is global by content address, so the blob it is deleting may be
+    /// charged to an account with no remaining connection to the asset whose purge exposed it.
+    /// The collector cannot supply the user and must not guess one, so it asks the ledger.
+    ///
+    /// `None` when the address was not attributed — which is the ordinary case for a blob the
+    /// ledger never saw, and is not an error.
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> StoreFuture<'a, Option<(UserId, u64)>>;
 }
 
 /// The state `used` puts a user in, given how long they have been over.
@@ -261,6 +278,22 @@ struct Inner {
     attributed: BTreeMap<ContentAddress, (UserId, u64)>,
     /// Each user's total and the moment they went over.
     usage: BTreeMap<UserId, StoredUsage>,
+}
+
+impl Inner {
+    /// Give `size` bytes back to `user`.
+    ///
+    /// One place, because both releases do exactly this and a second copy would eventually
+    /// forget the `over_since` half — which would leave an account that dropped back under its
+    /// limit still carrying the clock that decides when a soft limit becomes a hard one.
+    fn credit(&mut self, user: &UserId, size: u64) {
+        if let Some(entry) = self.usage.get_mut(user) {
+            entry.used = entry.used.saturating_sub(size);
+            // Back under the limit: the clock stops, so a later crossing gets a fresh window
+            // rather than inheriting an expired one.
+            entry.over_since = None;
+        }
+    }
 }
 
 impl InMemoryQuota {
@@ -330,13 +363,28 @@ impl QuotaStore for InMemoryQuota {
                 return Ok(false);
             }
             inner.attributed.remove(address);
-            if let Some(entry) = inner.usage.get_mut(user) {
-                entry.used = entry.used.saturating_sub(size);
-                // Back under the limit: the clock stops, so a later crossing gets a fresh
-                // window rather than inheriting an expired one.
-                entry.over_since = None;
-            }
+            inner.credit(user, size);
             Ok(true)
+        })
+    }
+
+    fn release_attribution<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> StoreFuture<'a, Option<(UserId, u64)>> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some((owner, size)) = inner.attributed.remove(address) else {
+                return Ok(None);
+            };
+            inner.credit(&owner, size);
+            tracing::info!(
+                user = %owner,
+                %address,
+                size,
+                "a swept blob's bytes were credited back to the account they were charged to"
+            );
+            Ok(Some((owner, size)))
         })
     }
 }
