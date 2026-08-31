@@ -215,7 +215,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C6 | Quota service | server | — | M | RETIRED | ready | |
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | ready | |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
-| S-C9 | Device-directory publish/fetch | server | — | M | RETIRED | ready | upload device identity → `S-C20` |
+| S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1 | M | RETIRED | ready | layout doc reconciled (filesystem/server.md, 2026-07-12) |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
@@ -248,6 +248,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
+| S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | ready | found by `S-C9`; half of invariant 23 is unenforced, and it bricks `S-C23` |
+| S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1166,7 +1168,33 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** invariant 23's rejecting test passes; a client can fetch and pin a
   directory end-to-end. **Tier:** Unit + Smoke. **Blocks:** S-C7, S-D2.
 - **Landed in retired code; re-scoped onto Kynos.**
-- **Owed:** upload device identity → `S-C20`.
+- **Ported 2026-08-30 (`done\*`).** `POST /v1/auth/devices/directory` and
+  `GET /v1/auth/devices/directory/{user_id}` over a `capsule-server/src/directory` port with a
+  deterministic in-memory adapter; 7 port cases and 9 surface cases.
+- **The monotonic guard is an operation on the port, not a check in a handler.** A handler that
+  reads the stored version, compares and then writes has a window in which a concurrent publish
+  lands, and two publishes racing through it can leave the *lower* version stored — which is the
+  rollback invariant 23 exists to prevent, reintroduced by the code enforcing it. So the
+  comparison is `DeviceDirectoryStore::publish` and every adapter owes atomicity: a mutex in the
+  in-memory one, a guarded upsert whose `WHERE` clause **is** the comparison in Postgres. The
+  same lesson `S-C37` learned about sequence numbers, applied before it could be got wrong here.
+- **Strictly greater, so equal is refused too** — `a_non_advancing_version_is_refused_and_leaves_the_stored_document_alone`
+  covers 5, 4 and 1 against a stored 5. A republished version could carry a different device
+  list under the same number, which is the rollback wearing the right version.
+- **The account comes from the signed core**, not from the token or a path parameter, so a
+  document signed for one account cannot be published under another's name even by the account
+  holding it.
+- **Two Salvo defects not carried across.** The retired `GET .../directory/{user_id}` was one of
+  the four operations spargen 0.4 refuses outright — a path template variable with **no declared
+  path parameters**, so no typed client could call it; Kynos checks that correspondence at
+  compile time. And the retired `404` carried no `error.*` code, which the i18n contract
+  requires; it is now `error.directory.not_published`.
+- **A `422` deleted by construction:** Kynos's shared body rejection declares `400`, `415` *and*
+  a `422` a raw-bytes body cannot produce. The `OpaqueBody` newtype that `S-C1` wrote for the
+  chunk body is now `capsule-server/src/body.rs`, shared, with the catalog codes coming from the
+  media-type marker — the second surface needing it is where two copies differing in two string
+  constants stopped being acceptable.
+- **Owed:** the signature half of invariant 23 → `S-C42`; upload device identity → `S-C20`.
 
 ### S-C10 — Key-free media serving conformance
 
@@ -1974,6 +2002,73 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   than timed. **Tier:** Unit.
 - **Blocked on `S-C32`**, which owns the counter port. Genuinely blocked, not stale: there is
   nothing to rate-limit against until it exists.
+
+### S-C42 — nothing verifies the device directory's own signature
+
+- **Contract:** [Validation invariant 23](capsule-docs/src/content/docs/design/threat-model/validation.md)
+  — *"A published `DeviceDirectory` has `directory_version` strictly greater than the version
+  currently stored for that user, **and the master signature covers it**."*
+- **Gap** (found 2026-08-30 porting `S-C9`): the second clause is enforced by nobody. The
+  retired implementation projected `directory_version` out of the CBOR and stored the bytes; the
+  Kynos port does the same. An authenticated caller can publish a document that verifies under
+  no key at all, and the server will serve it to every peer that asks.
+- **Why the server cannot simply check it:** it has no anchor. The document carries the IK's
+  signature over its core but **not the IK itself** — a `DeviceEntry` lists a *device* key — and
+  no account record holds an identity key either. On a first publish there is nothing to verify
+  against, so the check cannot be "verify against the stored IK" without first deciding where a
+  stored IK comes from.
+- **The consequence is worse than an unverified document sitting in a table.** `S-C23` anchors
+  revoke-all by accepting a candidate IK **only if it verifies the account's stored directory**.
+  So an authenticated caller who publishes garbage has permanently disabled that account's
+  global sign-out — which is precisely the recovery path a user reaches for after a device is
+  stolen, and precisely the ceremony designed so a stolen session token could *not* deny it to
+  them. A stolen token cannot revoke everything, but under this gap it can make sure nobody can.
+- **Deliverable, and the decision it needs first:** where the anchor lives. The candidates are
+  trust-on-first-publish (the first directory establishes the IK; every later one must verify
+  under it, and a version-1 republish is refused by invariant 23 already), or an IK recorded at
+  registration. The first needs no new surface and is self-consistent with the monotonic guard;
+  the second is stronger but changes the account record and the registration contract. Decide,
+  then verify on every publish.
+- **Watch out:** whichever anchor is chosen, the *existing* stored directories were accepted
+  without a check. Turning verification on is a migration, not a flag — an account whose stored
+  document does not verify has to be told, and refusing to serve it is another way to break the
+  same recovery path.
+- **Done when:** a publish whose signature does not verify under the account's anchor is
+  refused, and `S-C23`'s revoke-all cannot be disabled by publishing an unverifiable directory.
+  **Tier:** Unit.
+- **Blocks `S-C23`** in practice rather than on paper: revoke-all can be *written* against
+  today's port, and it would inherit a denial-of-service on its own recovery path.
+
+### S-C43 — `replace` rides the upload protocol and has no producer
+
+- **Contract:** [Authorization — The Lifecycle Write Surface](capsule-docs/src/content/docs/design/authorization.md)
+  — *"(`create` **and `replace`**, and any derivative action carrying new bytes, ride the upload
+  protocol instead — a write that moves blob bytes is an upload by definition.)"*;
+  [Validation invariants 17 and 18](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-30 reading the ported `S-C1` gate against the doc): the Kynos upload
+  gate accepts **`create` and nothing else** — `check_create` refuses any other action with
+  `ActionNotAllowed`, and `only_a_create_may_open_an_upload_session` pins it. `S-C16` covers the
+  actions that reference already-stored blobs. So `replace` — a write that *does* move bytes and
+  is therefore explicitly not `S-C16`'s — is served by neither surface.
+- **The two `None`s this makes honest, and dishonest.** `envelope_context` passes
+  `stored_chain_head: None` and `stored_amk_version: None` into the shared battery. For a
+  `create` those are **correct**: there is no predecessor to chain onto and no prior epoch to
+  regress from, so invariants 17 and 18 are vacuous rather than skipped. The moment `replace` is
+  accepted they become wrong, and silently: the battery would compare against nothing and pass a
+  stale-revival that invariant 17 exists to catch. Whoever lands this slice has to feed the
+  asset row's chain head and `amk_version` in, which means `S-C37`'s row grows two fields.
+- **Deliverable:** the upload gate accepts `replace`, with `stored_chain_head` and
+  `stored_amk_version` read from the asset row inside the same transaction that mints the
+  sequence number, and the `409` stale-revival and `400` amk-regression rejections carrying
+  their `error.*` codes.
+- **Watch out:** a `replace` re-points a role the index deliberately refuses to re-point —
+  `BlobOutcome::Conflict` exists because letting a later session swap the bytes under a
+  signature that still verifies against the old ones is the defect it was written to stop. A
+  `replace` is the *authorized* form of exactly that, so it needs its own index operation rather
+  than a relaxation of `record_blob`, or the refusal stops meaning anything.
+- **Done when:** a signed `replace` bundle uploads, supersedes the prior original, appears on
+  the feed as an `Updated` entry, and a stale `prior_provenance_hash` is refused `409` with its
+  code. **Tier:** Unit + Smoke.
 
 ## Lane D — SDK / clients
 
