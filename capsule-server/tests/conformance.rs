@@ -1367,6 +1367,52 @@ fn the_router_emits_a_document() {
     );
 }
 
+/// No album-shaped schema carries a plaintext title (`S-C26`).
+///
+/// The Salvo schema had `albums.name` and `albums.description` as plaintext Postgres columns —
+/// a residue of the pre-key-free design, and on a key-free server a privacy defect rather than
+/// dead weight. This port simply never declared them, which is the cheapest possible
+/// resolution and also the easiest to undo by accident: somebody adds a convenience field to
+/// an album response and the server is holding user content again.
+///
+/// So the guard is on the **emitted document**, not on a Rust struct. It walks every schema
+/// whose name mentions an album and asserts none of them has a `name` or `description`
+/// property. `VersionResponse` legitimately has a `name` — the server's own package name — and
+/// is exactly why this is scoped to album schemas rather than banning the word.
+#[test]
+fn no_album_schema_carries_a_plaintext_title() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json: serde_json::Value =
+        serde_json::from_str(&document.to_json().expect("document serializes"))
+            .expect("the document is JSON");
+
+    let schemas = json["components"]["schemas"]
+        .as_object()
+        .expect("the document declares schemas");
+
+    let mut checked = 0;
+    for (name, schema) in schemas {
+        if !name.to_lowercase().contains("album") {
+            continue;
+        }
+        checked += 1;
+        let Some(properties) = schema["properties"].as_object() else {
+            continue;
+        };
+        for forbidden in ["name", "description", "album_name", "album_description"] {
+            assert!(
+                !properties.contains_key(forbidden),
+                "{name} declares `{forbidden}`: album titles are user content and belong in the \
+                 encrypted sidecar, not on a key-free server (S-C26)"
+            );
+        }
+    }
+    assert!(
+        checked > 0,
+        "the guard checked nothing; the album schemas must have been renamed out from under it"
+    );
+}
+
 /// The emitted document declares OpenAPI 3.2.
 ///
 /// 3.2 is a project-level requirement, not a preference: spargen consumes this document to
