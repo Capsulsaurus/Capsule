@@ -224,7 +224,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
-| S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
+| S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | done\* | `moved/{user}` stays post-v1; revocations have no write surface until federation lands |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
 | S-C20 | Invariant-7 floor grounded in the device directory | server | S-C9 | M | RETIRED | done\* | the account-creation fallback is gone, not kept |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
@@ -1539,6 +1539,48 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** each record round-trips against its doc's shape; a second server's
   revocation check consumes the published list in the federation test rig.
 - **Tier:** Unit + Smoke. **Landed in retired code; re-scoped onto Kynos.**
+- **Landed 2026-08-31 (`done\*`)** as `capsule-server/src/discovery/` plus three public
+  operations in `routes/well_known.rs`, beside `S-C15`'s `attestation-keys`. All four
+  registry records are now served, and none of them takes a credential — the emitted
+  contract carries no `security` entry for any of them, which is the assertion the
+  conformance case makes by omission.
+- **The published signing key is read out of the signer** (`SessionTokens::from_pkcs8`
+  derives the public half and `public_key()` hands it over), not configured beside it. This
+  is the `S-C15` invariant applied to the operational key, and it mattered more here: a
+  published key that is only *usually* the signing key fails silently on the serving side
+  and totally on the peer's — every token this server ever minted becomes unverifiable at
+  once, which from outside is indistinguishable from a compromise. `SessionTokens::new` is
+  gone; the only constructor takes the operator's PKCS#8 DER, which is the shape
+  `JWT_ED25519_DER` actually has.
+- **Both halves of the revocation rule are implemented, and the second half is the point.**
+  Publishing a list is the easy half; `check_revocation` is the verifier's, and its
+  `Stale` verdict is what makes revocation survive an unreachable list. Without it,
+  revocation is defeated by any network position between two servers — a capability the
+  *revoked* peer is the most motivated to use. The criterion asked for "a second server's
+  revocation check consuming the published list in the federation test rig"; there is no
+  federation rig, so the peer is stood up as what a peer actually is for this rule — a
+  verifier holding a token and a fetched copy of the issuer's list — and the list it decides
+  against is parsed back out of the served JSON, not read from the port.
+- **The `503` on `revoked-jti` is a claim, not a formality.** An empty list is the strongest
+  statement the record can make — *nothing is revoked* — so serving one on a storage failure
+  would turn an outage into a silent un-revocation of every token a peer holds, and the
+  peer's own fail-closed rule cannot save it: a fresh, well-formed, empty list is exactly
+  what that rule says to believe. `SwitchableRevocations` proves the status reachable, per
+  `S-C28`'s both-directions audit.
+- **A deprecation inside the announcement window is refused at construction.** 90 days by
+  default, deployment-configurable. A server that published a well-formed cutoff for next
+  Tuesday would satisfy the record's shape while breaking the promise the record exists to
+  make, so it is unrepresentable rather than reviewed.
+- **Owed.** Nothing *writes* a revocation over the wire: minting and revoking federation
+  capability tokens is federation's, not this slice's, so the port is exercised directly
+  and the list is empty on a real deployment until that lands. The announcement window and
+  the accepted `protocol_version` range are constructed rather than configured, which is the
+  same structural debt every module in this crate carries — **no config loading exists**, so
+  nothing reads `JWT_ED25519_DER`, `SYNC_CURSOR_MAC_KEY` or `ATTESTATION_KEY_SEED` and there
+  is no server binary. The three auth endpoint URLs are literals here and literals again in
+  the route attributes with no type binding them; a test posts to the *published* login URL
+  and asserts the server answers, which makes a renamed route a `404` rather than a
+  discovery record that quietly sends every new client somewhere that does not exist.
 
 ### S-C19 — Authoritative album protocol pin
 
