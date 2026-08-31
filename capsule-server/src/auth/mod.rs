@@ -36,7 +36,7 @@ pub mod tokens;
 use std::sync::Arc;
 
 pub use self::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
-pub use self::scheme::AccessToken;
+pub use self::scheme::{AccessToken, AuthenticatedSession, TOUCH_INTERVAL};
 pub use self::tokens::{
     ACCESS_TOKEN_TTL, ISSUER, IssuedTokens, SessionTokens, TokenError, TokenKind, VerifiedToken,
 };

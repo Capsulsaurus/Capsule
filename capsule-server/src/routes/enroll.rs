@@ -29,7 +29,7 @@ use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::auth::{AccessToken, AuthContext};
+use crate::auth::AccessToken;
 use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::enrollment::{EnrollmentContext, MAX_RELAY_BYTES};
 use crate::store::{
@@ -213,27 +213,21 @@ pub enum RelayRejection {
     tag = EnrollmentTag
 )]
 pub async fn issue_enrollment_code(
-    Inject(auth): Inject<AuthContext>,
     Inject(enrollment): Inject<EnrollmentContext>,
     Auth(credential): Auth<AccessToken>,
 ) -> Result<Json<EnrollmentCodeResponse>, IssueRejection> {
     let user = UserId::new(credential.user.as_str());
     let now = enrollment.clock().now();
 
-    let session = auth
-        .sessions()
-        .read_session(&credential.session)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %user, "the session store could not answer an enrollment");
-            IssueRejection::unavailable()
-        })?;
-
-    // A session the store no longer holds cannot have authenticated recently, so this is the
-    // same refusal rather than a separate one — the token outliving its record is exactly the
-    // case a freshness gate exists to catch.
-    let fresh = session.is_some_and(|record| enrollment.is_fresh(record.authenticated_at, now));
-    if !fresh {
+    // Read from the credential, not from the store. `S-C48` put the ledger on the bearer
+    // scheme's path, so by the time a handler runs the session has already been confirmed live
+    // and its `authenticated_at` handed over. This used to be a second `read_session` with its
+    // own `500`; that answer became unreachable the moment the scheme started refusing an
+    // unreadable ledger itself, and a status nothing can produce is the `S-C28` defect.
+    //
+    // The "session the store no longer holds" case the old comment covered is not lost — it is
+    // now a `401` from the scheme, which is a better answer than the `403` this gate gave it.
+    if !enrollment.is_fresh(credential.authenticated_at, now) {
         tracing::info!(%user, "an enrollment was refused: no recent local authorization");
         return Err(IssueRejection::LocalAuthRequired {
             code: error_codes::ENROLLMENT_LOCAL_AUTH_REQUIRED,

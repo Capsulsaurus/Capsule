@@ -244,7 +244,9 @@ async fn another_accounts_session_is_refused_and_not_closed() {
     // which a caller ends somebody else's session and is then told they were not allowed to.
     let fixture = Fixture::working();
     let mine = login(&fixture, None, None).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     let target = ledger(&fixture, &bearer(&mine)).await["sessions"]
         .as_array()

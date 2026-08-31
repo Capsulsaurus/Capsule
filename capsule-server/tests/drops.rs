@@ -429,7 +429,9 @@ async fn a_session_cannot_be_appended_to_through_another_account_s_link() {
     )
     .await;
 
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
     provision(
         &fixture,
         &stranger,
@@ -450,7 +452,9 @@ async fn an_inbox_is_the_owners_alone() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     deposit(&fixture, &bearer, 1, &payload(b'g', 256)).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     assert_eq!(
         inbox(&fixture, &bearer).await["drops"]
@@ -476,7 +480,9 @@ async fn discarding_removes_a_drop_and_is_only_the_owners() {
         .as_str()
         .expect("a drop id")
         .to_owned();
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     fixture
         .client
@@ -633,7 +639,9 @@ async fn another_accounts_drop_cannot_be_adopted() {
         .as_str()
         .expect("a drop id")
         .to_owned();
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
     let manifest = support::create_request(&fixture.clock, &bytes, "original");
 
     fixture

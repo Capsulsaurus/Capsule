@@ -338,6 +338,7 @@ impl AccountDirectory for InMemoryAccounts {
 pub(crate) struct SwitchableSessions {
     inner: InMemoryAuthState,
     unavailable: AtomicBool,
+    unavailable_after_authentication: AtomicBool,
 }
 
 impl SwitchableSessions {
@@ -346,12 +347,32 @@ impl SwitchableSessions {
         Self {
             inner: InMemoryAuthState::new(clock, SESSION_TTL),
             unavailable: AtomicBool::new(false),
+            unavailable_after_authentication: AtomicBool::new(false),
         }
     }
 
     /// Make every subsequent operation fail, or stop.
+    ///
+    /// Since `S-C48` this includes `read_session`, which the bearer scheme calls, so a guarded
+    /// operation under this switch is refused **at the door** and its handler is never entered.
+    /// That is the truthful simulation of a total store outage; it is not the way to reach a
+    /// handler's own store-unavailable answer — see
+    /// [`Self::set_unavailable_after_authentication`].
     pub(crate) fn set_unavailable(&self, unavailable: bool) {
         self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// Make every operation *except* `read_session` fail.
+    ///
+    /// This is the partial outage a handler's `500` is written for and the only shape that can
+    /// still reach one: the bearer scheme's read succeeds, the request enters the handler, and
+    /// the write the handler makes is the thing that fails. It is not a contrivance — a read
+    /// served from a replica while the primary is unwritable is exactly this — and without it
+    /// `S-C48` would have made several declared `500`s unreachable, which is the `S-C28` defect
+    /// wearing a new hat.
+    pub(crate) fn set_unavailable_after_authentication(&self, unavailable: bool) {
+        self.unavailable_after_authentication
+            .store(unavailable, Ordering::SeqCst);
     }
 
     fn refuse<T>() -> Result<T, StoreError> {
@@ -361,8 +382,14 @@ impl SwitchableSessions {
         })
     }
 
+    /// Whether the store answers at all — the question `read_session` asks.
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+
+    /// Whether an operation a handler makes answers — every operation but `read_session`.
+    fn is_down_past_the_door(&self) -> bool {
+        self.is_down() || self.unavailable_after_authentication.load(Ordering::SeqCst)
     }
 }
 
@@ -943,7 +970,7 @@ impl AuthStateStore for SwitchableSessions {
     }
 
     fn open_session(&self, record: SessionRecord) -> StoreFuture<'_, ()> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.open_session(record)
@@ -964,7 +991,7 @@ impl AuthStateStore for SwitchableSessions {
         session: &'a SessionId,
         last_active_at: Timestamp,
     ) -> StoreFuture<'a, Option<SessionRecord>> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.touch_session(session, last_active_at)
@@ -975,7 +1002,7 @@ impl AuthStateStore for SwitchableSessions {
         session: &'a SessionId,
         at: Timestamp,
     ) -> StoreFuture<'a, Option<SessionRecord>> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.mark_authenticated(session, at)
@@ -985,21 +1012,21 @@ impl AuthStateStore for SwitchableSessions {
         &'a self,
         session: &'a SessionId,
     ) -> StoreFuture<'a, Option<SessionRecord>> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.close_session(session)
     }
 
     fn sessions_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<SessionRecord>> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.sessions_for_user(user)
     }
 
     fn close_all_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<SessionRecord>> {
-        if self.is_down() {
+        if self.is_down_past_the_door() {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.close_all_for_user(user)
@@ -2169,14 +2196,33 @@ impl Fixture {
     /// Minted with the server's own signer rather than by signing in, because the account it
     /// names has no directory row — which is exactly the point: the credential is valid, and
     /// the session it asks about is somebody else's.
-    pub(crate) fn other_bearer(&self, user_id: &str) -> String {
+    ///
+    /// **It opens a session record too**, and that is not incidental. `S-C48` put the ledger on
+    /// the bearer scheme's path, so a token naming a session nothing holds is now refused at the
+    /// door with a `401` — which would silently turn every cross-account isolation case into a
+    /// test of the authenticator rather than of the handler it was written for. A second
+    /// account has to be as real as the first for "another account cannot see this" to be the
+    /// thing being asserted.
+    pub(crate) async fn other_bearer(&self, user_id: &str) -> String {
+        let session = SessionId::new("01937b7c-0000-7000-8000-00000000000f");
+        let now = self.clock.now();
+        self.sessions
+            .open_session(SessionRecord {
+                session_id: session.clone(),
+                user_id: UserId::new(user_id),
+                created_at: now,
+                authenticated_at: now,
+                last_active_at: now,
+                user_agent: None,
+                ip_address: None,
+                cohort_hash: None,
+                device_id: None,
+            })
+            .await
+            .expect("the double opens a session");
         let issued = self
             .tokens
-            .issue(
-                &UserId::new(user_id),
-                &SessionId::new("01937b7c-0000-7000-8000-00000000000f"),
-                SESSION_TTL,
-            )
+            .issue(&UserId::new(user_id), &session, SESSION_TTL)
             .expect("the signer mints");
         format!("Bearer {}", issued.access_token)
     }

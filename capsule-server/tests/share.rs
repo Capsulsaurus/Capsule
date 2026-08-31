@@ -265,7 +265,9 @@ async fn revocation_takes_effect_immediately_and_is_only_the_owners() {
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
     let (id, _, original) = live_link(&fixture, &bearer, 7).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     // A stranger's revoke answers the same 204 — saying "there was nothing to revoke" would be
     // a lookup — and changes nothing.

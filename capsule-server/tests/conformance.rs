@@ -289,14 +289,14 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::FORBIDDEN);
 
-    fixture.sessions.set_unavailable(true);
+    fixture.sessions.set_unavailable_after_authentication(true);
     client
         .post("/v1/auth/logout")
         .header("authorization", &format!("Bearer {}", rotated.access_token))
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    fixture.sessions.set_unavailable(false);
+    fixture.sessions.set_unavailable_after_authentication(false);
 
     client
         .post("/v1/auth/logout")
@@ -309,7 +309,20 @@ async fn every_declared_response_is_exercised() {
     // One session is opened and driven through every answer the four operations can give. The
     // order is load-bearing: a `409` on `DELETE` needs a session mid-finalization, and a `200`
     // on `POST` needs one already open for the same bytes.
-    let bearer = format!("Bearer {}", rotated.access_token);
+    //
+    // A fresh sign-in, because the walk just logged the previous one out. Before `S-C48` the
+    // rest of this walk rode `rotated.access_token` straight past its own logout — the token
+    // outlived the session it named, which is exactly the defect that slice closed. That it now
+    // has to sign in again is the fix showing up in the test that would have hidden it.
+    let signed_in: TokenResponse = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": EMAIL, "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let bearer = format!("Bearer {}", signed_in.access_token);
     let first = payload(b'a', 4096);
     let second = payload(b'b', 4096);
     let whole: Vec<u8> = first.iter().chain(second.iter()).copied().collect();
@@ -421,7 +434,9 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
     client
         .head(&session)
         .header("authorization", &stranger)
@@ -1515,14 +1530,18 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
-    fixture.sessions.set_unavailable(true);
+    // The 500 comes from the *enrollment* store, not the session store. Since `S-C48` the
+    // freshness gate reads `authenticated_at` off the credential the bearer scheme already
+    // verified, so this operation no longer touches the session store at all — and a walk that
+    // kept reaching for it would be exercising a path the handler does not have.
+    fixture.enrollments.set_unavailable(true);
     client
         .post("/v1/auth/devices/enroll")
         .header("authorization", &bearer)
         .send()
         .await
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    fixture.sessions.set_unavailable(false);
+    fixture.enrollments.set_unavailable(false);
 
     let enrolled: serde_json::Value = client
         .post("/v1/auth/devices/enroll")
@@ -1763,31 +1782,19 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::BAD_REQUEST);
 
-    // 500 on both, from each of the two collaborators the listing reads.
-    fixture.sessions.set_unavailable(true);
-    client
-        .get("/v1/auth/devices")
-        .header("authorization", &bearer)
+    // A second sign-in, so there is a session this walk is not riding. It is opened *before*
+    // the failure cases because since `S-C48` the `DELETE`'s own 500 needs a target that really
+    // exists: the handler reads the session, finds it, and then fails on the close. A target
+    // that does not exist answers 404 and never reaches the store operation the 500 is about.
+    let extra: capsule_server::routes::auth::TokenResponse = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "email": support::EMAIL, "password": support::PASSWORD }))
         .send()
         .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    client
-        .delete("/v1/auth/devices/anything")
-        .header("authorization", &bearer)
-        .send()
-        .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    fixture.sessions.set_unavailable(false);
-    fixture.cohorts.set_unavailable(true);
-    client
-        .get("/v1/auth/devices")
-        .header("authorization", &bearer)
-        .send()
-        .await
-        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
-    fixture.cohorts.set_unavailable(false);
-
-    // 200, then a 204 that revokes a session this walk is not using.
+        .assert_status(StatusCode::OK)
+        .json();
+    let _ = &extra;
     let ledger: serde_json::Value = client
         .get("/v1/auth/devices")
         .header("authorization", &bearer)
@@ -1801,49 +1808,42 @@ async fn every_declared_response_is_exercised() {
         .expect("a sessions array")
         .iter()
         .find(|s| s["current"] == serde_json::json!(false))
-        .map(|s| s["session_id"].as_str().expect("a session id").to_owned());
-    if let Some(spare) = spare {
-        client
-            .delete(&format!("/v1/auth/devices/{spare}"))
-            .header("authorization", &bearer)
-            .send()
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    } else {
-        // No spare session to end, so a second sign-in provides one rather than the walk
-        // revoking the credential every block after this depends on.
-        let extra: capsule_server::routes::auth::TokenResponse = client
-            .post("/v1/auth/login")
-            .header("accept", "application/json")
-            .json(&serde_json::json!({ "email": support::EMAIL, "password": support::PASSWORD }))
-            .send()
-            .await
-            .assert_status(StatusCode::OK)
-            .json();
-        let ledger: serde_json::Value = client
-            .get("/v1/auth/devices")
-            .header("authorization", &format!("Bearer {}", extra.access_token))
-            .header("accept", "application/json")
-            .send()
-            .await
-            .assert_status(StatusCode::OK)
-            .json();
-        let target = ledger["sessions"]
-            .as_array()
-            .expect("a sessions array")
-            .iter()
-            .find(|s| s["current"] == serde_json::json!(true))
-            .expect("the extra session")["session_id"]
-            .as_str()
-            .expect("a session id")
-            .to_owned();
-        client
-            .delete(&format!("/v1/auth/devices/{target}"))
-            .header("authorization", &bearer)
-            .send()
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    }
+        .expect("the second sign-in is a spare session")["session_id"]
+        .as_str()
+        .expect("a session id")
+        .to_owned();
+
+    // 500 from each collaborator the listing reads, and from the close the revoke makes.
+    fixture.sessions.set_unavailable_after_authentication(true);
+    client
+        .get("/v1/auth/devices")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete(&format!("/v1/auth/devices/{spare}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.sessions.set_unavailable_after_authentication(false);
+    fixture.cohorts.set_unavailable(true);
+    client
+        .get("/v1/auth/devices")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.cohorts.set_unavailable(false);
+
+    // And the 204 that ends it for real.
+    client
+        .delete(&format!("/v1/auth/devices/{spare}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 
     // ── Guest drops (`S-C5`) ───────────────────────────────────────────────────────────────
     // In its own future, boxed: this walk drives every operation on one client — the recorder

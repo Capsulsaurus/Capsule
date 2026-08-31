@@ -219,7 +219,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | done | `PUT` is the replace; there is deliberately no delete |
-| S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | done | the ledger surface came with it; `last_active_at` does not move until `S-C48` |
+| S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | done | the ledger surface came with it; `last_active_at` moves as of `S-C48`, coalesced to a minute |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
@@ -229,7 +229,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C20 | Invariant-7 floor grounded in the device directory | server | S-C9 | M | RETIRED | done\* | the account-creation fallback is gone, not kept |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
-| S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done\* | the ceremony lands; already-issued access tokens outlive it by up to their TTL → `S-C48` |
+| S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done | `S-C48` closed the access-token window it left open |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
@@ -254,7 +254,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
-| S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | ready | found by `S-C23`; revocation is only as fast as the access-token TTL, and `touch_session` has no caller |
+| S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | done\* | fails closed as `401`; the honest `503` needs the seam `S-C36` wants |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
@@ -2946,32 +2946,58 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
 - **Contract:** [Authentication — Explicit Revocation](capsule-docs/src/content/docs/design/authentication.md#explicit-revocation)
   (*"Revoke any single session by invalidating its session token"*, and a sessions listing
   *"with last-used timestamp"*).
-- **Gap** (found 2026-08-31 landing `S-C23`): `Authenticator<AccessToken>` verifies the JWT's
-  signature, issuer, kind and deadline and **never touches** `AuthStateStore`. Two consequences
-  follow, and the second is the tell:
-  - Closing a session — one, or all of them — kills refresh immediately and leaves every
-    already-issued access token usable for the remainder of its fifteen minutes. Revocation is
-    therefore only as fast as the TTL, which is why the TTL is short, but it is still a window
-    and the ceremony's whole purpose is denying an attacker *now*.
-  - **`AuthStateStore::touch_session` has no production caller at all.** The port defines it,
-    the conformance suite exercises it, and no request path uses it — so `last_active_at` never
-    moves, and the "last-used timestamp" the sessions listing is specified to show would be the
-    sign-in time forever. A method the design needs and nothing calls is the clearest evidence
-    that the ledger was meant to be on the request path.
-- **Deliverable:** the scheme reads the session record, refuses a token whose session is gone,
-  and touches `last_active_at` on the way through.
-- **The decision it needs first, and why this is not a one-liner:** what a request does when the
-  store cannot answer. Failing **open** turns a cache outage into an authentication bypass;
-  failing **closed** turns it into a total outage — and `AuthRejection` is Kynos's type with
-  `401`/`403` and no `503`, so the closed answer needs a status the scheme cannot currently
-  render. There is also a cost: every authenticated request becomes a Valkey round trip, which
-  is the price of real revocation and should be paid deliberately rather than discovered.
-- **Watch out:** `touch_session` on every request is a *write* on every request. It probably
-  wants coalescing (touch at most once per minute per session), and a coalescing window is a
-  staleness window in the user-visible listing — say which it is rather than picking one.
-- **Done when:** a closed session's access token is refused before its TTL expires, the sessions
-  listing shows a `last_active_at` that moves, and the store-unavailable answer is a status the
-  document declares. **Tier:** Unit + Smoke.
+- **Gap** (found 2026-08-31 landing `S-C23`): `Authenticator<AccessToken>` verified the JWT's
+  signature, issuer, kind and deadline and **never touched** `AuthStateStore`. Closing a session
+  killed refresh immediately and left every already-issued access token usable for the remainder
+  of its fifteen minutes; and `AuthStateStore::touch_session` had no production caller at all, so
+  `last_active_at` never moved and the listing's "last used" was the sign-in time forever.
+- **Landed 2026-08-31.** The scheme reads the record, refuses a token whose session is gone, and
+  writes activity forward on the way through. The credential a handler receives is no longer a
+  `VerifiedToken` but an `AuthenticatedSession` carrying the ledger's own facts.
+
+**The decision it needed first: an unreadable ledger refuses.** Failing open turns a cache outage
+into an authentication bypass — the ledger stops being consulted at exactly the moment an attacker
+would choose — so it fails closed. **The status is knowingly wrong**: the honest answer is `503`,
+Kynos's `AuthRejection` carries `401` and `403` and nothing else, and an `Authenticator` can
+return nothing else. Two things keep that from being a lie a client acts on badly — every refusal
+logs at `error` with the store's reason, so an operator sees an outage rather than a spike in bad
+credentials; and a client that answers a `401` by refreshing reaches Capsule's own route, which
+renders `error.auth.unavailable`. **This is the same missing seam `S-C36` and `S-C38` want** — a
+framework rejection that can carry a Capsule status and a Capsule `error.*` code — and it is now
+three slices asking for it, which is the argument for fixing it upstream.
+
+**The touch is coalesced at one write per minute per session, and that is a staleness window in
+the listing.** Said rather than picked: a minute of staleness on a screen a human opens
+occasionally is invisible; one store write per request per device is not. A touch that fails does
+not fail the request — the authoritative read already succeeded.
+
+**What it broke, and why each break was the point.** Four existing behaviours changed, and none of
+them was incidental:
+
+- **A second logout is now `401`, not `204`.** The credential names a session the first logout
+  removed. The client is not worse off — it asked for the session to end and the refusal is proof
+  it did — and the old answer was the fifteen-minute window observed on the one operation whose
+  job is to close it.
+- **A handler's own store-unavailable `500` stopped being reachable from a total outage**, because
+  the scheme now refuses first. That is the `S-C28` defect in a new costume, so the test double
+  grew a *partial* outage — everything but `read_session` fails — which is both the shape a
+  handler's `500` was written for and a real production shape (a read served from a replica while
+  the primary is unwritable).
+- **`POST /v1/auth/devices/enroll` stopped reading the session store at all.** Its freshness gate
+  (`S-C7`) re-read the record the scheme had just read: a second round trip for an answer already
+  given, and one that could *differ*, since a close or a re-authentication can land between two
+  reads. It reads `credential.authenticated_at` now.
+- **A test fixture minting a token for a fabricated session id stopped working**, which is worth
+  recording because it was silently wrong before: every cross-account isolation case was riding a
+  credential no ledger backed.
+
+- **Done when:** ✅ a closed session's access token is refused before its TTL expires
+  (`a_valid_proof_closes_every_session_including_the_callers`,
+  `an_access_token_dies_with_its_session_and_not_with_its_deadline`); the listing shows a
+  `last_active_at` that moves, coalesced
+  (`activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute`); the store-unavailable
+  answer is a declared status (`an_unreadable_session_ledger_refuses_rather_than_admits`).
+  **Tier:** Unit + Smoke.
 
 ### S-C49 — moderation's federated halves have no federation to hang on
 

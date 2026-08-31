@@ -211,7 +211,9 @@ async fn a_takedown_appears_in_the_owners_record_naming_the_asset() {
 async fn one_accounts_record_is_not_another_s() {
     let fixture = Fixture::working();
     suspend(&fixture, Some("theirs")).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     let body = record(&fixture, &stranger, StatusCode::OK).await;
     assert_eq!(body["standing"], "active");

@@ -333,7 +333,9 @@ async fn the_feed_shows_only_the_callers_own_library() {
     let fixture = Fixture::working();
     publish(&fixture, "mine").await;
 
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
     let body = page(&fixture, &stranger, "", StatusCode::OK).await;
     assert!(
         body["entries"].as_array().expect("an array").is_empty(),

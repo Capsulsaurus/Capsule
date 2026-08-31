@@ -109,19 +109,25 @@ async fn a_valid_proof_closes_every_session_including_the_callers() {
             .assert_status(StatusCode::UNAUTHORIZED);
     }
 
-    // The already-issued **access** tokens are not, and this asserts the truth rather than the
-    // wish. The bearer scheme verifies a signature and a deadline and never reads the session
-    // ledger, so an access token minted before the revoke stays usable for the remainder of its
-    // fifteen minutes. That is why the TTL is short — but it is a window, and `S-C48` is where
-    // closing it is decided rather than assumed.
+    // And the already-issued **access** tokens are dead too, immediately. This assertion used to
+    // read the other way — a 200 here, with a comment saying the window was a window and `S-C48`
+    // was where closing it would be decided. It is decided: the bearer scheme reads the session
+    // ledger on every request, so a token whose session was removed is refused on the next
+    // request rather than on the next quarter hour.
+    //
+    // This is the assertion the ceremony is *for*. Killing refresh alone leaves an attacker
+    // fifteen minutes of unimpeded access after the owner has done everything the product told
+    // them to do, and fifteen minutes is enough to exfiltrate a library.
     fixture
         .client
         .get("/v1/quota")
         .header("authorization", &bearer)
         .send()
         .await
-        .assert_status(StatusCode::OK);
+        .assert_status(StatusCode::UNAUTHORIZED);
 
+    // Still refused once the token's own deadline has passed, for the ordinary reason. Kept so
+    // the case shows both refusals and cannot pass by accident if the ledger check regresses.
     fixture.clock.advance(SignedDuration::from_mins(16));
     fixture
         .client
@@ -287,7 +293,9 @@ async fn a_challenge_names_the_account_that_asked_for_it() {
     let ik = identity_key();
     let bearer = fixture.bearer().await;
     anchor(&fixture, &bearer, &ik).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     // The stranger's own challenge, signed with *this* account's key, revokes nothing — the
     // challenge names their account, and their account has no anchor for this key.

@@ -721,7 +721,9 @@ async fn only_the_uploader_may_append_and_the_session_is_hidden_from_others() {
     let (first, _, whole) = blob();
     let id = fixture.open_session(&whole, "original", &bearer).await;
 
-    let intruder = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let intruder = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
     let response = fixture.chunk(&id, 0, &first, &intruder).send().await;
     response.assert_status(StatusCode::FORBIDDEN);
     assert_eq!(

@@ -118,7 +118,9 @@ async fn one_accounts_escrow_is_not_another_s() {
     // rather than forbidden — this pins that the scoping is real and not incidental.
     let fixture = Fixture::working();
     let mine = fixture.bearer().await;
-    let theirs = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let theirs = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     store(&fixture, &mine, wrapped(0x33, 128), StatusCode::OK).await;
     fetch(&fixture, &theirs, StatusCode::NOT_FOUND).await;

@@ -25,13 +25,19 @@
 //! a `session_id`. A "revoke this cohort" verb would be an authorization decision made from a
 //! spoofable string, which is exactly the surface the advisory-only rule exists to refuse.
 //!
-//! # `last_active_at` does not move yet, and the listing says the same thing the port does
+//! # `last_active_at` moves, and it is stale by up to a minute on purpose
 //!
-//! `AuthStateStore::touch_session` has no caller on any request path (`S-C48`), so a session's
-//! `last_active_at` is its creation time until that lands. The field is served anyway rather
-//! than hidden: it is the shape the client is written against, and a listing that omitted it
-//! would have to grow it back later as a wire change. What must not happen is a client showing
-//! it as *"last used"* while it means *"signed in"*, so the slice note records it.
+//! `AuthStateStore::touch_session` had no caller on any request path until `S-C48` put the
+//! session ledger on the bearer scheme's path, so this field used to be the sign-in time
+//! forever. It is now written forward by any authenticated request, which makes it mean what
+//! the listing says it means.
+//!
+//! It is **coalesced** at
+//! [`TOUCH_INTERVAL`](crate::auth::scheme::TOUCH_INTERVAL) — one write per minute per session
+//! at most — because a touch on every request is a store write on every request. So a device
+//! that is actively syncing can read as up to a minute idle. That is deliberate and it is the
+//! right trade for a screen a human opens occasionally; the reasoning is in
+//! [`crate::auth::scheme`].
 
 use capsule_i18n::error_codes;
 use kynos::prelude::*;

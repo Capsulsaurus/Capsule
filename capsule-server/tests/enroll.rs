@@ -308,7 +308,9 @@ async fn the_initiator_can_close_a_channel_and_a_stranger_cannot() {
     let fixture = Fixture::working();
     let bearer = fresh(&fixture).await;
     let channel = open_channel(&fixture, &bearer).await;
-    let stranger = fixture.other_bearer("01937b7c-0000-7000-8000-0000000000ff");
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
 
     fixture
         .client

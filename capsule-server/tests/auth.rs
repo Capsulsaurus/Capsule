@@ -609,9 +609,17 @@ async fn logout_closes_the_session_the_credential_names() {
 }
 
 #[tokio::test]
-async fn logout_is_idempotent() {
-    // "There is no longer a session" is what the caller asked for, so a second attempt is a
-    // success rather than a 404 the client would have to special-case.
+async fn a_second_logout_is_refused_because_the_first_one_worked() {
+    // This case used to assert 204 twice, on the reasoning that "there is no longer a session"
+    // is what the caller asked for either way. `S-C48` changed the answer and the change is the
+    // point: the credential the second attempt presents names a session the ledger no longer
+    // holds, so it is refused at the door and the handler is never entered.
+    //
+    // The client is not worse off. It asked for the session to end; the 401 is proof that it
+    // did, and it is the same 401 every other operation would now give that token. What would
+    // be worse is the old answer — a 204 from a credential that is dead everywhere else, which
+    // is precisely the fifteen-minute window `S-C48` closed, observed on the one operation
+    // whose job is to close it.
     let fixture = Fixture::working();
 
     let pair: TokenResponse = post_json!(
@@ -622,15 +630,21 @@ async fn logout_is_idempotent() {
     .assert_status(StatusCode::OK)
     .json();
 
-    for _ in 0..2 {
-        fixture
-            .client
-            .post("/v1/auth/logout")
-            .header("authorization", &format!("Bearer {}", pair.access_token))
-            .send()
-            .await
-            .assert_status(StatusCode::NO_CONTENT);
-    }
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &format!("Bearer {}", pair.access_token))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 
     fixture.client.assert_conformance();
 }
@@ -731,11 +745,13 @@ async fn a_refresh_token_is_a_valid_credential_and_an_insufficient_one() {
 
 #[tokio::test]
 async fn logout_answers_500_when_the_session_store_cannot_answer() {
-    // Reached *past* authentication: the credential verifies against a signer that still works,
-    // so the 500 is the store's and not a 401 wearing a different number.
+    // Reached *past* authentication, and since `S-C48` that phrase is load-bearing: the bearer
+    // scheme reads the session ledger, so a store that fails *everything* refuses this request
+    // at the door with a 401 and the handler's own 500 becomes unreachable. The partial outage
+    // is the one this answer was written for — the read succeeds, the close does not.
     let fixture = Fixture::working();
     let pair = fixture.login().await;
-    fixture.sessions.set_unavailable(true);
+    fixture.sessions.set_unavailable_after_authentication(true);
 
     let body: serde_json::Value = fixture
         .client
@@ -809,6 +825,202 @@ async fn a_body_in_the_wrong_media_type_is_415_on_every_operation_that_takes_one
             .await
             .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
     }
+
+    fixture.client.assert_conformance();
+}
+
+// ===========================================================================================
+// The session ledger on the request path (`S-C48`)
+// ===========================================================================================
+
+/// The `last_active_at` the devices listing publishes for the caller's own session.
+async fn current_last_active(fixture: &Fixture, bearer: &str) -> String {
+    let ledger: serde_json::Value = fixture
+        .client
+        .get("/v1/auth/devices")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    ledger["sessions"]
+        .as_array()
+        .expect("a sessions array")
+        .iter()
+        .find(|session| session["current"] == json!(true))
+        .expect("the caller's own session")["last_active_at"]
+        .as_str()
+        .expect("a timestamp")
+        .to_owned()
+}
+
+#[tokio::test]
+async fn an_access_token_dies_with_its_session_and_not_with_its_deadline() {
+    // The property `S-C48` bought. Before it, the bearer scheme checked a signature and a
+    // deadline and never asked whether the session still existed, so closing a session left
+    // every access token minted against it usable for the rest of its fifteen minutes.
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+    let bearer = format!("Bearer {}", pair.access_token);
+
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    fixture
+        .client
+        .post("/v1/auth/logout")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The token itself is still perfectly valid — same signature, same issuer, and its deadline
+    // is a quarter of an hour away. It is refused because the session it names is gone.
+    assert!(
+        fixture.clock.now() < pair_deadline(&fixture),
+        "the token has not expired, so a refusal here can only be the ledger's"
+    );
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    fixture.client.assert_conformance();
+}
+
+/// When the access token minted at the current instant would expire.
+fn pair_deadline(fixture: &Fixture) -> jiff::Timestamp {
+    fixture
+        .clock
+        .now()
+        .checked_add(ACCESS_TOKEN_TTL)
+        .expect("a representable deadline")
+}
+
+#[tokio::test]
+async fn an_unreadable_session_ledger_refuses_rather_than_admits() {
+    // Fail closed. The alternative is an authentication bypass that an attacker triggers by
+    // loading the store — the ledger would stop being consulted at exactly the moment somebody
+    // wanted it not to be.
+    //
+    // The status is `401` and it is knowingly the wrong one: the honest answer is `503`, and
+    // `AuthRejection` is Kynos's type with 401 and 403 and nothing else. What keeps it from
+    // misleading a client is the operation below it — a client that answers this by refreshing
+    // gets `error.auth.unavailable`, which is the truth.
+    let fixture = Fixture::working();
+    let pair = fixture.login().await;
+    let bearer = format!("Bearer {}", pair.access_token);
+
+    fixture.sessions.set_unavailable(true);
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    let problem: serde_json::Value = fixture
+        .client
+        .post("/v1/auth/refresh")
+        .header("accept", "application/json")
+        .json(&json!({ "refresh_token": pair.refresh_token }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(
+        code_of(&problem),
+        "error.auth.unavailable",
+        "the refusal at the door says nothing, so the operation a client retries on has to say \
+         it is an outage and not an expiry"
+    );
+
+    // And it recovers on its own the moment the store does.
+    fixture.sessions.set_unavailable(false);
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
+    // `touch_session` had no production caller at all before `S-C48` — the port declared it, the
+    // conformance suite exercised it, and no request path used it — so this field was the
+    // sign-in time forever while the listing called it "last used".
+    //
+    // It moves now, and it is deliberately *coarse*: at most one write per minute per session,
+    // because a touch on every request is a store write on every request. The staleness that
+    // buys is asserted here rather than left to be discovered, since it is the visible half of
+    // the trade.
+    let fixture = Fixture::working();
+    let signed_in_at = fixture.clock.now();
+    let bearer = fixture.bearer().await;
+
+    assert_eq!(
+        current_last_active(&fixture, &bearer).await,
+        signed_in_at.to_string(),
+        "a fresh session's activity is its sign-in"
+    );
+
+    // Thirty seconds of traffic writes nothing: inside the coalescing window.
+    fixture.clock.advance(SignedDuration::from_secs(30));
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    assert_eq!(
+        current_last_active(&fixture, &bearer).await,
+        signed_in_at.to_string(),
+        "a busy session inside the window is indistinguishable from an idle one, which is what \
+         being coalesced means"
+    );
+
+    // Past the window, the next request writes it forward.
+    fixture.clock.advance(SignedDuration::from_secs(31));
+    let active_at = fixture.clock.now();
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    assert_eq!(
+        current_last_active(&fixture, &bearer).await,
+        active_at.to_string(),
+        "the listing shows when the session was last used"
+    );
+
+    // And activity is not a lifetime extension. The store's TTL is absolute, so a session that
+    // has been touched every minute for a day is still closed on schedule — a sliding lifetime
+    // would be the caller-supplied TTL `S-C29` deleted, wearing activity as a disguise.
+    fixture.clock.advance(SESSION_TTL);
+    fixture
+        .client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
 
     fixture.client.assert_conformance();
 }
