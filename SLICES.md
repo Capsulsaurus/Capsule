@@ -217,7 +217,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
-| S-C11 | Refcount GC + retention purge worker | server | S-C1 | M | RETIRED | ready | layout doc reconciled (filesystem/server.md, 2026-07-12) |
+| S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1 | M | RETIRED | ready | |
@@ -250,6 +250,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | ready | found by `S-C9`; half of invariant 23 is unenforced, and it bricks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
+| S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | ready | found by `S-C11`; quota only ever goes up |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1099,10 +1100,10 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   about it. Content addressing means one blob serves many assets, so answering would turn a
   durability query into a cross-account existence oracle. The contract already fixes the shape;
   this is the reason behind it.
-- **Owed:** the `deep` re-hash and its limiter → `S-C41`; `collectable_since` (a blob inside the
-  GC grace window is referenced and *not* retrievable) → `S-C11`; the signed
-  `StorageAttestation` → `S-C15`, which wraps this engine rather than replacing it — which is
-  why `AssetVerdict` is public.
+- **Owed:** the `deep` re-hash and its limiter → `S-C41`; the signed `StorageAttestation` →
+  `S-C15`, which wraps this engine rather than replacing it — which is why `AssetVerdict` is
+  public. **The GC half is no longer owed**: `S-C11` landed it, and a marked blob now reports
+  `stored = true, retrievable = false`, which is the combination the whole verdict exists for.
 
 ### S-C4 — Share-link serving
 
@@ -1162,9 +1163,11 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   crossed, so a self-hosted deployment runs the same predicates a limited one does rather than a
   "quota off" branch nothing tests. The wire reports the limits as **absent**, not as
   `u64::MAX`: a number that is not a limit is a number some client will put in a progress bar.
-- **Owed:** trash-retention and derivative-reclaim accounting ride the purge path (`S-C11`);
+- **Owed:** trash-retention and derivative-reclaim *accounting* — `S-C11` landed the purge that
+  drops the references, and crediting the freed bytes back to whoever they were attributed to is
+  the half still missing, because the purge does not yet call `QuotaStore::release`;
   federated-receive accounting and the per-peer caching budget ride federation; the Postgres
-  adapter with the rest.
+  adapter with the rest. The credit-back half has its own row now — `S-C44`.
 
 ### S-C7 — Device-enrollment endpoints
 
@@ -1256,9 +1259,10 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   addressing means two assets share a thumbnail, so deleting one must not take the other's bytes
   — the lookup asks whether **any** live asset holds it, and
   `a_shared_blob_survives_one_holders_deletion` is why that is not a matter of opinion.
-- **Owed:** takedown-gate fold → `S-C17` (there is no `served` flag on an asset row yet); GC
-  state (`collectable_since`, so a blob mid-collection is refused inside the grace window) →
-  `S-C11`; the contract's `403` → `S-C39`; the transient `409` → `S-C40`.
+- **Owed:** takedown-gate fold → `S-C17` (there is no `served` flag on an asset row yet); the
+  contract's `403` → `S-C39`; the transient `409` → `S-C40`. **GC state is no longer owed** —
+  `S-C11` landed it, and a blob the collector has marked is `410` with its bytes still on disk,
+  checked before the store is touched.
 
 ### S-C11 — Refcount GC + retention purge worker
 
@@ -1271,7 +1275,44 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   (early purge refused; post-window purge proceeds; hostile-purge defense).
 - **Tier:** Unit + Smoke + E2E case 7 (`S-Q3`).
 - **Landed in retired code; re-scoped onto Kynos.**
-- **Owed:** layout doc reconciled (filesystem/server.md, 2026-07-12).
+- **Ported 2026-08-31 (`done\*`).** `capsule-server/src/gc` — the two-phase collector, the
+  retention purge and the dangling-reference report; 11 worker cases and 3 more in the index
+  conformance suite. **It discharges what two landed slices owed**: `S-C10`'s takedown-adjacent
+  GC state and `S-C3`'s `retrievable`, both of which now read the collector's mark.
+- **Reference counting is a query, never a counter.** `AssetIndex::reference_count` is derived
+  from the rows that name an address each time it is asked. A counter is a second copy of a
+  derivable fact, and the failure mode of a counter that drifts low is deleting a live blob —
+  the one outcome this whole module exists to prevent.
+- **What the grace window is actually for.** Not politeness: a blob renamed into the store whose
+  index write never landed looks *exactly* like a blob whose last reference just went away, and
+  the difference only becomes visible by waiting. A reference reappearing mid-window **cancels**
+  the mark rather than deferring the sweep, which is the finalization-retry case.
+- **A marked blob is `410` and is `stored` but not `retrievable`.** That second combination is
+  the one that matters: the bytes are on disk right now and on their way out, so a client that
+  read `stored` alone and released its local copy would be releasing it into a window that
+  closes. The serve path checks the mark **before** touching the store, so a blob awaiting
+  collection is never read.
+- **A tombstone still references, and purging keeps it.** Deleting is not purging — trash
+  occupies storage until the signed window passes, which is what makes it recoverable — and the
+  purge drops the *references*, not the row, because a client that has not synced since the
+  delete still has to learn about it. The feed entry a tombstone produces already carries no
+  byte references, so the purge changes nothing a reader can see.
+- **The retention floor is the client's.** `retention_until` is read from the signed envelope
+  onto the asset row, so a hostile server cannot accelerate a purge by editing a config and a
+  buggy one cannot retain past the window the user chose. **A tombstone carrying no floor is
+  never purged**: absent is not "immediately", and reading it that way would purge exactly the
+  assets whose delete manifest the server failed to project a field out of. An *unparseable*
+  floor is a `400` rather than an absence, for the same reason.
+- **A mismatch is never resolved by deletion.** A blob with no referencing row is an orphan the
+  sweep reclaims; a row referencing a blob the store does not hold is reported, logged and left
+  alone, because erasing the row would destroy the only record that the asset should exist.
+- **Dry run is the default posture, not a debugging aid.** Both workers take a `Mode`, and a
+  dry pass reports exactly what a real one would do while writing nothing — including *not*
+  marking, since a dry run that marked would make the next real pass sweep a window early.
+- **Owed:** the `gc` operator binary, which is contracted in `guides/self-hosting.md` and needs
+  the Postgres and filesystem adapters to have anything to connect to; it lands with them rather
+  than as a shell. The layout-doc reconciliation this row used to carry is already discharged —
+  the sharded tree landed with `S-C35`.
 
 ### S-C12 — Backup escrow server surface
 
@@ -2180,6 +2221,35 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** a signed `replace` bundle uploads, supersedes the prior original, appears on
   the feed as an `Updated` entry, and a stale `prior_provenance_hash` is refused `409` with its
   code. **Tier:** Unit + Smoke.
+
+### S-C44 — a swept blob's bytes are never credited back
+
+- **Contract:** [Quota — Accounting Model](capsule-docs/src/content/docs/design/quota.md)
+  ("Derivatives are reclaimed on hard-purge … any blob whose reference count reaches zero is
+  garbage-collected and the freed bytes are **credited back** to whichever user they were
+  attributed to. A purged asset never leaves orphaned derivatives silently inflating a quota.")
+- **Gap** (found 2026-08-31 landing `S-C11`): the purge drops an asset's blob references and the
+  sweep removes the bytes, and **neither touches the ledger**. So an account's usage only ever
+  goes up: emptying the trash frees disk and frees nothing the user can see, and after enough
+  cycles a quota reflects storage the server no longer holds. A cancelled upload session *is*
+  credited back — that path knows its uploader — which makes the omission easy to miss.
+- **Why it is not a two-line addition, and this is the interesting part:**
+  `QuotaStore::release` takes a **user** and refuses an attribution that is not theirs, which is
+  right for cancellation (one account undoing its own reservation) and useless for the
+  collector. A sweep knows an address and nothing else: attribution is global by content
+  address, so the blob it is deleting may have been charged to an account with no remaining
+  connection to the asset that triggered the purge. The collector cannot supply the user, and it
+  must not guess one.
+- **Deliverable:** a collector-facing `release_attribution(address) -> Option<(UserId, u64)>`
+  that credits whoever the ledger holds it against, called from the sweep — after the removal,
+  so a failed sweep does not credit bytes still on disk. The user-scoped `release` stays for
+  cancellation, where refusing another account's attribution is the point.
+- **Watch out:** the credit belongs to the **sweep**, not to the purge. A purge drops references
+  while the blob may still have others (two assets sharing a thumbnail, one deleted), and
+  crediting there would refund bytes the server is still storing for the surviving holder.
+- **Done when:** delete an asset, run the purge past its retention floor, run the sweep, and
+  assert the uploader's `GET /v1/quota` reports the bytes back; and that a blob a second asset
+  still references credits nothing. **Tier:** Unit.
 
 ## Lane D — SDK / clients
 
