@@ -43,6 +43,7 @@ use capsule_server::directory::{
     DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory, PublishOutcome,
     PublishedDirectory,
 };
+use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, LifecycleOp, OpOutcome,
@@ -1022,6 +1023,27 @@ impl AssetIndex for SwitchableIndex {
         self.inner.apply_op(op)
     }
 
+    fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reference_count(address)
+    }
+
+    fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.tombstoned(limit)
+    }
+
+    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.purge(asset)
+    }
+
     fn find_reference<'a>(
         &'a self,
         address: &'a ContentAddress,
@@ -1097,6 +1119,8 @@ pub(crate) struct Fixture {
     pub(crate) albums: Arc<SwitchableAlbums>,
     /// The quota ledger the server charges against.
     pub(crate) quotas: Arc<SwitchableQuota>,
+    /// The collector's marks, which is where `retrievable` diverges from `stored`.
+    pub(crate) marks: Arc<InMemoryCollection>,
 }
 
 impl Fixture {
@@ -1131,6 +1155,7 @@ impl Fixture {
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
         let quotas = Arc::new(SwitchableQuota::new());
+        let marks = Arc::new(InMemoryCollection::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1150,8 +1175,8 @@ impl Fixture {
                 UploadPolicy::default(),
             ),
             sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
-            serve: ServeContext::new(index.clone(), blobs.clone()),
-            verify: VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
+            serve: ServeContext::new(index.clone(), blobs.clone(), marks.clone()),
+            verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
@@ -1171,6 +1196,7 @@ impl Fixture {
             directories,
             albums,
             quotas,
+            marks,
         }
     }
 
@@ -1210,8 +1236,17 @@ impl Fixture {
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
             ),
-            serve: ServeContext::new(index.clone(), blobs.clone()),
-            verify: VerifyContext::new(index, blobs, clock.clone()),
+            serve: ServeContext::new(
+                index.clone(),
+                blobs.clone(),
+                Arc::new(InMemoryCollection::new()),
+            ),
+            verify: VerifyContext::new(
+                index,
+                blobs,
+                Arc::new(InMemoryCollection::new()),
+                clock.clone(),
+            ),
             directories: DeviceDirectoryContext::new(
                 Arc::new(SwitchableDirectories::new()),
                 clock.clone(),

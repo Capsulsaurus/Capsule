@@ -801,6 +801,7 @@ fn op(case: &str, n: u32, action: OpAction, prior: Option<Hash32>, hash: Hash32)
         amk_version: 1,
         provenance: address(&format!("{case}prov{n}")),
         metadata: None,
+        retention_until: None,
         at: Timestamp::UNIX_EPOCH,
     }
 }
@@ -1077,6 +1078,135 @@ pub async fn a_lifecycle_write_repoints_the_provenance_blob(index: &dyn AssetInd
     );
 }
 
+/// Reference counting is a query over the rows, and a tombstone still references.
+pub async fn references_are_counted_from_the_rows_that_name_them(index: &dyn AssetIndex) {
+    let shared = address("refcount-shared");
+    let (first, _) = publish(index, "refcount", 1).await;
+    let (second, _) = publish(index, "refcount", 2).await;
+    assert_eq!(
+        ok(
+            index.reference_count(&shared).await,
+            "count an unheld address"
+        ),
+        0,
+    );
+
+    for asset in [&first, &second] {
+        record(
+            index,
+            asset,
+            BlobRecord {
+                role: BlobRole::Derivative,
+                address: shared.clone(),
+                size: 16,
+                finalized_at: Timestamp::UNIX_EPOCH,
+            },
+        )
+        .await;
+    }
+    assert_eq!(
+        ok(
+            index.reference_count(&shared).await,
+            "count a shared address"
+        ),
+        2,
+        "content addressing means one blob serves many assets, and the count is what stops the \
+         collector treating the second holder as an orphan",
+    );
+
+    // A tombstone still references: deleting is not purging.
+    let head = ok(index.read(&first).await, "read")
+        .expect("the row exists")
+        .chain_head;
+    let deleted = ok(
+        index
+            .apply_op(op("refcount", 1, OpAction::Delete, head, manifest(20)))
+            .await,
+        "delete",
+    );
+    assert!(matches!(deleted, OpOutcome::Applied { .. }));
+    assert_eq!(
+        ok(index.reference_count(&shared).await, "count after a delete"),
+        2,
+        "trash still occupies storage, which is what makes it recoverable",
+    );
+}
+
+/// Purging drops the references and keeps the tombstone.
+pub async fn purging_drops_the_references_and_keeps_the_tombstone(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "purge", 1).await;
+    let head = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .chain_head;
+    let mut delete = op("purge", 1, OpAction::Delete, head, manifest(21));
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    ok(index.apply_op(delete).await, "delete");
+
+    let listed = ok(index.tombstoned(10).await, "list tombstones");
+    assert!(
+        listed.iter().any(|row| row.asset_id == asset),
+        "a tombstoned row is the purge worker's input and has to be findable"
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|row| row.asset_id == asset)
+            .and_then(|row| row.retention_until),
+        Some(Timestamp::UNIX_EPOCH),
+        "the signed retention floor rides on the row, because the purge reads it from there \
+         rather than from a server policy",
+    );
+
+    let purged = ok(index.purge(&asset).await, "purge").expect("the row exists");
+    assert!(purged.blobs.is_empty());
+    assert_eq!(
+        purged.state,
+        AssetState::Tombstoned,
+        "removing the row would make the deletion invisible to a client that has not synced \
+         since it, rather than final",
+    );
+    assert_eq!(
+        ok(
+            index.purge(&AssetId::new("purge-no-such-asset")).await,
+            "purge nothing"
+        ),
+        None,
+    );
+}
+
+/// A restore clears the retention floor.
+pub async fn a_restore_clears_the_retention_floor(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "restore-floor", 1).await;
+    let head = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .chain_head;
+    let mut delete = op("restore-floor", 1, OpAction::Delete, head, manifest(22));
+    delete.retention_until = Some(Timestamp::UNIX_EPOCH);
+    ok(index.apply_op(delete).await, "delete");
+
+    let head = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .chain_head;
+    ok(
+        index
+            .apply_op(op(
+                "restore-floor",
+                1,
+                OpAction::TrashRestore,
+                head,
+                manifest(23),
+            ))
+            .await,
+        "restore",
+    );
+    let row = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(row.state, AssetState::Visible);
+    assert_eq!(
+        row.retention_until, None,
+        "an asset back in the live set has no window left to run out"
+    );
+}
+
 /// Run every case against `index`, in order.
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
@@ -1104,6 +1234,9 @@ pub async fn run_all(index: &dyn AssetIndex) {
     an_epoch_that_regresses_the_album_is_refused(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
+    references_are_counted_from_the_rows_that_name_them(index).await;
+    purging_drops_the_references_and_keeps_the_tombstone(index).await;
+    a_restore_clears_the_retention_floor(index).await;
 }
 
 #[cfg(test)]

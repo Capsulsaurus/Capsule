@@ -161,6 +161,13 @@ pub struct AssetRow {
     /// separate album table would be a second home for the same fact, and the two would
     /// eventually disagree about an album whose newest asset was rolled back.
     pub amk_version: u64,
+    /// The instant the asset's signed `delete` manifest fixed as its retention floor.
+    ///
+    /// `None` until a delete carries one. The purge worker reads it here rather than from a
+    /// server policy, which is the whole point: the floor is *signed*, so a hostile server
+    /// cannot accelerate a purge by editing a config and a buggy one cannot retain past the
+    /// window the user chose.
+    pub retention_until: Option<Timestamp>,
     /// When the row was reserved.
     pub created_at: Timestamp,
     /// When it last changed.
@@ -365,6 +372,11 @@ pub struct LifecycleOp {
     pub provenance: ContentAddress,
     /// The stored metadata blob, when the action carries one.
     pub metadata: Option<ContentAddress>,
+    /// The retention floor the manifest signed, when it carries one.
+    ///
+    /// Meaningful on a `delete`. A `trash-restore` clears it, because an asset back in the live
+    /// set has no window to run out.
+    pub retention_until: Option<Timestamp>,
     /// When the server accepted it.
     pub at: Timestamp,
 }
@@ -518,6 +530,30 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// it can both chain onto the same head — which is the double-apply invariant 17 exists to
     /// catch. An adapter owes atomicity across the whole sequence.
     fn apply_op(&self, op: LifecycleOp) -> IndexFuture<'_, OpOutcome>;
+
+    /// How many asset rows reference `address`.
+    ///
+    /// A **query**, which is the contract: a blob's reference count is derived from the rows
+    /// that name it and is never a separately-maintained number. A counter is a second copy of
+    /// a derivable fact, and a counter that drifts low deletes a live blob.
+    ///
+    /// Tombstoned rows count. Deleting is not purging — a deleted asset's bytes stay until the
+    /// retention window it signed has passed, which is what makes trash recoverable.
+    fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64>;
+
+    /// Up to `limit` tombstoned rows, oldest change first.
+    ///
+    /// The purge worker's input. Ordered so a bounded pass makes progress on the oldest
+    /// deletions rather than revisiting the same page.
+    fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>>;
+
+    /// Drop `asset`'s blob references, keeping the tombstone.
+    ///
+    /// The row **stays**. A client that has not synced since the delete still has to learn
+    /// about it, so removing the row would make the deletion invisible rather than final —
+    /// and the feed entry a tombstone produces already carries no byte references, so the
+    /// purge changes nothing a reader can see.
+    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>>;
 
     /// Up to `limit` feed entries for `owner` after sequence number `after`, in sequence order.
     ///

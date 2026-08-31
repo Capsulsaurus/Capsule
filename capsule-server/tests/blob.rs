@@ -10,6 +10,7 @@
 mod support;
 
 use capsule_server::blob::{BlobStore, ContentAddress};
+use capsule_server::gc::CollectionStore;
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::store::{AssetId, BlobRole};
 use jiff::Timestamp;
@@ -463,6 +464,48 @@ async fn a_quarantined_blob_is_gone_without_a_liveness_flag() {
         .send()
         .await
         .assert_status(StatusCode::GONE);
+}
+
+/// A blob the collector has marked is gone, even though its bytes are still on disk.
+#[tokio::test]
+async fn a_blob_awaiting_collection_is_gone_while_its_bytes_are_still_there() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "collectable", &bytes).await;
+
+    fixture
+        .marks
+        .mark(&address, Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the collector marks");
+
+    let response = fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    response.assert_status(StatusCode::GONE);
+    assert!(
+        fixture.blobs.stat(&address).await.expect("stat").is_some(),
+        "the bytes are still there, which is exactly why the refusal has to come from the mark \
+         rather than from their absence: they are on their way out"
+    );
+
+    // Cancelling the mark makes it servable again — the reference reappeared, so the sweep is off.
+    fixture
+        .marks
+        .unmark(&address)
+        .await
+        .expect("the collector unmarks");
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 }
 
 /// Every fetch needs a credential; ciphertext is not public just because it is opaque.

@@ -361,6 +361,7 @@ pub async fn apply_op(
             amk_version: u64::from(request.manifest_envelope.amk_version),
             provenance,
             metadata: metadata_address,
+            retention_until: retention_floor(&request.manifest_envelope)?,
             at: now,
         })
         .await
@@ -433,6 +434,25 @@ fn parse_address(hex: &str) -> Result<ContentAddress, OpRejection> {
         tracing::error!(%error, "a computed digest is not a content address");
         OpRejection::unavailable()
     })
+}
+
+/// The retention floor the manifest signed, parsed.
+///
+/// Read from the *envelope*, never from a server policy — that is what stops a hostile server
+/// accelerating a purge and a buggy one retaining past the window the user chose (`S-C11`). An
+/// unparseable value is a refusal rather than an absence: absent means "no floor and never
+/// purge", so silently turning a malformed instant into `None` would be the safe-looking
+/// mistake that hides a client bug forever.
+fn retention_floor(envelope: &ManifestEnvelope) -> Result<Option<jiff::Timestamp>, OpRejection> {
+    match &envelope.retention_until {
+        None => Ok(None),
+        Some(text) => text.parse().map(Some).map_err(|error| {
+            OpRejection::invalid(
+                error_codes::UPLOAD_ENVELOPE_MISMATCH,
+                &format!("retention_until is not an RFC 3339 instant: {error}"),
+            )
+        }),
+    }
 }
 
 /// The manifest's declared predecessor, parsed.

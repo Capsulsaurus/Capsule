@@ -60,8 +60,10 @@
 //!
 //! - **Moderation takedown** (`served = false` → `410` before any byte is touched) is `S-C17`;
 //!   there is no `served` flag on an asset row yet.
-//! - **GC state** (`collectable_since`, so a blob mid-collection is refused while its bytes
-//!   survive the grace window) is `S-C11`.
+//! - **GC state** landed with `S-C11`: a blob the collector has marked is refused `410` while
+//!   its bytes are still on disk, because those bytes are on their way out and a client that
+//!   fetched them would be caching something about to vanish. Checked *before* the store is
+//!   touched, so a marked blob's bytes are never read.
 //!
 //! A **quarantined** blob needs no check here and gets none: [`crate::blob::BlobStore::quarantine`]
 //! moves the bytes out of the store, so a quarantined address presents as a reference with no
@@ -84,12 +86,21 @@ use crate::index::{AssetIndex, AssetState};
 pub struct ServeContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
+    marks: Arc<dyn crate::gc::CollectionStore>,
 }
 
 impl ServeContext {
-    /// Assembles the module from its two collaborators.
-    pub fn new(index: Arc<dyn AssetIndex>, blobs: Arc<dyn BlobStore>) -> Self {
-        Self { index, blobs }
+    /// Assembles the module from its collaborators.
+    pub fn new(
+        index: Arc<dyn AssetIndex>,
+        blobs: Arc<dyn BlobStore>,
+        marks: Arc<dyn crate::gc::CollectionStore>,
+    ) -> Self {
+        Self {
+            index,
+            blobs,
+            marks,
+        }
     }
 
     /// The asset index the reference lookup reads.
@@ -100,6 +111,11 @@ impl ServeContext {
     /// The blob store the bytes come from.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
+    }
+
+    /// The collector's marks (`S-C11`).
+    pub fn marks(&self) -> &dyn crate::gc::CollectionStore {
+        self.marks.as_ref()
     }
 
     /// A handle to the store, for a [`BlobSource`] that outlives the request borrow.
@@ -165,6 +181,23 @@ pub async fn resolve(
     // learn to stop asking, and `410` is what tells it to.
     if reference.state == AssetState::Tombstoned {
         tracing::info!(asset = %reference.asset_id, "a deleted asset's blob was refused");
+        return Ok(ServeResolution::Gone);
+    }
+
+    // Mid-collection (`S-C11`). Decided before the store is touched, so a marked blob's bytes
+    // are never read — the bytes are still there, and that is exactly why the check has to come
+    // from the mark rather than from their presence.
+    if context
+        .marks()
+        .marked_since(&address)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the collector's marks could not be read");
+            ServeUnavailable("the collection marks could not be read".to_owned())
+        })?
+        .is_some()
+    {
+        tracing::info!(asset = %reference.asset_id, "a blob awaiting collection was refused");
         return Ok(ServeResolution::Gone);
     }
 

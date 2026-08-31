@@ -9,6 +9,7 @@
 mod support;
 
 use capsule_server::blob::{BlobStore, ContentAddress};
+use capsule_server::gc::CollectionStore;
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::store::{AssetId, BlobRole, OwnerId};
 use jiff::Timestamp;
@@ -297,6 +298,41 @@ async fn a_quarantined_blob_is_not_retrievable() {
         .as_array()
         .expect("per-blob detail");
     assert_eq!(blobs[0]["retrievable"], false);
+    assert_eq!(body["verdicts"][0]["durable"], false);
+}
+
+/// A marked blob is stored and **not** retrievable — the combination that matters most here.
+#[tokio::test]
+async fn a_blob_awaiting_collection_is_stored_but_not_retrievable() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "collectable").await;
+    fixture
+        .marks
+        .mark(&provenance, Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the collector marks");
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])] }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"]
+        .as_array()
+        .expect("per-blob detail");
+    assert_eq!(
+        blobs[0]["stored"], true,
+        "the bytes are on disk right now, and saying otherwise would be a lie a client could \
+         catch"
+    );
+    assert_eq!(
+        blobs[0]["retrievable"], false,
+        "and they are on their way out, so a client that read `stored` alone and released its \
+         copy would be releasing it into a window that closes"
+    );
     assert_eq!(body["verdicts"][0]["durable"], false);
 }
 

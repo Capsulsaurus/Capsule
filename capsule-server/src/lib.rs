@@ -30,6 +30,7 @@ pub mod auth;
 pub mod blob;
 pub mod body;
 pub mod directory;
+pub mod gc;
 pub mod index;
 pub mod limits;
 pub mod quota;

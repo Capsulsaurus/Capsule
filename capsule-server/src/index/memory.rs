@@ -162,6 +162,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 sync_seq: None,
                 chain_head: None,
                 amk_version: 0,
+                retention_until: None,
                 created_at: asset.created_at,
                 updated_at: asset.created_at,
             };
@@ -407,6 +408,12 @@ impl AssetIndex for InMemoryAssetIndex {
             }
             row.chain_head = Some(op.manifest_hash);
             row.amk_version = op.amk_version;
+            row.retention_until = match op.action {
+                OpAction::Delete => op.retention_until,
+                // Back in the live set: there is no window left to run out.
+                OpAction::TrashRestore => None,
+                OpAction::MetadataUpdate | OpAction::Derivative => row.retention_until,
+            };
             row.updated_at = op.at;
 
             let owner = row.owner_id.clone();
@@ -424,6 +431,48 @@ impl AssetIndex for InMemoryAssetIndex {
                 row: Box::new(row),
                 sync_seq,
             })
+        })
+    }
+
+    fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
+        Box::pin(async move {
+            Ok(lock(&self.inner)
+                .rows
+                .values()
+                .filter(|row| row.blobs.iter().any(|blob| &blob.address == address))
+                .count() as u64)
+        })
+    }
+
+    fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            let mut rows: Vec<AssetRow> = inner
+                .rows
+                .values()
+                .filter(|row| row.state == AssetState::Tombstoned)
+                .cloned()
+                .collect();
+            // Oldest change first, so a bounded pass makes progress on the oldest deletions
+            // rather than revisiting the same page.
+            rows.sort_by(|a, b| {
+                (a.updated_at, a.asset_id.as_str()).cmp(&(b.updated_at, b.asset_id.as_str()))
+            });
+            rows.truncate(limit);
+            Ok(rows)
+        })
+    }
+
+    fn purge<'a>(&'a self, asset: &'a AssetId) -> IndexFuture<'a, Option<AssetRow>> {
+        Box::pin(async move {
+            let mut inner = lock(&self.inner);
+            let Some(row) = inner.rows.get_mut(asset) else {
+                return Ok(None);
+            };
+            row.blobs.clear();
+            let row = row.clone();
+            tracing::info!(%asset, "purged a tombstoned asset's blob references");
+            Ok(Some(row))
         })
     }
 

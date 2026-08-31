@@ -42,9 +42,11 @@
 //!   cannot turn it into an I/O-amplification attack"*, and the per-user counter that would
 //!   enforce that has no port (`S-C32`). Shipping the re-hash without the limiter would ship
 //!   the amplification, so the two halves land together — see `S-C41`.
-//! - **GC state** (`collectable_since`: a blob inside the collection grace window is referenced
-//!   and *not* retrievable) is `S-C11`. A **quarantined** blob already reports correctly with
-//!   no extra check, because quarantining moves the bytes out of the store.
+//! - **GC state** landed with `S-C11`: a blob the collector has marked is `stored` and **not**
+//!   `retrievable`, which is the combination that matters most here. Its bytes are on disk
+//!   right now and on their way out, so a client that read `stored` alone and released its copy
+//!   would be releasing it into a window that closes. A **quarantined** blob already reports
+//!   correctly with no extra check, because quarantining moves the bytes out of the store.
 //! - The **signed** `StorageAttestation` form of this verdict is `S-C15`. It wraps this engine
 //!   rather than replacing it, which is why the verdict type is public.
 
@@ -74,6 +76,7 @@ pub const MAX_BLOBS_PER_ASSET: usize = 32;
 pub struct VerifyContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
+    marks: Arc<dyn crate::gc::CollectionStore>,
     clock: Arc<dyn Clock>,
 }
 
@@ -82,11 +85,13 @@ impl VerifyContext {
     pub fn new(
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
+        marks: Arc<dyn crate::gc::CollectionStore>,
         clock: Arc<dyn Clock>,
     ) -> Self {
         Self {
             index,
             blobs,
+            marks,
             clock,
         }
     }
@@ -99,6 +104,11 @@ impl VerifyContext {
     /// The blob store the `stored` fact comes from.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
+    }
+
+    /// The collector's marks, which is where `retrievable` diverges from `stored`.
+    pub fn marks(&self) -> &dyn crate::gc::CollectionStore {
+        self.marks.as_ref()
     }
 
     /// The trusted clock a verdict is stamped from.
@@ -249,15 +259,24 @@ async fn verify_one(
             })?
             .is_some();
 
+        // The one place `retrievable` is not `stored`: a marked blob is on disk and on its way
+        // out (`S-C11`).
+        let collectable = context
+            .marks()
+            .marked_since(hash)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %hash, "the collector's marks could not be read");
+                VerifyUnavailable("the collection marks could not be read".to_owned())
+            })?
+            .is_some();
+
         blobs.push(BlobVerdict {
             hash: hash.clone(),
             role: Some(held.role),
             stored,
             indexed: true,
-            // Indexed and present is all this port can establish today. `S-C11`'s
-            // `collectable_since` is the fact that would subtract from it; a quarantined blob
-            // already subtracts itself, because quarantining moves the bytes out of the store.
-            retrievable: stored,
+            retrievable: stored && !collectable,
         });
     }
 
