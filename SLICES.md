@@ -223,16 +223,16 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
-| S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
+| S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | done\* | no admin surface places a hold, and the provenance record → `S-C8`; purge interaction → `S-C47` |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | done\* | `moved/{user}` stays post-v1; revocations have no write surface until federation lands |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
 | S-C20 | Invariant-7 floor grounded in the device directory | server | S-C9 | M | RETIRED | done\* | the account-creation fallback is gone, not kept |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
-| S-C23 | `revoke_all_sessions` with master-key proof | server | — | M | RETIRED | ready | |
+| S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | ready | the anchor `S-C42` establishes is what a candidate IK is checked against |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
-| S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
+| S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
@@ -248,11 +248,12 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | blocked | found by `S-C3`; needs the per-user counter `S-C32` owns |
-| S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | ready | found by `S-C9`; half of invariant 23 is unenforced, and it bricks `S-C23` |
+| S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | ready | found by `S-C11`; quota only ever goes up |
 | S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
+| S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1527,6 +1528,42 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   included); legacy routes gone; no OpenAPI drift. **Tier:** Unit + Smoke.
 - **Landed in retired code; re-scoped onto Kynos.** Moderation-correctness fix —
   schedule it early in the rebuild, not after.
+- **Landed 2026-08-31 (`done\*`).** [`ServingHold`](capsule-server/src/index/mod.rs) is
+  `Takedown` or `LegalHold`, carried on the asset row and on every `BlobReference` the serving
+  path reads, with `AssetIndex::set_hold` placing and lifting it. `serve::resolve` refuses a
+  held reference `410` **before any read**, first among the refusals.
+- **The hold is orthogonal to `AssetState`, not a fourth variant of it.** A takedown is
+  reversible by default, so lifting one has to restore whatever state the asset was already in;
+  a state machine that swallowed `Visible` would need a second copy of a fact the row already
+  holds. The conformance case asserts what a hold does *not* touch — state, blobs, `sync_seq` —
+  which is the whole content of "a serving constraint, not a destruction".
+- **The hold is the asset's, never an address's.** Content addressing means two assets
+  legitimately share a thumbnail, so holding an address would take down somebody else's photo.
+  Same reason `find_reference` prefers a live reference over a tombstoned one.
+- **Storage verification moved with it, and that is the half worth the slice.** A held asset
+  reports every blob `stored` and **not** `retrievable`. This surface exists to answer one
+  question — may I release my only local copy? — and a server that said `durable` about bytes
+  it holds and will not serve would be answering it wrong in the one direction that loses a
+  photo. `stored ∧ ¬retrievable` is the honest pair: *we have your bytes, and we will not serve
+  them.*
+- **Three facts collapse into one `410`** — deleted, awaiting collection, held — deliberately.
+  The client's action is identical in all three, and a status that told an anonymous fetcher
+  which it was would make the serving path a moderation oracle: whether a given asset was taken
+  down is precisely what a takedown does not owe a peer. The distinction lives in the log line.
+- **"Delete the legacy per-id asset routes" is discharged by construction** — this port never
+  had them; `/v1/blob/{hash}` is the only serving path it has ever served.
+- **Owed.** There is no admin surface that places a hold: moderation's admin queue, suspension
+  and report intake are `S-C8`'s, so a hold is placed through the port today. And the
+  moderation **provenance record** the contract requires — what was taken down, when, and why,
+  visible in the user's own audit log — has nowhere to go: no audit log exists on this server.
+  A user whose asset stops serving is currently left to guess why, which is the
+  "[no silent operations](capsule-docs/src/content/docs/design/moderation.md)" rule unmet. It
+  goes with `S-C8`.
+- **Found on the way: `S-C47`.** The retention purge deletes a tombstoned asset's blob
+  references once its *signed* retention floor passes, and a moderation hold does not stop it.
+  Whether a legal hold should outlive a user's own signed delete is a question about what a
+  hold obliges an operator to do, with a real privacy commitment on the other side. Recorded
+  rather than guessed.
 
 ### S-C18 — `.well-known/capsule` registry completion
 
@@ -1791,6 +1828,18 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Rebuild note:** the cheapest resolution is that the Kynos schema simply never declares
   them. Keep the slice anyway — if the rebuild ports the existing schema, this is the row
   that has to be dropped, and if it does not, this is the row that proves it.
+- **Landed 2026-08-31 (`done`).** The rebuild took the cheap resolution: `AlbumRecord` carries
+  an id, an owner, a protocol pin and a timestamp, and nothing else. `ProvisionAlbumRequest` is
+  `deny_unknown_fields` with one field, so a body carrying a `name` is a `400` rather than a
+  silently-dropped extra — a client is told the server will not hold it, which
+  `a_body_carrying_a_name_is_refused_rather_than_ignored` pins.
+- **The guard is on the emitted document, not on a struct**, because the failure this slice
+  exists to prevent is a *future* convenience field, not the current one. Nothing here declares
+  a title today; `no_album_schema_carries_a_plaintext_title` walks every album-named schema in
+  the OpenAPI document and refuses `name`, `description`, `album_name` and `album_description`.
+  It also asserts it checked something, so renaming the schemas cannot silently disarm it.
+  `VersionResponse` legitimately carries a `name` — the server's own package name — which is
+  why the check is scoped to album schemas rather than banning the word.
 
 ### S-C27 — Wire-contract types on plain serde behind a per-framework adapter
 
@@ -2308,6 +2357,42 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** a publish whose signature does not verify under the account's anchor is
   refused, and `S-C23`'s revoke-all cannot be disabled by publishing an unverifiable directory.
   **Tier:** Unit.
+- **Landed 2026-08-31 (`done`). The anchor is trust-on-first-publish**, and the choice is
+  narrower than it looks. Recording an IK at registration is genuinely stronger — it closes the
+  first-publish window in which a stolen session token could pin an attacker's key — but
+  registration is `S-N1` and is not ported, so there is no account record to hold an IK and no
+  registration contract to change. What made the decision easy is that it is not a fork: the
+  anchor's meaning is *"the key this account's directories verify under"*, and where it came
+  from is the registration path's business. Pre-seeding it later needs no change to this port's
+  contract. Choosing the weaker anchor now forecloses nothing; leaving the clause unenforced
+  forecloses `S-C23`.
+- **The key travels beside the document, never inside it.** `X-Capsule-Identity-Key`, base64
+  over the hybrid `classical ‖ ml` layout, registered in the `X-Capsule-*` census. The document
+  is stored and served back byte-for-byte, so anything the server needs that the signed core
+  does not carry has to travel where the bytes are not — and wrapping it in an envelope would
+  change the media type of a record whose entire contract is "exactly the bytes the client
+  signed".
+- **The two halves of the check live in different places, deliberately.** Verifying the
+  signature is a pure function of bytes and a key, so it happens in `project_version` before the
+  store is touched. Deciding whether that key is *this account's* is state, so it happens inside
+  the same critical section as the version guard — otherwise two concurrent **first** publishes,
+  each self-consistent under its own key, could both pass a read-then-write anchor check, and
+  whichever landed second would leave the account anchored to a key its stored document does not
+  verify under. Same `S-C37` lesson, third application.
+- **The anchor is checked before the version.** A wrong key with a stale version answers
+  `IdentityMismatch`, not `Stale`, so the endpoint cannot be used to probe the stored version
+  with a document the caller never had the key for.
+- **`403`, not `400`.** The document is well-formed and correctly signed — it is signed by
+  somebody else. It carries nothing about the stored anchor: the anchor is public (anyone who
+  fetched a directory could recover it), but echoing it *here* would turn a refusal into a
+  lookup, and a refusal that answers a question the caller did not ask is a refusal that will be
+  used for it.
+- **The migration the slice warned about does not exist, and that is entirely a matter of
+  timing.** No deployment has stored a directory under this port — every adapter is in-memory
+  and there is no server binary — so turning verification on costs nothing. Landing it after a
+  first deployment would have meant accounts whose stored document verifies under no key, and
+  refusing to serve those is another way to break the same recovery path the slice exists to
+  protect.
 - **Blocks `S-C23`** in practice rather than on paper: revoke-all can be *written* against
   today's port, and it would inherit a denial-of-service on its own recovery path.
 
@@ -2464,6 +2549,35 @@ Area split: `capsule-cli`, `capsule-web`, and the `capsule-core` halves are `ACT
 and its gRPC sync half is re-fronted on REST. The crate itself is
 **replacement-in-progress, not review material** — see
 [Sequencing](#sequencing--build-then-retire).
+
+### S-C47 — does a legal hold outlive the user's own signed delete?
+
+- **Contract:** [Moderation — Takedown](capsule-docs/src/content/docs/design/moderation.md),
+  [Filesystem — Server](capsule-docs/src/content/docs/design/filesystem/server.md).
+- **Gap** (found 2026-08-31 implementing `S-C17`): `gc::purge_expired` deletes a tombstoned
+  asset's blob references once the retention floor its own signed `delete` manifest fixed has
+  passed. A [`ServingHold`](capsule-server/src/index/mod.rs) does not stop it, so a user can
+  delete an asset that is under a **legal hold** and the server will destroy the bytes on
+  schedule.
+- **Why this is not a bug to fix in one line.** Both readings are defensible and they conflict
+  directly:
+  - A legal hold is a **preservation obligation**. A server that destroys the bytes on schedule
+    has destroyed the thing it was ordered to keep, and "lifted only when the legal obligation
+    ends" reads as a duty that a delete cannot discharge.
+  - The retention floor is **signed by the user's own delete manifest**. A server that kept the
+    bytes anyway is retaining data against an explicit request — and doing so *silently*, since
+    nothing on the wire would say the delete had not taken effect. That is the promise the whole
+    retention path exists to keep.
+- **Deliverable:** a decision, then whichever of these it implies — purge skips
+  `ServingHold::LegalHold` rows (and the user is told their delete is deferred, because a
+  silent non-deletion is worse than either answer), or purge proceeds and the hold's meaning is
+  written down as serving-only. `ServingHold::Takedown` almost certainly does **not** block a
+  purge either way: it is an admin serving decision, not a preservation order.
+- **Blocked on:** a legal answer about what a hold obliges an operator to do, which is not an
+  engineering question. Until then `purge_expired` carries a comment saying so rather than a
+  behaviour nobody chose.
+- **Done when:** the decision is recorded in `moderation.md`, and a test exercises a
+  legal-hold-plus-expired-retention asset against it either way. **Tier:** Unit.
 
 ### S-D1 — SDK upload client
 
