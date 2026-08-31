@@ -143,6 +143,10 @@
         "message": "Capsule couldn't reach the device list. Please try again.",
         "context": "HTTP 500 on the device-directory surface (slice S-C9): the store could not answer, so nothing was published or read. Retryable, and it says nothing about whether a directory exists."
     },
+    "error.directory.identity_mismatch": {
+        "message": "This device list is signed by a different account key.",
+        "context": "HTTP 403 on POST /v1/auth/devices/directory (slice S-C42, threat-model invariant 23): the document is well-formed and correctly signed, but under a key that is not this account's identity anchor. The anchor is established by the account's first published directory and is immutable after it. The refusal deliberately says nothing about the stored anchor."
+    },
     "error.escrow.malformed": {
         "message": "The recovery backup could not be saved.",
         "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."

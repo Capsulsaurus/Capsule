@@ -266,6 +266,20 @@
         "summary": "Publish the caller's signed device directory.",
         "description": "The bytes are stored verbatim; the server decodes them to read `directory_version` and\nnothing else. The monotonicity comparison is the store's, not this handler's — see\n[`crate::directory`] for why a read-compare-write here would be a rollback window.",
         "operationId": "publish_device_directory",
+        "parameters": [
+          {
+            "name": "X-Capsule-Identity-Key",
+            "in": "header",
+            "description": "The account's identity public key, standard base64 over the hybrid `classical ‖ ml`\nlayout. Required: invariant 23's second clause is undefined without it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/cbor": {
@@ -305,8 +319,8 @@
               }
             }
           },
-          "415": {
-            "description": "Unsupported media type",
+          "400": {
+            "description": "Bad Request",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -315,8 +329,8 @@
               }
             }
           },
-          "400": {
-            "description": "Malformed request",
+          "415": {
+            "description": "Unsupported media type",
             "content": {
               "application/problem+json": {
                 "schema": {

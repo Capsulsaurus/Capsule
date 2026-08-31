@@ -180,6 +180,7 @@
     <string name="error_blob_not_found">That photo file isn\'t on the server.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
     <string name="error_blob_unavailable">Capsule couldn\'t reach that photo file. Please try again.</string>
+    <string name="error_directory_identity_mismatch">This device list is signed by a different account key.</string>
     <string name="error_directory_malformed">The device list could not be read.</string>
     <string name="error_directory_not_published">This account hasn\'t published a device list yet.</string>
     <string name="error_directory_unavailable">Capsule couldn\'t reach the device list. Please try again.</string>

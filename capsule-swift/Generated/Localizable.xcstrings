@@ -11853,6 +11853,16 @@
         }
       }
     },
+    "error.directory.identity_mismatch": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This device list is signed by a different account key."
+          }
+        }
+      }
+    },
     "error.directory.malformed": {
       "localizations": {
         "ar": {

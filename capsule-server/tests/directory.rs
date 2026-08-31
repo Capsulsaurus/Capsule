@@ -7,6 +7,8 @@
 
 mod support;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
 use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
 use kynos::http::StatusCode;
@@ -14,19 +16,29 @@ use serde_json::Value;
 use support::{Fixture, user};
 use uuid::Uuid;
 
-/// The signed CBOR of a directory for `user` at `version`, with `devices` device entries.
+/// An account's identity key.
 ///
-/// Freshly keyed each call: the server never verifies the signature (see `S-C42`), so a stable
-/// key would suggest a check that is not there.
-fn signed(user: Uuid, version: u64) -> Vec<u8> {
-    let ik = HybridSigningKey::generate();
+/// Held by the caller rather than generated inside `signed`, because the server anchors an
+/// account to the first key it sees (`S-C42`) and a fresh key per publish would make every
+/// second one a `403`.
+fn ik() -> HybridSigningKey {
+    HybridSigningKey::generate()
+}
+
+/// The `X-Capsule-Identity-Key` header value for `ik`.
+fn anchor(ik: &HybridSigningKey) -> String {
+    BASE64.encode(ik.verifying_key().to_bytes())
+}
+
+/// The signed CBOR of a directory for `user` at `version`, signed by `ik`.
+fn signed_by(ik: &HybridSigningKey, user: Uuid, version: u64) -> Vec<u8> {
     let directory: DeviceDirectory = DirectoryCore {
         user_id: user,
         directory_version: version,
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: Vec::new(),
     }
-    .sign(&ik);
+    .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
 }
 
@@ -44,6 +56,7 @@ async fn bearer(fixture: &Fixture) -> String {
 async fn publish(
     fixture: &Fixture,
     bearer: &str,
+    ik: &HybridSigningKey,
     document: Vec<u8>,
     expect: StatusCode,
 ) -> kynos::test::TestResponse {
@@ -51,6 +64,7 @@ async fn publish(
         .client
         .post("/v1/auth/devices/directory")
         .header("authorization", bearer)
+        .header("x-capsule-identity-key", &anchor(ik))
         .body("application/cbor", document)
         .send()
         .await;
@@ -65,9 +79,10 @@ async fn publish(
 async fn a_published_directory_is_served_back_byte_for_byte() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
-    let document = signed(account(), 1);
+    let ik = ik();
+    let document = signed_by(&ik, account(), 1);
 
-    let accepted: Value = publish(&fixture, &bearer, document.clone(), StatusCode::OK)
+    let accepted: Value = publish(&fixture, &bearer, &ik, document.clone(), StatusCode::OK)
         .await
         .json();
     assert_eq!(accepted["directory_version"], 1);
@@ -97,8 +112,9 @@ async fn a_published_directory_is_served_back_byte_for_byte() {
 async fn a_non_advancing_version_is_refused_and_leaves_the_stored_document_alone() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
-    let held = signed(account(), 5);
-    publish(&fixture, &bearer, held.clone(), StatusCode::OK).await;
+    let ik = ik();
+    let held = signed_by(&ik, account(), 5);
+    publish(&fixture, &bearer, &ik, held.clone(), StatusCode::OK).await;
 
     // Equal is refused too. A republished version could carry a *different* device list under
     // the same number, which is the rollback wearing the right version.
@@ -106,7 +122,8 @@ async fn a_non_advancing_version_is_refused_and_leaves_the_stored_document_alone
         let problem: Value = publish(
             &fixture,
             &bearer,
-            signed(account(), version),
+            &ik,
+            signed_by(&ik, account(), version),
             StatusCode::CONFLICT,
         )
         .await
@@ -138,9 +155,17 @@ async fn a_non_advancing_version_is_refused_and_leaves_the_stored_document_alone
 async fn an_advancing_version_replaces_the_stored_document() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
-    publish(&fixture, &bearer, signed(account(), 1), StatusCode::OK).await;
-    let newer = signed(account(), 2);
-    let accepted: Value = publish(&fixture, &bearer, newer.clone(), StatusCode::OK)
+    let ik = ik();
+    publish(
+        &fixture,
+        &bearer,
+        &ik,
+        signed_by(&ik, account(), 1),
+        StatusCode::OK,
+    )
+    .await;
+    let newer = signed_by(&ik, account(), 2);
+    let accepted: Value = publish(&fixture, &bearer, &ik, newer.clone(), StatusCode::OK)
         .await
         .json();
     assert_eq!(accepted["directory_version"], 2);
@@ -161,10 +186,12 @@ async fn a_document_signed_for_another_account_is_refused() {
     let bearer = bearer(&fixture).await;
     let somebody_else = Uuid::parse_str("01937b7c-0000-7000-8000-0000000000ff").expect("a uuid");
 
+    let ik = ik();
     let problem: Value = publish(
         &fixture,
         &bearer,
-        signed(somebody_else, 1),
+        &ik,
+        signed_by(&ik, somebody_else, 1),
         StatusCode::BAD_REQUEST,
     )
     .await
@@ -188,6 +215,7 @@ async fn a_body_that_is_not_a_directory_is_refused() {
     let problem: Value = publish(
         &fixture,
         &bearer,
+        &ik(),
         b"not a directory".to_vec(),
         StatusCode::BAD_REQUEST,
     )
@@ -214,6 +242,7 @@ async fn a_body_in_the_wrong_media_type_is_refused() {
         .client
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &anchor(&ik()))
         .body("application/json", "{}")
         .send()
         .await
@@ -242,8 +271,9 @@ async fn an_unpublished_account_is_not_found() {
 async fn any_authenticated_caller_may_fetch_any_directory() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
-    let document = signed(account(), 1);
-    publish(&fixture, &bearer, document.clone(), StatusCode::OK).await;
+    let ik = ik();
+    let document = signed_by(&ik, account(), 1);
+    publish(&fixture, &bearer, &ik, document.clone(), StatusCode::OK).await;
 
     // A second sign-in stands in for a second party: the fixture seeds one account, and what
     // is being asserted is that the *fetch* is not owner-scoped, not that two accounts exist.
@@ -266,7 +296,8 @@ async fn the_directory_surface_requires_a_credential() {
     fixture
         .client
         .post("/v1/auth/devices/directory")
-        .body("application/cbor", signed(account(), 1))
+        .header("x-capsule-identity-key", &anchor(&ik()))
+        .body("application/cbor", signed_by(&ik(), account(), 1))
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
@@ -276,4 +307,123 @@ async fn the_directory_surface_requires_a_credential() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// The account is anchored to the first identity key it publishes under (`S-C42`).
+///
+/// This is invariant 23's second clause reaching the wire. Before it, an authenticated caller
+/// could publish a document that verifies under no key, and `S-C23`'s revoke-all — which
+/// accepts a candidate IK only if it verifies the account's stored directory — would have been
+/// permanently disabled for that account by a stolen session token. A stolen token cannot
+/// revoke everything; it must not be able to make sure nobody can.
+#[tokio::test]
+async fn a_second_identity_key_cannot_take_over_an_anchored_account() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let anchored = ik();
+    let attacker = ik();
+
+    publish(
+        &fixture,
+        &bearer,
+        &anchored,
+        signed_by(&anchored, account(), 1),
+        StatusCode::OK,
+    )
+    .await;
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &attacker,
+        signed_by(&attacker, account(), 2),
+        StatusCode::FORBIDDEN,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.directory.identity_mismatch");
+    assert!(
+        !problem.to_string().contains(&anchor(&anchored)),
+        "the refusal must not echo the stored anchor: a refusal that answers a question the \
+         caller did not ask is a refusal that will be used for it"
+    );
+
+    // The anchored key still works, so this is a lockout of the impostor and not of the account.
+    publish(
+        &fixture,
+        &bearer,
+        &anchored,
+        signed_by(&anchored, account(), 2),
+        StatusCode::OK,
+    )
+    .await;
+}
+
+/// A document that does not verify under the key it was published with is refused.
+#[tokio::test]
+async fn a_document_that_does_not_verify_under_its_declared_key_is_refused() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let declared = ik();
+    let actual = ik();
+
+    let problem: Value = publish(
+        &fixture,
+        &bearer,
+        &declared,
+        signed_by(&actual, account(), 1),
+        StatusCode::BAD_REQUEST,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.directory.malformed");
+
+    fixture
+        .client
+        .get(&format!("/v1/auth/devices/directory/{}", user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// A publish with no identity key is refused rather than stored unverified.
+#[tokio::test]
+async fn a_publish_without_an_identity_key_is_refused() {
+    // The header is required, not optional-with-a-fallback. An optional anchor would mean the
+    // unverified path still exists and every client that omits the header takes it.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+
+    let response = fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .body("application/cbor", signed_by(&ik(), account(), 1))
+        .send()
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    let problem: Value = response.json();
+    assert_eq!(problem["code"], "error.directory.malformed");
+}
+
+/// A malformed identity key is refused before the document is decoded.
+#[tokio::test]
+async fn an_identity_key_that_is_not_base64_is_refused() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+
+    let response = fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header("x-capsule-identity-key", "not base64 at all!!")
+        .body("application/cbor", signed_by(&ik(), account(), 1))
+        .send()
+        .await;
+    response.assert_status(StatusCode::BAD_REQUEST);
+    assert_eq!(
+        response.json::<Value>()["code"],
+        "error.directory.malformed"
+    );
 }

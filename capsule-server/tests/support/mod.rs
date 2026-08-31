@@ -27,6 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use base64::Engine as _;
 use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
 use capsule_server::App;
 use capsule_server::album::{
@@ -123,11 +124,17 @@ pub(crate) fn op_bundle(
     })
 }
 
-/// A freshly signed device directory for the seeded account at `version`.
+/// An account's identity key, generated once per test and reused across its publishes.
 ///
-/// The key is generated per call: the server does not verify the signature (`S-C42`), so a
-/// stable key here would imply a check that is not there.
-pub(crate) fn signed_directory(version: u64) -> Vec<u8> {
+/// A publish carries the key its document verifies under, and the server anchors the account to
+/// the first one it sees (`S-C42`). A helper that generated a fresh key per call would make
+/// every second publish an `IdentityMismatch`, which is why the key is the caller's to hold.
+pub(crate) fn identity_key() -> HybridSigningKey {
+    HybridSigningKey::generate()
+}
+
+/// A device directory for the seeded account at `version`, signed by `ik`.
+pub(crate) fn signed_directory_by(ik: &HybridSigningKey, version: u64) -> Vec<u8> {
     use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
 
     let directory: DeviceDirectory = DirectoryCore {
@@ -136,8 +143,13 @@ pub(crate) fn signed_directory(version: u64) -> Vec<u8> {
         updated_at: "2026-01-01T00:00:00Z".to_owned(),
         devices: Vec::new(),
     }
-    .sign(&HybridSigningKey::generate());
+    .sign(ik);
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// The `X-Capsule-Identity-Key` header value for `ik`.
+pub(crate) fn identity_header(ik: &HybridSigningKey) -> String {
+    base64::engine::general_purpose::STANDARD.encode(ik.verifying_key().to_bytes())
 }
 
 /// The origin the fixture's server calls itself.

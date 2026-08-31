@@ -168,6 +168,10 @@ async fn the_invariant_seven_floor_is_the_devices_own_added_at() {
             user_id: user.clone(),
             directory_version: 1,
             document: directory(&user, device, "2026-03-04T05:06:07Z", None),
+            // The authority reads a *stored* directory, which the publish path has already
+            // anchored and verified (`S-C42`); these cases seed the store directly, so the
+            // anchor is only along for the ride.
+            identity_key: Vec::new(),
             published_at: Timestamp::UNIX_EPOCH,
         })
         .await
@@ -213,6 +217,7 @@ async fn a_revoked_device_may_not_sign_new_manifests() {
                 "2026-03-04T05:06:07Z",
                 Some("2026-04-01T00:00:00Z"),
             ),
+            identity_key: Vec::new(),
             published_at: Timestamp::UNIX_EPOCH,
         })
         .await

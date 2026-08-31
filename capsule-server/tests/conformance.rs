@@ -854,11 +854,17 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::OK);
 
     // ── /v1/auth/devices/directory ─────────────────────────────────────────────────────────
-    let directory = support::signed_directory(1);
+    // One identity key for the whole block: the account is anchored to the first key it
+    // publishes under (`S-C42`), so a fresh key per request would make every publish after the
+    // first a 403 for the wrong reason.
+    let account_ik = support::identity_key();
+    let anchor = support::identity_header(&account_ik);
+    let directory = support::signed_directory_by(&account_ik, 1);
 
     // 401 and 403 on both operations.
     client
         .post("/v1/auth/devices/directory")
+        .header("x-capsule-identity-key", &anchor)
         .body("application/cbor", directory.clone())
         .send()
         .await
@@ -874,6 +880,7 @@ async fn every_declared_response_is_exercised() {
             "authorization",
             &format!("Bearer {}", rotated.refresh_token),
         )
+        .header("x-capsule-identity-key", &anchor)
         .body("application/cbor", directory.clone())
         .send()
         .await
@@ -894,6 +901,7 @@ async fn every_declared_response_is_exercised() {
     client
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &anchor)
         .body("application/json", "{}")
         .send()
         .await
@@ -904,6 +912,7 @@ async fn every_declared_response_is_exercised() {
     client
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &anchor)
         .body("application/cbor", "not a directory")
         .send()
         .await
@@ -928,6 +937,7 @@ async fn every_declared_response_is_exercised() {
     client
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &anchor)
         .body("application/cbor", directory.clone())
         .send()
         .await
@@ -945,6 +955,7 @@ async fn every_declared_response_is_exercised() {
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
         .header("accept", "application/json")
+        .header("x-capsule-identity-key", &anchor)
         .body("application/cbor", directory.clone())
         .send()
         .await
@@ -958,10 +969,33 @@ async fn every_declared_response_is_exercised() {
     client
         .post("/v1/auth/devices/directory")
         .header("authorization", &bearer)
-        .body("application/cbor", support::signed_directory(1))
+        .header("x-capsule-identity-key", &anchor)
+        .body(
+            "application/cbor",
+            support::signed_directory_by(&account_ik, 1),
+        )
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
+
+    // 403 on publish, the *other* way: the document is well-formed and correctly signed, but by
+    // a key that is not this anchored account's (`S-C42`). Distinct from the credential 403
+    // above, which is the framework's.
+    let impostor = support::identity_key();
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header(
+            "x-capsule-identity-key",
+            &support::identity_header(&impostor),
+        )
+        .body(
+            "application/cbor",
+            support::signed_directory_by(&impostor, 9),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
 
     // ── POST /v1/albums/{album_id}/ops ─────────────────────────────────────────────────────
     // The asset every arm below acts on, published through the ports.

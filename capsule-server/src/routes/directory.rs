@@ -28,7 +28,8 @@
 //! | publish `200` | kept |
 //! | publish `400 error.directory.malformed` | kept, and now also covers a document signed for another account and one past the size ceiling |
 //! | publish `415 error.directory.unsupported_media_type` | **new, and it replaces a phantom.** Kynos's own `Binary` rejection declares `400`, `415` *and* a `422` a raw-bytes body cannot produce, and carries no `error.*` code; [`DirectoryBody`] delegates the enforcement and replaces only the rejection — see [`crate::body`] |
-//! | publish `409 error.directory.version_conflict` | kept — invariant 23, and the one status the whole surface exists for |
+//! | publish `409 error.directory.version_conflict` | kept — invariant 23's first clause, and the one status the whole surface exists for |
+//! | publish `403 error.directory.identity_mismatch` | **new with `S-C42`** — invariant 23's *second* clause, which nothing enforced on either side |
 //! | fetch `200` (`application/cbor`, verbatim) | kept |
 //! | fetch `404` | kept, and now carries `error.directory.not_published`; the Salvo body had no code |
 //! | `401` | kept, and now the framework's |
@@ -41,6 +42,8 @@
 //!
 //! [`DeviceDirectory`]: capsule_core::crypto::keys::DeviceDirectory
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use capsule_i18n::error_codes;
 use kynos::extract::body::binary::Binary;
 use kynos::extract::media::MediaType;
@@ -84,6 +87,25 @@ impl CodedMedia for Cbor {
 /// The signed device directory, as it arrives.
 pub type DirectoryBody = OpaqueBody<Cbor>;
 
+/// The identity anchor a publish presents (`S-C42`).
+///
+/// Beside the body rather than inside it, deliberately: the document is stored and served back
+/// **verbatim**, so anything the server needs that the signed core does not carry has to travel
+/// somewhere the bytes are not. A header keeps the signed structure untouched — the alternative,
+/// wrapping the document in an envelope, would change the media type of a record whose whole
+/// contract is "exactly the bytes the client signed".
+///
+/// Read as a string rather than as typed bytes so a malformed one is *this* surface's coded
+/// `400` rather than the framework's uncoded one, which is the same reason
+/// `X-Capsule-Protocol` is a string on the upload path.
+#[derive(HeaderParams)]
+pub struct IdentityHeader {
+    /// The account's identity public key, standard base64 over the hybrid `classical ‖ ml`
+    /// layout. Required: invariant 23's second clause is undefined without it.
+    #[header(rename = "X-Capsule-Identity-Key")]
+    identity_key: Option<String>,
+}
+
 /// The account whose directory is being fetched.
 #[derive(PathParams, Schema)]
 pub struct DirectoryPath {
@@ -107,6 +129,19 @@ pub enum PublishRejection {
     Malformed {
         /// What was wrong, in English.
         detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The submitted identity key is not this account's anchor (`S-C42`).
+    ///
+    /// `403` rather than `400`: the document is well-formed and correctly signed — it is signed
+    /// by *somebody else*. Carrying nothing about the stored anchor, because a refusal that
+    /// answered a question the caller did not ask would be used for exactly that.
+    #[error("this directory is signed under a key that is not the account's identity anchor")]
+    #[problem(status = 403, title = "Identity anchor mismatch")]
+    IdentityMismatch {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -176,13 +211,29 @@ pub enum FetchRejection {
 pub async fn publish_device_directory(
     Inject(directories): Inject<DeviceDirectoryContext>,
     Auth(credential): Auth<AccessToken>,
+    Headers(headers): Headers<IdentityHeader>,
     body: DirectoryBody,
 ) -> Result<Json<PublishDirectoryResponse>, PublishRejection> {
     let user = UserId::new(credential.user.as_str());
     let document = body.into_vec();
 
-    let directory_version =
-        crate::directory::project_version(&document, &user).map_err(|error| {
+    let Some(encoded) = headers.identity_key else {
+        tracing::info!(%user, "a device directory publish carried no identity key");
+        return Err(PublishRejection::Malformed {
+            detail: "X-Capsule-Identity-Key is required".to_owned(),
+            code: error_codes::DIRECTORY_MALFORMED,
+        });
+    };
+    let identity_key = BASE64.decode(encoded.trim()).map_err(|error| {
+        tracing::info!(%user, %error, "a device directory publish carried an unreadable identity key");
+        PublishRejection::Malformed {
+            detail: "X-Capsule-Identity-Key is not base64".to_owned(),
+            code: error_codes::DIRECTORY_MALFORMED,
+        }
+    })?;
+
+    let directory_version = crate::directory::project_version(&document, &user, &identity_key)
+        .map_err(|error| {
             tracing::info!(%user, %error, "a device directory publish was refused as malformed");
             PublishRejection::malformed(&error)
         })?;
@@ -193,6 +244,7 @@ pub async fn publish_device_directory(
             user_id: user.clone(),
             directory_version,
             document,
+            identity_key,
             published_at: directories.clock().now(),
         })
         .await
@@ -209,6 +261,9 @@ pub async fn publish_device_directory(
             stored,
             submitted: directory_version,
             code: error_codes::DIRECTORY_VERSION_CONFLICT,
+        }),
+        PublishOutcome::IdentityMismatch => Err(PublishRejection::IdentityMismatch {
+            code: error_codes::DIRECTORY_IDENTITY_MISMATCH,
         }),
     }
 }

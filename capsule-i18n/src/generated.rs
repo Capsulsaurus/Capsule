@@ -77,6 +77,9 @@ pub mod error_codes {
     /// `error.blob.unavailable`
     pub const BLOB_UNAVAILABLE: &str = "error.blob.unavailable";
 
+    /// `error.directory.identity_mismatch`
+    pub const DIRECTORY_IDENTITY_MISMATCH: &str = "error.directory.identity_mismatch";
+
     /// `error.directory.malformed`
     pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
 

@@ -181,6 +181,7 @@
   "error.blob.not_found": "That photo file isn't on the server.",
   "error.blob.pending_upload": "The original photo hasn't been uploaded from its device yet.",
   "error.blob.unavailable": "Capsule couldn't reach that photo file. Please try again.",
+  "error.directory.identity_mismatch": "This device list is signed by a different account key.",
   "error.directory.malformed": "The device list could not be read.",
   "error.directory.not_published": "This account hasn't published a device list yet.",
   "error.directory.unavailable": "Capsule couldn't reach the device list. Please try again.",
