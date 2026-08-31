@@ -78,7 +78,15 @@ async fn version_reports_the_server_identity() {
 /// [`support::SwitchableSessions`] and the directory's switch exist for.
 #[tokio::test]
 async fn every_declared_response_is_exercised() {
-    let fixture = Fixture::working();
+    // Finite-but-large limits rather than `Fixture::working`'s unlimited ones: the drop path's
+    // `403` is a *quota* refusal, and an unlimited ledger can never produce one. A hundred and
+    // twenty-eight mebibytes is orders of magnitude above everything this walk uploads, so it
+    // changes no other answer — and one deliberately enormous declared size reaches it.
+    let fixture = Fixture::with_quota(capsule_server::quota::QuotaLimits::new(
+        64 * 1024 * 1024,
+        128 * 1024 * 1024,
+        jiff::SignedDuration::from_hours(24),
+    ));
     let client = &fixture.client;
 
     // ── GET /v1/version → 200 ──────────────────────────────────────────────────────────────
@@ -133,6 +141,13 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/s/anything"),
         ("GET", "/s/anything/wrapped-secret"),
         ("GET", "/s/anything/blob/deadbeef"),
+        ("POST", "/v1/drops/links"),
+        ("DELETE", "/v1/drops/links/anything"),
+        ("POST", "/d/anything"),
+        ("PATCH", "/d/anything/anything"),
+        ("GET", "/v1/drops"),
+        ("POST", "/v1/drops/anything/adopt"),
+        ("DELETE", "/v1/drops/anything"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1815,6 +1830,19 @@ async fn every_declared_response_is_exercised() {
             .assert_status(StatusCode::NO_CONTENT);
     }
 
+    // ── Guest drops (`S-C5`) ───────────────────────────────────────────────────────────────
+    // In its own future, boxed: this walk drives every operation on one client — the recorder
+    // is per-client — and inlining every block into one `async fn` overflowed the test thread's
+    // stack once the surface passed forty operations. `Box::pin` moves each block's state to
+    // the heap, which is the fix for a *generator* that is too large rather than for recursion.
+    Box::pin(drops_block(
+        client,
+        &fixture,
+        &bearer,
+        &rotated.refresh_token,
+    ))
+    .await;
+
     // ── Share links (`S-C4`) ───────────────────────────────────────────────────────────────
     // The public path is walked last among the reads, because a revoked link is one of the
     // answers and revoking it ends the only live link this block makes.
@@ -2324,4 +2352,447 @@ fn the_document_declares_openapi_32() {
         version.starts_with("3.2"),
         "expected an OpenAPI 3.2 document, got {version:?} — check the `openapi32` feature"
     );
+}
+
+/// The guest-drop surface's whole walk (`S-C5`).
+///
+/// Extracted so [`every_declared_response_is_exercised`] does not build one generator larger
+/// than a thread stack. Same client, so the recorder still sees these.
+async fn drops_block(
+    client: &kynos::test::TestClient<capsule_server::App>,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+) {
+    let rotated_refresh = refresh_token;
+    for (method, path) in [
+        ("POST", "/v1/drops/links"),
+        ("GET", "/v1/drops"),
+        ("POST", "/v1/drops/anything/adopt"),
+        ("DELETE", "/v1/drops/anything"),
+        ("DELETE", "/v1/drops/links/anything"),
+    ] {
+        let unauthenticated = match method {
+            "GET" => client.get(path),
+            "DELETE" => client.delete(path),
+            _ => client.post(path),
+        };
+        unauthenticated
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+
+        let insufficient = match method {
+            "GET" => client.get(path),
+            "DELETE" => client.delete(path),
+            _ => client.post(path),
+        };
+        insufficient
+            .header("authorization", &format!("Bearer {rotated_refresh}"))
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+
+    // The two authenticated bodies' rejections.
+    for path in ["/v1/drops/links", "/v1/drops/anything/adopt"] {
+        client
+            .post(path)
+            .header("authorization", bearer)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post(path)
+            .header("authorization", bearer)
+            .body("application/json", "{ not json")
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        client
+            .post(path)
+            .header("authorization", bearer)
+            .json(&serde_json::json!({ "opaque_id": 7 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // 400 on provisioning: a structured opaque id.
+    client
+        .post("/v1/drops/links")
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "opaque_id": "too-short",
+            "drop_pubkey": "AAAA",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // A real link, and a drop through it.
+    let drop_link = "abcdef0123456789abcdef01234567aa";
+    client
+        .post("/v1/drops/links")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "opaque_id": drop_link,
+            "drop_pubkey": "AAAA",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "max_file_size": 4096,
+            "max_file_count": 2,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    let dropped = payload(b'd', 1024);
+    let drop_declaration = serde_json::json!({
+        "content_type": "image/jpeg",
+        "size": dropped.len(),
+        "ciphertext_hash": checksum(&dropped),
+        "kem_ct": "AAAA",
+    });
+
+    // The guest path's own rejections, before the successful one.
+    client
+        .post(&format!("/d/{drop_link}"))
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post(&format!("/d/{drop_link}"))
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post(&format!("/d/{drop_link}"))
+        .json(&serde_json::json!({ "content_type": 7 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/d/not-an-opaque-id")
+        .json(&drop_declaration)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .post(&format!("/d/{drop_link}"))
+        .json(&serde_json::json!({
+            "content_type": "image/jpeg",
+            "size": 99_999,
+            "ciphertext_hash": checksum(&dropped),
+            "kem_ct": "AAAA",
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
+
+    let opened: serde_json::Value = client
+        .post(&format!("/d/{drop_link}"))
+        .header("accept", "application/json")
+        .json(&drop_declaration)
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let drop_session = opened["upload_id"].as_str().expect("a session").to_owned();
+    let chunk_path = format!("/d/{drop_link}/{drop_session}");
+
+    // The chunk path's rejections, then the chunk that lands the drop.
+    client
+        .patch(&chunk_path)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .patch(&chunk_path)
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .patch(&chunk_path)
+        .header("x-capsule-offset", "512")
+        .header("x-capsule-checksum", &checksum(&dropped))
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .patch(&format!("/d/{drop_link}/no-such-session"))
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&dropped))
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .patch(&chunk_path)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&dropped))
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The inbox, an adoption refused on its merits, and a discard.
+    let inbox: serde_json::Value = client
+        .get("/v1/drops")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let pending = inbox["drops"].as_array().expect("drops")[0]["drop_id"]
+        .as_str()
+        .expect("a drop id")
+        .to_owned();
+
+    client
+        .post(&format!("/v1/drops/{pending}/adopt"))
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "album_id": support::album().as_str(),
+            "asset_id": "conformance-adopted",
+            "size": dropped.len(),
+            "hash": checksum(&dropped),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "smuggled",
+            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
+                ["manifest_envelope"],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/drops/no-such-drop/adopt")
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "album_id": support::album().as_str(),
+            "asset_id": "conformance-adopted",
+            "size": dropped.len(),
+            "hash": checksum(&dropped),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "wrapped",
+            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
+                ["manifest_envelope"],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .post(&format!("/v1/drops/{pending}/adopt"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "album_id": support::album().as_str(),
+            "asset_id": "conformance-adopted",
+            "size": dropped.len(),
+            "hash": checksum(&dropped),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "wrapped",
+            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
+                ["manifest_envelope"],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    client
+        .delete("/v1/drops/no-such-drop")
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // The `Path` extractor's 400 on every drop path that takes a segment.
+    for (method, path) in [
+        ("DELETE", "/v1/drops/links/%FF"),
+        ("POST", "/d/%FF"),
+        ("PATCH", "/d/%FF/anything"),
+        ("POST", "/v1/drops/%FF/adopt"),
+        ("DELETE", "/v1/drops/%FF"),
+    ] {
+        let request = match method {
+            "DELETE" => client.delete(path),
+            "PATCH" => client.patch(path),
+            _ => client.post(path),
+        };
+        request
+            .header("authorization", bearer)
+            .header("x-capsule-offset", "0")
+            .header("x-capsule-checksum", &checksum(&dropped))
+            .body("application/octet-stream", dropped.clone())
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    // A second drop, so a discard has something to remove, and a revoked link.
+    let second = payload(b'e', 512);
+    let opened: serde_json::Value = client
+        .post(&format!("/d/{drop_link}"))
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "content_type": "image/jpeg",
+            "size": second.len(),
+            "ciphertext_hash": checksum(&second),
+            "kem_ct": "AAAA",
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    client
+        .patch(&format!(
+            "/d/{drop_link}/{}",
+            opened["upload_id"].as_str().expect("a session")
+        ))
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&second))
+        .body("application/octet-stream", second.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let inbox: serde_json::Value = client
+        .get("/v1/drops")
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let discardable = inbox["drops"].as_array().expect("drops")[0]["drop_id"]
+        .as_str()
+        .expect("a drop id")
+        .to_owned();
+    client
+        .delete(&format!("/v1/drops/{discardable}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // The link is now full (two files), which is the 409 an otherwise-live link gives.
+    client
+        .post(&format!("/d/{drop_link}"))
+        .json(&drop_declaration)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // 403 on creation: the **link owner's** quota, not the guest's (invariant 29). A second
+    // link with no file-size cap, so the refusal is the quota's rather than the cap's.
+    let unbounded = "abcdef0123456789abcdef01234567bb";
+    client
+        .post("/v1/drops/links")
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "opaque_id": unbounded,
+            "drop_pubkey": "AAAA",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    client
+        .post(&format!("/d/{unbounded}"))
+        .json(&serde_json::json!({
+            "content_type": "image/jpeg",
+            "size": 512 * 1024 * 1024_u64,
+            "ciphertext_hash": checksum(&dropped),
+            "kem_ct": "AAAA",
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 500 on every drop operation: the store cannot answer.
+    fixture.dropstore.set_unavailable(true);
+    client
+        .post("/v1/drops/links")
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "opaque_id": drop_link,
+            "drop_pubkey": "AAAA",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete(&format!("/v1/drops/links/{drop_link}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .post(&format!("/d/{drop_link}"))
+        .json(&drop_declaration)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .patch(&chunk_path)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&dropped))
+        .body("application/octet-stream", dropped.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get("/v1/drops")
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .post("/v1/drops/anything/adopt")
+        .header("authorization", bearer)
+        .json(&serde_json::json!({
+            "album_id": support::album().as_str(),
+            "asset_id": "conformance-adopted-2",
+            "size": dropped.len(),
+            "hash": checksum(&dropped),
+            "content_type": "image/jpeg",
+            "crypto_suite_id": capsule_core::crypto::CRYPTO_SUITE_ID,
+            "protocol_version": PROTOCOL_VERSION,
+            "key_mode": "wrapped",
+            "manifest_envelope": create_request(&fixture.clock, &dropped, "original")
+                ["manifest_envelope"],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete("/v1/drops/anything")
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.dropstore.set_unavailable(false);
+
+    client
+        .delete(&format!("/v1/drops/links/{drop_link}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }

@@ -50,6 +50,9 @@ use capsule_server::discovery::revocation::{
     InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
+use capsule_server::drop::{
+    Admission, DropContext, DropStore, InMemoryDrops, InboxEntry, PendingDeposit, UploadLinkRecord,
+};
 use capsule_server::enrollment::EnrollmentContext;
 use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::gc::memory::InMemoryCollection;
@@ -359,6 +362,146 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// A drop store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableDrops {
+    inner: InMemoryDrops,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableDrops {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "drops",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl DropStore for SwitchableDrops {
+    fn provision(&self, record: UploadLinkRecord) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.provision(record)
+    }
+
+    fn resolve<'a>(&'a self, opaque_id: &'a str) -> StoreFuture<'a, Option<UploadLinkRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.resolve(opaque_id)
+    }
+
+    fn revoke<'a>(
+        &'a self,
+        owner: &'a UserId,
+        opaque_id: &'a str,
+        at: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.revoke(owner, opaque_id, at)
+    }
+
+    fn charge<'a>(
+        &'a self,
+        opaque_id: &'a str,
+        size: u64,
+        at: Timestamp,
+    ) -> StoreFuture<'a, Admission> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.charge(opaque_id, size, at)
+    }
+
+    fn reserve(&self, pending: PendingDeposit, upload: &UploadId) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.reserve(pending, upload)
+    }
+
+    fn take_reservation<'a>(
+        &'a self,
+        upload: &'a UploadId,
+    ) -> StoreFuture<'a, Option<PendingDeposit>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.take_reservation(upload)
+    }
+
+    fn refund<'a>(&'a self, opaque_id: &'a str, size: u64) -> StoreFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.refund(opaque_id, size)
+    }
+
+    fn deposit(&self, entry: InboxEntry) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.deposit(entry)
+    }
+
+    fn inbox<'a>(&'a self, owner: &'a UserId) -> StoreFuture<'a, Vec<InboxEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.inbox(owner)
+    }
+
+    fn claim<'a>(
+        &'a self,
+        owner: &'a UserId,
+        drop_id: &'a str,
+    ) -> StoreFuture<'a, Option<InboxEntry>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.claim(owner, drop_id)
+    }
+
+    fn settle<'a>(&'a self, drop_id: &'a str) -> StoreFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.settle(drop_id)
+    }
+
+    fn release<'a>(&'a self, drop_id: &'a str) -> StoreFuture<'a, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release(drop_id)
+    }
+
+    fn discard<'a>(&'a self, owner: &'a UserId, drop_id: &'a str) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.discard(owner, drop_id)
     }
 }
 
@@ -1752,6 +1895,8 @@ pub(crate) struct Fixture {
     pub(crate) moderation: Arc<SwitchableModeration>,
     /// The public share links.
     pub(crate) shares: Arc<SwitchableShares>,
+    /// The upload links and the inbox behind them.
+    pub(crate) dropstore: Arc<SwitchableDrops>,
 }
 
 impl Fixture {
@@ -1803,6 +1948,7 @@ impl Fixture {
         let channels = Arc::new(SwitchableChannels::new(clock.clone()));
         let moderation = Arc::new(SwitchableModeration::new());
         let shares = Arc::new(SwitchableShares::new());
+        let dropstore = Arc::new(SwitchableDrops::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1843,6 +1989,12 @@ impl Fixture {
             ),
             moderation: ModerationContext::new(moderation.clone()),
             share: ShareContext::new(shares.clone(), blobs.clone(), clock.clone()),
+            drops: DropContext::new(
+                dropstore.clone(),
+                uploads.clone(),
+                blobs.clone(),
+                clock.clone(),
+            ),
         });
 
         Self {
@@ -1870,6 +2022,7 @@ impl Fixture {
             channels,
             moderation,
             shares,
+            dropstore,
         }
     }
 
@@ -1955,6 +2108,12 @@ impl Fixture {
             share: ShareContext::new(
                 Arc::new(InMemoryShares::new()),
                 blobs.clone(),
+                clock.clone(),
+            ),
+            drops: DropContext::new(
+                Arc::new(InMemoryDrops::new()),
+                Arc::new(SwitchableUploads::new(clock.clone())),
+                blobs,
                 clock.clone(),
             ),
         });

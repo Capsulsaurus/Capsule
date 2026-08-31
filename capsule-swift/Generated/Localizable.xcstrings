@@ -12283,6 +12283,16 @@
         }
       }
     },
+    "error.drop.adoption_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That upload could not be added to the album."
+          }
+        }
+      }
+    },
     "error.drop.cap_exceeded": {
       "localizations": {
         "ar": {
@@ -12365,6 +12375,46 @@
         }
       }
     },
+    "error.drop.cap_exhausted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This upload link is full. Ask for a new one."
+          }
+        }
+      }
+    },
+    "error.drop.chunk_refused": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That part of the upload could not be accepted. It will be retried."
+          }
+        }
+      }
+    },
+    "error.drop.file_too_large": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That file is larger than this link accepts."
+          }
+        }
+      }
+    },
+    "error.drop.malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That upload could not be accepted."
+          }
+        }
+      }
+    },
     "error.drop.malformed_descriptor": {
       "localizations": {
         "ar": {
@@ -12443,6 +12493,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "無法接受此上傳。"
+          }
+        }
+      }
+    },
+    "error.drop.not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That upload is no longer in your inbox."
           }
         }
       }
@@ -12689,6 +12749,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.drop.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the upload service. Please try again."
           }
         }
       }

@@ -49,6 +49,7 @@ pub mod blob;
 pub mod body;
 pub mod directory;
 pub mod discovery;
+pub mod drop;
 pub mod enrollment;
 pub mod escrow;
 pub mod gc;
@@ -89,7 +90,7 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Five `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // Six `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
         // next addition obvious rather than a puzzle. Each group is well under the cap, so a
@@ -147,6 +148,16 @@ pub fn router() -> ServerRouter {
             routes::share::share_metadata,
             routes::share::share_wrapped_secret,
             routes::share::share_blob,
+        ])
+        // Guest drops: the owner's link, the guest's deposit, and the inbox between them.
+        .mount(kynos::routes![
+            routes::drop::provision_link,
+            routes::drop::revoke_link,
+            routes::drop::create_drop,
+            routes::drop::append_drop_chunk,
+            routes::drop::list_inbox,
+            routes::drop::adopt_drop,
+            routes::drop::discard_drop,
         ])
 }
 

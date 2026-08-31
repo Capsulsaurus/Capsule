@@ -175,6 +175,34 @@
         "message": "That device code didn't work. Generate a new one and try again.",
         "context": "HTTP 404 on POST /devices/enroll/redeem (slice S-C7): the submitted enrollment code is unknown, already redeemed, expired, or rate-limited. Every reason is surfaced identically (indistinguishable by design) so redemption is not an oracle."
     },
+    "error.drop.malformed": {
+        "message": "That upload could not be accepted.",
+        "context": "HTTP 400 on POST /d/{opaque-id} and its chunk path (slice S-C5, threat-model invariants 27 and 30): the declaration is not a usable drop — a zero size, a malformed ciphertext hash, an empty kem_ct, a missing content type, or a body carrying a field a drop may not have (an album id, a manifest, provenance). `deny_unknown_fields` is what makes the absence clause a rejection rather than a silently ignored field, because ignoring it would let a guest believe they had written into an album."
+    },
+    "error.drop.cap_exhausted": {
+        "message": "This upload link is full. Ask for a new one.",
+        "context": "HTTP 409 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 26): a cumulative cap — total bytes or file count — on an otherwise-live link. Deliberately NOT the indistinguishable 404 the link's own liveness gets: the guest was handed a real link by somebody who wants their photos and needs to be told to ask for a new one rather than conclude the link never existed."
+    },
+    "error.drop.file_too_large": {
+        "message": "That file is larger than this link accepts.",
+        "context": "HTTP 413 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 28): the single file exceeds the link's max_file_size. Answered before the cumulative caps, so a guest is told to shrink the file rather than to ask for a new link."
+    },
+    "error.drop.chunk_refused": {
+        "message": "That part of the upload could not be accepted. It will be retried.",
+        "context": "HTTP 409 on PATCH /d/{opaque-id}/{upload-id} (slice S-C5, threat-model invariants 9-12): the chunk is at the wrong offset, carries different bytes for an offset already accepted, is unaligned, or would exceed the declared size. The same rules the album chunk path runs, through the same function."
+    },
+    "error.drop.not_found": {
+        "message": "That upload is no longer in your inbox.",
+        "context": "HTTP 404 on the inbox operations (slice S-C5): no pending drop of this account has that id. One answer for unknown, for another account's, and for one already held by a concurrent adoption, so the endpoint is not an oracle over guessed drop ids."
+    },
+    "error.drop.adoption_refused": {
+        "message": "That upload could not be added to the album.",
+        "context": "HTTP 400 on POST /v1/drops/{drop-id}/adopt (slice S-C5, threat-model invariant 32): the signed create manifest was refused — a key_mode outside its closed enum, a manifest naming a different blob or size than the drop, no write capability for the album, an unknown device, or a failure of invariants 1-8. Nothing is written and the drop returns to the inbox."
+    },
+    "error.drop.unavailable": {
+        "message": "Capsule couldn't reach the upload service. Please try again.",
+        "context": "HTTP 500 on the drop surface (slice S-C5): a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down."
+    },
     "error.enrollment.channel_not_found": {
         "message": "This device-add session has ended. Start again.",
         "context": "HTTP 404 on the enrollment relay channel (slice S-C7): the channel handle is unknown or expired, so the server has nothing to relay between the two devices."

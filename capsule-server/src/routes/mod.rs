@@ -11,6 +11,7 @@ pub mod auth;
 pub mod blob;
 pub mod devices;
 pub mod directory;
+pub mod drop;
 pub mod enroll;
 pub mod escrow;
 pub mod moderation;

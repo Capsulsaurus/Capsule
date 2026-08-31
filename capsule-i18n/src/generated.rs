@@ -98,11 +98,29 @@ pub mod error_codes {
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 
+    /// `error.drop.adoption_refused`
+    pub const DROP_ADOPTION_REFUSED: &str = "error.drop.adoption_refused";
+
     /// `error.drop.cap_exceeded`
     pub const DROP_CAP_EXCEEDED: &str = "error.drop.cap_exceeded";
 
+    /// `error.drop.cap_exhausted`
+    pub const DROP_CAP_EXHAUSTED: &str = "error.drop.cap_exhausted";
+
+    /// `error.drop.chunk_refused`
+    pub const DROP_CHUNK_REFUSED: &str = "error.drop.chunk_refused";
+
+    /// `error.drop.file_too_large`
+    pub const DROP_FILE_TOO_LARGE: &str = "error.drop.file_too_large";
+
+    /// `error.drop.malformed`
+    pub const DROP_MALFORMED: &str = "error.drop.malformed";
+
     /// `error.drop.malformed_descriptor`
     pub const DROP_MALFORMED_DESCRIPTOR: &str = "error.drop.malformed_descriptor";
+
+    /// `error.drop.not_found`
+    pub const DROP_NOT_FOUND: &str = "error.drop.not_found";
 
     /// `error.drop.not_in_inbox`
     pub const DROP_NOT_IN_INBOX: &str = "error.drop.not_in_inbox";
@@ -112,6 +130,9 @@ pub mod error_codes {
 
     /// `error.drop.rate_limited`
     pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
+
+    /// `error.drop.unavailable`
+    pub const DROP_UNAVAILABLE: &str = "error.drop.unavailable";
 
     /// `error.enrollment.channel_not_found`
     pub const ENROLLMENT_CHANNEL_NOT_FOUND: &str = "error.enrollment.channel_not_found";

@@ -81,15 +81,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::blob::{BlobError, ContentAddress};
+use crate::blob::ContentAddress;
 use crate::store::{
-    AcceptedChunk, AlbumId, AssetId, BlobRole, OwnerId, StoreError, UploadId, UploadSessionRecord,
+    AlbumId, AssetId, BlobRole, OwnerId, StoreError, UploadId, UploadSessionRecord,
     UploadSessionStatus, UserId,
 };
 use crate::upload::body::ChunkBody;
 use crate::upload::chunk::{
-    self, MAX_CHUNK_BYTES, OffsetPosition, alignment_ok, classify_offset, parse_checksum,
-    parse_offset, suggested_chunk_size,
+    self, MAX_CHUNK_BYTES, parse_checksum, parse_offset, suggested_chunk_size,
 };
 use crate::upload::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
 use crate::upload::finalize::{self, FinalizeFailure, Outcome};
@@ -1075,114 +1074,59 @@ pub async fn append_chunk(
         return Err(ChunkRejection::checksum_mismatch());
     }
 
-    // Replay, conflict, or a stale offset — all three answered from the accepted-chunk record
-    // rather than from the bytes on disk.
-    match classify_offset(offset, record.received_bytes) {
-        OffsetPosition::Behind => {
-            let recorded = upload
-                .sessions()
-                .chunk_at(&id, offset)
-                .await
-                .map_err(|error| {
-                    store_unavailable(&error, "look up an accepted chunk");
-                    ChunkRejection::unavailable()
-                })?;
-            return match recorded {
-                Some(chunk) if chunk.chunk_hash == received_hash => {
-                    tracing::debug!(upload_id = %id, offset, "an accepted chunk was replayed");
-                    Ok(WithHeaders::new(
-                        NoContent,
-                        OffsetHeader {
-                            offset: chunk.next_offset,
-                        },
-                    ))
+    // The rules themselves live in `upload::chunk`, shared verbatim with the guest-drop path
+    // (`S-C5`): invariants 9–12 mean the same thing on both surfaces, and two copies would
+    // drift on exactly the case a client hits after losing a connection. What stays here is
+    // what genuinely differs — who is allowed to append, and how a refusal is spelled on the
+    // wire.
+    let accepted = chunk::append(
+        upload.sessions(),
+        upload.blobs(),
+        upload.clock(),
+        &record,
+        offset,
+        bytes,
+        &received_hash,
+    )
+    .await
+    .map_err(|error| {
+        store_unavailable(&error, "append a chunk");
+        ChunkRejection::unavailable()
+    })?;
+
+    let next_offset = match accepted {
+        chunk::Accepted::Advanced {
+            next_offset,
+            complete,
+        } => {
+            if complete {
+                match finalize::finalize(&upload, &attestation, &id).await {
+                    Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
+                    Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
+                    Err(failure) => return Err(ChunkRejection::from(failure)),
                 }
-                Some(_) => Err(ChunkRejection::chunk_conflict()),
-                None => Err(ChunkRejection::offset_mismatch(record.received_bytes)),
-            };
-        }
-        OffsetPosition::Ahead => {
-            return Err(ChunkRejection::offset_mismatch(record.received_bytes));
-        }
-        OffsetPosition::AtHead => {}
-    }
-
-    let length = bytes.len() as u64;
-    if !alignment_ok(offset, length, record.total_size) {
-        return Err(ChunkRejection::chunk_not_aligned());
-    }
-
-    // Cumulative bounds, checked at every arrival rather than only at finalization: a client
-    // streaming past its own declaration is cut off before more bytes are persisted, and the
-    // session is unsalvageable because the declaration it was opened under was broken.
-    if offset.saturating_add(length) > record.total_size {
-        tracing::warn!(
-            upload_id = %id,
-            offset,
-            length,
-            total = record.total_size,
-            "a chunk was refused: it would exceed the declared size"
-        );
-        abandon_failed(&upload, &id).await;
-        return Err(ChunkRejection::size_exceeded());
-    }
-
-    // Durable before the acknowledgement. The port's own offset cross-check is the append
-    // path's storage-consistency guard: a stage whose length is not the session's counter is
-    // the server's inconsistency, never the client's fault.
-    upload
-        .blobs()
-        .append(&id, offset, bytes)
-        .await
-        .map_err(|error| match error {
-            BlobError::OffsetMismatch { actual, .. } => {
-                tracing::error!(
-                    upload_id = %id,
-                    counter = record.received_bytes,
-                    on_disk = actual,
-                    "the stage and the session's counter diverged"
-                );
-                ChunkRejection::storage_inconsistent()
             }
-            other => {
-                tracing::error!(%other, upload_id = %id, "the chunk could not be staged");
-                ChunkRejection::unavailable()
-            }
-        })?;
-
-    // One write, not three. The byte counter, the progress clock and the replay entry are one
-    // fact about one event, and a crash between them used to leave all three disagreeing.
-    let accepted_at = upload.clock().now();
-    let Some(updated) = upload
-        .sessions()
-        .record_progress(
-            &id,
-            AcceptedChunk {
-                offset,
-                chunk_hash: received_hash,
-                next_offset: offset + length,
-                accepted_at,
-            },
-        )
-        .await
-        .map_err(|error| {
-            store_unavailable(&error, "record a chunk");
-            ChunkRejection::unavailable()
-        })?
-    else {
-        // The session went away between the read and the write — expired, discarded, or
-        // cancelled. The staged bytes are now an orphan the scrub reclaims.
-        return Err(ChunkRejection::session_not_found());
+            next_offset
+        }
+        chunk::Accepted::Replayed { next_offset } => next_offset,
+        chunk::Accepted::Conflict => return Err(ChunkRejection::chunk_conflict()),
+        chunk::Accepted::OffsetMismatch { expected } => {
+            return Err(ChunkRejection::offset_mismatch(expected));
+        }
+        chunk::Accepted::NotAligned => return Err(ChunkRejection::chunk_not_aligned()),
+        chunk::Accepted::SizeExceeded => {
+            // A declared size the bytes exceed is a client that has lost track of its own
+            // upload; resuming would keep failing, so the session goes.
+            abandon_failed(&upload, &id).await;
+            return Err(ChunkRejection::size_exceeded());
+        }
+        chunk::Accepted::StorageInconsistent => {
+            return Err(ChunkRejection::storage_inconsistent());
+        }
+        // Expired, discarded, or cancelled between the read and the write. The staged bytes are
+        // now an orphan the scrub reclaims.
+        chunk::Accepted::SessionGone => return Err(ChunkRejection::session_not_found()),
     };
-
-    let next_offset = updated.received_bytes;
-    if next_offset == updated.total_size {
-        match finalize::finalize(&upload, &attestation, &id).await {
-            Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
-            Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
-            Err(failure) => return Err(ChunkRejection::from(failure)),
-        }
-    }
 
     Ok(WithHeaders::new(
         NoContent,

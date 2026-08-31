@@ -33,6 +33,7 @@ use crate::attestation::AttestationContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
 use crate::discovery::DiscoveryContext;
+use crate::drop::DropContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
 use crate::moderation::ModerationContext;
@@ -78,6 +79,8 @@ pub struct App {
     moderation: ModerationContext,
     /// The share-link surface's collaborators.
     share: ShareContext,
+    /// The guest-drop surface's collaborators.
+    drops: DropContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -117,6 +120,8 @@ pub struct Modules {
     pub moderation: ModerationContext,
     /// The share-link surface's collaborators.
     pub share: ShareContext,
+    /// The guest-drop surface's collaborators.
+    pub drops: DropContext,
 }
 
 impl App {
@@ -137,6 +142,7 @@ impl App {
             enrollment,
             moderation,
             share,
+            drops,
         } = modules;
         Self {
             auth,
@@ -153,6 +159,7 @@ impl App {
             enrollment,
             moderation,
             share,
+            drops,
         }
     }
 }

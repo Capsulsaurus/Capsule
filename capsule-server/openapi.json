@@ -3636,6 +3636,726 @@
           }
         }
       }
+    },
+    "/v1/drops/links": {
+      "post": {
+        "summary": "Provision an upload link.",
+        "operationId": "provision_link",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionLinkRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The upload link is provisioned and accepting drops",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionLinkResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/drops/links/{opaque_id}": {
+      "delete": {
+        "summary": "Revoke one of the caller's links.",
+        "description": "Indistinguishable and idempotent, for the same reason a share revocation is: saying \"there\nwas nothing to revoke\" would be a lookup.",
+        "operationId": "revoke_link",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/d/{opaque_id}": {
+      "post": {
+        "summary": "Open a drop session through a link.",
+        "description": "Invariants 26–30 in order: the link admits the file and reserves its caps in one store\noperation, then the owner's quota is charged, then the declaration is checked.",
+        "operationId": "create_drop",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDropRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "A drop session is open and accepting chunks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateDropResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Quota exceeded",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Link capacity exhausted",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "File too large",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/d/{opaque_id}/{upload_id}": {
+      "patch": {
+        "summary": "Append one chunk to a drop session.",
+        "description": "The link is the credential: possession of the opaque id, plus a session that belongs to it.\nEverything after that is [`crate::upload::chunk::append`] — the album path's own function.",
+        "operationId": "append_drop_chunk",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id of the link the session belongs to.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "upload_id",
+            "in": "path",
+            "description": "The session id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Capsule-Offset",
+            "in": "header",
+            "description": "Where in the blob this chunk starts.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "X-Capsule-Checksum",
+            "in": "header",
+            "description": "The chunk's SHA-256, bare lowercase hex. Required: the idempotency tuple is undefined\nwithout it.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/octet-stream": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send",
+            "headers": {
+              "X-Capsule-Offset": {
+                "description": "Where the session is now.",
+                "required": true,
+                "schema": {
+                  "type": "integer",
+                  "minimum": 0.0,
+                  "format": "uint64"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Chunk refused",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/v1/drops": {
+      "get": {
+        "summary": "The caller's pending drops.",
+        "operationId": "list_inbox",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InboxResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/drops/{drop_id}/adopt": {
+      "post": {
+        "summary": "Adopt a pending drop into an album.",
+        "description": "Invariant 32. The manifest re-runs the create battery — a drop that skipped it would be the\none write on this server that entered an album unvalidated — and its `ciphertext_hash` must\nname a blob in **the caller's own inbox**, which is what stops an adoption from minting an\nasset over somebody else's bytes.\n\nThe row is **claimed, written, then settled**. Across two ports there is no transaction, and\nthe two failure directions are not equal: writing first and deleting after can duplicate a\nphoto, taking first and failing to write loses one. A claim leaves a crash visible in the\nowner's own inbox instead, marked `adopting`.",
+        "operationId": "adopt_drop",
+        "parameters": [
+          {
+            "name": "drop_id",
+            "in": "path",
+            "description": "The drop's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AdoptRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdoptResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/drops/{drop_id}": {
+      "delete": {
+        "summary": "Discard a pending drop.",
+        "description": "The bytes become unreferenced and the collector reclaims them; the link's cap is **not**\nrefunded, because the drop did happen — a guest deposited a file and the owner chose not to\nkeep it, which is not the same as a link slot never having been used.",
+        "operationId": "discard_drop",
+        "parameters": [
+          {
+            "name": "drop_id",
+            "in": "path",
+            "description": "The drop's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -5032,6 +5752,292 @@
           "passphrase_protected"
         ],
         "description": "What a viewer needs to start."
+      },
+      "ProvisionLinkRequest": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The 128-bit opaque id, 32 lowercase hex characters, from the client's CSPRNG."
+          },
+          "drop_pubkey": {
+            "type": "string",
+            "description": "The Drop Key's public half, base64. Opaque here — the server never decapsulates."
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The suite a drop must be sealed under."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the link stops accepting drops, RFC 3339."
+          },
+          "max_total_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Cumulative bytes across every drop on this link."
+          },
+          "max_file_count": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "How many files the link may deposit."
+          },
+          "max_file_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The largest single file."
+          },
+          "single_use": {
+            "type": "boolean",
+            "description": "Whether the link dies after its first successful drop."
+          },
+          "passphrase_verifier": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An Argon2id **verifier**, base64, when the link is passphrase-gated.\n\nA verifier and never a passphrase: this is an abuse gate the server checks, which is why\nit is stored here at all — unlike a share link's passphrase, which protects decryption\nand which the server never sees in any form."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id",
+          "drop_pubkey",
+          "crypto_suite_id"
+        ],
+        "description": "A link the owner is provisioning."
+      },
+      "ProvisionLinkResponse": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The opaque id, echoed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id"
+        ],
+        "description": "Confirmation that a link is live."
+      },
+      "CreateDropRequest": {
+        "properties": {
+          "content_type": {
+            "type": "string",
+            "description": "The declared content type, from the link's pinned protocol enum (invariant 27)."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The ciphertext's total length."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The lowercase-hex SHA-256 finalization verifies against."
+          },
+          "kem_ct": {
+            "type": "string",
+            "description": "`K` encapsulated to the link's Drop Key, base64. Length fixed by the suite\n(invariant 30)."
+          },
+          "suggested_filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Guest-supplied and unverified. Advisory only."
+          }
+        },
+        "type": "object",
+        "required": [
+          "content_type",
+          "size",
+          "ciphertext_hash",
+          "kem_ct"
+        ],
+        "description": "A guest's declared drop.\n\n**No `album_id`, no `amk_version`, no manifest, no provenance.** `deny_unknown_fields` is\nwhat enforces invariant 30's *absence* clause: a drop that names an album is a `400` rather\nthan a field the server quietly ignores, because ignoring it would let a guest believe they\nhad written into an album."
+      },
+      "CreateDropResponse": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "description": "The session id, and the last path segment of the chunk endpoint."
+          },
+          "suggested_chunk_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The chunk size to start with."
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "suggested_chunk_size"
+        ],
+        "description": "The session a guest uploads into."
+      },
+      "InboxEntryResponse": {
+        "properties": {
+          "drop_id": {
+            "type": "string",
+            "description": "The drop's identifier, which adoption and discard name."
+          },
+          "opaque_id": {
+            "type": "string",
+            "description": "The link it arrived through."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The ciphertext's content address."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "How many bytes."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "The guest's declared content type."
+          },
+          "kem_ct": {
+            "type": "string",
+            "description": "`K` encapsulated to the link's Drop Key, base64. The owner decapsulates."
+          },
+          "suggested_filename": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Guest-supplied and **unverified**.\n\nA guest chose this text. A client rendering it treats it as untrusted input — it is the\none field on this surface an anonymous party authored."
+          },
+          "received_at": {
+            "type": "string",
+            "description": "When it landed, RFC 3339."
+          },
+          "adopting": {
+            "type": "boolean",
+            "description": "Whether an adoption currently holds this row.\n\nSurfaced rather than hidden: a crash between claim and settle leaves a row here, and an\nowner who cannot see it cannot act on it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "drop_id",
+          "opaque_id",
+          "ciphertext_hash",
+          "size",
+          "content_type",
+          "kem_ct",
+          "received_at",
+          "adopting"
+        ],
+        "description": "One drop waiting for the owner."
+      },
+      "InboxResponse": {
+        "properties": {
+          "drops": {
+            "items": {
+              "$ref": "#/components/schemas/InboxEntryResponse"
+            },
+            "type": "array",
+            "description": "Everything waiting, oldest first."
+          }
+        },
+        "type": "object",
+        "required": [
+          "drops"
+        ],
+        "description": "The owner's pending drops."
+      },
+      "AdoptRequest": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album to adopt into."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the drop becomes."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The blob's declared size — the inbox row's, restated and checked against it."
+          },
+          "hash": {
+            "type": "string",
+            "description": "The ciphertext hash, which must name **this drop's** blob."
+          },
+          "content_type": {
+            "type": "string",
+            "description": "The declared content type."
+          },
+          "crypto_suite_id": {
+            "type": "integer",
+            "maximum": 65535.0,
+            "minimum": 0.0,
+            "format": "uint16",
+            "description": "The crypto suite."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol version the manifest is written against."
+          },
+          "key_mode": {
+            "type": "string",
+            "description": "How the asset's key is carried. `derived` or `wrapped` (invariant 32)."
+          },
+          "manifest_envelope": {
+            "$ref": "#/components/schemas/ManifestEnvelope",
+            "description": "The signed manifest envelope, verbatim."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "asset_id",
+          "size",
+          "hash",
+          "content_type",
+          "crypto_suite_id",
+          "protocol_version",
+          "key_mode",
+          "manifest_envelope"
+        ],
+        "description": "The owner's signed `create` over a drop already in their inbox.\n\nThe same shape a `POST /v1/upload` create carries, minus everything about transferring bytes:\nthe blob is already committed, so there is no size to negotiate and no session to open. What\nremains is the manifest, which is the whole point — a drop becomes an asset only when the\n**owner** signs for it."
+      },
+      "AdoptResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the drop became."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id"
+        ],
+        "description": "What adoption produced."
       }
     },
     "securitySchemes": {
