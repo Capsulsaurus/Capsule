@@ -471,6 +471,26 @@
         "message": "Capsule is still receiving this photo's new version. It'll finish on its own.",
         "context": "HTTP 409 on PATCH /v1/upload/{id} (slice S-C43): a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
     },
+    "error.upload.album_quiescing": {
+        "message": "This album is being upgraded. Your photos will upload once it's done.",
+        "context": "HTTP 409 on POST /v1/upload (slice S-C24): the album is in upgrade quiescence and this session did not name the ceremony's intent_id — a stale client that never saw the UpgradeIntent trying to write past the freeze. Transient: the ceremony completes and the client writes into the fork, or its deadline passes on the server's clock and the album returns to normal operation."
+    },
+    "error.album.upgrade_malformed": {
+        "message": "Capsule couldn't read that album upgrade request.",
+        "context": "HTTP 400 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): the body is not a signed UpgradeIntent, is past the size ceiling, or the intent_id is not a UUID."
+    },
+    "error.album.upgrade_proposer": {
+        "message": "Only an admin device on this account can upgrade an album.",
+        "context": "HTTP 403 on POST /v1/albums/{id}/upgrade (slice S-C24): the intent's proposer signature does not verify against the account's published device directory, or no directory is published. Without this check anyone holding a token could freeze an album by posting a struct."
+    },
+    "error.album.upgrade_not_found": {
+        "message": "That album isn't yours, or doesn't exist.",
+        "context": "HTTP 404 on the album-upgrade surface (slice S-C24): no such album, or one filed under a different account. One answer for both — an album id is client-derived, so a guess must buy nothing."
+    },
+    "error.album.upgrade_in_flight": {
+        "message": "This album is already being upgraded.",
+        "context": "HTTP 409 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): only one upgrade may be in flight per album. Carries the live intent_id so a proposer can tell which ceremony it is losing to."
+    },
     "error.upload.amk_regressed": {
         "message": "This change references an older album key than the server has recorded.",
         "context": "HTTP 400 on POST /albums/{album_id}/ops, invariant 18: the manifest's amk_version regresses below the album's recorded epoch. The server counter is the monotonic backstop; MLS is the authoritative ceiling."

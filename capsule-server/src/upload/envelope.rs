@@ -531,6 +531,7 @@ fn build_manifest_core(envelope: &ManifestEnvelope) -> Result<ManifestCore, Gate
         timestamp: envelope.timestamp.clone(),
         action,
         prior_provenance_hash,
+        upgraded_from: None,
         retention_until: envelope.retention_until.clone(),
     })
 }

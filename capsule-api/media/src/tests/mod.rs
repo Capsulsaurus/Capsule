@@ -885,6 +885,7 @@ pub(crate) fn adopt_manifest_cbor(
         timestamp: Timestamp::now().to_string(),
         action: Action::Create,
         prior_provenance_hash: None,
+        upgraded_from: None,
         retention_until: None,
     };
     let manifest = core.sign(&device, &write).unwrap();

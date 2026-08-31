@@ -117,6 +117,9 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/devices/directory/anyone"),
         ("POST", "/v1/albums/anything/ops"),
         ("POST", "/v1/albums"),
+        ("POST", "/v1/albums/anything/upgrade"),
+        ("GET", "/v1/albums/anything/upgrade"),
+        ("DELETE", "/v1/albums/anything/upgrade"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/anything/receipt"),
         ("GET", "/.well-known/capsule/attestation-keys"),
@@ -1309,6 +1312,20 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // ── The album-upgrade ceremony (`S-C24`) ───────────────────────────────────────────────
+    // Boxed like the drops block, and for the same reason: this walk drives every operation on
+    // one client, and the generator holding all of it overflowed the test thread's stack once
+    // the surface passed forty operations.
+    Box::pin(upgrade_block(
+        client,
+        &fixture,
+        &bearer,
+        &rotated.refresh_token,
+        DERIVED,
+        &account_ik,
+    ))
+    .await;
 
     // ── GET /v1/quota ──────────────────────────────────────────────────────────────────────
     client
@@ -2878,4 +2895,213 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::NO_CONTENT);
+}
+
+/// Every answer the three upgrade-ceremony operations can give (`S-C24`).
+///
+/// Its own function so the walk's generator stays inside the test thread's stack; see the drops
+/// block for the same note.
+async fn upgrade_block(
+    client: &kynos::test::TestClient<capsule_server::app::App>,
+    fixture: &Fixture,
+    bearer: &str,
+    refresh_token: &str,
+    album: &str,
+    account_ik: &capsule_core::crypto::keys::hybrid_sig::HybridSigningKey,
+) {
+    let path = format!("/v1/albums/{album}/upgrade");
+    // The account's *own* anchor, not a fresh key: `S-C42` pins a directory to the first identity
+    // key that published one, so a second key here would be refused as an impostor — which is
+    // the check working, in the middle of a walk about something else.
+    let dsk = support::identity_key();
+    let intent = uuid::Uuid::parse_str("019a0000-0000-7000-8000-0000000000c0").expect("a uuid");
+    let signed =
+        || support::signed_upgrade_intent(&dsk, support::device(), intent, "2030-01-01", 300);
+
+    // 401 and 403 are the scheme's, on all three.
+    for (method, uri) in [("POST", path.clone()), ("GET", path.clone())] {
+        let request = if method == "POST" {
+            client.post(&uri).body("application/cbor", signed())
+        } else {
+            client.get(&uri)
+        };
+        request.send().await.assert_status(StatusCode::UNAUTHORIZED);
+    }
+    client
+        .delete(&format!("{path}?intent_id={intent}"))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post(&path)
+        .header("authorization", &format!("Bearer {refresh_token}"))
+        .body("application/cbor", signed())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get(&path)
+        .header("authorization", &format!("Bearer {refresh_token}"))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete(&format!("{path}?intent_id={intent}"))
+        .header("authorization", &format!("Bearer {refresh_token}"))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 400 are the body's, and 400 also covers an unreadable intent id.
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .body("application/cbor", b"not an intent".to_vec())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .delete(&format!("{path}?intent_id=not-a-uuid"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 403: no published directory yet, so nothing can vouch for the proposer.
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .body("application/cbor", signed())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", bearer)
+        .header(
+            "x-capsule-identity-key",
+            &support::identity_header(account_ik),
+        )
+        .body(
+            "application/cbor",
+            support::signed_directory_with_device(
+                account_ik,
+                9,
+                support::device(),
+                &dsk,
+                "1970-01-01T00:00:00Z",
+            ),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 500 from each collaborator: the album store, and the sessions the drain count reads.
+    fixture.albums.set_unavailable(true);
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .body("application/cbor", signed())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.albums.set_unavailable(false);
+    fixture.uploads.set_unavailable(true);
+    client
+        .get(&path)
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
+
+    // 200 on all three, then the 409 a second ceremony gets.
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .body("application/cbor", signed())
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&path)
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    let other = uuid::Uuid::parse_str("019a0000-0000-7000-8000-0000000000c1").expect("a uuid");
+    client
+        .post(&path)
+        .header("authorization", bearer)
+        .body(
+            "application/cbor",
+            support::signed_upgrade_intent(&dsk, support::device(), other, "2030-01-01", 300),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .delete(&format!("{path}?intent_id={other}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .delete(&format!("{path}?intent_id={intent}"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 500 on the abort, from the same collaborator.
+    fixture.albums.set_unavailable(true);
+    client
+        .delete(&format!("{path}?intent_id={intent}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.albums.set_unavailable(false);
+
+    // 404 on all three: an album this caller does not hold.
+    let stranger = "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2eff";
+    client
+        .get(&format!("/v1/albums/{stranger}/upgrade"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .post(&format!("/v1/albums/{stranger}/upgrade"))
+        .header("authorization", bearer)
+        .body("application/cbor", signed())
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete(&format!("/v1/albums/{stranger}/upgrade?intent_id={intent}"))
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 400 on the phase read is the `Path` extractor's, reached the only way a `String` path
+    // parameter can be: a segment that is not valid UTF-8.
+    client
+        .get("/v1/albums/%FF/upgrade")
+        .header("authorization", bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
 }

@@ -547,6 +547,7 @@ fn build_op_core(env: &ManifestEnvelope, action: Action) -> Result<ManifestCore,
         timestamp: env.timestamp.clone(),
         action,
         prior_provenance_hash,
+        upgraded_from: None,
         retention_until: env.retention_until.clone(),
     })
 }

@@ -273,6 +273,7 @@ fn build_manifest_core(env: &ManifestEnvelope) -> Result<ManifestCore, UploadErr
         timestamp: env.timestamp.clone(),
         action,
         prior_provenance_hash,
+        upgraded_from: None,
         retention_until: env.retention_until.clone(),
     })
 }

@@ -83,6 +83,15 @@ pub enum AlbumWriteAccess {
     Writable {
         /// The album's pinned protocol version (`YYYY-MM-DD`), set when it was provisioned.
         protocol_pin: String,
+        /// The upgrade ceremony the album is quiescing under, if any (`S-C24`).
+        ///
+        /// Carried on the *write access* rather than fetched separately, for the reason the
+        /// serving path carries a hold on the blob reference: the answer has to come from the
+        /// same read that decided the access, or an upgrade that began between the two is one a
+        /// write slips past. `None` covers both "no ceremony" and "the ceremony's deadline has
+        /// passed" — an expired quiescence aborts the upgrade, so it is indistinguishable from
+        /// none by design.
+        quiescing_under: Option<uuid::Uuid>,
     },
     /// The album does not exist, or the owner may not write to it.
     Denied,

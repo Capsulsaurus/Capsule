@@ -82,6 +82,7 @@ fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
         timestamp: "2026-01-01T00:00:00Z".to_owned(),
         action: Action::Create,
         prior_provenance_hash: None,
+        upgraded_from: None,
         retention_until: None,
     };
     let device = HybridSigningKey::from_seed64(&[1; 64]);

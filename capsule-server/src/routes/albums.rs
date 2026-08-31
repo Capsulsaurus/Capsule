@@ -143,6 +143,7 @@ pub async fn provision_album(
             // The server's own protocol, never the request's (`S-C19`). An album whose pin came
             // from a request would have invariant 6 comparing a write against itself.
             protocol_version: capsule_core::crypto::primitives::PROTOCOL_VERSION.to_owned(),
+            upgrade: None,
             created_at: albums.clock().now(),
         })
         .await

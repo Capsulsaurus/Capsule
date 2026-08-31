@@ -135,6 +135,7 @@ impl PulledEnvelope {
             timestamp: self.timestamp.clone(),
             action,
             prior_provenance_hash,
+            upgraded_from: None,
             retention_until: self.retention_until.clone(),
         })
     }

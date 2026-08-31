@@ -140,6 +140,20 @@ pub struct ManifestCore {
     pub prior_provenance_hash: Option<Hash32>,
     /// Server-visible retention deadline (RFC3339); set only for `action = delete`.
     pub retention_until: Option<String>,
+    /// The album this asset's album was **forked from**, when it is a fork (slice `S-C24`).
+    ///
+    /// The normative link between an upgraded album and its predecessor — never the MLS group
+    /// name, which is an internal detail. A device that joins the fork reads this and can walk
+    /// back to the album the asset came from; without it, a fork looks like an unrelated album
+    /// full of assets that appeared from nowhere.
+    ///
+    /// **Wire-absent when there is none**, never present-`null`. This is inside the signed core,
+    /// so a present-`null` would change [`signing_bytes`](Self::signing_bytes) and silently break
+    /// re-verification of every manifest written before the field existed — the same trap
+    /// `S-A11` carries for `dek_public`, and the reason
+    /// `an_absent_lineage_is_wire_absent_and_does_not_move_the_signature` exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgraded_from: Option<crate::crypto::upgrade::UpgradeLineage>,
 }
 
 /// A signed asset manifest: a [`ManifestCore`] plus its two hybrid signatures.
@@ -310,6 +324,7 @@ mod tests {
             action,
             prior_provenance_hash: prior,
             retention_until: None,
+            upgraded_from: None,
         }
     }
 
@@ -536,5 +551,46 @@ mod tests {
             blob_hash.is_bytes(),
             "metadata_blob_hash must encode as a CBOR byte string"
         );
+    }
+    /// An absent lineage is **wire-absent**, and adding the field moved no signature.
+    ///
+    /// The `S-A11` discipline, applied to `upgraded_from` (`S-C24`). A present-`null` inside a
+    /// signed core changes `signing_bytes` and silently breaks re-verification of every manifest
+    /// written before the field existed — a failure that shows up as "the signature is wrong"
+    /// long after the commit that caused it.
+    #[test]
+    fn an_absent_lineage_is_wire_absent_and_does_not_move_the_signature() {
+        let core = core(Action::Create, None);
+        let encoded = core.signing_bytes();
+        let decoded: ciborium::Value =
+            ciborium::from_reader(encoded.as_slice()).expect("canonical CBOR decodes");
+        let ciborium::Value::Map(entries) = decoded else {
+            panic!("a manifest core encodes as a map")
+        };
+        assert!(
+            !entries.iter().any(|(key, _)| {
+                matches!(key, ciborium::Value::Text(name) if name == "upgraded_from")
+            }),
+            "the key must be absent, not present-null"
+        );
+
+        // And a lineage that *is* present round-trips, so absence is a choice rather than the
+        // only thing the encoding can express.
+        let mut forked = core;
+        forked.upgraded_from = Some(crate::crypto::upgrade::UpgradeLineage {
+            old_album_id: Uuid::from_u128(0xA0),
+            intent_id: Uuid::from_u128(0x1),
+            frozen_state_hash: Hash32([0xEE; 32]),
+            from_suite_id: 1,
+            to_suite_id: 1,
+        });
+        let present = forked.signing_bytes();
+        assert_ne!(
+            present, encoded,
+            "a lineage is signed over, so it has to change what the signature covers"
+        );
+        let back: ManifestCore =
+            crate::cbor::from_slice(&present).expect("a core with a lineage decodes");
+        assert_eq!(back.upgraded_from, forked.upgraded_from);
     }
 }

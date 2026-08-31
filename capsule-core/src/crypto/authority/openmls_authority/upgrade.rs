@@ -15,12 +15,12 @@
 //! (whose MLS suite is `0x004D`) exists in this build. Reads of the old album are never gated —
 //! only *writes* refuse after a tombstone (`verify_asset` stays byte-for-byte untouched).
 //!
-//! **Server-side out of scope.** The server-clock deadline evaluation, the `409 Conflict` on stale
-//! upload sessions, and the drain of in-flight sessions are server concerns (S-X3 makes **no
-//! server changes**). [`UpgradeIntent::is_expired`] is provided as the pure clock predicate the
-//! server would evaluate against its trusted clock; here it is exercised in isolation.
+//! **The wire vocabulary moved out.** [`UpgradeIntent`], [`SignedUpgradeIntent`] and
+//! [`UpgradeLineage`] now live in [`crate::crypto::upgrade`], **ungated**, because the key-free
+//! server owns four of the ceremony's steps and does not enable the `mls` feature (`S-C24`). They
+//! are re-exported here so this module reads as it did. What stays is everything that touches a
+//! group.
 
-use jiff::Timestamp;
 use openmls::group::CommitMessageBundle;
 use openmls::prelude::{LeafNodeParameters, MlsMessageIn, MlsMessageOut, ProcessedMessageContent};
 use serde::{Deserialize, Serialize};
@@ -33,111 +33,10 @@ use super::{
     parse_commit_aad, protocol_message,
 };
 use crate::crypto::hash::{self, Hash32};
-use crate::crypto::keys::{DeviceDirectory, HybridSignature, HybridSigningKey};
-
-/// The default upgrade deadline (7 days), as a [`jiff::SignedDuration`] the caller can pass to
-/// [`OpenMlsAuthority::propose_upgrade`].
-pub const DEFAULT_UPGRADE_DEADLINE: jiff::SignedDuration = jiff::SignedDuration::from_hours(24 * 7);
-
-/// The signed-over content of an upgrade proposal (versioning.md step 1). Every field is covered by
-/// the proposer's DSK hybrid signature in the enclosing [`SignedUpgradeIntent`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UpgradeIntent {
-    /// UUIDv7 idempotency key for the whole ceremony — a duplicate/contradictory proposal under a
-    /// *different* id is rejected while one is in flight; a *replayed* one is a no-op.
-    pub intent_id: Uuid,
-    /// The album's current (immutable) `protocol_version`.
-    pub from_protocol_version: String,
-    /// The target `protocol_version` the fork is pinned to.
-    pub to_protocol_version: String,
-    /// The album's current `crypto_suite_id` wire codepoint.
-    pub from_suite_id: u16,
-    /// The target `crypto_suite_id` wire codepoint (may equal `from_suite_id` for a protocol-only
-    /// upgrade; differs for a suite migration).
-    pub to_suite_id: u16,
-    /// The account the proposing admin device belongs to.
-    pub proposer_user: Uuid,
-    /// The proposing admin device (its DSK signs this intent; verified against the device directory).
-    pub proposer_device: Uuid,
-    /// The deadline **duration** in whole seconds (default [`DEFAULT_UPGRADE_DEADLINE`]). The
-    /// effective expiry is `received_at + deadline` on the **server's** trusted clock — see
-    /// [`is_expired`](Self::is_expired); a member clock can neither extend nor shorten it.
-    pub deadline_secs: u64,
-}
-
-impl UpgradeIntent {
-    /// The canonical-CBOR signing bytes the proposer's DSK covers.
-    pub(super) fn signing_bytes(&self) -> Result<Vec<u8>> {
-        crate::cbor::to_canonical_vec(self)
-            .map_err(|e| OpenMlsAuthorityError::Upgrade(format!("intent encode: {e}")))
-    }
-
-    /// Whether this intent has expired: `now >= received_at + deadline` on the caller's (server's)
-    /// trusted clock. Overflow is treated as expired (fail-closed). This is the **only** clock
-    /// evaluation; it is a server concern here and is exercised in isolation.
-    pub fn is_expired(&self, received_at: Timestamp, now: Timestamp) -> bool {
-        let secs = i64::try_from(self.deadline_secs).unwrap_or(i64::MAX);
-        match received_at.checked_add(jiff::SignedDuration::from_secs(secs)) {
-            Ok(expiry) => now >= expiry,
-            Err(_) => true,
-        }
-    }
-}
-
-/// An [`UpgradeIntent`] plus the proposing admin device's DSK **hybrid** signature over it. Rides
-/// the group's application-message channel (self-describing as [`MlsAppPayload::Upgrade`]).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SignedUpgradeIntent {
-    /// The proposed upgrade.
-    pub intent: UpgradeIntent,
-    /// The proposer DSK's hybrid signature over [`UpgradeIntent::signing_bytes`].
-    pub proposer_sig: HybridSignature,
-}
-
-impl SignedUpgradeIntent {
-    /// Verify the proposer's DSK hybrid signature (Ed25519 **and** ML-DSA) against the device
-    /// directory — the same trust resolution `verify_leaf_binding` uses. A stale, forged, or
-    /// wrong-device signature is rejected before any quiescence state is entered.
-    pub fn verify(&self, directory: &DeviceDirectory) -> Result<()> {
-        if directory.core.user_id != self.intent.proposer_user {
-            return Err(OpenMlsAuthorityError::Upgrade(
-                "intent proposer_user does not match the device directory".into(),
-            ));
-        }
-        let entry = directory
-            .device(&self.intent.proposer_device)
-            .ok_or_else(|| {
-                OpenMlsAuthorityError::Upgrade(
-                    "proposer device is not in the device directory".into(),
-                )
-            })?;
-        if !entry
-            .dsk_public
-            .verify(&self.intent.signing_bytes()?, &self.proposer_sig)
-        {
-            return Err(OpenMlsAuthorityError::Upgrade(
-                "proposer DSK hybrid signature over the upgrade intent did not verify".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// The `upgraded_from` continuity pointer the fork's manifests carry — the normative link between
-/// the old album and its fork (never the MLS group name, which is an internal detail).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct UpgradeLineage {
-    /// The album this fork was upgraded from.
-    pub old_album_id: Uuid,
-    /// The ceremony's idempotency key.
-    pub intent_id: Uuid,
-    /// The frozen old-album state hash the tombstone committed to.
-    pub frozen_state_hash: Hash32,
-    /// The old album's `crypto_suite_id`.
-    pub from_suite_id: u16,
-    /// The fork's `crypto_suite_id`.
-    pub to_suite_id: u16,
-}
+use crate::crypto::keys::{DeviceDirectory, HybridSigningKey};
+pub use crate::crypto::upgrade::{
+    DEFAULT_UPGRADE_DEADLINE, SignedUpgradeIntent, UpgradeIntent, UpgradeLineage,
+};
 
 /// The caller-supplied facts about an album's full state that the `frozen_state_hash` is computed
 /// over, **alongside** the MLS-derived sorted member list. Owned by the application/library layer

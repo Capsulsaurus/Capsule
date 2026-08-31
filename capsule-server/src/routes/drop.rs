@@ -1023,7 +1023,7 @@ async fn adopt_claimed(
 
     // Invariant 6, unchanged: adoption is a write into an album and needs the same capability
     // any other write does.
-    let crate::upload::AlbumWriteAccess::Writable { protocol_pin } = upload
+    let crate::upload::AlbumWriteAccess::Writable { protocol_pin, .. } = upload
         .authority()
         .album_write_access(&owner_id, &album)
         .await

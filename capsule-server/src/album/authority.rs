@@ -48,14 +48,24 @@ use crate::upload::{AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuth
 pub struct ProvisionedAuthority {
     albums: Arc<dyn AlbumStore>,
     directories: Arc<dyn DeviceDirectoryStore>,
+    clock: Arc<dyn crate::store::Clock>,
 }
 
 impl ProvisionedAuthority {
-    /// Assembles the authority over the two stores that hold its facts.
-    pub fn new(albums: Arc<dyn AlbumStore>, directories: Arc<dyn DeviceDirectoryStore>) -> Self {
+    /// Assembles the authority over the stores that hold its facts.
+    ///
+    /// The clock is here because an upgrade ceremony's window is evaluated on the **server's**
+    /// clock and nowhere else (`S-C24`) — the deadline is a duration precisely so that a member's
+    /// clock cannot move it.
+    pub fn new(
+        albums: Arc<dyn AlbumStore>,
+        directories: Arc<dyn DeviceDirectoryStore>,
+        clock: Arc<dyn crate::store::Clock>,
+    ) -> Self {
         Self {
             albums,
             directories,
+            clock,
         }
     }
 }
@@ -79,8 +89,17 @@ impl WriteAuthority for ProvisionedAuthority {
                 tracing::error!(%error, %album, "the album store could not answer");
                 unavailable(&error)
             })?;
+            let now = self.clock.now();
             Ok(match record {
                 Some(record) if &record.owner_id == owner => AlbumWriteAccess::Writable {
+                    // `S-C24`: an expired ceremony is reported as none, because the deadline
+                    // passing *is* the abort. Nothing has to run to clear it, which is what stops
+                    // a proposer who vanished from freezing an album forever.
+                    quiescing_under: record
+                        .upgrade
+                        .as_ref()
+                        .filter(|quiescence| !quiescence.is_expired(now))
+                        .map(|quiescence| quiescence.intent.intent_id),
                     protocol_pin: record.protocol_version,
                 },
                 // Unprovisioned, or somebody else's. One answer: the id is client-derived and

@@ -142,6 +142,7 @@ fn browser_sealed_drop_adopts_and_verifies() {
         timestamp: "2026-05-31T12:00:00Z".into(),
         action: Action::Create,
         prior_provenance_hash: None,
+        upgraded_from: None,
         retention_until: None,
     };
     let manifest = core

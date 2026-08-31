@@ -78,6 +78,25 @@ A version-pinned album is upgraded by a **tombstone-plus-fork** ceremony: the ol
 7. **Resumption (partial-failure recovery).** A client that crashes between step 2 and step 6 reads its local `upgrade_pending_to` on restart, queries the server for the upgrade's current phase via the album row, and resumes from there. The `intent_id` is the idempotency key — the same `UpgradeIntent` never produces two forks, and a duplicate `AlbumTombstone` commit is a no-op at the MLS layer.
 8. **Atomicity guarantee.** The cutover is the single MLS commit in step 4. Until that commit is applied by a member's client, the client is operating in v_old; after, in v_new. There is no in-between state visible to one client. Cross-member, the cutover is observed as each member processes the commit; until the slowest member processes it, that member is still in v_old (and its `pending_until_upgrade` writes remain queued locally, never lost).
 
+### The Server's Halves
+
+Four of the steps above are the server's, and each one is the server's **because the clients cannot do it themselves** (slice `S-C24`). They are exposed as three operations on the album:
+
+| | |
+| --- | --- |
+| `POST /v1/albums/{id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
+| `GET /v1/albums/{id}/upgrade` | the phase, the expiry, and the **drain count** |
+| `DELETE /v1/albums/{id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
+
+- **The proposer is verified, against the account's [published device directory](/design/cryptography/keys/#device-directory).** Without that check anyone holding an access token could freeze an album by posting a struct, which is the opposite of a ceremony keyed to an admin device. What the server does **not** verify — and has no surface that could carry — is the `frozen_state_hash`: that is each member's independent statement about its own view, and a server that adjudicated it would be the single point the hostile-member defence exists to avoid.
+- **The window is `received_at + deadline` on the server's clock**, which is the whole reason the deadline is a duration. `received_at` is stamped when the proposal is accepted and never moves.
+- **Expiry is not a job.** An expired quiescence is treated *everywhere* as absent — by the write gate, by the phase, and by a fresh proposal, which replaces it rather than conflicting with it. Step 3's *"on deadline expiry the upgrade aborts cleanly"* is implemented as an absence of state rather than as a worker, which is what stops a proposer who vanished from freezing an album forever.
+- **Only one ceremony per album**, and the same `intent_id` twice is idempotent — a proposer that lost an acknowledgement re-POSTs the same bytes. A *different* id while one is live is `409 error.album.upgrade_in_flight`, carrying the live id.
+- **A write that does not name the live `intent_id` is `409 error.upload.album_quiescing`**, carrying it, so a client that *is* participating can tell "wrong ticket" from "somebody else's upgrade". The ceremony's own writes go through, which is what makes quiescence a filter rather than a freeze: in-flight uploads reach a terminal state instead of being abandoned.
+- **`in_flight` is a count, not a listing.** The proposer needs to know *whether* to wait and has no business seeing other members' upload identifiers to find out. It counts every non-terminal session against the album, `Pending` included: a session opened with no bytes sent is exactly as much in flight as one mid-transfer.
+
+**Lineage rides the signed manifest, and only the signed manifest.** `upgraded_from` is a field of the [asset manifest's](/design/cryptography/provenance/#asset-manifest) signed core, wire-absent when there is none. It is deliberately **not** mirrored into the `manifest_envelope` projection: that projection exists so a key-free server can validate a write without the manifest bytes, and lineage gates nothing the server decides — a projected field the server never reads is a field that can disagree with the manifest without anything noticing. A joining device reads the manifest itself, which the feed serves byte-for-byte.
+
 ### What This Defends Against
 
 - **Version-mismatched-client damage.** A v_old client cannot write into a v_new album because every write carries `protocol_version`, which is rejected by the [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation) and the [server-side validation invariants](/design/threat-model/validation/#server-side-validation-invariants).

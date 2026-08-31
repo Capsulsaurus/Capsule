@@ -230,7 +230,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | S-C42 | M | RETIRED | done | `S-C48` closed the access-token window it left open |
-| S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
+| S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | S-C42 | M-L | RETIRED | done\* | the ceremony's wire vocabulary was `mls`-gated and therefore unreachable; the projection deliberately gets no lineage |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | done | the Kynos schema never declared them; a document tripwire keeps it that way |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
@@ -2001,15 +2001,65 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 
 ### S-C24 — Album-upgrade server halves
 
-- **Contract:** [Versioning — Album Upgrade Ceremony](capsule-docs/src/content/docs/design/versioning.md),
+- **Contract:** [Versioning — Album Upgrade Ceremony](capsule-docs/src/content/docs/design/versioning.md#album-upgrade-ceremony),
   [MLS Resilience](capsule-docs/src/content/docs/design/mls-resilience.md); `S-X3`'s owed list.
-- **Deliverable:** server-clock deadline evaluation (consuming core's `is_expired`),
-  `409` on upload sessions whose `intent_id` mismatches during quiescence, in-flight
-  session drain at ceremony start, and `upgraded_from` carried at the manifest layer
-  so joiners see lineage (core field + envelope projection).
-- **Done when:** the versioning doc's server-side ceremony bullets pass against
-  testcontainer Postgres (stale-session 409, drain, joiner lineage visible on the
-  feed). **Tier:** Unit + Smoke; completes E2E case 8's server shape.
+- **Deliverable:** server-clock deadline evaluation (consuming core's `is_expired`), `409` on
+  upload sessions whose `intent_id` mismatches during quiescence, in-flight session drain at
+  ceremony start, and `upgraded_from` carried at the manifest layer.
+- **Landed `done*` 2026-08-31.** All four, plus the three operations they need to be reachable
+  from — the ceremony rides MLS application messages the server cannot read, so the doc named a
+  state it gave the server no way to enter.
+
+**The blocker nobody had noticed: the ceremony's wire vocabulary was unreachable.**
+`UpgradeIntent`, `SignedUpgradeIntent` and `UpgradeLineage` lived in `openmls_authority`, behind
+the **`mls` feature**, which a key-free server does not enable. `S-X3` said in its own docs that
+the server would evaluate `is_expired` — against a type it could not name. They are pure data plus
+a signature check with no MLS in them, so they moved to an ungated `capsule_core::crypto::upgrade`
+and the authority re-exports them: the `S-C46` move, for the `S-C46` reason. A structure defined at
+both ends is one added field away from a signature that stops verifying.
+
+**What the server verifies, and the line it must not cross.** It verifies the proposer's DSK
+signature against the account's published device directory (`S-C42`'s anchor) — without that,
+anyone holding an access token could freeze an album by posting a struct. It does **not** verify
+the `frozen_state_hash`, and there is deliberately no surface that could carry one: that hash is
+each member's independent statement about its own view, and a server that adjudicated it would be
+the single point the ceremony's hostile-member defence exists to avoid.
+
+**Expiry is an absence, not a worker.** An expired quiescence is treated as *absent* everywhere —
+by the write gate, by the phase, and by a fresh proposal, which replaces it rather than conflicting
+with it. That is step 3's "on deadline expiry the upgrade aborts cleanly" implemented as a
+property rather than a job, and it is what stops a proposer who vanished from freezing an album
+forever. Nothing has to run for an album to recover.
+
+**The quiescence fact rides the write authority.** `AlbumWriteAccess::Writable` grew
+`quiescing_under`, for the reason a serving hold rides a blob reference: the answer has to come
+from the *same read* that decided the access, or an upgrade that began between two reads is one a
+write slips past.
+
+**The projection deliberately gets no lineage**, which is a departure from this row's parenthetical
+("core field + envelope projection"). `upgraded_from` is a field of the signed manifest core,
+wire-absent when there is none. The `manifest_envelope` projection exists so a key-free server can
+validate a write *without* the manifest bytes, and lineage gates nothing the server decides — a
+projected field the server never reads is a field that can disagree with the manifest without
+anything noticing. A joining device reads the manifest, which the feed serves byte-for-byte
+(`S-C30`).
+
+**Three rejection enums, not one.** A shared enum across the three operations over-declares: a
+phase read cannot be malformed and cannot conflict, and an abort verifies no signature so it has no
+`403`. `assert_declared_responses_covered` caught it immediately, which is the `S-C28` discipline
+working on a surface written after it.
+
+- **Owed:** the smoke case against testcontainer Postgres, with the adapters (`S-C29`). Everything
+  here is proven against the in-memory adapter and one shared conformance suite.
+- **Done when:** ✅ the versioning doc's server-side bullets —
+  `a_signed_proposal_quiesces_the_album_and_the_deadline_is_the_servers`,
+  `a_quiescing_album_refuses_a_write_that_does_not_name_the_ceremony`,
+  `the_drain_count_is_what_the_proposer_waits_on`,
+  `only_one_ceremony_may_be_in_flight_and_the_same_one_is_idempotent`,
+  `an_intent_no_admin_device_signed_is_refused`,
+  `a_ceremony_can_be_aborted_by_the_id_that_holds_it_and_not_by_another`, plus
+  `an_absent_lineage_is_wire_absent_and_does_not_move_the_signature` in core.
+  **Tier:** Unit + Smoke; completes E2E case 8's server shape.
 
 ### S-C25 — Album provisioning and UUID album ids
 

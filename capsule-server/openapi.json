@@ -1589,6 +1589,343 @@
         ]
       }
     },
+    "/v1/albums/{album_id}/upgrade": {
+      "get": {
+        "summary": "Read the ceremony's phase and the drain count.",
+        "description": "The one call a proposer polls between steps 2 and 4. `in_flight` reaching zero is the signal\nthat the tombstone may be committed.",
+        "operationId": "album_upgrade_phase",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradePhaseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Put an album into upgrade quiescence.",
+        "description": "Idempotent under its own `intent_id`: versioning.md is explicit that the same `UpgradeIntent`\nnever produces two forks, and a proposer that lost an acknowledgement re-POSTs the same bytes.",
+        "operationId": "begin_album_upgrade",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/cbor": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradePhaseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Upgrade in flight",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "summary": "Abort a ceremony, returning the album to normal operation.",
+        "description": "Named by `intent_id` in the path's own query so that aborting is a statement about *which*\nupgrade — a caller that does not hold the live id gets a `409` rather than the power to\ncancel somebody else's ceremony.",
+        "operationId": "abort_album_upgrade",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "intent_id",
+            "in": "query",
+            "description": "The ceremony to abort.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradePhaseResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Upgrade in flight",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/quota": {
       "get": {
         "summary": "Report the authenticated uploader's storage-quota snapshot.",
@@ -2002,6 +2339,16 @@
               }
             }
           },
+          "409": {
+            "description": "Album quiescing",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBlobProblem"
+                }
+              }
+            }
+          },
           "426": {
             "description": "Protocol version unsupported",
             "content": {
@@ -2018,16 +2365,6 @@
               "application/problem+json": {
                 "schema": {
                   "$ref": "#/components/schemas/CodedProblem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Duplicate blob",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DuplicateBlobProblem"
                 }
               }
             }
@@ -4884,6 +5221,47 @@
           "created"
         ],
         "description": "What provisioning did."
+      },
+      "UpgradePhaseResponse": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album, echoed."
+          },
+          "intent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The ceremony in flight, or absent when the album is in normal operation.\n\nAbsent also covers *expired*: the deadline passing aborts the upgrade, so there is nothing\nleft to be in."
+          },
+          "to_protocol_version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The protocol version the fork will be pinned to, when a ceremony is in flight."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the window closes, RFC 3339, on the **server's** clock."
+          },
+          "in_flight": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "How many upload sessions are still in flight against this album.\n\nThe drain signal of versioning.md step 3: the proposer waits for zero. A count rather than\na listing, because the proposer needs to know *whether* to wait and has no business seeing\nother members' upload identifiers to find out."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "in_flight"
+        ],
+        "description": "The ceremony this album is in, as a client polls it."
       },
       "QuotaResponse": {
         "properties": {

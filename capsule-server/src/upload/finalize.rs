@@ -614,7 +614,7 @@ async fn revalidate(
         .album_write_access(&record.owner_id, album)
         .await
         .map_err(|error| FinalizeFailure::Unavailable(error.to_string()))?;
-    let AlbumWriteAccess::Writable { protocol_pin } = access else {
+    let AlbumWriteAccess::Writable { protocol_pin, .. } = access else {
         // The album closed, or write capability was withdrawn, since creation. The taxonomy
         // answers a finalization-time envelope failure with one code, so this is not a second
         // `album_access_denied`.

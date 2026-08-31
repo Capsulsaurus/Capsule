@@ -1214,6 +1214,13 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.pending_for_address(owner, expected_hash)
     }
 
+    fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.in_flight_for_album(album)
+    }
+
     fn least_recently_progressed(
         &self,
         not_progressed_since: Timestamp,
@@ -1418,6 +1425,7 @@ impl BlobStore for SwallowingBlobs {
 #[derive(Debug, Default)]
 pub(crate) struct TestAuthority {
     albums: Mutex<BTreeMap<(String, String), String>>,
+    upgrades: Mutex<BTreeMap<(String, String), Uuid>>,
     devices: Mutex<BTreeMap<(String, Uuid), Timestamp>>,
     unavailable: AtomicBool,
 }
@@ -1437,6 +1445,30 @@ impl TestAuthority {
     }
 
     /// Forget an album, as a closed or unshared one would be.
+    /// Put an album into upgrade quiescence under `intent` (`S-C24`).
+    ///
+    /// The double carries the fact the production authority reads off the album record, so a
+    /// case can assert what a quiescing album does to an upload without standing up the ceremony
+    /// that got it there.
+    pub(crate) fn quiesce_album(&self, owner: &OwnerId, album: &AlbumId, intent: Uuid) {
+        self.upgrades
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(
+                (owner.as_str().to_owned(), album.as_str().to_owned()),
+                intent,
+            );
+    }
+
+    /// The ceremony an album is quiescing under, if any.
+    fn quiescing_under(&self, owner: &OwnerId, album: &AlbumId) -> Option<Uuid> {
+        self.upgrades
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&(owner.as_str().to_owned(), album.as_str().to_owned()))
+            .copied()
+    }
+
     pub(crate) fn close_album(&self, owner: &OwnerId, album: &AlbumId) {
         self.albums()
             .remove(&(owner.as_str().to_owned(), album.as_str().to_owned()));
@@ -1486,6 +1518,7 @@ impl WriteAuthority for TestAuthority {
                 .get(&(owner.as_str().to_owned(), album.as_str().to_owned()))
                 .map_or(AlbumWriteAccess::Denied, |pin| AlbumWriteAccess::Writable {
                     protocol_pin: pin.clone(),
+                    quiescing_under: self.quiescing_under(owner, album),
                 }))
         })
     }
@@ -1639,6 +1672,32 @@ impl AlbumStore for SwitchableAlbums {
             return Box::pin(async { Self::refuse() });
         }
         self.inner.read(album)
+    }
+
+    fn begin_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        quiescence: capsule_server::album::UpgradeQuiescence,
+        now: Timestamp,
+    ) -> StoreFuture<'a, capsule_server::album::UpgradeOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.begin_upgrade(album, owner, quiescence, now)
+    }
+
+    fn end_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        intent_id: Uuid,
+        now: Timestamp,
+    ) -> StoreFuture<'a, capsule_server::album::UpgradeOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.end_upgrade(album, owner, intent_id, now)
     }
 }
 
@@ -2440,4 +2499,65 @@ pub(crate) fn replace_request(
         body["manifest_envelope"]["metadata_blob_hash"] = metadata.into();
     }
     body
+}
+
+/// A signed device directory holding one device, whose DSK is `dsk` (`S-C24`).
+///
+/// The empty directory `signed_directory_by` produces is enough for `S-C42`'s anchor check and
+/// not enough for an upgrade proposal, which is verified against the *proposing device's* DSK.
+pub(crate) fn signed_directory_with_device(
+    ik: &HybridSigningKey,
+    version: u64,
+    device_id: Uuid,
+    dsk: &HybridSigningKey,
+    added_at: &str,
+) -> Vec<u8> {
+    use capsule_core::crypto::keys::{DeviceDirectory, DeviceEntry, DirectoryCore};
+
+    let directory: DeviceDirectory = DirectoryCore {
+        user_id: Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid"),
+        directory_version: version,
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+        devices: vec![DeviceEntry {
+            device_id,
+            dsk_public: dsk.verifying_key(),
+            dek_public: None,
+            added_at: added_at.to_owned(),
+            revoked_at: None,
+        }],
+    }
+    .sign(ik);
+    capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
+
+/// A signed upgrade intent, as the proposing admin device's client would produce it (`S-C24`).
+///
+/// Built through `capsule_core::crypto::upgrade` — the *same* types the server verifies with —
+/// because a fixture that assembled the signed bytes itself would pass while the two ends
+/// disagreed about what was signed.
+pub(crate) fn signed_upgrade_intent(
+    dsk: &HybridSigningKey,
+    device_id: Uuid,
+    intent_id: Uuid,
+    to_protocol_version: &str,
+    deadline_secs: u64,
+) -> Vec<u8> {
+    use capsule_core::crypto::upgrade::{SignedUpgradeIntent, UpgradeIntent};
+
+    let intent = UpgradeIntent {
+        intent_id,
+        from_protocol_version: PROTOCOL_VERSION.to_owned(),
+        to_protocol_version: to_protocol_version.to_owned(),
+        from_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        to_suite_id: capsule_core::crypto::CRYPTO_SUITE_ID,
+        proposer_user: Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid"),
+        proposer_device: device_id,
+        deadline_secs,
+    };
+    let proposer_sig = dsk.sign(&intent.signing_bytes().expect("an intent encodes"));
+    capsule_core::cbor::to_canonical_vec(&SignedUpgradeIntent {
+        intent,
+        proposer_sig,
+    })
+    .expect("a signed intent serializes")
 }

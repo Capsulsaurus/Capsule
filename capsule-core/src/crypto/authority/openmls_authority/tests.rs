@@ -130,6 +130,7 @@ fn create_manifest_core(album: Uuid, epoch: AmkVersion, user: Uuid, device: Uuid
         timestamp: "2026-05-31T12:00:00Z".into(),
         action: Action::Create,
         prior_provenance_hash: None,
+        upgraded_from: None,
         retention_until: None,
     }
 }
@@ -1109,7 +1110,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
     .sign(&HybridSigningKey::from_seed_bytes(&[7; 32], &[7; 32]));
     assert!(matches!(
         proposal.signed_intent.verify(&tampered_dir),
-        Err(OpenMlsAuthorityError::Upgrade(_))
+        Err(crate::crypto::upgrade::UpgradeError::Proposer(_))
     ));
     assert!(
         proposal

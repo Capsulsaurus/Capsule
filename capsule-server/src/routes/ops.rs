@@ -229,7 +229,7 @@ pub async fn apply_op(
     }
 
     // Invariant 6, the half only the authority can answer.
-    let AlbumWriteAccess::Writable { protocol_pin } = upload
+    let AlbumWriteAccess::Writable { protocol_pin, .. } = upload
         .authority()
         .album_write_access(&owner, &album)
         .await

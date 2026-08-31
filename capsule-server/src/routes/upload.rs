@@ -330,6 +330,23 @@ pub struct UploadPath {
 /// the bare status.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum CreateRejection {
+    /// The album is quiescing under an upgrade ceremony this write does not name (`S-C24`).
+    ///
+    /// Transient by construction: the ceremony either completes — and the client writes into the
+    /// fork — or its deadline passes and the album returns to normal operation. Carries the live
+    /// `intent_id` so a client that *is* participating can tell "I sent the wrong ticket" from
+    /// "somebody else's upgrade is in flight", which are different bugs.
+    #[error("this album is quiescing under upgrade {intent_id}")]
+    #[problem(status = 409, title = "Album quiescing")]
+    UpgradeQuiescing {
+        /// The ceremony in flight.
+        #[problem(extension)]
+        intent_id: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The request is not one this surface can read — a missing or unreadable handshake
     /// header, most often.
     #[error("the request is not a well-formed upload: {detail}")]
@@ -838,7 +855,10 @@ pub async fn create_upload(
         return Err(CreateRejection::album_access_denied());
     };
 
-    let AlbumWriteAccess::Writable { protocol_pin } = upload
+    let AlbumWriteAccess::Writable {
+        protocol_pin,
+        quiescing_under,
+    } = upload
         .authority()
         .album_write_access(&owner, &album)
         .await
@@ -850,6 +870,26 @@ pub async fn create_upload(
         tracing::info!(%owner, %album, "an upload was refused: no write capability");
         return Err(CreateRejection::album_access_denied());
     };
+
+    // Upgrade quiescence (`S-C24`, versioning.md step 2). An album whose members have stopped
+    // writing and are draining accepts **only** the ceremony's own writes, so a stale client that
+    // never saw the `UpgradeIntent` cannot write past the freeze. The intent is client-asserted
+    // here and that is fine: it is not an authorization, it is a *ticket* the server checks
+    // against a value only the ceremony's own proposal could have put there.
+    if let Some(live) = quiescing_under
+        && request.intent_id.as_deref() != Some(live.to_string().as_str())
+    {
+        tracing::info!(
+            %owner,
+            %album,
+            intent = %live,
+            "an upload was refused: the album is quiescing under a different ceremony"
+        );
+        return Err(CreateRejection::UpgradeQuiescing {
+            intent_id: live.to_string(),
+            code: error_codes::UPLOAD_ALBUM_QUIESCING,
+        });
+    }
 
     // Invariant 7: the device the manifest names must be in the uploader's published
     // directory, and the battery compares the moment it was admitted against the manifest.

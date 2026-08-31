@@ -85,7 +85,11 @@ async fn provisioning_makes_an_album_writable() {
     let fixture = Fixture::working();
     let bearer = token(&fixture).await;
     let album = AlbumId::new(DERIVED);
-    let authority = ProvisionedAuthority::new(fixture.albums.clone(), fixture.directories.clone());
+    let authority = ProvisionedAuthority::new(
+        fixture.albums.clone(),
+        fixture.directories.clone(),
+        fixture.clock.clone(),
+    );
 
     assert_eq!(
         authority
@@ -110,6 +114,7 @@ async fn provisioning_makes_an_album_writable() {
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Writable {
+            quiescing_under: None,
             protocol_pin: PROTOCOL_VERSION.to_owned()
         },
         "invariant 6 compares a write against this pin, and it is the server's own"
@@ -137,6 +142,7 @@ async fn an_id_bound_elsewhere_is_refused_uninformatively() {
             album_id: AlbumId::new(DERIVED),
             owner_id: capsule_server::store::OwnerId::new("somebody-else"),
             protocol_version: PROTOCOL_VERSION.to_owned(),
+            upgrade: None,
             created_at: jiff::Timestamp::UNIX_EPOCH,
         })
         .await
@@ -244,6 +250,7 @@ async fn the_surface_and_the_store_agree_on_what_happened() {
             album_id: AlbumId::new(DERIVED),
             owner_id: owner(),
             protocol_version: PROTOCOL_VERSION.to_owned(),
+            upgrade: None,
             created_at: jiff::Timestamp::UNIX_EPOCH,
         })
         .await

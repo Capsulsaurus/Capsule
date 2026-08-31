@@ -155,6 +155,7 @@ impl Fx {
                 timestamp: "2026-05-31T00:00:00Z".into(),
                 action,
                 prior_provenance_hash: prior,
+                upgraded_from: None,
                 retention_until: None,
             };
             let manifest = core.sign(&self.dev_a, &self.write).unwrap();

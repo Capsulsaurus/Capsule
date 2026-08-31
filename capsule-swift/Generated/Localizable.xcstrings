@@ -11229,6 +11229,46 @@
         }
       }
     },
+    "error.album.upgrade_in_flight": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This album is already being upgraded."
+          }
+        }
+      }
+    },
+    "error.album.upgrade_malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read that album upgrade request."
+          }
+        }
+      }
+    },
+    "error.album.upgrade_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That album isn't yours, or doesn't exist."
+          }
+        }
+      }
+    },
+    "error.album.upgrade_proposer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only an admin device on this account can upgrade an album."
+          }
+        }
+      }
+    },
     "error.auth.account_locked": {
       "localizations": {
         "en": {
@@ -15369,6 +15409,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "您無權向此相簿新增照片。"
+          }
+        }
+      }
+    },
+    "error.upload.album_quiescing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This album is being upgraded. Your photos will upload once it's done."
           }
         }
       }

@@ -29,7 +29,8 @@ use super::ceremony::{
     WEBAUTHN_CEREMONY_TTL, WebauthnCeremonyStore,
 };
 use super::ids::{
-    CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
+    AlbumId, CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
+    UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -593,6 +594,22 @@ impl UploadSessionStore for InMemoryUploadSessions {
                 .collect();
             matches.sort();
             Ok(matches.first().map(|id| (*id).clone()))
+        })
+    }
+
+    fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            Ok(state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| {
+                    record.status.is_active() && record.album_id.as_ref() == Some(album)
+                })
+                .count() as u64)
         })
     }
 

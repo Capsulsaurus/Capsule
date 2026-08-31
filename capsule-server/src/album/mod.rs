@@ -49,6 +49,79 @@ pub struct AlbumRecord {
     pub protocol_version: String,
     /// When it was provisioned.
     pub created_at: Timestamp,
+    /// The upgrade ceremony in flight against this album, if any (`S-C24`).
+    ///
+    /// `None` is the ordinary state. While it is `Some` and unexpired the album is **quiescing**:
+    /// the members have stopped writing and are draining, and the server refuses any upload that
+    /// does not name the ceremony's `intent_id`.
+    pub upgrade: Option<UpgradeQuiescence>,
+}
+
+/// An album-upgrade ceremony the server has accepted (`S-C24`).
+///
+/// # Why the whole intent is stored rather than its fields
+///
+/// The deadline is a **duration**, and the expiry is `received_at + deadline` on the *server's*
+/// clock — that is the entire point of the design: a skewed member clock can neither extend nor
+/// shorten the window. Keeping the signed intent intact means the predicate that decides expiry is
+/// [`capsule_core::crypto::upgrade::UpgradeIntent::is_expired`], the same function the client
+/// reasons with, rather than a second arithmetic here that could round differently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeQuiescence {
+    /// The intent exactly as the proposing admin device signed it.
+    ///
+    /// The signature is verified **before** this is written, against the account's published
+    /// device directory (`S-C42`'s anchor), so a recorded quiescence is one an admin really asked
+    /// for. It is not re-verified on every read: a directory that later revokes the proposing
+    /// device does not retroactively un-propose an upgrade, exactly as a revoked device's earlier
+    /// manifests stay verifiable.
+    pub intent: capsule_core::crypto::upgrade::UpgradeIntent,
+    /// The server's own clock when it accepted the intent.
+    ///
+    /// The **only** anchor the deadline is measured from, and the reason this field exists at all.
+    pub received_at: Timestamp,
+}
+
+impl UpgradeQuiescence {
+    /// Whether the ceremony's window has closed on `now`.
+    ///
+    /// Delegates to core's predicate rather than restating it. An expired quiescence is treated
+    /// everywhere as *absent* — versioning.md step 3: on deadline expiry the upgrade aborts
+    /// cleanly and the album returns to normal operation — so nothing has to run to clear it and
+    /// a ceremony whose proposer vanished cannot freeze an album forever.
+    #[must_use]
+    pub fn is_expired(&self, now: Timestamp) -> bool {
+        self.intent.is_expired(self.received_at, now)
+    }
+
+    /// When the window closes, for the phase a client polls.
+    #[must_use]
+    pub fn expires_at(&self) -> Timestamp {
+        let secs = i64::try_from(self.intent.deadline_secs).unwrap_or(i64::MAX);
+        crate::store::deadline(self.received_at, jiff::SignedDuration::from_secs(secs))
+    }
+}
+
+/// What accepting or clearing an upgrade did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpgradeOutcome {
+    /// The album is quiescing under the intent this call named.
+    ///
+    /// Also the answer to a **replayed** proposal: `intent_id` is the ceremony's idempotency key,
+    /// and versioning.md is explicit that the same `UpgradeIntent` never produces two forks.
+    Quiescing(Box<AlbumRecord>),
+    /// The album is no longer quiescing — what clearing one returns.
+    Cleared(Box<AlbumRecord>),
+    /// A **different** ceremony is already in flight, and only one may be.
+    ///
+    /// Carries the live id so the caller can tell a proposer which ceremony it is losing to;
+    /// reached only by the album's owner, so it discloses nothing.
+    Conflict {
+        /// The ceremony already in flight.
+        intent_id: Uuid,
+    },
+    /// No such album, or not this caller's.
+    NotFound,
 }
 
 /// What a provisioning attempt did.
@@ -78,6 +151,39 @@ pub trait AlbumStore: std::fmt::Debug + Send + Sync {
 
     /// The album, if it has been provisioned.
     fn read<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<AlbumRecord>>;
+
+    /// Put `album` into upgrade quiescence under `quiescence`, if nothing else holds it
+    /// (`S-C24`).
+    ///
+    /// One operation for the same reason [`Self::provision`] is one: a caller that read the
+    /// album, saw no ceremony, and then wrote one has a window in which a second proposer does
+    /// the same, and both would believe they hold the album. `now` is passed in rather than read
+    /// here because the expiry check and the write must see the *same* instant — a ceremony that
+    /// expired between them would otherwise be neither cleared nor honoured.
+    ///
+    /// An **expired** ceremony is not a conflict: the window closing aborts the upgrade, so a new
+    /// proposal simply replaces it.
+    fn begin_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        quiescence: UpgradeQuiescence,
+        now: Timestamp,
+    ) -> StoreFuture<'a, UpgradeOutcome>;
+
+    /// End the ceremony `intent_id` names, returning the album to normal operation (`S-C24`).
+    ///
+    /// Idempotent in the direction that matters: an album that is not quiescing is already in the
+    /// state this asks for, so it answers [`UpgradeOutcome::Cleared`] rather than an error. A
+    /// *different* live ceremony is a conflict — aborting somebody else's upgrade is not
+    /// something an id you do not hold should buy.
+    fn end_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        intent_id: Uuid,
+        now: Timestamp,
+    ) -> StoreFuture<'a, UpgradeOutcome>;
 }
 
 /// A deterministic in-memory adapter.
@@ -128,6 +234,78 @@ impl AlbumStore for InMemoryAlbums {
 
     fn read<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<AlbumRecord>> {
         Box::pin(async move { Ok(lock(&self.albums).get(album).cloned()) })
+    }
+
+    fn begin_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        quiescence: UpgradeQuiescence,
+        now: Timestamp,
+    ) -> StoreFuture<'a, UpgradeOutcome> {
+        Box::pin(async move {
+            let mut albums = lock(&self.albums);
+            let Some(record) = albums.get_mut(album) else {
+                return Ok(UpgradeOutcome::NotFound);
+            };
+            // Not this caller's album is the same answer as no album, as everywhere else: the id
+            // is client-derived, so a guess must buy nothing.
+            if &record.owner_id != owner {
+                return Ok(UpgradeOutcome::NotFound);
+            }
+            if let Some(live) = &record.upgrade
+                && !live.is_expired(now)
+                && live.intent.intent_id != quiescence.intent.intent_id
+            {
+                tracing::info!(
+                    %album,
+                    live = %live.intent.intent_id,
+                    proposed = %quiescence.intent.intent_id,
+                    "an upgrade proposal was refused: another ceremony is in flight"
+                );
+                return Ok(UpgradeOutcome::Conflict {
+                    intent_id: live.intent.intent_id,
+                });
+            }
+            tracing::info!(
+                %album,
+                intent = %quiescence.intent.intent_id,
+                to = %quiescence.intent.to_protocol_version,
+                "an album entered upgrade quiescence"
+            );
+            record.upgrade = Some(quiescence);
+            Ok(UpgradeOutcome::Quiescing(Box::new(record.clone())))
+        })
+    }
+
+    fn end_upgrade<'a>(
+        &'a self,
+        album: &'a AlbumId,
+        owner: &'a OwnerId,
+        intent_id: Uuid,
+        now: Timestamp,
+    ) -> StoreFuture<'a, UpgradeOutcome> {
+        Box::pin(async move {
+            let mut albums = lock(&self.albums);
+            let Some(record) = albums.get_mut(album) else {
+                return Ok(UpgradeOutcome::NotFound);
+            };
+            if &record.owner_id != owner {
+                return Ok(UpgradeOutcome::NotFound);
+            }
+            if let Some(live) = &record.upgrade
+                && !live.is_expired(now)
+                && live.intent.intent_id != intent_id
+            {
+                return Ok(UpgradeOutcome::Conflict {
+                    intent_id: live.intent.intent_id,
+                });
+            }
+            if record.upgrade.take().is_some() {
+                tracing::info!(%album, intent = %intent_id, "an album left upgrade quiescence");
+            }
+            Ok(UpgradeOutcome::Cleared(Box::new(record.clone())))
+        })
     }
 }
 

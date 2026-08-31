@@ -503,6 +503,7 @@ mod tests {
             timestamp: "2026-05-31T12:00:00Z".into(),
             action: Action::Create,
             prior_provenance_hash: None,
+            upgraded_from: None,
             retention_until: None,
         };
         let manifest = core.sign(&f.device, &f.write).unwrap();

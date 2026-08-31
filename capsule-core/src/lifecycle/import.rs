@@ -482,6 +482,7 @@ impl Workspace {
             timestamp: now_rfc3339(),
             action: Action::Create,
             prior_provenance_hash: None,
+            upgraded_from: None,
             retention_until: None,
         };
         let manifest = core.sign(self.device_signer.as_ref(), album.write_tier_signer()?)?;

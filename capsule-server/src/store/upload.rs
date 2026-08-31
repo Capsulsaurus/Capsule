@@ -279,6 +279,18 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>>;
 
+    /// How many sessions are still in flight against `album` (`S-C24`).
+    ///
+    /// The drain count versioning.md step 3 asks the server to expose: *"the upgrade cannot
+    /// proceed while any session for this album is in `Uploading` or `WaitingForProcessing`"*.
+    /// Counted rather than listed, because the proposer needs to know **whether** to wait and has
+    /// no business seeing other members' upload identifiers to find out.
+    ///
+    /// Includes `Pending` — a session that has been opened and has sent no bytes is exactly as
+    /// much in flight as one that has, and the ceremony's whole purpose is that nothing is
+    /// mid-write at the cutover.
+    fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64>;
+
     /// Up to `limit` active sessions that have not progressed since `not_progressed_since`,
     /// least recently progressed first.
     ///

@@ -24,6 +24,7 @@ fn record(who: &OwnerId) -> AlbumRecord {
         album_id: album(),
         owner_id: who.clone(),
         protocol_version: "2026-01-01".to_owned(),
+        upgrade: None,
         created_at: Timestamp::UNIX_EPOCH,
     }
 }
@@ -119,7 +120,11 @@ fn authority(
     albums: Arc<InMemoryAlbums>,
     directories: Arc<InMemoryDeviceDirectory>,
 ) -> ProvisionedAuthority {
-    ProvisionedAuthority::new(albums, directories)
+    ProvisionedAuthority::new(
+        albums,
+        directories,
+        std::sync::Arc::new(crate::store::SystemClock),
+    )
 }
 
 #[tokio::test]
@@ -134,6 +139,7 @@ async fn an_album_is_writable_by_the_account_it_was_provisioned_to() {
             .await
             .expect("the authority answers"),
         AlbumWriteAccess::Writable {
+            quiescing_under: None,
             protocol_pin: "2026-01-01".to_owned()
         },
         "the pin is the album's own, which is what invariant 6 compares a write against"

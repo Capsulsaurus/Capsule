@@ -27,6 +27,7 @@ pub mod pwkdf;
 pub mod receipts;
 pub mod revoke;
 pub mod rng;
+pub mod upgrade;
 pub mod verify_asset;
 
 pub use hash::{Hash32, Sha256Hasher};

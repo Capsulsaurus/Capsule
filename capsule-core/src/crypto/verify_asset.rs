@@ -362,6 +362,7 @@ mod tests {
                 timestamp: "2026-05-31T12:00:00Z".into(),
                 action,
                 prior_provenance_hash: prior,
+                upgraded_from: None,
                 retention_until: None,
             }
         }

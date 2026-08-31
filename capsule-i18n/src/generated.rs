@@ -41,6 +41,18 @@ pub mod error_codes {
     /// `error.album.unavailable`
     pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
 
+    /// `error.album.upgrade_in_flight`
+    pub const ALBUM_UPGRADE_IN_FLIGHT: &str = "error.album.upgrade_in_flight";
+
+    /// `error.album.upgrade_malformed`
+    pub const ALBUM_UPGRADE_MALFORMED: &str = "error.album.upgrade_malformed";
+
+    /// `error.album.upgrade_not_found`
+    pub const ALBUM_UPGRADE_NOT_FOUND: &str = "error.album.upgrade_not_found";
+
+    /// `error.album.upgrade_proposer`
+    pub const ALBUM_UPGRADE_PROPOSER: &str = "error.album.upgrade_proposer";
+
     /// `error.auth.account_locked`
     pub const AUTH_ACCOUNT_LOCKED: &str = "error.auth.account_locked";
 
@@ -268,6 +280,9 @@ pub mod error_codes {
 
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
+
+    /// `error.upload.album_quiescing`
+    pub const UPLOAD_ALBUM_QUIESCING: &str = "error.upload.album_quiescing";
 
     /// `error.upload.amk_regressed`
     pub const UPLOAD_AMK_REGRESSED: &str = "error.upload.amk_regressed";

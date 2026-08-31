@@ -130,6 +130,9 @@ pub fn router() -> ServerRouter {
         // The library's own surfaces, and the public record anybody may read.
         .mount(kynos::routes![
             routes::albums::provision_album,
+            routes::upgrade::begin_album_upgrade,
+            routes::upgrade::album_upgrade_phase,
+            routes::upgrade::abort_album_upgrade,
             routes::quota::get_quota,
             routes::moderation::moderation_record,
             routes::well_known::attestation_keys,

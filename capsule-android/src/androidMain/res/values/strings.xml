@@ -168,6 +168,10 @@
     <string name="error_album_invalid_id">This album could not be registered because its identifier is malformed.</string>
     <string name="error_album_not_available">This album isn\'t available on your account.</string>
     <string name="error_album_unavailable">Capsule couldn\'t set up that album. Please try again.</string>
+    <string name="error_album_upgrade_in_flight">This album is already being upgraded.</string>
+    <string name="error_album_upgrade_malformed">Capsule couldn\'t read that album upgrade request.</string>
+    <string name="error_album_upgrade_not_found">That album isn\'t yours, or doesn\'t exist.</string>
+    <string name="error_album_upgrade_proposer">Only an admin device on this account can upgrade an album.</string>
     <string name="error_auth_account_locked">This account is locked after too many failed sign-in attempts.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
@@ -244,6 +248,7 @@
     <string name="error_sync_unauthenticated">Please sign in again to continue syncing.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>
     <string name="error_upload_album_access_denied">You don\'t have permission to add photos to this album.</string>
+    <string name="error_upload_album_quiescing">This album is being upgraded. Your photos will upload once it\'s done.</string>
     <string name="error_upload_amk_regressed">This change references an older album key than the server has recorded.</string>
     <string name="error_upload_checksum_mismatch">Upload data was corrupted in transit. Retrying…</string>
     <string name="error_upload_chunk_conflict">The upload sent conflicting data and was stopped.</string>
