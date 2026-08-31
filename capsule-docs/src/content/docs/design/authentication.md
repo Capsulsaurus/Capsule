@@ -152,7 +152,7 @@ Domain-separated, [canonical CBOR](/design/metadata/#canonical-cbor-encoding) (n
 
 ### Server Storage and Surfacing
 
-The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort.
+The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort. Recording a cohort is **never allowed to fail a sign-in**: it is written after the session and its failure is logged and dropped, because an advisory grouping aid must not take down the one operation an account cannot do without — the same reason a malformed value is dropped rather than rejected. The listing surface is shaped so the advisory-only rule cannot quietly erode: the cohort appears there and nowhere else, no parameter filters by one, and revocation names a `session_id`. A "revoke this cohort" verb would be an authorization decision made from a spoofable string.
 
 ### UX and Support Contract
 

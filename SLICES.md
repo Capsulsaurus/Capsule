@@ -219,7 +219,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | done | `PUT` is the replace; there is deliberately no delete |
-| S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
+| S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | done | the ledger surface came with it; `last_active_at` does not move until `S-C48` |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
@@ -313,7 +313,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
-| S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | ready | |
+| S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done\* | the wire half lands with `S-C13`; TOTP/passkey ceremonies wait on `S-N1` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
 | S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | ready | |
@@ -1370,6 +1370,32 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Tier:** Unit + Smoke. **Blocks:** S-D11.
 - **Landed in retired code; re-scoped onto Kynos.**
 - **Owed:** wire device_id + ceremony cohort → `S-N3`.
+- **Landed 2026-08-31 (`done`).** `GET /v1/auth/devices` serves the ledger and
+  `DELETE /v1/auth/devices/{session_id}` is the single-session revoke — items 1 and 2 of
+  design/authentication.md's session ledger, which had no surface at all on this port.
+  `CohortStore` is the durable `device_cohorts` map, written on sign-in.
+- **The map is the one store in `crate::store` with no clock and no TTL**, and that is the whole
+  reason it exists rather than being a projection of the session store. A cohort is worth
+  recording precisely because it outlives the sessions that carried it: a user reinstalls, gets
+  a new `device_id` by design, and the sessions naming the old one expired months ago. A map
+  that expired with them would forget exactly when "have I seen this device before?" starts
+  being worth asking. `the_cohort_map_outlives_the_sessions_that_carried_it` walks that.
+- **Recording a cohort can never fail a sign-in.** It is written after the session and its error
+  is logged and dropped — an advisory grouping aid must not take down the one operation an
+  account cannot do without. Same reason a malformed cohort is dropped rather than rejected.
+- **Advisory-only is enforced by the shape of the surface, not by a comment.** The cohort appears
+  on the listing and nowhere else; there is no filter parameter that takes one, and revocation
+  names a `session_id`. A "revoke this cohort" verb would be an authorization decision made from
+  a spoofable client-asserted string, which is exactly what the rule refuses.
+- **Single-session revoke reads before it closes.** The ownership check is against the record the
+  store returns, so there is no window in which a caller ends another account's session and is
+  then told they were not allowed to — and somebody else's session id answers exactly as an
+  unknown one does, so the endpoint is not an oracle over guessed ids.
+- **Revoking the current session is allowed.** Signing this device out is a legitimate ask, and
+  refusing it would only push a client into calling `logout` and hoping the two behave the same.
+- **Owed: `last_active_at` does not move** (`S-C48`). It is served anyway rather than hidden —
+  it is the shape the client is written against — but a client must not label it "last used"
+  until the session ledger is on the request path.
 
 ### S-C14 — Server integrity scrub
 
@@ -3660,6 +3686,15 @@ lands on Kynos rather than on Salvo.
   `cohort_hash` acceptance, and the SDK support bundle all ship. It is **done on the
   server side, which is `RETIRED`**, so the row reads `ready`: the deliverable re-scopes
   onto Kynos. The SDK support-bundle half is `ACTIVE` and stays.
+- **Re-landed on Kynos 2026-08-31 (`done\*`)** with `S-C13`. `device_id` is on the
+  `GET /v1/auth/devices` wire beside `cohort_hash`, as a distinct identifier space — the cohort
+  groups re-enrollments of one physical device, `device_id` names one directory device — and
+  `a_reinstall_groups_with_the_device_it_replaced` asserts exactly that distinction: two
+  `device_id`s, one cohort, one durable row.
+- **Owed: the TOTP and passkey ceremonies.** They have no surface on this port at all — the only
+  sign-in is password, and OIDC and the second-factor ceremonies are `S-N1`'s. Accepting
+  `cohort_hash` there is a line each once those ceremonies exist, and there is nothing to
+  implement it against today.
 
 ## Lane P — iOS app path
 
