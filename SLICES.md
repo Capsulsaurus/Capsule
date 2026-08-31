@@ -237,7 +237,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
 | S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | done\* | server half stores and serves verbatim; client producer owed to `S-D1` |
-| S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
+| S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | done | the chain position replaces it, and the chain head stops riding a coincidence |
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | done\* | the port lands with three of its consumers; the per-source half needs a trusted client address |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
@@ -2192,6 +2192,124 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** one shared conformance suite passes for every adapter, enumeration is exercised
   over a populated shard tree, and no caller reaches past the port to the filesystem.
   **Tier:** Unit + conformance.
+
+### S-C29 — the two storage ports and the typed ceremony stores
+
+- **Contract:** [Filesystem — Server](capsule-docs/src/content/docs/design/filesystem/server.md)
+  (Required Services), [Authentication](capsule-docs/src/content/docs/design/authentication.md).
+- **Landed.** Two typed state ports plus four typed ceremony stores, replacing the Salvo
+  `SessionStorage` grab-bag — a generic `save_temp_data<T>`/`get_temp_data<T>` with a
+  **caller-supplied TTL** that four unrelated ceremonies rode, namespaced by hand-formatted
+  strings. The full reasoning lives in `capsule-server/src/store/mod.rs`, which is the module's
+  own contract; the three properties that matter are that no operation takes an arbitrary
+  serializable payload, that TTL is a property of the store rather than an argument, and that a
+  session record and its per-user index entry cannot be addressed separately — which is what made
+  the `revoke_all_for_user` over-count unrepresentable rather than fixed twice.
+- **Owed:** the Valkey and Postgres adapters. Every port has an in-memory adapter and one shared
+  conformance suite, so "the double behaves like Valkey" is an assertion rather than an
+  assumption. Counters were deliberately excluded and became `S-C32`.
+- **Done when:** ✅ the conformance suite passes against the in-memory adapter, case by case and
+  in one pass. **Tier:** Unit.
+
+### S-C30 — feed `manifest_cbor` carries the signed manifest
+
+- **Contract:** [Provenance — the signed bytes are the served bytes](capsule-docs/src/content/docs/design/cryptography/provenance.md),
+  [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md).
+- **Landed `done*`.** The provenance blob is the signed manifest, transferred like any other blob
+  and stored byte-for-byte; the feed serves those exact bytes. Nothing on the finalization path
+  produces manifest bytes, which is the property `capsule-server/src/upload/finalize.rs` states in
+  its own docs and the `S-C30` smoke case asserts.
+- **What it left open, twice over.** The server gates publication on a provenance blob's
+  *presence* and never on its agreement with the validated envelope, because it does not parse
+  the bytes — detection, not prevention. That is `S-C45` arriving from the scrub's side. And the
+  custody receipt was attesting a hash of the *projection* rather than of the manifest, which is
+  `S-C31`.
+- **Owed:** the client producer, to `S-D1`.
+- **Done when:** ✅ `a_provenance_blob_is_stored_exactly_as_it_arrived` and
+  `the_feed_serves_the_lifecycle_manifest_byte_for_byte`. **Tier:** Unit + Smoke.
+
+### S-C31 — the custody receipt attested a hash of server-invented bytes
+
+- **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md).
+- **Gap** (found landing `S-C30`): `envelope_hash` was
+  `SHA-256(serde_json::to_string(manifest_envelope))` — the server's **own re-serialization** of
+  the JSON *projection* of the manifest. Three things wrong with it, and the third is the one
+  that would have hurt:
+  1. **No client could reproduce it.** Reproducing it needs the server's exact Rust type, with
+     its exact field order and its exact serde configuration. A Swift or TypeScript client cannot,
+     and a Rust client could only by depending on the server's own struct.
+  2. **Reordering a field of that struct would have silently invalidated every receipt ever
+     issued** — a signed evidentiary artifact broken by a refactor with no test that could see it.
+  3. **It hashed the projection, not the manifest.** The upload protocol is explicit that the
+     server may never serve the projection *"or anything re-encoded from it"* where a manifest is
+     expected; a signed receipt claiming to carry "SHA-256 of the manifest envelope CBOR" over a
+     JSON re-encoding is that, in the one artifact whose whole job is to be evidence.
+- **Landed 2026-08-31.** `envelope_hash` is now **SHA-256 over the asset's signed manifest — its
+  provenance-chain position** — carried on the `provenance` blob's own receipt and absent on every
+  other.
+
+**One receipt per manifest, and that is the design rather than a shortcut.** The provenance blob
+*is* the manifest, so its receipt names it twice: once as the bytes taken custody of, once as the
+chain position. The manifest itself commits to the other blobs' hashes, so "this blob was accepted
+under this manifest" is provable from content addressing alone. Restating it on every receipt would
+add a fourth statement that has to be kept consistent with the other three — and, because the
+protocol imposes **no wire ordering** on a bundle, a non-provenance receipt could only carry it
+when the manifest happened to finalize first, which would make the value depend on arrival order
+and a client's expectation impossible to state. Present-or-absent by *role* is deterministic; the
+client knows its manifest's digest the moment it signs.
+
+**And it killed the coincidence this row's code note was really about.** The chain head used to be
+derived from the provenance blob's content address, correct only because the shipped suite
+content-addresses with SHA-256 while `prior_provenance_hash` is fixed at SHA-256 by definition —
+two identifiers that are equal and are not the same thing. Finalization now computes the SHA-256
+over the bytes it committed and hands it to the index as `BlobRecord::manifest_sha256`, so
+`chain_head` is a fact the server established rather than one it inferred. `StagedDigest` returns
+both values from one pass over the bytes, so the day a suite selects a different content-address
+digest it grows a second hasher and every call site keeps compiling — which is the whole reason
+they are two fields rather than one variable.
+
+- **Done when:** ✅ `only_the_manifests_own_receipt_names_the_chain_position` and
+  `a_client_can_form_the_expectation_before_it_uploads` in `capsule-server/tests/receipts.rs` —
+  the second exists because the old value's real defect was that no client could state the
+  expectation in advance, which made an equality check a tautology fed from the receipt itself.
+  **Tier:** Unit.
+
+### S-C32 — MFA-attempt and rate-limit counters have no port
+
+- **Contract:** [Authentication](capsule-docs/src/content/docs/design/authentication.md),
+  [Share Links](capsule-docs/src/content/docs/design/share-links.md),
+  [Drops](capsule-docs/src/content/docs/design/drops.md).
+- **Gap** (found landing `S-C29`): counters rode the Salvo grab-bag and `S-C29` deliberately gave
+  them no home — they are counters, not records, with a different failure mode (they must survive
+  a lost increment badly, not a lost record) — so several documented limits had nothing to
+  enforce them.
+- **Landed `done*`.** A `CounterStore` with a **closed** `CounterKey` enum, so a limiter cannot be
+  added by formatting a new string, and budgets declared as data. `hit` is one critical section:
+  read, decide and increment under the same lock, because a limiter that reads then writes is a
+  limiter two concurrent requests walk through. Every consumer **fails closed** — a counter store
+  that cannot answer is a refusal, since a limiter an attacker turns off by loading the store is
+  not a limiter.
+- **Owed:** the per-source-address half, which needs a trusted client address the server does not
+  have behind an unconfigured proxy chain.
+- **Done when:** ✅ the store's conformance cases plus the three consumers' own
+  (`S-C4`, `S-C5`, `S-C41`). **Tier:** Unit.
+
+### S-C34 — nothing gates the Kynos OpenAPI document
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) — the
+  document is the contract, and the client is generated from it.
+- **Gap:** the rebuild's central claim is that the description is derived from the types and
+  cannot disagree with them. `assert_conformance` and `assert_declared_responses_covered` enforce
+  that *inside* the crate and neither helps a client: a surface can be ported, the emitted
+  document can change shape, and nothing outside notices until someone regenerates by hand.
+- **Landed.** `gen_openapi --check` in `check-rust`, over a committed `capsule-server/openapi.json`.
+  It needs no database, no Valkey, no key material, no disk and no network, which is what lets it
+  run in the check gate beside `i18n-check`.
+- **Two documents, gated separately, on purpose.** `capsule-sdk` still generates from the Salvo
+  document; committing both as *the* contract at once would leave no way to say which one a client
+  should believe. The changeover is its own step and also drops the four `spargen::OmitRule`
+  narrowings.
+- **Done when:** ✅ `mise run openapi-check-kynos` fails on a stale document. **Tier:** Gate.
 
 ### S-C33 — request-size limits, because Kynos declares constraints it does not enforce
 

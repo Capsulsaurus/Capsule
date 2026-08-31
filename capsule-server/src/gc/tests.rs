@@ -124,6 +124,7 @@ impl Harness {
                     role,
                     address: address.clone(),
                     size: 16,
+                    manifest_sha256: None,
                     finalized_at: Timestamp::UNIX_EPOCH,
                 },
             )

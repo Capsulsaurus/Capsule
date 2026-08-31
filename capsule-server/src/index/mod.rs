@@ -195,12 +195,11 @@ pub struct AssetRow {
     /// The content hash of the last manifest accepted for this asset — invariant 17's
     /// *stored chain head*.
     ///
-    /// `None` until a lifecycle manifest has been accepted. Stored explicitly rather than
-    /// derived from the provenance blob's content address: with `crypto_suite_id = 1` the two
-    /// are digests of the same byte string and therefore equal, but they are **not** the same
-    /// identifier — a content address is whatever digest the suite selects, while
-    /// `prior_provenance_hash` is fixed at SHA-256. `S-C31` records that trap; relying on the
-    /// coincidence here would set it.
+    /// `None` until a lifecycle manifest has been accepted. It is **not** the provenance blob's
+    /// content address, even though the two are equal today: a content address is whatever
+    /// digest the crypto suite selects, while `prior_provenance_hash` is fixed at SHA-256. The
+    /// value arrives on [`BlobRecord::manifest_sha256`], computed by finalization over the bytes
+    /// it committed, so the equality is never relied on (`S-C31`).
     pub chain_head: Option<Hash32>,
     /// The album-key epoch the last accepted manifest was written under — invariant 18's
     /// subject.
@@ -288,6 +287,15 @@ pub struct BlobRecord {
     pub address: ContentAddress,
     /// Its size in bytes.
     pub size: u64,
+    /// SHA-256 over the blob's bytes, for a `provenance` blob (`S-C31`).
+    ///
+    /// `None` for every other role, and the asymmetry is the point: this is the asset's
+    /// **chain position** — `prior_provenance_hash` is defined as a SHA-256 over the signed
+    /// manifest, whatever digest the crypto suite chose for content addressing — so it is
+    /// carried here as its own value rather than re-derived from the address. Finalization
+    /// computes it over the bytes it just committed, which is what keeps the chain head a fact
+    /// the server established rather than one it inferred from a coincidence between two digests.
+    pub manifest_sha256: Option<Hash32>,
     /// When finalization committed it.
     pub finalized_at: Timestamp,
 }

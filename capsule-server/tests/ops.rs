@@ -9,7 +9,7 @@ mod support;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_server::blob::{BlobStore, ContentAddress};
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::store::{AssetId, BlobRole, Clock, OwnerId};
@@ -67,6 +67,11 @@ async fn publish(fixture: &Fixture) -> AssetId {
             .record_blob(
                 &id,
                 BlobRecord {
+                    // A provenance blob carries the chain position finalization computed over
+                    // its bytes (`S-C31`); the addresses here are SHA-256 digests, so it is the
+                    // same value, arriving the way the port requires rather than by inference.
+                    manifest_sha256: (role == BlobRole::Provenance)
+                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
                     role,
                     address,
                     size: seed.len() as u64,

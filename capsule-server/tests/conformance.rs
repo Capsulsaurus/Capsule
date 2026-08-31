@@ -770,6 +770,12 @@ async fn every_declared_response_is_exercised() {
             .record_blob(
                 &asset,
                 capsule_server::index::BlobRecord {
+                    manifest_sha256: (role == capsule_server::store::BlobRole::Provenance).then(
+                        || {
+                            capsule_core::crypto::hash::Hash32::from_hex(at.as_str())
+                                .expect("a digest")
+                        },
+                    ),
                     role,
                     address: at.clone(),
                     size: ciphertext.len() as u64,
@@ -1106,6 +1112,13 @@ async fn every_declared_response_is_exercised() {
             .record_blob(
                 &asset,
                 capsule_server::index::BlobRecord {
+                    // The chain head, which the first lifecycle op has to name (`S-C31`).
+                    manifest_sha256: (role == capsule_server::store::BlobRole::Provenance).then(
+                        || {
+                            capsule_core::crypto::hash::Hash32::from_hex(at.as_str())
+                                .expect("a digest")
+                        },
+                    ),
                     role,
                     address: at,
                     size: 64,

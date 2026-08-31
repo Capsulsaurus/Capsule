@@ -84,8 +84,9 @@ CustodyReceipt {
   blob_role:          enum,             // original | derivative | metadata | provenance
   ciphertext_hash:    bytes,            // RECOMPUTED by the server at finalization — never echoed from the client
   size:               u64,
-  envelope_hash:      Option<[u8;32]>,  // SHA-256 of the manifest envelope CBOR — binds the receipt to the
-                                        //   asset's provenance-chain position
+  envelope_hash:      Option<[u8;32]>,  // SHA-256 over the asset's signed manifest — the provenance-chain
+                                        //   position. Present on the `provenance` blob's receipt and absent
+                                        //   on every other; SHA-256 by definition, never the content address
   uploaded_by_user:   UUID,
   uploaded_by_device: Option<UUID>,
   received_at:        RFC3339,          // server's trusted clock at the finalization commit
@@ -93,6 +94,11 @@ CustodyReceipt {
   server_sig:         Hybrid(Ed25519, ML-DSA-65),  // under the server attestation key, over all fields above
 }
 ```
+
+**`envelope_hash` is on one receipt per manifest, and never on the others (slice `S-C31`).** The provenance blob *is* the signed manifest, so its receipt names the manifest twice — once as the bytes the server took custody of, once as the chain position — and the manifest itself commits to the other blobs' hashes. "This blob was accepted under this manifest" is therefore provable from content addressing alone, and restating it on every receipt would add a fourth statement that has to be kept consistent with the other three. Two properties follow and both are load-bearing:
+
+- **It is a SHA-256 by definition, not the blob's content address.** They are equal under every suite that content-addresses with SHA-256; they are not the same identifier, because an address is whatever digest the suite selects while a chain position is fixed at SHA-256 by `prior_provenance_hash`. The server computes it over the bytes it committed rather than reading it back off the address, so the equality is never relied on.
+- **It is deterministic on both sides**, which is what lets a client check it by equality: a client uploading its own manifest knows the digest before it opens the session, and a client uploading anything else knows the server has nothing to say here. The rejected alternative — hashing the JSON `manifest_envelope` projection — was reproducible only by a client holding the server's exact Rust type, and any reordering of that type's fields would have silently invalidated every receipt ever issued. It also hashed *something re-encoded from the projection*, which [Provenance](/design/cryptography/provenance/#asset-manifest) forbids being served where a manifest is expected.
 
 Canonical CBOR with the same [wire-presence discipline](/design/cryptography/provenance/#asset-manifest) as manifests (absent optionals encode as absent keys), and deliberately server-visible — it carries ciphertext hashes only, no plaintext. Receipts are the server-signed complement of the client-signed [provenance chain](/design/cryptography/provenance/#provenance-of-library-modifications): the envelope proves what a client *claimed and signed*; the receipt proves what the server *accepted*, over a hash it recomputed itself.
 

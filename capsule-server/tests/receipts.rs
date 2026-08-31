@@ -337,3 +337,103 @@ async fn the_published_key_history_verifies_a_fetched_receipt() {
         "publishing a key the server does not sign with would emit evidence nobody can check"
     );
 }
+
+// ===========================================================================================
+// The chain position the receipt attests (`S-C31`)
+// ===========================================================================================
+
+/// The provenance blob's receipt names the manifest's SHA-256; nothing else's does.
+///
+/// The defect this replaced: `envelope_hash` was `SHA-256(serde_json::to_string(projection))` —
+/// a hash of bytes the *server* invented, over the JSON mirror of the manifest rather than the
+/// manifest. No client outside this exact Rust type could reproduce it, and reordering a field
+/// of that type would have silently invalidated every receipt ever issued.
+#[tokio::test]
+async fn only_the_manifests_own_receipt_names_the_chain_position() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+
+    // The signed manifest, uploaded as the provenance blob it is.
+    let manifest = support::payload(b'm', 8192);
+    let manifest_upload = fixture.open_session(&manifest, "provenance", &bearer).await;
+    fixture
+        .chunk(&manifest_upload, 0, &manifest, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let provenance = CustodyReceipt::from_canonical_cbor(
+        fetch(&fixture, &bearer, &manifest_upload, StatusCode::OK)
+            .await
+            .bytes(),
+    )
+    .expect("a receipt");
+    assert_eq!(
+        provenance.core.envelope_hash,
+        Some(hash_bytes(&manifest)),
+        "the chain position is a SHA-256 the server computed over the bytes it committed, which \
+         is exactly what a client can compute before it opens the session"
+    );
+    assert_eq!(
+        provenance.core.ciphertext_hash,
+        hash_bytes(&manifest),
+        "and it names the same manifest as the custody it attests, because the provenance blob \
+         *is* the manifest"
+    );
+
+    // Any other blob's receipt says nothing about the chain, because the manifest already
+    // commits to that blob's hash and a second statement is a second thing to keep consistent.
+    let (first, second, whole) = blob();
+    let original = upload(&fixture, &bearer, &first, &second, &whole).await;
+    let receipt = CustodyReceipt::from_canonical_cbor(
+        fetch(&fixture, &bearer, &original, StatusCode::OK)
+            .await
+            .bytes(),
+    )
+    .expect("a receipt");
+    assert_eq!(receipt.core.envelope_hash, None);
+}
+
+/// A client's expectation is exact, which is only possible because the value is deterministic.
+#[tokio::test]
+async fn a_client_can_form_the_expectation_before_it_uploads() {
+    // The property the old value did not have. A client knows its manifest's digest the moment
+    // it signs, so it can state what the receipt must say *before* the session exists — which is
+    // what makes `verify_receipt`'s equality check meaningful rather than a tautology fed from
+    // the receipt itself.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let manifest = support::payload(b'n', 8192);
+    let expected_position = hash_bytes(&manifest);
+
+    let id = fixture.open_session(&manifest, "provenance", &bearer).await;
+    fixture
+        .chunk(&id, 0, &manifest, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    let receipt = CustodyReceipt::from_canonical_cbor(
+        fetch(&fixture, &bearer, &id, StatusCode::OK).await.bytes(),
+    )
+    .expect("a receipt");
+
+    assert_eq!(
+        verify_receipt(
+            &receipt,
+            &[fixture.attestation_key.verifying_key()],
+            &ReceiptExpectations {
+                ciphertext_hash: expected_position,
+                size: manifest.len() as u64,
+                role: BlobRole::Provenance,
+                envelope_hash: Some(expected_position),
+            },
+            receipt
+                .core
+                .received_at
+                .parse::<jiff::Timestamp>()
+                .expect("an instant")
+                .as_second(),
+        ),
+        Ok(())
+    );
+}

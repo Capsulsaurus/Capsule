@@ -83,7 +83,23 @@ pub struct CustodyReceiptCore {
     pub ciphertext_hash: Hash32,
     /// Ciphertext size in bytes.
     pub size: u64,
-    /// SHA-256 of the manifest envelope CBOR, when present.
+    /// SHA-256 over the asset's signed manifest — its provenance-chain position — on the
+    /// receipt for the `provenance` blob, and absent on every other receipt.
+    ///
+    /// **A SHA-256 by definition, not the blob's content address.** The two are equal under
+    /// every suite that content-addresses with SHA-256 and they are not the same identifier: an
+    /// address is whatever digest the suite selects, while a chain position is fixed at SHA-256
+    /// because `prior_provenance_hash` is. Deriving one from the other is correct by
+    /// coincidence, which is the trap `S-C31` names.
+    ///
+    /// **Present on one receipt per manifest, and that is the whole design.** The provenance
+    /// blob *is* the signed manifest, so its receipt names the manifest twice — once as the
+    /// bytes taken custody of, once as the chain position — and the manifest itself commits to
+    /// the other blobs' hashes. So "this blob was accepted under this manifest" is provable from
+    /// content addressing, and no other receipt needs to restate it. The server earlier hashed
+    /// its own re-serialization of the JSON *projection* of the manifest, which no client
+    /// outside this exact Rust type could reproduce and which reordering a struct field would
+    /// have silently invalidated.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub envelope_hash: Option<Hash32>,
     /// The user that uploaded.
@@ -141,7 +157,13 @@ pub struct ReceiptExpectations {
     pub size: u64,
     /// The blob's role on the asset.
     pub role: BlobRole,
-    /// The manifest envelope hash the write committed to, when the action carries one.
+    /// The asset's provenance-chain position — SHA-256 over the signed manifest — for the
+    /// upload of the `provenance` blob, and `None` for every other role.
+    ///
+    /// Deterministic on both sides, which is what lets this be an equality check: a client
+    /// uploading its manifest knows the digest before it opens the session, and a client
+    /// uploading anything else knows the server has nothing to say here. See
+    /// [`CustodyReceiptCore::envelope_hash`].
     pub envelope_hash: Option<Hash32>,
 }
 

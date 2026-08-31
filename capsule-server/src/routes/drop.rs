@@ -1104,6 +1104,7 @@ async fn adopt_claimed(
                 role: crate::store::BlobRole::Original,
                 address: entry.address.clone(),
                 size: entry.size,
+                manifest_sha256: None,
                 finalized_at: now,
             },
         )

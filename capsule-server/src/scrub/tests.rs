@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use capsule_core::crypto::hash::hash_bytes;
+use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use jiff::Timestamp;
 
 use super::*;
@@ -76,6 +76,8 @@ impl Harness {
             .record_blob(
                 asset,
                 BlobRecord {
+                    manifest_sha256: (role == BlobRole::Provenance)
+                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
                     role,
                     address: address.clone(),
                     size: 32,

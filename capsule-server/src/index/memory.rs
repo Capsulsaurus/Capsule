@@ -42,22 +42,6 @@ fn is_singular(role: BlobRole) -> bool {
     )
 }
 
-/// The chain head a provenance blob at `address` establishes, when the server can know it.
-///
-/// A create's manifest is uploaded as a provenance blob and never re-declared, so its content
-/// address is the only handle the server has on it — and invariant 17's `prior_provenance_hash`
-/// is a **SHA-256** digest of those same bytes. Under the one crypto suite that ships, the
-/// content address *is* that digest, so the two coincide and the head is knowable.
-///
-/// They are not the same identifier, and `S-C31` records why: a content address is whatever
-/// digest the suite selects. The day a suite picks a different one this returns `None`, which
-/// is the honest answer — the server would have no way to compute a SHA-256 it was never given,
-/// and invariant 17 would need the client to declare the manifest hash explicitly. Returning
-/// `None` there makes the first lifecycle op fail visibly rather than chain onto a wrong value.
-fn chain_head_from(address: &ContentAddress) -> Option<Hash32> {
-    Hash32::from_hex(address.as_str()).ok()
-}
-
 /// Point `role` at `address`, replacing whatever it held.
 ///
 /// The one place a singular role legitimately moves. [`AssetIndex::record_blob`] refuses to
@@ -217,10 +201,16 @@ impl AssetIndex for InMemoryAssetIndex {
             // the chain the first lifecycle op must name (invariant 17). Set here rather than
             // declared by the route because this is where the manifest becomes durable, and a
             // head recorded before the bytes landed would point at a manifest nobody holds.
-            if let Some(provenance) = row.address_for(BlobRole::Provenance).cloned()
+            //
+            // The value is the record's own `manifest_sha256` and never the content address
+            // (`S-C31`): the two are equal today and are not the same identifier, so deriving
+            // one from the other would be correct by coincidence and would break silently the
+            // day a suite picks a different content-address digest.
+            if blob.role == BlobRole::Provenance
                 && row.chain_head.is_none()
+                && let Some(manifest_sha256) = blob.manifest_sha256
             {
-                row.chain_head = chain_head_from(&provenance);
+                row.chain_head = Some(manifest_sha256);
             }
 
             // The publishable check runs over the *bundle*, so a blob completing the index tier

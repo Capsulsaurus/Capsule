@@ -75,10 +75,18 @@ fn pending(case: &str, n: u32) -> PendingAsset {
 }
 
 /// A finalized blob of `role`, addressed from `seed`.
+///
+/// A provenance blob carries a `manifest_sha256`, because that is what a real finalization
+/// computes over the bytes it committed and it is what the chain head is set from (`S-C31`).
+/// Taken from the address here only because the double's addresses *are* SHA-256 digests; the
+/// port is what refuses to make that assumption.
 fn blob(role: BlobRole, seed: &str) -> BlobRecord {
+    let address = address(seed);
     BlobRecord {
+        manifest_sha256: (role == BlobRole::Provenance)
+            .then(|| Hash32::from_hex(address.as_str()).expect("an address is a digest")),
         role,
-        address: address(seed),
+        address,
         size: 1024,
         finalized_at: Timestamp::UNIX_EPOCH,
     }
@@ -661,6 +669,7 @@ pub async fn the_duplicate_lookup_is_scoped_to_owner_and_album(index: &dyn Asset
             role: BlobRole::Metadata,
             address: held.clone(),
             size: 1024,
+            manifest_sha256: None,
             finalized_at: Timestamp::UNIX_EPOCH,
         },
     )
@@ -753,6 +762,7 @@ pub async fn a_live_holder_outranks_a_deleted_one(index: &dyn AssetIndex) {
         role: BlobRole::Derivative,
         address: shared.clone(),
         size: 1024,
+        manifest_sha256: None,
         finalized_at: Timestamp::UNIX_EPOCH,
     };
 
@@ -1099,6 +1109,7 @@ pub async fn references_are_counted_from_the_rows_that_name_them(index: &dyn Ass
                 role: BlobRole::Derivative,
                 address: shared.clone(),
                 size: 16,
+                manifest_sha256: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )

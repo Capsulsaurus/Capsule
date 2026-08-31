@@ -82,6 +82,7 @@ async fn reference(
                 role,
                 address: address.clone(),
                 size,
+                manifest_sha256: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )

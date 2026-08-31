@@ -57,7 +57,7 @@
 //! and does not synthesize a manifest for a feed. The signed manifest is a `provenance` blob
 //! that travelled this same path and is held verbatim at its content address.
 
-use capsule_core::crypto::hash::{Hash32, Sha256Hasher, hash_bytes};
+use capsule_core::crypto::hash::{Hash32, Sha256Hasher};
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
@@ -205,11 +205,11 @@ async fn run_claimed(
     }
 
     // 2. Invariant 14.
-    let actual = recompute_hash(context, upload, record.total_size).await?;
-    if actual != record.expected_hash {
+    let digest = recompute_hash(context, upload, record.total_size).await?;
+    if digest.address != record.expected_hash {
         return Err(FinalizeFailure::ContentHashMismatch {
             expected: record.expected_hash.clone(),
-            actual,
+            actual: digest.address,
         });
     }
 
@@ -231,11 +231,18 @@ async fn run_claimed(
         .await
         .map_err(blob_unavailable("commit the staged upload"))?;
 
+    // The asset's chain position, and only for the blob that *is* the manifest (`S-C31`). It
+    // travels as its own value rather than being read back off the content address, because
+    // `prior_provenance_hash` is a SHA-256 by definition while an address is whatever digest the
+    // suite chose — equal today, not the same identifier.
+    let manifest_sha256 =
+        (record.blob_role == crate::store::BlobRole::Provenance).then_some(digest.sha256);
+
     // 5. The durable half. Nothing before this point is observable to another device.
-    let minted = record_against_asset(context, record, &address).await?;
+    let minted = record_against_asset(context, record, &address, manifest_sha256).await?;
 
     // 6. The signed half. After custody, deliberately — see the module docs.
-    issue_receipt(context, attestation, record, &address).await?;
+    issue_receipt(context, attestation, record, &address, manifest_sha256).await?;
 
     Ok((placement, minted))
 }
@@ -250,6 +257,7 @@ async fn issue_receipt(
     attestation: &crate::attestation::AttestationContext,
     record: &UploadSessionRecord,
     address: &ContentAddress,
+    manifest_sha256: Option<Hash32>,
 ) -> Result<(), FinalizeFailure> {
     let ciphertext_hash = Hash32::from_hex(address.as_str()).map_err(|_| {
         // Unreachable: the address was just built from a digest this function computed.
@@ -267,7 +275,7 @@ async fn issue_receipt(
                 blob_role: record.blob_role.as_str().to_owned(),
                 ciphertext_hash,
                 size: record.total_size,
-                envelope_hash: Some(hash_bytes(record.manifest_envelope.as_bytes())),
+                envelope_hash: manifest_sha256,
                 uploaded_by_user: record.upload_user_id.as_str().to_owned(),
                 uploaded_by_device: None,
                 received_at: context.clock().now().to_string(),
@@ -287,6 +295,7 @@ async fn record_against_asset(
     context: &UploadContext,
     record: &UploadSessionRecord,
     address: &ContentAddress,
+    manifest_sha256: Option<Hash32>,
 ) -> Result<Option<u64>, FinalizeFailure> {
     let outcome = context
         .index()
@@ -296,6 +305,7 @@ async fn record_against_asset(
                 role: record.blob_role,
                 address: address.clone(),
                 size: record.total_size,
+                manifest_sha256,
                 finalized_at: context.clock().now(),
             },
         )
@@ -337,12 +347,27 @@ async fn record_against_asset(
     }
 }
 
+/// What one pass over the staged bytes established.
+///
+/// Two fields from one hasher, because they are two *identifiers* that happen to share a
+/// digest today and must not share a variable (`S-C31`): the content address is whatever digest
+/// the crypto suite selects, and the chain position is a SHA-256 by definition. The day a suite
+/// selects something else, this struct grows a second hasher and every caller keeps compiling —
+/// which is the whole reason they are separate here while they are equal.
+#[derive(Debug, Clone)]
+struct StagedDigest {
+    /// The content address, as the wire spells it.
+    address: String,
+    /// SHA-256 over the same bytes.
+    sha256: Hash32,
+}
+
 /// Recompute the ciphertext hash over the staged bytes, window by window.
 async fn recompute_hash(
     context: &UploadContext,
     upload: &UploadId,
     expected_len: u64,
-) -> Result<String, FinalizeFailure> {
+) -> Result<StagedDigest, FinalizeFailure> {
     let mut hasher = Sha256Hasher::new();
     let mut offset = 0_u64;
 
@@ -371,7 +396,11 @@ async fn recompute_hash(
     }
 
     tracing::debug!(%upload, bytes = offset, "recomputed the ciphertext hash");
-    Ok(hasher.finalize().to_hex())
+    let sha256 = hasher.finalize();
+    Ok(StagedDigest {
+        address: sha256.to_hex(),
+        sha256,
+    })
 }
 
 /// Step 3: the battery, re-run against durable state as it is at this instant.

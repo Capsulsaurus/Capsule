@@ -10,6 +10,7 @@ mod support;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use capsule_core::crypto::hash::Hash32;
 use capsule_server::blob::BlobStore;
 use capsule_server::index::{AssetIndex, BlobRecord, PendingAsset};
 use capsule_server::quota::{DEFAULT_GRACE_WINDOW, QuotaLimits, QuotaStore};
@@ -213,6 +214,8 @@ async fn the_grace_window_stops_metadata_growth_but_never_a_delete() {
             .record_blob(
                 &asset,
                 BlobRecord {
+                    manifest_sha256: (role == BlobRole::Provenance)
+                        .then(|| Hash32::from_hex(address.as_str()).expect("a digest")),
                     role,
                     address,
                     size: bytes.len() as u64,

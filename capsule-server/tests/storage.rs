@@ -68,6 +68,7 @@ async fn record(fixture: &Fixture, asset: &AssetId, role: BlobRole, address: &Co
                 role,
                 address: address.clone(),
                 size: 32,
+                manifest_sha256: None,
                 finalized_at: Timestamp::UNIX_EPOCH,
             },
         )
