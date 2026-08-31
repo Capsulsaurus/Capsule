@@ -218,7 +218,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
 | S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
-| S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
+| S-C12 | Backup escrow server surface | server | — | S | RETIRED | done | `PUT` is the replace; there is deliberately no delete |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
@@ -1329,6 +1329,33 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   path already tested in core; after a replace, the prior blob is gone and unwraps
   nothing. **Tier:** Smoke + E2E case 6 (`S-Q2`). **Blocks:** S-D12.
 - **Landed in retired code; re-scoped onto Kynos.**
+- **Landed 2026-08-31 (`done`).** `PUT /v1/auth/escrow` stores and `GET /v1/auth/escrow` fetches;
+  `capsule-server/src/escrow/` owns the port.
+- **Replace is one store operation, and that is the contract rather than an optimisation.** An
+  adapter that deleted then inserted would leave a window with no escrow at all; one that
+  inserted before deleting would leave a window in which the secret the user is rotating *away
+  from* still works. Either is a recovery path the user did not ask for, so `EscrowStore::store`
+  is a replace and every adapter owes atomicity across it.
+- **Nothing keeps the previous blob.** Retaining it sounds prudent and is the opposite: rotation
+  happens exactly when the user believes the old secret is lost or compromised, so a "previous
+  escrow" table would preserve the one artifact the rotation exists to destroy. Recovery from a
+  bad rotation is the backup *artifact*, which the user holds.
+- **There is no delete verb**, and the omission is deliberate: a standalone delete would let one
+  authenticated request remove an account's last recovery path, which is precisely what a stolen
+  session token must not be able to do. Rotation replaces; account deletion takes the escrow
+  with it.
+- **No `{user_id}` on the path.** Unlike the device directory — which carries public keys and
+  exists to be read by strangers — an escrow is a wrapped master key and the only account
+  entitled to it is its own. Scoping by credential makes "fetching somebody else's escrow"
+  unrepresentable rather than forbidden.
+- **The size bound is not a format check.** The server cannot tell a real wrap from noise of the
+  same length; the ≥128-bit recovery-secret floor is `capsule_core`'s, client-side, because it
+  is a property of a secret the server never sees. All this refuses is something that cannot be
+  an escrow at any version, so a misdirected upload does not silently become an account's
+  recovery blob — and a refused store leaves the held escrow alone, which has its own test,
+  because a rejected rotation must never be a deletion.
+- **No `409`.** Storing over an existing escrow is the *documented* operation; answering
+  `409` would fail a client's guided re-wrap on the one path it exists for.
 
 ### S-C13 — Session device-cohort storage + grouping
 
