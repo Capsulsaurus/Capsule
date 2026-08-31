@@ -211,7 +211,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
 | S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | done\* | the serve-path privacy strip is unimplementable on a key-free server → `S-C50`; limiters → `S-C32` |
-| S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
+| S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | done\* | adoption is a two-phase claim, not a transaction; limiters → `S-C32` |
 | S-C6 | Quota service | server | S-C25, S-C37 | M | RETIRED | done\* | federated-receive and purge-reclaim accounting owed to `S-C11`/federation |
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | done\* | the freshness gate needed `authenticated_at` and a re-auth verb; redemption rate limiting → `S-C32` |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | part | suspension + the user's record land; federated intake and the blocklist need federation → `S-C49` |
@@ -1172,6 +1172,50 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   crash-injection smoke passes. **Tier:** Unit + Smoke + E2E case 13. **Blocks:** S-D3.
 - **Landed in retired code; re-scoped onto Kynos.**
 - **Owed:** OpenAPI row → `S-C22`; shared limiter → post-v1.
+- **Landed 2026-08-31 (`done\*`).** Seven operations: the owner provisions and revokes a link,
+  a guest opens a drop session at `/d/{opaque-id}` and chunks into it, and the owner lists,
+  adopts and discards. Invariants 26–32 each have a rejecting test.
+- **A drop is not a small upload.** An album write carries a signed manifest, names an album,
+  and extends a provenance chain; a drop carries none of those and **cannot**, because the party
+  uploading is a guest with no account, no keys and no membership. So the destination is the
+  inbox, `deny_unknown_fields` makes invariant 30's absence clause a `422` rather than a
+  silently ignored field, and `a_guest_drop_lands_in_the_owners_inbox_and_never_in_an_album`
+  asserts the sync feed stays empty until the owner signs.
+- **The chunk rules are shared verbatim, not reimplemented.** `upload::chunk::append` was
+  factored out of the album path and both surfaces now call it — invariants 9–12 mean the same
+  thing on both, and two copies would drift on exactly the case a client hits after losing a
+  connection. The 24 existing upload tests passed unchanged through that refactor, which is what
+  makes it a factoring rather than a rewrite.
+- **Caps are decided and reserved in one store operation.** They are the *entire* authorization
+  model on a path with no credential, so a read-decide-write would admit two concurrent guests
+  through the same last slot — how a "maximum two files" link ends up holding three. And a drop
+  the quota then refuses is **refunded**, because a refusal that still spent a slot would let
+  anyone burn a link down without depositing anything.
+- **A full link is a `409`, not the indistinguishable `404`.** Unknown, expired, revoked and
+  spent are one byte-identical answer — the guest path carries no credential — but a cumulative
+  cap on an *otherwise-live* link is not, because the guest was handed a real link by somebody
+  who wants their photos and needs to be told to ask for a new one. An oversized file is its own
+  `413` before the cumulative caps, for the same reason: shrink it, do not ask for a new link.
+- **A single-use link still lets its own drop finish.** `is_live_at` and `is_live_for_chunks_at`
+  differ in exactly that one place. Revocation and expiry *do* stop chunks mid-flight, which is
+  the point of revoking — a guest mid-upload is precisely who the owner is revoking against.
+- **Adoption is a two-phase claim, and this is where the contract and the port disagree
+  honestly.** Invariant 32 asks for one transaction; across two ports there is none, and the two
+  failure directions are not equal — writing the asset first can duplicate a photo, taking the
+  row first can lose one. So `claim` → write → `settle`, with `release` on refusal, which is the
+  shape `FinalizeClaim` already uses. A crash between leaves a row visibly `adopting` in the
+  owner's own inbox: recoverable, neither lost nor silently duplicated, and *surfaced on the
+  wire* rather than hidden, because an owner who cannot see it cannot act on it.
+- **The manifest must name this drop's blob.** Without that check an owner could adopt their own
+  inbox row while pointing the manifest at any address the store happens to hold. The create
+  battery (invariants 1–8, 6, 7) runs unchanged — a drop that skipped it would be the one write
+  on this server entering an album unvalidated.
+- **Owed: invariant 31's two limiters**, the same pair `S-C4` owes and the same counter port
+  (`S-C32`). The `429` is **not declared** rather than declared and unreachable. The caps bound
+  total damage but not request rate, and the two are not substitutes.
+- **Found on the way: the conformance walk overflowed its stack.** One `async fn` driving 46
+  operations builds one generator larger than a test thread's stack. Each large block is now a
+  `Box::pin`'d sub-future on the *same* client, so the response recorder still sees everything.
 
 ### S-C6 — Quota service
 

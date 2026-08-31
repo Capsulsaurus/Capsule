@@ -150,7 +150,11 @@ Concrete error variants are an implementation detail; the opaque-id entropy, fra
 
 ## Validation
 
-The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store + inbox + adoption transition are planned in `capsule-api::drops`.
+The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store, the inbox and the adoption transition are **served today** by the Kynos surface, with slice `S-C5`.
+
+**Two qualifications, recorded rather than implied.** First, **adoption is a two-phase claim, not a transaction.** Invariant 32 asks that the inbox row be deleted and the album asset created together; across two ports that is not available, and the two failure directions are not equal — writing the asset first can duplicate a photo, taking the row first can lose one. So the row is *claimed*, the asset is written, and only then is the row settled; a refused write releases it back to the inbox. A crash in between leaves a row marked `adopting` in the owner's own inbox — recoverable, neither lost nor silently duplicated, and surfaced on the wire rather than hidden, because an owner who cannot see it cannot act on it. Real atomicity arrives with the Postgres adapter, where both are rows in one transaction.
+
+Second, **invariant 31's two rate limiters are absent.** They need the per-user counter port `S-C32` owns, so the `429` is deliberately *not declared* in the served contract rather than declared and unreachable. The per-link caps are enforced — decided and reserved in one store operation, so two concurrent guests cannot both take the last slot — but caps bound total damage, not request rate, and the two are not substitutes.
 
 - **Drop seal round-trip (unit).** Seal a plaintext under a random `K` to a Drop Key public half; decapsulate with the private half; STREAM-decrypt; assert byte-equality. Assert `kem_ct` length matches the suite.
 - **Opaque-id entropy (unit).** Assert generated upload-link ids are ≥128-bit and non-sequential, identical to the [share-link check](/design/share-links/#validation).
