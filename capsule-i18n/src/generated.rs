@@ -77,6 +77,15 @@ pub mod error_codes {
     /// `error.directory.malformed`
     pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
 
+    /// `error.directory.not_published`
+    pub const DIRECTORY_NOT_PUBLISHED: &str = "error.directory.not_published";
+
+    /// `error.directory.unavailable`
+    pub const DIRECTORY_UNAVAILABLE: &str = "error.directory.unavailable";
+
+    /// `error.directory.unsupported_media_type`
+    pub const DIRECTORY_UNSUPPORTED_MEDIA_TYPE: &str = "error.directory.unsupported_media_type";
+
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 

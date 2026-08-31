@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">لم يتم رفع الصورة الأصلية من جهازها بعد.</string>
     <string name="error_blob_unavailable">تعذّر على Capsule الوصول إلى ملف الصورة. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_directory_malformed">تعذّرت قراءة قائمة الأجهزة.</string>
+    <string name="error_directory_not_published">لم ينشر هذا الحساب قائمة أجهزة بعد.</string>
+    <string name="error_directory_unavailable">تعذّر على Capsule الوصول إلى قائمة الأجهزة. يُرجى المحاولة مرة أخرى.</string>
+    <string name="error_directory_unsupported_media_type">تعذّرت قراءة قائمة الأجهزة هذه.</string>
     <string name="error_directory_version_conflict">قائمة الأجهزة هذه قديمة. سيقوم Capsule بتحديثها قبل المتابعة.</string>
     <string name="error_drop_cap_exceeded">رابط الرفع هذا ممتلئ.</string>
     <string name="error_drop_malformed_descriptor">تعذّر قبول هذا الرفع.</string>

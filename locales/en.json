@@ -123,6 +123,18 @@
         "message": "The device list could not be read.",
         "context": "HTTP 400 on device-directory publish: the request body is not a decodable signed DeviceDirectory document (bad CBOR, or a directory_version outside the representable range)."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "That device list couldn't be read.",
+        "context": "HTTP 415 on POST /v1/auth/devices/directory (slice S-C9): the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
+    },
+    "error.directory.not_published": {
+        "message": "This account hasn't published a device list yet.",
+        "context": "HTTP 404 on GET /v1/auth/devices/directory/{user_id} (slice S-C9): the account has never published a signed DeviceDirectory. Not an error state for the caller so much as a fact about the target — a client that cannot resolve a device key cannot verify that account's manifests, and this says why."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule couldn't reach the device list. Please try again.",
+        "context": "HTTP 500 on the device-directory surface (slice S-C9): the store could not answer, so nothing was published or read. Retryable, and it says nothing about whether a directory exists."
+    },
     "error.escrow.malformed": {
         "message": "The recovery backup could not be saved.",
         "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."

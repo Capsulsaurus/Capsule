@@ -95,6 +95,18 @@
         "message": "無法讀取裝置清單。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "無法讀取該裝置清單。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "該帳戶尚未發布裝置清單。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule 無法存取裝置清單，請重試。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "無法儲存復原備份。",
         "context": "Machine-translated seed pending human review."

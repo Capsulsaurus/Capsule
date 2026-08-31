@@ -180,6 +180,9 @@
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
     <string name="error_blob_unavailable">Capsule couldn\'t reach that photo file. Please try again.</string>
     <string name="error_directory_malformed">The device list could not be read.</string>
+    <string name="error_directory_not_published">This account hasn\'t published a device list yet.</string>
+    <string name="error_directory_unavailable">Capsule couldn\'t reach the device list. Please try again.</string>
+    <string name="error_directory_unsupported_media_type">That device list couldn\'t be read.</string>
     <string name="error_directory_version_conflict">This device list is out of date. Capsule will refresh it before continuing.</string>
     <string name="error_drop_cap_exceeded">This upload link is full.</string>
     <string name="error_drop_malformed_descriptor">This upload couldn\'t be accepted.</string>

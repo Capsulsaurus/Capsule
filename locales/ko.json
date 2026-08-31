@@ -95,6 +95,18 @@
         "message": "기기 목록을 읽을 수 없습니다.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "해당 기기 목록을 읽지 못했습니다.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "이 계정은 아직 기기 목록을 게시하지 않았습니다.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule이 기기 목록에 접근하지 못했습니다. 다시 시도해 주세요.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "복구 백업을 저장할 수 없습니다.",
         "context": "Machine-translated seed pending human review."

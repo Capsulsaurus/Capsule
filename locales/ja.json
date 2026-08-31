@@ -95,6 +95,18 @@
         "message": "デバイス一覧を読み取れませんでした。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "そのデバイス一覧を読み取れませんでした。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "このアカウントはまだデバイス一覧を公開していません。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule はデバイス一覧にアクセスできませんでした。もう一度お試しください。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "リカバリーバックアップを保存できませんでした。",
         "context": "Machine-translated seed pending human review."

@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">La photo d\'origine n\'a pas encore été téléversée depuis son appareil.</string>
     <string name="error_blob_unavailable">Capsule n\'a pas pu accéder à ce fichier photo. Veuillez réessayer.</string>
     <string name="error_directory_malformed">La liste des appareils n\'a pas pu être lue.</string>
+    <string name="error_directory_not_published">Ce compte n\'a pas encore publié de liste d\'appareils.</string>
+    <string name="error_directory_unavailable">Capsule n\'a pas pu accéder à la liste d\'appareils. Veuillez réessayer.</string>
+    <string name="error_directory_unsupported_media_type">Cette liste d\'appareils n\'a pas pu être lue.</string>
     <string name="error_directory_version_conflict">Cette liste d\'appareils est obsolète. Capsule l\'actualisera avant de continuer.</string>
     <string name="error_drop_cap_exceeded">Ce lien de téléversement est plein.</string>
     <string name="error_drop_malformed_descriptor">Ce téléversement n\'a pas pu être accepté.</string>

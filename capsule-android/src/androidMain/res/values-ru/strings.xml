@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">Оригинальное фото ещё не загружено с устройства.</string>
     <string name="error_blob_unavailable">Capsule не удалось получить этот файл фотографии. Повторите попытку.</string>
     <string name="error_directory_malformed">Не удалось прочитать список устройств.</string>
+    <string name="error_directory_not_published">Эта учётная запись ещё не опубликовала список устройств.</string>
+    <string name="error_directory_unavailable">Capsule не удалось получить список устройств. Повторите попытку.</string>
+    <string name="error_directory_unsupported_media_type">Не удалось прочитать этот список устройств.</string>
     <string name="error_directory_version_conflict">Этот список устройств устарел. Capsule обновит его перед продолжением.</string>
     <string name="error_drop_cap_exceeded">Эта ссылка для загрузки заполнена.</string>
     <string name="error_drop_malformed_descriptor">Не удалось принять эту загрузку.</string>

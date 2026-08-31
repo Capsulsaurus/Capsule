@@ -95,6 +95,18 @@
         "message": "تعذّرت قراءة قائمة الأجهزة.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "تعذّرت قراءة قائمة الأجهزة هذه.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "لم ينشر هذا الحساب قائمة أجهزة بعد.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "تعذّر على Capsule الوصول إلى قائمة الأجهزة. يُرجى المحاولة مرة أخرى.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "تعذّر حفظ النسخة الاحتياطية للاسترداد.",
         "context": "Machine-translated seed pending human review."

@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">A foto original ainda não foi enviada do dispositivo dela.</string>
     <string name="error_blob_unavailable">O Capsule não conseguiu acessar esse arquivo de foto. Tente novamente.</string>
     <string name="error_directory_malformed">Não foi possível ler a lista de dispositivos.</string>
+    <string name="error_directory_not_published">Esta conta ainda não publicou uma lista de dispositivos.</string>
+    <string name="error_directory_unavailable">O Capsule não conseguiu acessar a lista de dispositivos. Tente novamente.</string>
+    <string name="error_directory_unsupported_media_type">Não foi possível ler essa lista de dispositivos.</string>
     <string name="error_directory_version_conflict">Esta lista de dispositivos está desatualizada. O Capsule vai atualizá-la antes de continuar.</string>
     <string name="error_drop_cap_exceeded">Este link de envio está cheio.</string>
     <string name="error_drop_malformed_descriptor">Não foi possível aceitar este envio.</string>

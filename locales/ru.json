@@ -95,6 +95,18 @@
         "message": "Не удалось прочитать список устройств.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "Не удалось прочитать этот список устройств.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "Эта учётная запись ещё не опубликовала список устройств.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule не удалось получить список устройств. Повторите попытку.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "Не удалось сохранить резервную копию для восстановления.",
         "context": "Machine-translated seed pending human review."

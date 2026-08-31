@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">La foto originale non è ancora stata caricata dal suo dispositivo.</string>
     <string name="error_blob_unavailable">Capsule non è riuscito a raggiungere quel file foto. Riprova.</string>
     <string name="error_directory_malformed">Impossibile leggere l\'elenco dei dispositivi.</string>
+    <string name="error_directory_not_published">Questo account non ha ancora pubblicato un elenco di dispositivi.</string>
+    <string name="error_directory_unavailable">Capsule non è riuscito a raggiungere l\'elenco dei dispositivi. Riprova.</string>
+    <string name="error_directory_unsupported_media_type">Non è stato possibile leggere quell\'elenco di dispositivi.</string>
     <string name="error_directory_version_conflict">Questo elenco di dispositivi non è aggiornato. Capsule lo aggiornerà prima di continuare.</string>
     <string name="error_drop_cap_exceeded">Questo link di caricamento è pieno.</string>
     <string name="error_drop_malformed_descriptor">Impossibile accettare questo caricamento.</string>

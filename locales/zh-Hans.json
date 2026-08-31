@@ -95,6 +95,18 @@
         "message": "无法读取设备列表。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "无法读取该设备列表。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "该账户尚未发布设备列表。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule 无法访问设备列表，请重试。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "无法保存恢复备份。",
         "context": "Machine-translated seed pending human review."

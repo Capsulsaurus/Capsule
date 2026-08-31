@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">原始照片尚未從其裝置上傳。</string>
     <string name="error_blob_unavailable">Capsule 無法存取該相片檔案，請重試。</string>
     <string name="error_directory_malformed">無法讀取裝置清單。</string>
+    <string name="error_directory_not_published">該帳戶尚未發布裝置清單。</string>
+    <string name="error_directory_unavailable">Capsule 無法存取裝置清單，請重試。</string>
+    <string name="error_directory_unsupported_media_type">無法讀取該裝置清單。</string>
     <string name="error_directory_version_conflict">此裝置清單已過期。Capsule 會在繼續前重新整理。</string>
     <string name="error_drop_cap_exceeded">此上傳連結已滿。</string>
     <string name="error_drop_malformed_descriptor">無法接受此上傳。</string>

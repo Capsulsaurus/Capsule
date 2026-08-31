@@ -95,6 +95,18 @@
         "message": "Impossibile leggere l'elenco dei dispositivi.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "Non è stato possibile leggere quell'elenco di dispositivi.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "Questo account non ha ancora pubblicato un elenco di dispositivi.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule non è riuscito a raggiungere l'elenco dei dispositivi. Riprova.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "Impossibile salvare il backup di ripristino.",
         "context": "Machine-translated seed pending human review."

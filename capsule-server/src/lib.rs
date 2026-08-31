@@ -27,6 +27,8 @@
 pub mod app;
 pub mod auth;
 pub mod blob;
+pub mod body;
+pub mod directory;
 pub mod index;
 pub mod limits;
 pub mod routes;
@@ -72,6 +74,8 @@ pub fn router() -> ServerRouter {
             routes::sync::sync_feed,
             routes::blob::get_blob,
             routes::storage::verify_storage,
+            routes::directory::publish_device_directory,
+            routes::directory::fetch_device_directory,
         ])
 }
 

@@ -95,6 +95,18 @@
         "message": "डिवाइस सूची पढ़ी नहीं जा सकी।",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "वह डिवाइस सूची पढ़ी नहीं जा सकी।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "इस खाते ने अभी तक डिवाइस सूची प्रकाशित नहीं की है।",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule डिवाइस सूची तक नहीं पहुँच सका। कृपया फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "रिकवरी बैकअप सहेजा नहीं जा सका।",
         "context": "Machine-translated seed pending human review."

@@ -35,6 +35,10 @@ use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
     QuarantineReason, QuarantinedBlob,
 };
+use capsule_server::directory::{
+    DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory, PublishOutcome,
+    PublishedDirectory,
+};
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, PendingAsset,
@@ -64,6 +68,24 @@ use uuid::Uuid;
 /// exercises a realistic "the refresh token dies with its record" window rather than a shorter
 /// one that would hide the arrangement.
 pub(crate) const SESSION_TTL: SignedDuration = SignedDuration::from_hours(24 * 7);
+
+/// A freshly signed device directory for the seeded account at `version`.
+///
+/// The key is generated per call: the server does not verify the signature (`S-C42`), so a
+/// stable key here would imply a check that is not there.
+pub(crate) fn signed_directory(version: u64) -> Vec<u8> {
+    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::keys::{DeviceDirectory, DirectoryCore};
+
+    let directory: DeviceDirectory = DirectoryCore {
+        user_id: Uuid::parse_str(user().as_str()).expect("the seeded account id is a uuid"),
+        directory_version: version,
+        updated_at: "2026-01-01T00:00:00Z".to_owned(),
+        devices: Vec::new(),
+    }
+    .sign(&HybridSigningKey::generate());
+    capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
+}
 
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
@@ -726,6 +748,55 @@ pub(crate) struct SwitchableIndex {
     unavailable: AtomicBool,
 }
 
+/// A device-directory store that can be made to fail on demand.
+///
+/// Delegates to a real in-memory store, so the failing case and the working case differ in
+/// exactly one thing.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableDirectories {
+    inner: InMemoryDeviceDirectory,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableDirectories {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "device-directory",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl DeviceDirectoryStore for SwitchableDirectories {
+    fn publish(&self, record: PublishedDirectory) -> StoreFuture<'_, PublishOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.publish(record)
+    }
+
+    fn fetch<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<PublishedDirectory>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.fetch(user)
+    }
+}
+
 impl SwitchableIndex {
     /// A working index.
     pub(crate) fn new() -> Self {
@@ -855,6 +926,8 @@ pub(crate) struct Fixture {
     /// The cursor codec the server mints with — the *same* one, so a test can mint a cursor
     /// the server will accept, or one it must not.
     pub(crate) cursors: Arc<CursorCodec>,
+    /// The published device directories the server reads and writes.
+    pub(crate) directories: Arc<SwitchableDirectories>,
 }
 
 impl Fixture {
@@ -879,6 +952,7 @@ impl Fixture {
 
         let index = Arc::new(SwitchableIndex::new());
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
+        let directories = Arc::new(SwitchableDirectories::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -900,6 +974,7 @@ impl Fixture {
             SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
             ServeContext::new(index.clone(), blobs.clone()),
             VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
+            DeviceDirectoryContext::new(directories.clone(), clock.clone()),
         );
 
         Self {
@@ -913,6 +988,7 @@ impl Fixture {
             authority,
             index,
             cursors,
+            directories,
         }
     }
 
@@ -954,6 +1030,7 @@ impl Fixture {
             ),
             ServeContext::new(index.clone(), blobs.clone()),
             VerifyContext::new(index, blobs, clock.clone()),
+            DeviceDirectoryContext::new(Arc::new(SwitchableDirectories::new()), clock.clone()),
         );
         (app, clock)
     }

@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">元の写真はまだデバイスからアップロードされていません。</string>
     <string name="error_blob_unavailable">Capsule はその写真ファイルにアクセスできませんでした。もう一度お試しください。</string>
     <string name="error_directory_malformed">デバイス一覧を読み取れませんでした。</string>
+    <string name="error_directory_not_published">このアカウントはまだデバイス一覧を公開していません。</string>
+    <string name="error_directory_unavailable">Capsule はデバイス一覧にアクセスできませんでした。もう一度お試しください。</string>
+    <string name="error_directory_unsupported_media_type">そのデバイス一覧を読み取れませんでした。</string>
     <string name="error_directory_version_conflict">このデバイス一覧は最新ではありません。Capsule は続行前に更新します。</string>
     <string name="error_drop_cap_exceeded">このアップロードリンクはいっぱいです。</string>
     <string name="error_drop_malformed_descriptor">このアップロードは受け付けられませんでした。</string>

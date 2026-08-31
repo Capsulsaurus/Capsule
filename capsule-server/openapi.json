@@ -1361,6 +1361,207 @@
           }
         ]
       }
+    },
+    "/v1/auth/devices/directory": {
+      "post": {
+        "summary": "Publish the caller's signed device directory.",
+        "description": "The bytes are stored verbatim; the server decodes them to read `directory_version` and\nnothing else. The monotonicity comparison is the store's, not this handler's — see\n[`crate::directory`] for why a read-compare-write here would be a rollback window.",
+        "operationId": "publish_device_directory",
+        "requestBody": {
+          "content": {
+            "application/cbor": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishDirectoryResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Directory version conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/directory/{user_id}": {
+      "get": {
+        "summary": "Fetch a user's signed device directory, verbatim.",
+        "description": "The response body is the exact bytes the owner signed. Re-encoding them would detach the\ndocument from its signature, and the failure would look like the *publisher's* bug.",
+        "operationId": "fetch_device_directory",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The account id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/cbor": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1948,6 +2149,21 @@
           "verdicts"
         ],
         "description": "The `POST /v1/storage/verify` response."
+      },
+      "PublishDirectoryResponse": {
+        "properties": {
+          "directory_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The version now stored, which equals the submitted one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "directory_version"
+        ],
+        "description": "The accepted version, echoed so a client knows what is now in force."
       }
     },
     "securitySchemes": {

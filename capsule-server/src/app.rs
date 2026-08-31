@@ -29,6 +29,7 @@ use kynos::prelude::*;
 use kynos::security::Authenticates;
 
 use crate::auth::{AccessToken, AuthContext};
+use crate::directory::DeviceDirectoryContext;
 use crate::serve::ServeContext;
 use crate::sync::SyncContext;
 use crate::upload::UploadContext;
@@ -51,6 +52,8 @@ pub struct App {
     serve: ServeContext,
     /// The storage-verification module's collaborators.
     verify: VerifyContext,
+    /// The device-directory module's collaborators.
+    directories: DeviceDirectoryContext,
 }
 
 impl App {
@@ -64,6 +67,7 @@ impl App {
         sync: SyncContext,
         serve: ServeContext,
         verify: VerifyContext,
+        directories: DeviceDirectoryContext,
     ) -> Self {
         Self {
             auth,
@@ -71,6 +75,7 @@ impl App {
             sync,
             serve,
             verify,
+            directories,
         }
     }
 }

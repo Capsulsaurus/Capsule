@@ -95,6 +95,18 @@
         "message": "La liste des appareils n'a pas pu être lue.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "Cette liste d'appareils n'a pas pu être lue.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "Ce compte n'a pas encore publié de liste d'appareils.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule n'a pas pu accéder à la liste d'appareils. Veuillez réessayer.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "La sauvegarde de récupération n'a pas pu être enregistrée.",
         "context": "Machine-translated seed pending human review."

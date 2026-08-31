@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">Das Originalfoto wurde noch nicht von seinem Gerät hochgeladen.</string>
     <string name="error_blob_unavailable">Capsule konnte diese Bilddatei nicht erreichen. Bitte versuche es erneut.</string>
     <string name="error_directory_malformed">Die Geräteliste konnte nicht gelesen werden.</string>
+    <string name="error_directory_not_published">Dieses Konto hat noch keine Geräteliste veröffentlicht.</string>
+    <string name="error_directory_unavailable">Capsule konnte die Geräteliste nicht erreichen. Bitte versuche es erneut.</string>
+    <string name="error_directory_unsupported_media_type">Diese Geräteliste konnte nicht gelesen werden.</string>
     <string name="error_directory_version_conflict">Diese Geräteliste ist veraltet. Capsule aktualisiert sie, bevor es fortfährt.</string>
     <string name="error_drop_cap_exceeded">Dieser Upload-Link ist voll.</string>
     <string name="error_drop_malformed_descriptor">Dieser Upload konnte nicht angenommen werden.</string>

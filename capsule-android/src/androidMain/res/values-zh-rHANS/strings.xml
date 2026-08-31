@@ -134,6 +134,9 @@
     <string name="error_blob_pending_upload">原始照片尚未从其设备上传。</string>
     <string name="error_blob_unavailable">Capsule 无法访问该照片文件，请重试。</string>
     <string name="error_directory_malformed">无法读取设备列表。</string>
+    <string name="error_directory_not_published">该账户尚未发布设备列表。</string>
+    <string name="error_directory_unavailable">Capsule 无法访问设备列表，请重试。</string>
+    <string name="error_directory_unsupported_media_type">无法读取该设备列表。</string>
     <string name="error_directory_version_conflict">此设备列表已过期。Capsule 将在继续前刷新它。</string>
     <string name="error_drop_cap_exceeded">此上传链接已满。</string>
     <string name="error_drop_malformed_descriptor">无法接受此上传。</string>

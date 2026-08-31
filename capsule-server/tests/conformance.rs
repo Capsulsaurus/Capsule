@@ -105,6 +105,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/sync"),
         ("GET", "/v1/blob/deadbeef"),
         ("POST", "/v1/storage/verify"),
+        ("POST", "/v1/auth/devices/directory"),
+        ("GET", "/v1/auth/devices/directory/anyone"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -842,6 +844,116 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // ── /v1/auth/devices/directory ─────────────────────────────────────────────────────────
+    let directory = support::signed_directory(1);
+
+    // 401 and 403 on both operations.
+    client
+        .post("/v1/auth/devices/directory")
+        .body("application/cbor", directory.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/auth/devices/directory/anyone")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/auth/devices/directory")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .body("application/cbor", directory.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get("/v1/auth/devices/directory/anyone")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415: the body is not CBOR. The `422` Kynos's own body rejection would also have declared
+    // is gone, because `OpaqueBody` replaces the rejection with one a raw-bytes body can
+    // actually produce — see `capsule_server::body`.
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+    // 400 on publish: CBOR that is not a directory. 400 on fetch is the `Path` extractor's,
+    // reached the only way a `String` path parameter can be: a segment that is not a string.
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .body("application/cbor", "not a directory")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .get("/v1/auth/devices/directory/%FF")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: nobody has published for this account yet.
+    client
+        .get(&format!("/v1/auth/devices/directory/{}", support::user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 500 on both: the store cannot answer.
+    fixture.directories.set_unavailable(true);
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .body("application/cbor", directory.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get(&format!("/v1/auth/devices/directory/{}", support::user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.directories.set_unavailable(false);
+
+    // 200 on publish, then 200 on fetch, then 409 on a version that does not advance.
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body("application/cbor", directory.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/v1/auth/devices/directory/{}", support::user()))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .body("application/cbor", support::signed_directory(1))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

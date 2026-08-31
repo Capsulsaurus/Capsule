@@ -95,6 +95,18 @@
         "message": "Die Geräteliste konnte nicht gelesen werden.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.directory.unsupported_media_type": {
+        "message": "Diese Geräteliste konnte nicht gelesen werden.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.not_published": {
+        "message": "Dieses Konto hat noch keine Geräteliste veröffentlicht.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.directory.unavailable": {
+        "message": "Capsule konnte die Geräteliste nicht erreichen. Bitte versuche es erneut.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.escrow.malformed": {
         "message": "Das Wiederherstellungs-Backup konnte nicht gespeichert werden.",
         "context": "Machine-translated seed pending human review."
