@@ -2748,6 +2748,32 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** a signed `replace` bundle uploads, supersedes the prior original, appears on
   the feed as an `Updated` entry, and a stale `prior_provenance_hash` is refused `409` with its
   code. **Tier:** Unit + Smoke.
+- **Design analysis, 2026-08-31** (done while sizing this against the landed `S-C16` and
+  `S-C37` code; recorded so it is not re-derived):
+  - **The gate half is small.** `check_op` already demonstrates the shape: it allow-lists its
+    actions and then passes `core.prior_provenance_hash` straight into
+    `EnvelopeContext::stored_chain_head`, so the battery's invariants 17 and 18 are *vacuous by
+    construction* and the index is the authority. A `check_replace` sibling to `check_create`
+    does the same, and the two `None`s this row warns about stop being wrong because nothing
+    depends on them.
+  - **The index half is where the work is, and `apply_op` is already most of it.** Its critical
+    section checks 17 against `row.chain_head`, checks 18 against the album's high-water mark,
+    re-points the provenance blob through `set_singular`, and mints — which is every step a
+    `replace` needs except re-pointing the **original**. So the operation this row asks for is
+    `apply_op` with an `OpAction::Replace` and an `original: Option<ContentAddress>`, *not* a
+    relaxed `record_blob`: `BlobOutcome::Conflict` keeps meaning what it means, and the
+    authorized re-point is the one that also proves it chains onto the current head.
+  - **The sharp edge is bundle arity, and it is not obvious.** A `replace` bundle is three
+    blobs — original, metadata, provenance — arriving as three sessions that each carry *the
+    same* signed envelope. The first to finalize advances `chain_head` to the manifest hash;
+    the second then fails invariant 17, because the head is no longer the predecessor. And the
+    `applied` idempotency map cannot absorb it either: answering `Replayed` would drop the
+    second and third blobs' bytes on the floor. Whatever lands has to admit "this is another
+    blob of the manifest already at the head" as a distinct case — re-point, do **not** mint a
+    second sequence number — and that is a real extension to a well-tested operation's
+    contract, which is why it is worth stating before anyone starts.
+  - **The finalize seam is one function.** `upload::finalize::record_against_asset` is the only
+    place the upload path touches the index; a `replace` branches there and nowhere else.
 
 ### S-C44 — a swept blob's bytes are never credited back
 
