@@ -40,6 +40,7 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, PendingAsset,
     Reservation,
 };
+use capsule_server::serve::ServeContext;
 use capsule_server::store::memory::{InMemoryAuthState, InMemoryUploadSessions, ManualClock};
 use capsule_server::store::{
     AcceptedChunk, AlbumId, AssetId, AuthStateStore, Clock, FinalizeClaim, OwnerId, SessionId,
@@ -784,6 +785,16 @@ impl AssetIndex for SwitchableIndex {
         self.inner.tombstone(asset, at)
     }
 
+    fn find_reference<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> IndexFuture<'a, Option<capsule_server::index::BlobReference>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.find_reference(address)
+    }
+
     fn find_by_address<'a>(
         &'a self,
         owner: &'a OwnerId,
@@ -884,6 +895,7 @@ impl Fixture {
                 UploadPolicy::default(),
             ),
             SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
+            ServeContext::new(index.clone(), blobs.clone()),
         );
 
         Self {
@@ -929,7 +941,12 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            SyncContext::new(index, blobs, Arc::new(CursorCodec::new(&CURSOR_KEY))),
+            SyncContext::new(
+                index.clone(),
+                blobs.clone(),
+                Arc::new(CursorCodec::new(&CURSOR_KEY)),
+            ),
+            ServeContext::new(index, blobs),
         );
         (app, clock)
     }

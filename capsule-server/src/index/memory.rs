@@ -226,6 +226,42 @@ impl AssetIndex for InMemoryAssetIndex {
         })
     }
 
+    fn find_reference<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> IndexFuture<'a, Option<super::BlobReference>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            // Two passes rather than a sort: a live reference outranks a tombstoned one, and
+            // pending rows are not references at all.
+            let holds = |row: &&AssetRow| row.blobs.iter().any(|blob| &blob.address == address);
+            let reference = |row: &AssetRow| super::BlobReference {
+                asset_id: row.asset_id.clone(),
+                role: row
+                    .blobs
+                    .iter()
+                    .find(|blob| &blob.address == address)
+                    .map_or(BlobRole::Original, |blob| blob.role),
+                state: row.state,
+                original_held: row.original_held(),
+            };
+            let live = inner
+                .rows
+                .values()
+                .filter(|row| row.state == AssetState::Visible)
+                .find(holds);
+            if let Some(row) = live {
+                return Ok(Some(reference(row)));
+            }
+            Ok(inner
+                .rows
+                .values()
+                .filter(|row| row.state == AssetState::Tombstoned)
+                .find(holds)
+                .map(reference))
+        })
+    }
+
     fn feed_page<'a>(
         &'a self,
         owner: &'a OwnerId,

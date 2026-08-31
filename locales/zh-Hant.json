@@ -75,6 +75,18 @@
         "message": "原始照片尚未從其裝置上傳。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "伺服器上沒有該相片檔案。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "該相片檔案已無法使用。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule 無法存取該相片檔案，請重試。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "此裝置清單已過期。Capsule 會在繼續前重新整理。",
         "context": "Machine-translated seed pending human review."

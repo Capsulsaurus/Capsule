@@ -30,6 +30,7 @@ pub mod blob;
 pub mod index;
 pub mod limits;
 pub mod routes;
+pub mod serve;
 pub mod store;
 pub mod sync;
 pub mod upload;
@@ -68,6 +69,7 @@ pub fn router() -> ServerRouter {
             routes::upload::head_upload,
             routes::upload::cancel_upload,
             routes::sync::sync_feed,
+            routes::blob::get_blob,
         ])
 }
 

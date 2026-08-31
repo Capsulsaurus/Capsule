@@ -88,6 +88,10 @@ ring = { workspace = true }
 # base64url for that cursor, which is a query parameter and therefore has to survive a URL.
 # Already a workspace dependency with a row in design/dependencies.md.
 base64 = { workspace = true }
+# The buffer type Kynos's `ByteSource` signature is written in, so ranged blob serving can hand
+# back a span without a copy. Already in the lock file through `capsule-sdk` and `capsule-api`;
+# no new external dependency and no new domain, so no design/dependencies.md row.
+bytes = { workspace = true }
 
 # `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
 # and this mirrors it deliberately: two committed documents, two identical drift guards, so the

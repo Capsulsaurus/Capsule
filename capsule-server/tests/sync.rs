@@ -524,6 +524,12 @@ async fn an_upload_through_the_surface_becomes_a_feed_entry() {
         "the original has not landed, and the feed says so rather than implying it"
     );
     assert_eq!(entry["metadata_blob"], metadata.as_str());
+    assert!(
+        entry["blobs"].as_array().expect("blob refs").is_empty(),
+        "the index tier rides in its own fields; `blobs` is the original and derivatives, and \
+         listing the manifest there twice is how a client double-fetches it"
+    );
+    assert_ne!(manifest.as_str(), metadata.as_str());
 
     let decoded = BASE64
         .decode(

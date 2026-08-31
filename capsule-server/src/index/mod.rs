@@ -266,6 +266,31 @@ impl ChangeKind {
     }
 }
 
+/// What the index knows about one content address, for the serving path.
+///
+/// Deliberately **not** owner-scoped, unlike [`AssetIndex::find_by_address`], and the asymmetry
+/// is the point rather than an oversight. That lookup answers "which asset of *yours* holds
+/// these bytes" and hands the client an asset id, so scoping it is what stops one account
+/// learning another's holdings. This one answers "is this address live", and its answer reaches
+/// the client only as a status — served, gone, or unknown. A caller must already hold the
+/// content address to ask, and a content address is the hash of ciphertext nobody can produce
+/// without the key, so it is a capability rather than a guessable name.
+///
+/// See [`crate::serve`] for what the reachable disclosure actually is, and for the
+/// album-scoped `403` the download-sync contract describes and neither implementation renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobReference {
+    /// The asset the reference belongs to.
+    pub asset_id: AssetId,
+    /// The role the address holds in that asset's bundle.
+    pub role: BlobRole,
+    /// The asset's lifecycle state — `Tombstoned` is what turns a reference into a `410`.
+    pub state: AssetState,
+    /// Whether that asset's original has landed, which is what tells a missing original apart
+    /// from a dangling reference.
+    pub original_held: bool,
+}
+
 /// One entry of the sync feed.
 ///
 /// Carries addresses, never bytes. The route that serves a page reads the provenance blob
@@ -351,6 +376,21 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         album: &'a AlbumId,
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<AssetId>>;
+
+    /// What the index knows about `address`, for the serving path — see [`BlobReference`].
+    ///
+    /// **Pending rows do not count as references.** An asset whose index tier has not landed is
+    /// in nobody's feed, so nothing can legitimately have learned its addresses; treating it as
+    /// unknown keeps a half-finished upload from being fetchable before it is published.
+    ///
+    /// **A visible reference outranks a tombstoned one.** Content addressing means two assets
+    /// share a thumbnail, so deleting one of them must not take the other's bytes with it. The
+    /// retired implementation took the *newest* reference and would have answered `410` for a
+    /// blob a live asset still holds; this asks whether any live asset holds it.
+    fn find_reference<'a>(
+        &'a self,
+        address: &'a ContentAddress,
+    ) -> IndexFuture<'a, Option<BlobReference>>;
 
     /// Up to `limit` feed entries for `owner` after sequence number `after`, in sequence order.
     ///

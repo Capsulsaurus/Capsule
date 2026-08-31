@@ -75,6 +75,18 @@
         "message": "元の写真はまだデバイスからアップロードされていません。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "その写真ファイルはサーバーにありません。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "その写真ファイルは利用できなくなりました。",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule はその写真ファイルにアクセスできませんでした。もう一度お試しください。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "このデバイス一覧は最新ではありません。Capsule は続行前に更新します。",
         "context": "Machine-translated seed pending human review."

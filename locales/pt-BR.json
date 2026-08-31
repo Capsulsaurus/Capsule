@@ -75,6 +75,18 @@
         "message": "A foto original ainda não foi enviada do dispositivo dela.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "Esse arquivo de foto não está no servidor.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "Esse arquivo de foto não está mais disponível.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "O Capsule não conseguiu acessar esse arquivo de foto. Tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "Esta lista de dispositivos está desatualizada. O Capsule vai atualizá-la antes de continuar.",
         "context": "Machine-translated seed pending human review."

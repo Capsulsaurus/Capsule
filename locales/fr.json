@@ -75,6 +75,18 @@
         "message": "La photo d'origine n'a pas encore été téléversée depuis son appareil.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "Ce fichier photo n'est pas sur le serveur.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "Ce fichier photo n'est plus disponible.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule n'a pas pu accéder à ce fichier photo. Veuillez réessayer.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "Cette liste d'appareils est obsolète. Capsule l'actualisera avant de continuer.",
         "context": "Machine-translated seed pending human review."

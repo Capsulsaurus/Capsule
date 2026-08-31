@@ -75,6 +75,18 @@
         "message": "Das Originalfoto wurde noch nicht von seinem Gerät hochgeladen.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "Diese Bilddatei ist nicht auf dem Server.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "Diese Bilddatei ist nicht mehr verfügbar.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule konnte diese Bilddatei nicht erreichen. Bitte versuche es erneut.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "Diese Geräteliste ist veraltet. Capsule aktualisiert sie, bevor es fortfährt.",
         "context": "Machine-translated seed pending human review."

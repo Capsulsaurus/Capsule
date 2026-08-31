@@ -75,6 +75,18 @@
         "message": "Оригинальное фото ещё не загружено с устройства.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "Этого файла фотографии нет на сервере.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "Этот файл фотографии больше недоступен.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule не удалось получить этот файл фотографии. Повторите попытку.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "Этот список устройств устарел. Capsule обновит его перед продолжением.",
         "context": "Machine-translated seed pending human review."

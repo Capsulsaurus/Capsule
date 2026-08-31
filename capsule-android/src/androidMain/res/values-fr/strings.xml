@@ -129,7 +129,10 @@
     <string name="error_auth_invalid_credentials">E-mail ou mot de passe incorrect.</string>
     <string name="error_auth_rate_limited">Trop de tentatives. Veuillez patienter et réessayer.</string>
     <string name="error_auth_user_already_exists">Un compte avec ces informations existe déjà.</string>
+    <string name="error_blob_gone">Ce fichier photo n\'est plus disponible.</string>
+    <string name="error_blob_not_found">Ce fichier photo n\'est pas sur le serveur.</string>
     <string name="error_blob_pending_upload">La photo d\'origine n\'a pas encore été téléversée depuis son appareil.</string>
+    <string name="error_blob_unavailable">Capsule n\'a pas pu accéder à ce fichier photo. Veuillez réessayer.</string>
     <string name="error_directory_malformed">La liste des appareils n\'a pas pu être lue.</string>
     <string name="error_directory_version_conflict">Cette liste d\'appareils est obsolète. Capsule l\'actualisera avant de continuer.</string>
     <string name="error_drop_cap_exceeded">Ce lien de téléversement est plein.</string>

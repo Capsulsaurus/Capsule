@@ -129,7 +129,10 @@
     <string name="error_auth_invalid_credentials">Correo electrónico o contraseña no válidos.</string>
     <string name="error_auth_rate_limited">Demasiados intentos. Espera e inténtalo de nuevo.</string>
     <string name="error_auth_user_already_exists">Ya existe una cuenta con estos datos.</string>
+    <string name="error_blob_gone">Ese archivo de foto ya no está disponible.</string>
+    <string name="error_blob_not_found">Ese archivo de foto no está en el servidor.</string>
     <string name="error_blob_pending_upload">La foto original aún no se ha subido desde su dispositivo.</string>
+    <string name="error_blob_unavailable">Capsule no pudo acceder a ese archivo de foto. Inténtalo de nuevo.</string>
     <string name="error_directory_malformed">No se pudo leer la lista de dispositivos.</string>
     <string name="error_directory_version_conflict">Esta lista de dispositivos está desactualizada. Capsule la actualizará antes de continuar.</string>
     <string name="error_drop_cap_exceeded">Este enlace de subida está lleno.</string>

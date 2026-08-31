@@ -75,6 +75,18 @@
         "message": "لم يتم رفع الصورة الأصلية من جهازها بعد.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "ملف الصورة هذا ليس على الخادم.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "ملف الصورة هذا لم يعد متاحًا.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "تعذّر على Capsule الوصول إلى ملف الصورة. يُرجى المحاولة مرة أخرى.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "قائمة الأجهزة هذه قديمة. سيقوم Capsule بتحديثها قبل المتابعة.",
         "context": "Machine-translated seed pending human review."

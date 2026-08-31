@@ -16,6 +16,8 @@
 
 mod support;
 
+use capsule_server::blob::BlobStore;
+use capsule_server::index::AssetIndex;
 use capsule_server::routes::auth::TokenResponse;
 use capsule_server::routes::version::VersionResponse;
 use kynos::http::StatusCode;
@@ -101,6 +103,7 @@ async fn every_declared_response_is_exercised() {
         ("HEAD", "/v1/upload/anything"),
         ("DELETE", "/v1/upload/anything"),
         ("GET", "/v1/sync"),
+        ("GET", "/v1/blob/deadbeef"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -645,6 +648,130 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // ── GET /v1/blob/{hash} ────────────────────────────────────────────────────────────────
+    // 401 and 403 are the scheme's, exactly as on the feed.
+    client
+        .get("/v1/blob/deadbeef")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/blob/deadbeef")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 400 is the `Path` extractor's, and it took a probe to establish that anything reaches it:
+    // a `String` path parameter accepts every segment that *is* a string, so the only way in is
+    // a segment that is not one. `%FF` is not valid UTF-8, so the request is refused before the
+    // route runs. Reachable, therefore declared — the `S-C28` question asked of the framework's
+    // own rejection rather than only of the handler's.
+    client
+        .get("/v1/blob/%FF")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // A blob to serve, put in through the ports rather than through an upload: this test is
+    // about which statuses exist, and `tests/blob.rs` is where the serving behaviour lives.
+    let ciphertext = payload(b'z', 8192);
+    let address = capsule_server::blob::ContentAddress::parse(&checksum(&ciphertext))
+        .expect("a content address");
+    fixture
+        .blobs
+        .put(&address, &ciphertext)
+        .await
+        .expect("the store accepts");
+    let asset = capsule_server::store::AssetId::new("conformance-served");
+    fixture
+        .index
+        .reserve(capsule_server::index::PendingAsset {
+            asset_id: asset.clone(),
+            owner_id: support::owner(),
+            album_id: support::album(),
+            protocol_version: PROTOCOL_VERSION.to_owned(),
+            crypto_suite_id: 1,
+            created_at: jiff::Timestamp::UNIX_EPOCH,
+        })
+        .await
+        .expect("the index reserves");
+    for (role, at) in [
+        (capsule_server::store::BlobRole::Provenance, &address),
+        (capsule_server::store::BlobRole::Metadata, &address),
+    ] {
+        fixture
+            .index
+            .record_blob(
+                &asset,
+                capsule_server::index::BlobRecord {
+                    role,
+                    address: at.clone(),
+                    size: ciphertext.len() as u64,
+                    finalized_at: jiff::Timestamp::UNIX_EPOCH,
+                },
+            )
+            .await
+            .expect("the index records");
+    }
+
+    // 404: a well-formed address nothing references.
+    client
+        .get(&format!("/v1/blob/{}", checksum(b"nothing holds these")))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 200, 206 and 304 all come from one `Delivery`, which is why they are declared together.
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("range", "bytes=0-1023")
+        .send()
+        .await
+        .assert_status(StatusCode::PARTIAL_CONTENT);
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .header("if-none-match", &format!("\"{address}\""))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+
+    // 500: the index could not answer, which must never look like a missing blob.
+    fixture.index.set_unavailable(true);
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.index.set_unavailable(false);
+
+    // 410 last, because it is the one that consumes the asset.
+    fixture
+        .index
+        .tombstone(&asset, jiff::Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the index tombstones");
+    client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::GONE);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

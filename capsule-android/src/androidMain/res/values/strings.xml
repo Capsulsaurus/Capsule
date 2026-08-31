@@ -175,7 +175,10 @@
     <string name="error_auth_session_expired">Your session has ended. Please sign in again.</string>
     <string name="error_auth_unavailable">Capsule couldn\'t reach your account just now. Please try again.</string>
     <string name="error_auth_user_already_exists">An account with these details already exists.</string>
+    <string name="error_blob_gone">That photo file is no longer available.</string>
+    <string name="error_blob_not_found">That photo file isn\'t on the server.</string>
     <string name="error_blob_pending_upload">The original photo hasn\'t been uploaded from its device yet.</string>
+    <string name="error_blob_unavailable">Capsule couldn\'t reach that photo file. Please try again.</string>
     <string name="error_directory_malformed">The device list could not be read.</string>
     <string name="error_directory_version_conflict">This device list is out of date. Capsule will refresh it before continuing.</string>
     <string name="error_drop_cap_exceeded">This upload link is full.</string>

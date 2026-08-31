@@ -680,6 +680,99 @@ pub async fn the_duplicate_lookup_is_scoped_to_owner_and_album(index: &dyn Asset
     );
 }
 
+/// The serving lookup answers about liveness, and pending rows are not live.
+pub async fn the_serving_lookup_ignores_unpublished_rows(index: &dyn AssetIndex) {
+    let row = pending("serve-pending", 1);
+    let asset = row.asset_id.clone();
+    ok(index.reserve(row).await, "reserve a row");
+    let held = address("servep1");
+    record(index, &asset, blob(BlobRole::Provenance, "servep1")).await;
+
+    assert_eq!(
+        ok(index.find_reference(&held).await, "look up a pending blob"),
+        None,
+        "an asset in nobody's feed must not be fetchable by content address",
+    );
+
+    // Publishing it makes the same address a live reference.
+    record(index, &asset, blob(BlobRole::Metadata, "servepm1")).await;
+    let reference = ok(
+        index.find_reference(&held).await,
+        "look up a published blob",
+    )
+    .expect("a published asset's blob is a live reference");
+    assert_eq!(reference.asset_id, asset);
+    assert_eq!(reference.role, BlobRole::Provenance);
+    assert_eq!(reference.state, AssetState::Visible);
+}
+
+/// A tombstone makes its blobs gone, and `original_held` rides along for the pending case.
+pub async fn the_serving_lookup_reports_state_and_original_holding(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "serve-state", 1).await;
+    let held = address("serve-statem1");
+
+    let reference = ok(index.find_reference(&held).await, "look up a live blob")
+        .expect("a published asset's blob is a live reference");
+    assert_eq!(reference.state, AssetState::Visible);
+    assert!(
+        !reference.original_held,
+        "no original has landed, and the reference must say so rather than imply it"
+    );
+
+    record(index, &asset, blob(BlobRole::Original, "serve-stateo1")).await;
+    let reference = ok(
+        index.find_reference(&address("serve-stateo1")).await,
+        "look up an original",
+    )
+    .expect("the original is a live reference");
+    assert!(reference.original_held);
+    assert_eq!(reference.role, BlobRole::Original);
+
+    ok(
+        index.tombstone(&asset, Timestamp::UNIX_EPOCH).await,
+        "tombstone",
+    );
+    let reference = ok(
+        index.find_reference(&held).await,
+        "look up a tombstoned blob",
+    )
+    .expect("the reference survives the tombstone; GC owns the bytes, not this port");
+    assert_eq!(
+        reference.state,
+        AssetState::Tombstoned,
+        "a deleted asset's blob is gone, not unknown",
+    );
+}
+
+/// Deleting one asset must not take a shared blob's other holder with it.
+pub async fn a_live_holder_outranks_a_deleted_one(index: &dyn AssetIndex) {
+    let shared = address("serve-shared");
+    let thumbnail = || BlobRecord {
+        role: BlobRole::Derivative,
+        address: shared.clone(),
+        size: 1024,
+        finalized_at: Timestamp::UNIX_EPOCH,
+    };
+
+    let (first, _) = publish(index, "serve-shared", 1).await;
+    let (second, _) = publish(index, "serve-shared", 2).await;
+    record(index, &first, thumbnail()).await;
+    record(index, &second, thumbnail()).await;
+
+    ok(
+        index.tombstone(&first, Timestamp::UNIX_EPOCH).await,
+        "tombstone the first holder",
+    );
+
+    let reference = ok(index.find_reference(&shared).await, "look up a shared blob")
+        .expect("a shared blob with a live holder is a live reference");
+    assert_eq!(
+        reference.asset_id, second,
+        "deleting one asset made a blob another asset still holds unservable",
+    );
+    assert_eq!(reference.state, AssetState::Visible);
+}
+
 /// Run every case against `index`, in order.
 pub async fn run_all(index: &dyn AssetIndex) {
     reserving_twice_joins_the_same_row(index).await;
@@ -698,6 +791,9 @@ pub async fn run_all(index: &dyn AssetIndex) {
     tombstoning_a_pending_row_publishes_nothing(index).await;
     a_late_blob_does_not_revive_a_tombstone(index).await;
     the_duplicate_lookup_is_scoped_to_owner_and_album(index).await;
+    the_serving_lookup_ignores_unpublished_rows(index).await;
+    the_serving_lookup_reports_state_and_original_holding(index).await;
+    a_live_holder_outranks_a_deleted_one(index).await;
 }
 
 #[cfg(test)]

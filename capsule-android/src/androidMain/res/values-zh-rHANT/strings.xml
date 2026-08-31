@@ -129,7 +129,10 @@
     <string name="error_auth_invalid_credentials">電子郵件或密碼無效。</string>
     <string name="error_auth_rate_limited">嘗試次數過多。請稍候再試。</string>
     <string name="error_auth_user_already_exists">已有使用這些資料的帳戶。</string>
+    <string name="error_blob_gone">該相片檔案已無法使用。</string>
+    <string name="error_blob_not_found">伺服器上沒有該相片檔案。</string>
     <string name="error_blob_pending_upload">原始照片尚未從其裝置上傳。</string>
+    <string name="error_blob_unavailable">Capsule 無法存取該相片檔案，請重試。</string>
     <string name="error_directory_malformed">無法讀取裝置清單。</string>
     <string name="error_directory_version_conflict">此裝置清單已過期。Capsule 會在繼續前重新整理。</string>
     <string name="error_drop_cap_exceeded">此上傳連結已滿。</string>

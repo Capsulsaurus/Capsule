@@ -75,6 +75,18 @@
         "message": "원본 사진이 아직 해당 기기에서 업로드되지 않았습니다.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.blob.not_found": {
+        "message": "해당 사진 파일이 서버에 없습니다.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.gone": {
+        "message": "해당 사진 파일은 더 이상 사용할 수 없습니다.",
+        "context": "Machine-translated seed pending human review."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule이 해당 사진 파일에 접근하지 못했습니다. 다시 시도해 주세요.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.directory.version_conflict": {
         "message": "이 기기 목록이 오래되었습니다. Capsule이 계속하기 전에 새로 고칩니다.",
         "context": "Machine-translated seed pending human review."

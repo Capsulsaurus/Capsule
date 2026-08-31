@@ -103,6 +103,18 @@
         "message": "The original photo hasn't been uploaded from its device yet.",
         "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."
     },
+    "error.blob.not_found": {
+        "message": "That photo file isn't on the server.",
+        "context": "HTTP 404 on GET /v1/blob/{hash} (slice S-C10): no live asset references the content address, or the path is not a content address at all. Both answer identically on purpose — a distinguishable malformed-address response would turn the route into an oracle over guesses."
+    },
+    "error.blob.gone": {
+        "message": "That photo file is no longer available.",
+        "context": "HTTP 410 on GET /v1/blob/{hash} (slice S-C10): the address is referenced but not retrievable per policy — the asset was deleted, or the reference is dangling. Permanent: the client degrades to a representation it already holds rather than retrying. Distinct from the transient error.blob.pending_upload."
+    },
+    "error.blob.unavailable": {
+        "message": "Capsule couldn't reach that photo file. Please try again.",
+        "context": "HTTP 500 on GET /v1/blob/{hash} (slice S-C10): the asset index or the blob store could not answer, so the server decided nothing. Retryable; it says nothing about whether the blob exists."
+    },
     "error.directory.version_conflict": {
         "message": "This device list is out of date. Capsule will refresh it before continuing.",
         "context": "HTTP 409 on device-directory publish (threat-model invariant 23): the submitted DeviceDirectory's directory_version does not strictly advance the version already stored for the user. A non-advancing or regressing publish is refused so the server cannot roll back a revocation."

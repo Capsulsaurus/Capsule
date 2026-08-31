@@ -62,8 +62,17 @@ pub mod error_codes {
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
 
+    /// `error.blob.gone`
+    pub const BLOB_GONE: &str = "error.blob.gone";
+
+    /// `error.blob.not_found`
+    pub const BLOB_NOT_FOUND: &str = "error.blob.not_found";
+
     /// `error.blob.pending_upload`
     pub const BLOB_PENDING_UPLOAD: &str = "error.blob.pending_upload";
+
+    /// `error.blob.unavailable`
+    pub const BLOB_UNAVAILABLE: &str = "error.blob.unavailable";
 
     /// `error.directory.malformed`
     pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
