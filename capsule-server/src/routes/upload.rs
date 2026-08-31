@@ -988,6 +988,7 @@ pub async fn create_upload(
 #[kynos::patch("/v1/upload/{id}", operation_id = "append_chunk", tag = UploadTag)]
 pub async fn append_chunk(
     Inject(upload): Inject<UploadContext>,
+    Inject(attestation): Inject<crate::attestation::AttestationContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
     Headers(headers): Headers<ChunkHeaders>,
@@ -1141,7 +1142,7 @@ pub async fn append_chunk(
 
     let next_offset = updated.received_bytes;
     if next_offset == updated.total_size {
-        match finalize::finalize(&upload, &id).await {
+        match finalize::finalize(&upload, &attestation, &id).await {
             Ok(Outcome::Committed { .. } | Outcome::AlreadyClaimed) => {}
             Ok(Outcome::NotFound) => return Err(ChunkRejection::session_not_found()),
             Err(failure) => return Err(ChunkRejection::from(failure)),

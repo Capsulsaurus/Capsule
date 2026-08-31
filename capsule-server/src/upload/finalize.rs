@@ -15,7 +15,18 @@
 //! 4. **Commit** the stage onto its content address, atomically.
 //! 5. **Record the blob against its asset**, which is where the asset's next sequence number is
 //!    minted when the change is one a client can observe (`S-C37`).
-//! 6. **Complete**, or fail the session and drop the staged bytes.
+//! 6. **Issue the custody receipt** — the server's signed admission of what it accepted
+//!    (`S-C15`).
+//! 7. **Complete**, or fail the session and drop the staged bytes.
+//!
+//! # Why the receipt comes after custody and not with it
+//!
+//! The contract asks that the two commit together; across two ports all that is available is an
+//! order, and this one guarantees the direction that matters — **no receipt without custody**.
+//! A crash between them leaves a finalized blob with no receipt, which is visible, reissuable,
+//! and merely inconvenient. The reverse is not: a receipt is evidence a client keeps, and one
+//! attesting to bytes the server does not hold cannot be withdrawn from whoever already has it.
+//! See [`crate::attestation`].
 //!
 //! # Why an index failure fails the whole finalization
 //!
@@ -46,7 +57,7 @@
 //! and does not synthesize a manifest for a feed. The signed manifest is a `provenance` blob
 //! that travelled this same path and is held verbatim at its content address.
 
-use capsule_core::crypto::hash::Sha256Hasher;
+use capsule_core::crypto::hash::{Hash32, Sha256Hasher, hash_bytes};
 
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
@@ -125,6 +136,7 @@ pub enum FinalizeFailure {
 #[tracing::instrument(skip(context), fields(upload = %upload))]
 pub async fn finalize(
     context: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
     upload: &UploadId,
 ) -> Result<Outcome, FinalizeFailure> {
     // 1. Claim. Only a `Pending` or `Uploading` session transitions, so the winner is unique
@@ -146,7 +158,7 @@ pub async fn finalize(
         }
     };
 
-    match run_claimed(context, upload, &record).await {
+    match run_claimed(context, attestation, upload, &record).await {
         Ok((placement, minted)) => {
             complete(context, upload).await?;
             tracing::info!(
@@ -174,6 +186,7 @@ pub async fn finalize(
 /// Steps 2–4, for a session this caller has claimed.
 async fn run_claimed(
     context: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
     upload: &UploadId,
     record: &UploadSessionRecord,
 ) -> Result<(Placement, Option<u64>), FinalizeFailure> {
@@ -220,7 +233,53 @@ async fn run_claimed(
 
     // 5. The durable half. Nothing before this point is observable to another device.
     let minted = record_against_asset(context, record, &address).await?;
+
+    // 6. The signed half. After custody, deliberately — see the module docs.
+    issue_receipt(context, attestation, record, &address).await?;
+
     Ok((placement, minted))
+}
+
+/// Step 6: the server signs what it just took custody of.
+///
+/// The facts come from what the server *established*, never from the request: the address is the
+/// one finalization recomputed over the stored bytes, and the size is the stage's own length.
+/// A receipt echoing a client's declaration would attest to the claim rather than to the custody.
+async fn issue_receipt(
+    context: &UploadContext,
+    attestation: &crate::attestation::AttestationContext,
+    record: &UploadSessionRecord,
+    address: &ContentAddress,
+) -> Result<(), FinalizeFailure> {
+    let ciphertext_hash = Hash32::from_hex(address.as_str()).map_err(|_| {
+        // Unreachable: the address was just built from a digest this function computed.
+        FinalizeFailure::Unavailable("a computed address is not a digest".to_owned())
+    })?;
+
+    attestation
+        .receipts()
+        .issue(
+            crate::attestation::ReceiptDraft {
+                crypto_suite_id: record.crypto_suite_id,
+                protocol_version: record.protocol_version.clone(),
+                upload_id: record.upload_id.clone(),
+                asset_id: record.asset_id.clone(),
+                blob_role: record.blob_role.as_str().to_owned(),
+                ciphertext_hash,
+                size: record.total_size,
+                envelope_hash: Some(hash_bytes(record.manifest_envelope.as_bytes())),
+                uploaded_by_user: record.upload_user_id.as_str().to_owned(),
+                uploaded_by_device: None,
+                received_at: context.clock().now().to_string(),
+            },
+            attestation.signer(),
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, upload = %record.upload_id, "a custody receipt could not be issued");
+            FinalizeFailure::Unavailable("the custody receipt could not be issued".to_owned())
+        })?;
+    Ok(())
 }
 
 /// Step 5: tell the index the blob landed, and hand back the sequence number it minted.

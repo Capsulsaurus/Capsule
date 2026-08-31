@@ -110,6 +110,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/albums/anything/ops"),
         ("POST", "/v1/albums"),
         ("GET", "/v1/quota"),
+        ("GET", "/v1/upload/anything/receipt"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1216,6 +1217,87 @@ async fn every_declared_response_is_exercised() {
         .get("/v1/quota")
         .header("authorization", &bearer)
         .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // ── GET /v1/upload/{id}/receipt ────────────────────────────────────────────────────────
+    client
+        .get("/v1/upload/anything/receipt")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/upload/anything/receipt")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    // 400 is the `Path` extractor's, reached the only way a `String` parameter allows.
+    client
+        .get("/v1/upload/%FF/receipt")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .get("/v1/upload/no-such-session/receipt")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    fixture.uploads.set_unavailable(true);
+    client
+        .get("/v1/upload/anything/receipt")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
+
+    // 409 then 200: a session mid-transfer has no receipt yet, and a finalized one does.
+    let receipt_bytes = payload(b'r', 8192);
+    let opened: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("accept", "application/json")
+        .json(&create_request(&fixture.clock, &receipt_bytes, "original"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let receipt_session = opened["id"].as_str().expect("a session id").to_owned();
+    client
+        .get(&format!("/v1/upload/{receipt_session}/receipt"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    for offset in [0_usize, 4096] {
+        client
+            .patch(&format!("/v1/upload/{receipt_session}"))
+            .header("authorization", &bearer)
+            .header("x-capsule-protocol", PROTOCOL_VERSION)
+            .header("x-capsule-offset", &offset.to_string())
+            .header(
+                "x-capsule-checksum",
+                &checksum(&receipt_bytes[offset..offset + 4096]),
+            )
+            .body(
+                "application/octet-stream",
+                receipt_bytes[offset..offset + 4096].to_vec(),
+            )
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    client
+        .get(&format!("/v1/upload/{receipt_session}/receipt"))
+        .header("authorization", &bearer)
         .send()
         .await
         .assert_status(StatusCode::OK);

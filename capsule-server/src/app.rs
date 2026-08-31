@@ -29,6 +29,7 @@ use kynos::prelude::*;
 use kynos::security::Authenticates;
 
 use crate::album::AlbumContext;
+use crate::attestation::AttestationContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
 use crate::quota::QuotaContext;
@@ -60,6 +61,8 @@ pub struct App {
     albums: AlbumContext,
     /// The quota module's collaborators.
     quota: QuotaContext,
+    /// The custody-receipt module's collaborators.
+    attestation: AttestationContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -87,6 +90,8 @@ pub struct Modules {
     pub albums: AlbumContext,
     /// The quota module's collaborators.
     pub quota: QuotaContext,
+    /// The custody-receipt module's collaborators.
+    pub attestation: AttestationContext,
 }
 
 impl App {
@@ -101,6 +106,7 @@ impl App {
             directories,
             albums,
             quota,
+            attestation,
         } = modules;
         Self {
             auth,
@@ -111,6 +117,7 @@ impl App {
             directories,
             albums,
             quota,
+            attestation,
         }
     }
 }

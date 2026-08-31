@@ -261,6 +261,391 @@
         ]
       }
     },
+    "/v1/auth/devices/directory": {
+      "post": {
+        "summary": "Publish the caller's signed device directory.",
+        "description": "The bytes are stored verbatim; the server decodes them to read `directory_version` and\nnothing else. The monotonicity comparison is the store's, not this handler's — see\n[`crate::directory`] for why a read-compare-write here would be a rollback window.",
+        "operationId": "publish_device_directory",
+        "requestBody": {
+          "content": {
+            "application/cbor": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported media type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishDirectoryResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Directory version conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/directory/{user_id}": {
+      "get": {
+        "summary": "Fetch a user's signed device directory, verbatim.",
+        "description": "The response body is the exact bytes the owner signed. Re-encoding them would detach the\ndocument from its signature, and the failure would look like the *publisher's* bug.",
+        "operationId": "fetch_device_directory",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "description": "The account id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/cbor": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/albums": {
+      "post": {
+        "summary": "Bind an album id to the authenticated caller.",
+        "description": "Idempotent: the same id from a second device, or after a recovery, is a success that writes\nnothing.",
+        "operationId": "provision_album",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionAlbumRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The album was created and bound to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The album id was already provisioned to this account; nothing was written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/quota": {
+      "get": {
+        "summary": "Report the authenticated uploader's storage-quota snapshot.",
+        "description": "Scoped to the caller, and to nobody else: quota is accounted to the *uploader*, and one\naccount's storage use is not another's business.",
+        "operationId": "get_quota",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/upload": {
       "post": {
         "summary": "Open an upload session for one blob of an asset bundle.",
@@ -940,6 +1325,249 @@
         ]
       }
     },
+    "/v1/upload/{id}/receipt": {
+      "get": {
+        "summary": "Fetch the custody receipt for a finalized upload.",
+        "operationId": "get_upload_receipt",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "The session's identifier, as `POST /v1/upload` returned it.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/cbor": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Receipt not available",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/albums/{album_id}/ops": {
+      "post": {
+        "summary": "Apply one signed lifecycle manifest to an album's asset.",
+        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
+        "operationId": "album_lifecycle_op",
+        "parameters": [
+          {
+            "name": "album_id",
+            "in": "path",
+            "description": "The album's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpResponse"
+                }
+              }
+            }
+          },
+          "426": {
+            "description": "Upgrade required",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Stale revival",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/sync": {
       "get": {
         "summary": "Returns the changes in the caller's library after `cursor`.",
@@ -1361,529 +1989,6 @@
           }
         ]
       }
-    },
-    "/v1/auth/devices/directory": {
-      "post": {
-        "summary": "Publish the caller's signed device directory.",
-        "description": "The bytes are stored verbatim; the server decodes them to read `directory_version` and\nnothing else. The monotonicity comparison is the store's, not this handler's — see\n[`crate::directory`] for why a read-compare-write here would be a rollback window.",
-        "operationId": "publish_device_directory",
-        "requestBody": {
-          "content": {
-            "application/cbor": {
-              "schema": {}
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported media type",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Malformed request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishDirectoryResponse"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Directory version conflict",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/auth/devices/directory/{user_id}": {
-      "get": {
-        "summary": "Fetch a user's signed device directory, verbatim.",
-        "description": "The response body is the exact bytes the owner signed. Re-encoding them would detach the\ndocument from its signature, and the failure would look like the *publisher's* bug.",
-        "operationId": "fetch_device_directory",
-        "parameters": [
-          {
-            "name": "user_id",
-            "in": "path",
-            "description": "The account id.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/cbor": {
-                "schema": {}
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/albums/{album_id}/ops": {
-      "post": {
-        "summary": "Apply one signed lifecycle manifest to an album's asset.",
-        "description": "The whole battery runs before anything is written, and a rejection writes nothing —\nincluding the blobs the bundle carries, which are stored only after the manifest has passed\nevery check the server can make without a key.",
-        "operationId": "album_lifecycle_op",
-        "parameters": [
-          {
-            "name": "album_id",
-            "in": "path",
-            "description": "The album's identifier.",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/OpRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OpResponse"
-                }
-              }
-            }
-          },
-          "426": {
-            "description": "Upgrade required",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Stale revival",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/albums": {
-      "post": {
-        "summary": "Bind an album id to the authenticated caller.",
-        "description": "Idempotent: the same id from a second device, or after a recovery, is a success that writes\nnothing.",
-        "operationId": "provision_album",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ProvisionAlbumRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "415": {
-            "description": "Unsupported Media Type",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Unprocessable Entity",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "The album was created and bound to the caller",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "The album id was already provisioned to this account; nothing was written",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
-    },
-    "/v1/quota": {
-      "get": {
-        "summary": "Report the authenticated uploader's storage-quota snapshot.",
-        "description": "Scoped to the caller, and to nobody else: quota is accounted to the *uploader*, and one\naccount's storage use is not another's business.",
-        "operationId": "get_quota",
-        "responses": {
-          "401": {
-            "description": "Unauthorized",
-            "headers": {
-              "WWW-Authenticate": {
-                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
-                "required": true,
-                "schema": {
-                  "type": "string"
-                },
-                "example": "Bearer"
-              }
-            },
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QuotaResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "413": {
-            "description": "the request body exceeds the configured limit"
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ]
-      }
     }
   },
   "components": {
@@ -2010,6 +2115,95 @@
           "refresh_token"
         ],
         "description": "The refresh token being exchanged for a new pair.\n\n`Debug` is hand-written, for the same reason as [`LoginRequest`]: this field is a live\ncredential."
+      },
+      "PublishDirectoryResponse": {
+        "properties": {
+          "directory_version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The version now stored, which equals the submitted one."
+          }
+        },
+        "type": "object",
+        "required": [
+          "directory_version"
+        ],
+        "description": "The accepted version, echoed so a client knows what is now in force."
+      },
+      "ProvisionAlbumRequest": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The client-derived album id, as a canonical lowercase hyphenated UUID."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id"
+        ],
+        "description": "The provisioning request."
+      },
+      "ProvisionAlbumResponse": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album, echoed."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol date the album is pinned to — the server's, fixed at creation."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether this call created the album. Advisory; both answers mean the same thing."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "protocol_version",
+          "created"
+        ],
+        "description": "What provisioning did."
+      },
+      "QuotaResponse": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Bytes charged to the caller."
+          },
+          "soft_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Where the warning starts, or absent on an unlimited deployment."
+          },
+          "hard_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Where uploads stop, or absent on an unlimited deployment."
+          },
+          "state": {
+            "type": "string",
+            "description": "The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "state"
+        ],
+        "description": "A user's quota snapshot."
       },
       "WireBlobRole": {
         "type": "string",
@@ -2227,6 +2421,61 @@
           "suggested_chunk_size"
         ],
         "description": "What a client needs to start sending bytes."
+      },
+      "OpRequest": {
+        "properties": {
+          "manifest_envelope": {
+            "$ref": "#/components/schemas/ManifestEnvelope",
+            "description": "The server-visible projection of the signed manifest's fields, exactly as\n`POST /v1/upload` carries it. Its `album_id` must equal the path segment and its\n`action` must be one this surface accepts."
+          },
+          "manifest_cbor": {
+            "type": "string",
+            "description": "The signed manifest itself, base64 of the canonical CBOR.\n\nStored verbatim as the asset's new provenance blob, so the feed serves the exact bytes\nthe client signed (`S-C30`) for a lifecycle write as it already does for an upload. The\nserver does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`."
+          },
+          "metadata_blob": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The encrypted metadata blob, base64, present exactly when the action carries one.\n\nIts content hash must equal the manifest's committed `metadata_blob_hash`\n(invariant 25). The server holds no key and never reads it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "manifest_envelope",
+          "manifest_cbor"
+        ],
+        "description": "The signed manifest bundle a lifecycle write carries."
+      },
+      "OpResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the op chained onto."
+          },
+          "sync_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The feed position it occupies. On a replay, the position the *first* application took."
+          },
+          "action": {
+            "type": "string",
+            "description": "The action that was applied."
+          },
+          "replayed": {
+            "type": "boolean",
+            "description": "Whether this response is a replay of an already-applied manifest.\n\nAdvisory, and deliberately not something a correct client needs: the other three fields\nare identical either way, which is what \"byte-identical prior response\" means."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "sync_seq",
+          "action",
+          "replayed"
+        ],
+        "description": "What a lifecycle write did."
       },
       "WireChangeKind": {
         "type": "string",
@@ -2471,150 +2720,6 @@
           "verdicts"
         ],
         "description": "The `POST /v1/storage/verify` response."
-      },
-      "PublishDirectoryResponse": {
-        "properties": {
-          "directory_version": {
-            "type": "integer",
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "The version now stored, which equals the submitted one."
-          }
-        },
-        "type": "object",
-        "required": [
-          "directory_version"
-        ],
-        "description": "The accepted version, echoed so a client knows what is now in force."
-      },
-      "OpRequest": {
-        "properties": {
-          "manifest_envelope": {
-            "$ref": "#/components/schemas/ManifestEnvelope",
-            "description": "The server-visible projection of the signed manifest's fields, exactly as\n`POST /v1/upload` carries it. Its `album_id` must equal the path segment and its\n`action` must be one this surface accepts."
-          },
-          "manifest_cbor": {
-            "type": "string",
-            "description": "The signed manifest itself, base64 of the canonical CBOR.\n\nStored verbatim as the asset's new provenance blob, so the feed serves the exact bytes\nthe client signed (`S-C30`) for a lifecycle write as it already does for an upload. The\nserver does not parse it: base64 is a transport encoding, and `decode(encode(b)) == b`."
-          },
-          "metadata_blob": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The encrypted metadata blob, base64, present exactly when the action carries one.\n\nIts content hash must equal the manifest's committed `metadata_blob_hash`\n(invariant 25). The server holds no key and never reads it."
-          }
-        },
-        "type": "object",
-        "required": [
-          "manifest_envelope",
-          "manifest_cbor"
-        ],
-        "description": "The signed manifest bundle a lifecycle write carries."
-      },
-      "OpResponse": {
-        "properties": {
-          "asset_id": {
-            "type": "string",
-            "description": "The asset the op chained onto."
-          },
-          "sync_seq": {
-            "type": "integer",
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "The feed position it occupies. On a replay, the position the *first* application took."
-          },
-          "action": {
-            "type": "string",
-            "description": "The action that was applied."
-          },
-          "replayed": {
-            "type": "boolean",
-            "description": "Whether this response is a replay of an already-applied manifest.\n\nAdvisory, and deliberately not something a correct client needs: the other three fields\nare identical either way, which is what \"byte-identical prior response\" means."
-          }
-        },
-        "type": "object",
-        "required": [
-          "asset_id",
-          "sync_seq",
-          "action",
-          "replayed"
-        ],
-        "description": "What a lifecycle write did."
-      },
-      "ProvisionAlbumRequest": {
-        "properties": {
-          "album_id": {
-            "type": "string",
-            "description": "The client-derived album id, as a canonical lowercase hyphenated UUID."
-          }
-        },
-        "type": "object",
-        "required": [
-          "album_id"
-        ],
-        "description": "The provisioning request."
-      },
-      "ProvisionAlbumResponse": {
-        "properties": {
-          "album_id": {
-            "type": "string",
-            "description": "The album, echoed."
-          },
-          "protocol_version": {
-            "type": "string",
-            "description": "The protocol date the album is pinned to — the server's, fixed at creation."
-          },
-          "created": {
-            "type": "boolean",
-            "description": "Whether this call created the album. Advisory; both answers mean the same thing."
-          }
-        },
-        "type": "object",
-        "required": [
-          "album_id",
-          "protocol_version",
-          "created"
-        ],
-        "description": "What provisioning did."
-      },
-      "QuotaResponse": {
-        "properties": {
-          "used": {
-            "type": "integer",
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "Bytes charged to the caller."
-          },
-          "soft_limit": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "Where the warning starts, or absent on an unlimited deployment."
-          },
-          "hard_limit": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "minimum": 0.0,
-            "format": "uint64",
-            "description": "Where uploads stop, or absent on an unlimited deployment."
-          },
-          "state": {
-            "type": "string",
-            "description": "The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`."
-          }
-        },
-        "type": "object",
-        "required": [
-          "used",
-          "state"
-        ],
-        "description": "A user's quota snapshot."
       }
     },
     "securitySchemes": {

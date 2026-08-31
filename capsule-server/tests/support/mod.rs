@@ -32,6 +32,7 @@ use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
 use capsule_server::app::Modules;
+use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
 use capsule_server::auth::{
     AccountDirectory, AuthContext, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
 };
@@ -1132,6 +1133,11 @@ pub(crate) struct Fixture {
     pub(crate) quotas: Arc<SwitchableQuota>,
     /// The collector's marks, which is where `retrievable` diverges from `stored`.
     pub(crate) marks: Arc<InMemoryCollection>,
+    /// The append-only custody-receipt log.
+    pub(crate) receipts: Arc<InMemoryReceipts>,
+    /// The attestation key the server signs receipts with — the *same* one, so a test can
+    /// verify a fetched receipt the way a client would.
+    pub(crate) attestation_key: Arc<LocalAttestationKey>,
 }
 
 impl Fixture {
@@ -1167,6 +1173,14 @@ impl Fixture {
         let albums = Arc::new(SwitchableAlbums::new());
         let quotas = Arc::new(SwitchableQuota::new());
         let marks = Arc::new(InMemoryCollection::new());
+        let receipts = Arc::new(InMemoryReceipts::new());
+        // The attestation key is generated per fixture and *distinct from* the token signer, as
+        // the design requires: a receipt that verified under the operational key would let
+        // anything holding that key manufacture custody evidence.
+        let attestation_key = Arc::new(LocalAttestationKey::new(
+            "capsule.test",
+            capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+        ));
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1191,6 +1205,7 @@ impl Fixture {
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
+            attestation: AttestationContext::new(receipts.clone(), attestation_key.clone()),
         });
 
         Self {
@@ -1208,6 +1223,8 @@ impl Fixture {
             albums,
             quotas,
             marks,
+            receipts,
+            attestation_key,
         }
     }
 
@@ -1267,6 +1284,13 @@ impl Fixture {
                 Arc::new(SwitchableQuota::new()),
                 clock.clone(),
                 QuotaLimits::unlimited(),
+            ),
+            attestation: AttestationContext::new(
+                Arc::new(InMemoryReceipts::new()),
+                Arc::new(LocalAttestationKey::new(
+                    "capsule.test",
+                    capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+                )),
             ),
         });
         (app, clock)

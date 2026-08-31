@@ -12,6 +12,7 @@ pub mod blob;
 pub mod directory;
 pub mod ops;
 pub mod quota;
+pub mod receipts;
 pub mod storage;
 pub mod sync;
 pub mod upload;

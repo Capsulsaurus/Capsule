@@ -41,6 +41,7 @@
 
 pub mod album;
 pub mod app;
+pub mod attestation;
 pub mod auth;
 pub mod blob;
 pub mod body;
@@ -81,23 +82,32 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
+        // Two `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // sixteen and the seventeenth operation is a compile error, so the split is forced —
+        // but grouping it by surface rather than splitting at the arbitrary boundary is what
+        // makes the next addition obvious rather than a puzzle.
+        // The account and library surfaces.
         .mount(kynos::routes![
             routes::version::get_version,
             routes::auth::login_user,
             routes::auth::refresh_token,
             routes::auth::logout,
+            routes::directory::publish_device_directory,
+            routes::directory::fetch_device_directory,
+            routes::albums::provision_album,
+            routes::quota::get_quota,
+        ])
+        // The asset surfaces: getting bytes in, changing what they mean, and reading them back.
+        .mount(kynos::routes![
             routes::upload::create_upload,
             routes::upload::append_chunk,
             routes::upload::head_upload,
             routes::upload::cancel_upload,
+            routes::receipts::get_upload_receipt,
+            routes::ops::apply_op,
             routes::sync::sync_feed,
             routes::blob::get_blob,
             routes::storage::verify_storage,
-            routes::directory::publish_device_directory,
-            routes::directory::fetch_device_directory,
-            routes::ops::apply_op,
-            routes::albums::provision_album,
-            routes::quota::get_quota,
         ])
 }
 
