@@ -331,14 +331,24 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
         at: Timestamp,
     ) -> IndexFuture<'a, Option<AssetRow>>;
 
-    /// The asset `owner` already holds carrying `address` in any role, if any.
+    /// The asset already holding `address` under `(owner, album)`, if there is one.
     ///
-    /// Owner-scoped in the signature, not by convention: this is the lookup `S-C22`'s structured
-    /// `existing_asset` needs, and answering it from blob presence alone — which is what the
-    /// blob store could do — would tell one account that another holds a particular ciphertext.
+    /// The signature **is** the idempotency key the validation doc fixes for session creation —
+    /// `(owner_id, hash, album_id)` — rather than a convention a caller is trusted to apply.
+    /// Both scopes are load-bearing and for different reasons:
+    ///
+    /// - **Owner** is the disclosure boundary. The blob store could say whether *anyone* holds
+    ///   a ciphertext, and answering `S-C22`'s `existing_asset` from that would tell one account
+    ///   what another holds — which content addressing makes a real cross-tenant leak.
+    /// - **Album** is the merge contract. A `409 duplicate_blob` is the *client's merge
+    ///   trigger*: it means "you already have these bytes here, reconcile the two assets
+    ///   locally". Across two albums there is nothing to merge — the same thumbnail
+    ///   legitimately belongs to assets in both — so the second upload proceeds and the blob
+    ///   store deduplicates it onto the occupied address instead.
     fn find_by_address<'a>(
         &'a self,
         owner: &'a OwnerId,
+        album: &'a AlbumId,
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<AssetId>>;
 

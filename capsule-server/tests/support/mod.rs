@@ -787,12 +787,13 @@ impl AssetIndex for SwitchableIndex {
     fn find_by_address<'a>(
         &'a self,
         owner: &'a OwnerId,
+        album: &'a AlbumId,
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<AssetId>> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
         }
-        self.inner.find_by_address(owner, address)
+        self.inner.find_by_address(owner, album, address)
     }
 
     fn feed_page<'a>(
@@ -867,6 +868,8 @@ impl Fixture {
         let index = Arc::new(SwitchableIndex::new());
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
 
+        // One index behind both modules, which is what makes "upload it, then read it back off
+        // the feed" a test of the server rather than of two disconnected doubles.
         let app = App::with_auth(
             sessions.clone(),
             accounts.clone(),
@@ -875,6 +878,7 @@ impl Fixture {
             UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
+                index.clone(),
                 authority.clone(),
                 clock.clone(),
                 UploadPolicy::default(),
@@ -911,6 +915,7 @@ impl Fixture {
         authority.add_device(&user(), device(), clock.now());
 
         let blobs = Arc::new(SwallowingBlobs::new());
+        let index = Arc::new(SwitchableIndex::new());
         let app = App::with_auth(
             Arc::new(SwitchableSessions::new(clock.clone())),
             accounts,
@@ -919,15 +924,12 @@ impl Fixture {
             UploadContext::new(
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 blobs.clone(),
+                index.clone(),
                 authority,
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            SyncContext::new(
-                Arc::new(SwitchableIndex::new()),
-                blobs,
-                Arc::new(CursorCodec::new(&CURSOR_KEY)),
-            ),
+            SyncContext::new(index, blobs, Arc::new(CursorCodec::new(&CURSOR_KEY))),
         );
         (app, clock)
     }
@@ -971,12 +973,23 @@ impl Fixture {
     /// Panics rather than returning a `Result`: a fixture that cannot open a session has
     /// nothing to test, and the failure a test wants to see is the one it is about to cause.
     pub(crate) async fn open_session(&self, bytes: &[u8], role: &str, bearer: &str) -> String {
+        self.open_session_with(&create_request(&self.clock, bytes, role), bearer)
+            .await
+    }
+
+    /// The same, over a body the caller has already mutated — the shape a case wants when it
+    /// is varying a field the default body fixes, such as the album.
+    pub(crate) async fn open_session_with(
+        &self,
+        request: &serde_json::Value,
+        bearer: &str,
+    ) -> String {
         let body: serde_json::Value = self
             .client
             .post("/v1/upload")
             .header("authorization", bearer)
             .header("x-capsule-protocol", PROTOCOL_VERSION)
-            .json(&create_request(&self.clock, bytes, role))
+            .json(request)
             .send()
             .await
             .assert_status(kynos::http::StatusCode::CREATED)
@@ -1011,6 +1024,14 @@ pub(crate) const PROTOCOL_VERSION: &str = capsule_core::crypto::primitives::PROT
 /// The album [`Fixture::working`] seeds as writable.
 pub(crate) fn album() -> AlbumId {
     AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e60")
+}
+
+/// A second album under the same owner, for cases about album scoping.
+///
+/// Not seeded by [`Fixture::working`]: a case that wants it writable says so, so the album
+/// gate stays the thing the case is asserting rather than fixture background.
+pub(crate) fn second_album() -> AlbumId {
+    AlbumId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e70")
 }
 
 /// The owner the seeded album belongs to — the seeded account, filing under itself.

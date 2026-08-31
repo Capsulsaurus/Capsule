@@ -14,7 +14,10 @@
 mod support;
 
 use kynos::http::StatusCode;
-use support::{Fixture, PROTOCOL_VERSION, album, checksum, create_request, device, owner, payload};
+use support::{
+    Fixture, PROTOCOL_VERSION, album, checksum, create_request, device, owner, payload,
+    second_album,
+};
 
 /// The blob every happy-path case transfers: two 4 KiB chunks.
 const CHUNK: usize = 4096;
@@ -431,12 +434,30 @@ async fn a_provenance_blob_is_stored_exactly_as_it_arrived() {
 
 #[tokio::test]
 async fn identical_bytes_become_one_object() {
+    // The same ciphertext legitimately belongs to assets in two albums — one thumbnail shared
+    // between a copy in each. Neither is the other's duplicate (a `409` is the client's *merge*
+    // trigger, and across albums there is nothing to merge), so both uploads proceed and the
+    // blob store is what deduplicates them onto one address.
     let fixture = Fixture::working();
     let bearer = fixture.bearer().await;
+    fixture
+        .authority
+        .allow_album(&owner(), &second_album(), PROTOCOL_VERSION);
     let (first, second, whole) = blob();
 
-    for _ in 0..2 {
-        let id = fixture.open_session(&whole, "original", &bearer).await;
+    for album in [album(), second_album()] {
+        let mut request = create_request(&fixture.clock, &whole, "original");
+        request["album_id"] = serde_json::Value::String(album.as_str().to_owned());
+        request["manifest_envelope"]["album_id"] =
+            serde_json::Value::String(album.as_str().to_owned());
+        // A distinct asset per album: the id is the manifest's, and reserving the *same* id
+        // under a second album is a conflict, not a join.
+        request["manifest_envelope"]["file_id"] = serde_json::Value::String(format!(
+            "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e{:02x}",
+            0x61 + u8::from(album == second_album())
+        ));
+
+        let id = fixture.open_session_with(&request, &bearer).await;
         fixture
             .chunk(&id, 0, &first, &bearer)
             .send()
@@ -447,14 +468,50 @@ async fn identical_bytes_become_one_object() {
             .send()
             .await
             .assert_status(StatusCode::NO_CONTENT);
-        // The second session's create is not a duplicate: the first one is terminal by then, so
-        // it is a fresh session that commits onto an occupied address.
     }
 
     assert_eq!(
         fixture.blobs.blob_count_for_test().await,
         1,
         "identical ciphertext is one blob, not two"
+    );
+}
+
+#[tokio::test]
+async fn the_same_bytes_in_the_same_album_are_refused_as_a_duplicate() {
+    // The other half of the rule, and the one that makes the case above meaningful: within one
+    // album a finalized address is `409 error.upload.duplicate_blob`, carrying the asset the
+    // client must merge against.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (first, second, whole) = blob();
+
+    let id = fixture.open_session(&whole, "original", &bearer).await;
+    fixture
+        .chunk(&id, 0, &first, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .chunk(&id, 4096, &second, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let refusal = fixture
+        .client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &whole, "original"))
+        .send()
+        .await;
+    refusal.assert_status(StatusCode::CONFLICT);
+    let problem: serde_json::Value = refusal.json();
+    assert_eq!(problem["code"], "error.upload.duplicate_blob");
+    assert_eq!(
+        problem["existing_asset"], "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",
+        "the client is told which asset to merge against, and nothing else"
     );
 }
 

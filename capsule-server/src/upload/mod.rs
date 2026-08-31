@@ -12,6 +12,7 @@
 //! | Session records, chunk replay, the finalize claim | [`crate::store::UploadSessionStore`] (`S-C29`) | landed already; consumed, not re-declared |
 //! | Staged bytes and the content-addressed store | [`crate::blob::BlobStore`] (`S-C35`) | landed already; the **only** path to bytes |
 //! | The keyless invariants | [`capsule_core::validation`] | shared with the client's own `verify_asset`; a second implementation would be a second answer |
+//! | The durable asset row, and the sequence its changes mint | [`crate::index::AssetIndex`] (`S-C37`) | landed already; consumed, not re-declared |
 //! | Album capability, album pin, device floor | [`WriteAuthority`] | the two facts the request cannot carry |
 //! | The tunable half of the contract | [`UploadPolicy`] | protocol window, ceiling, closed content-type enum, drift |
 //!
@@ -27,21 +28,21 @@
 //!   [`crate::store::UploadSessionStore::record_progress`] — because the byte counter, the progress clock and the replay entry describe one event.
 //!   The Salvo server issued three writes and a crash between them left all three disagreeing.
 //!
-//! # What this port does not carry
+//! # The asset id comes from the manifest, not from here
 //!
-//! There is **no durable asset index** in this crate yet, and three parts of the Salvo surface
-//! rest on one:
+//! A session's `asset_id` is the envelope's `file_id` — "the same id across the bundle's
+//! members" — and **not** a fresh UUID per session. Minting one per session, which is what this
+//! surface did before the index existed, gave every blob of one bundle a different asset: the
+//! bundle was ungroupable, the visibility gate had nothing to be a conjunction over, and the
+//! feed would have served one asset per blob. The id is client-chosen, so
+//! [`crate::index::Reservation::Conflict`] is what stops a guessed id from joining somebody
+//! else's bundle.
 //!
-//! - the **pending asset row** a session reserves at creation, and the `uploaded` flip at
-//!   finalization;
-//! - the `409 error.upload.duplicate_blob` half of create-dedup, which must name the existing
-//!   asset (`S-C22`'s structured `existing_asset` field) and cannot be answered from blob
-//!   presence alone without leaking another account's holdings;
-//! - the durable half of the visibility gate — [`visibility`] carries the *definition*, and
-//!   the row it would flip does not exist here.
+//! # What this port still does not carry
 //!
-//! Quota (`S-C6`), the sync feed (`S-C2`) and custody receipts (`S-C15`) are likewise absent
-//! and owned elsewhere. Each is reported as a gap rather than approximated.
+//! Quota (`S-C6`) and custody receipts (`S-C15`) are absent and owned elsewhere, and so is the
+//! **adoption path** cross-asset deduplication needs — see [`crate::routes::upload`]'s note on
+//! `409 duplicate_blob`. Each is reported as a gap rather than approximated.
 
 pub mod authority;
 pub mod body;
@@ -57,6 +58,7 @@ pub use self::authority::{AlbumWriteAccess, AuthorityError, AuthorityFuture, Wri
 pub use self::envelope::{DeclaredBlob, GateContext, GateReject, ManifestEnvelope};
 pub use self::policy::UploadPolicy;
 use crate::blob::BlobStore;
+use crate::index::AssetIndex;
 use crate::store::{Clock, UploadSessionStore};
 
 /// Everything the upload operations reach for, as one injectable value.
@@ -68,6 +70,7 @@ use crate::store::{Clock, UploadSessionStore};
 pub struct UploadContext {
     sessions: Arc<dyn UploadSessionStore>,
     blobs: Arc<dyn BlobStore>,
+    index: Arc<dyn AssetIndex>,
     authority: Arc<dyn WriteAuthority>,
     clock: Arc<dyn Clock>,
     policy: Arc<UploadPolicy>,
@@ -83,6 +86,7 @@ impl UploadContext {
     pub fn new(
         sessions: Arc<dyn UploadSessionStore>,
         blobs: Arc<dyn BlobStore>,
+        index: Arc<dyn AssetIndex>,
         authority: Arc<dyn WriteAuthority>,
         clock: Arc<dyn Clock>,
         policy: UploadPolicy,
@@ -90,6 +94,7 @@ impl UploadContext {
         Self {
             sessions,
             blobs,
+            index,
             authority,
             clock,
             policy: Arc::new(policy),
@@ -104,6 +109,12 @@ impl UploadContext {
     /// The blob store (`S-C35`) — the only path to bytes.
     pub fn blobs(&self) -> &dyn BlobStore {
         self.blobs.as_ref()
+    }
+
+    /// The durable asset index (`S-C37`). The **same** index the feed reads, which is what
+    /// makes an upload observable rather than merely stored.
+    pub fn index(&self) -> &dyn AssetIndex {
+        self.index.as_ref()
     }
 
     /// The album and device authority invariants 6 and 7 are decided against.

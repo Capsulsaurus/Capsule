@@ -20,7 +20,7 @@ use super::{
     PendingAsset, Reservation, entry_for,
 };
 use crate::blob::ContentAddress;
-use crate::store::{AssetId, BlobRole, OwnerId};
+use crate::store::{AlbumId, AssetId, BlobRole, OwnerId};
 
 /// Take a lock, recovering rather than propagating a poisoned one — see
 /// [`crate::store::memory`], which does the same for the same reason.
@@ -209,6 +209,7 @@ impl AssetIndex for InMemoryAssetIndex {
     fn find_by_address<'a>(
         &'a self,
         owner: &'a OwnerId,
+        album: &'a AlbumId,
         address: &'a ContentAddress,
     ) -> IndexFuture<'a, Option<AssetId>> {
         Box::pin(async move {
@@ -217,6 +218,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 .values()
                 .find(|row| {
                     &row.owner_id == owner
+                        && &row.album_id == album
                         && row.state != AssetState::Tombstoned
                         && row.blobs.iter().any(|blob| &blob.address == address)
                 })

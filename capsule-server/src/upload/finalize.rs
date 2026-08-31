@@ -13,7 +13,21 @@
 //! 3. **Re-run the envelope battery**, against the clock and the authority *now* — a device
 //!    revoked or an album closed since creation does not slip through.
 //! 4. **Commit** the stage onto its content address, atomically.
-//! 5. **Complete**, or fail the session and drop the staged bytes.
+//! 5. **Record the blob against its asset**, which is where the asset's next sequence number is
+//!    minted when the change is one a client can observe (`S-C37`).
+//! 6. **Complete**, or fail the session and drop the staged bytes.
+//!
+//! # Why an index failure fails the whole finalization
+//!
+//! Step 5 comes after the bytes are committed, so a failure there leaves a blob at its content
+//! address that no asset references. That is the *safe* half of the trade and the reason the
+//! order is this way round: an unreferenced blob is what refcount GC exists to collect, while
+//! an asset row claiming a blob the store does not hold is a dangling reference the feed would
+//! serve. So an index that cannot answer marks the session `FailedProcessing` and the client
+//! retries — the commit is idempotent, because an identical ciphertext is one object.
+//!
+//! Completing the session *without* recording would be the worst of the three: the client would
+//! be told its upload succeeded, and the asset would never become visible to anything.
 //!
 //! # Losing the claim is not an error
 //!
@@ -37,6 +51,7 @@ use capsule_core::crypto::hash::Sha256Hasher;
 use super::envelope::{GateContext, GateReject, ManifestEnvelope, check_finalize};
 use super::{AlbumWriteAccess, UploadContext};
 use crate::blob::{BlobError, ContentAddress, Placement};
+use crate::index::{BlobOutcome, BlobRecord};
 use crate::store::{FinalizeClaim, StoreError, UploadId, UploadSessionRecord, UploadSessionStatus};
 
 /// How many bytes of the stage are read and hashed at a time.
@@ -132,7 +147,7 @@ pub async fn finalize(
     };
 
     match run_claimed(context, upload, &record).await {
-        Ok(placement) => {
+        Ok((placement, minted)) => {
             complete(context, upload).await?;
             tracing::info!(
                 %upload,
@@ -140,9 +155,7 @@ pub async fn finalize(
                 blob_role = record.blob_role.as_str(),
                 placement = ?placement,
                 completes_index_tier = super::visibility::completes_index_tier(record.blob_role),
-                original_held = super::visibility::derive_original_held(
-                    record.blob_role == crate::store::BlobRole::Original
-                ),
+                sync_seq = minted,
                 "upload finalized"
             );
             Ok(Outcome::Committed { placement, record })
@@ -163,7 +176,7 @@ async fn run_claimed(
     context: &UploadContext,
     upload: &UploadId,
     record: &UploadSessionRecord,
-) -> Result<Placement, FinalizeFailure> {
+) -> Result<(Placement, Option<u64>), FinalizeFailure> {
     // The stage is the truth the session's counter caches, so a divergence here is a
     // server-side inconsistency and never a reason to commit.
     let staged = context
@@ -199,11 +212,70 @@ async fn run_claimed(
         // earlier check holds" is exactly the assumption worth a cheap guard.
         FinalizeFailure::Unavailable(format!("the session's hash is not an address: {error}"))
     })?;
-    context
+    let placement = context
         .blobs()
         .commit(upload, &address)
         .await
-        .map_err(blob_unavailable("commit the staged upload"))
+        .map_err(blob_unavailable("commit the staged upload"))?;
+
+    // 5. The durable half. Nothing before this point is observable to another device.
+    let minted = record_against_asset(context, record, &address).await?;
+    Ok((placement, minted))
+}
+
+/// Step 5: tell the index the blob landed, and hand back the sequence number it minted.
+async fn record_against_asset(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+    address: &ContentAddress,
+) -> Result<Option<u64>, FinalizeFailure> {
+    let outcome = context
+        .index()
+        .record_blob(
+            &record.asset_id,
+            BlobRecord {
+                role: record.blob_role,
+                address: address.clone(),
+                size: record.total_size,
+                finalized_at: context.clock().now(),
+            },
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, asset = %record.asset_id, "the asset index could not record a blob");
+            FinalizeFailure::Unavailable("could not record the blob against its asset".to_owned())
+        })?;
+
+    match outcome {
+        BlobOutcome::Recorded { minted, .. } => Ok(minted),
+        // A retried finalization of a blob already held. Not an error: the asset already says
+        // what this finalization was going to make it say.
+        BlobOutcome::AlreadyHeld(row) => Ok(row.sync_seq),
+        // The asset already holds a *different* address under a role that admits one. The
+        // envelope contradicts the asset it names, which is exactly invariant 15's shape, so it
+        // is answered as an envelope failure rather than as a new status.
+        BlobOutcome::Conflict => {
+            tracing::info!(
+                asset = %record.asset_id,
+                role = record.blob_role.as_str(),
+                "a finalization tried to re-point a role the asset already holds"
+            );
+            Err(FinalizeFailure::EnvelopeRejected(
+                GateReject::EnvelopeMismatch("blob_role"),
+            ))
+        }
+        // The row is gone, or was never reserved. The server's own inconsistency: creation
+        // reserves before it opens a session.
+        BlobOutcome::NotFound => {
+            tracing::error!(
+                asset = %record.asset_id,
+                "finalization found no asset row for a session that reserved one"
+            );
+            Err(FinalizeFailure::Unavailable(
+                "the asset row this session reserved is gone".to_owned(),
+            ))
+        }
+    }
 }
 
 /// Recompute the ciphertext hash over the staged bytes, window by window.

@@ -594,20 +594,25 @@ pub async fn a_late_blob_does_not_revive_a_tombstone(index: &dyn AssetIndex) {
 // Lookup
 // ---------------------------------------------------------------------------------------
 
-/// The duplicate lookup is owner-scoped, which is the whole reason it exists.
-pub async fn find_by_address_is_owner_scoped(index: &dyn AssetIndex) {
+/// The duplicate lookup is scoped to owner *and* album, and both scopes carry weight.
+pub async fn the_duplicate_lookup_is_scoped_to_owner_and_album(index: &dyn AssetIndex) {
     let (asset, _) = publish(index, "find", 1).await;
     let mine = OwnerId::new("find-owner");
     let theirs = OwnerId::new("find-other-owner");
+    let album = AlbumId::new("find-album");
+    let elsewhere = AlbumId::new("find-second-album");
     let held = address("findm1");
 
     assert_eq!(
-        ok(index.find_by_address(&mine, &held).await, "look up my blob"),
-        Some(asset),
+        ok(
+            index.find_by_address(&mine, &album, &held).await,
+            "look up my blob"
+        ),
+        Some(asset.clone()),
     );
     assert_eq!(
         ok(
-            index.find_by_address(&theirs, &held).await,
+            index.find_by_address(&theirs, &album, &held).await,
             "look up another owner's blob"
         ),
         None,
@@ -615,10 +620,63 @@ pub async fn find_by_address_is_owner_scoped(index: &dyn AssetIndex) {
     );
     assert_eq!(
         ok(
-            index.find_by_address(&mine, &address("never-stored")).await,
+            index.find_by_address(&mine, &elsewhere, &held).await,
+            "look up my blob from another album"
+        ),
+        None,
+        "the same bytes in a second album are not a duplicate: there is nothing to merge, \
+         so the upload proceeds and the blob store deduplicates the ciphertext instead",
+    );
+    assert_eq!(
+        ok(
+            index
+                .find_by_address(&mine, &album, &address("never-stored"))
+                .await,
             "look up an unheld blob"
         ),
         None,
+    );
+
+    // The second album's copy is its own asset, and *it* is what a repeat upload there finds.
+    let second = AssetId::new("find-second-asset");
+    ok(
+        index
+            .reserve(PendingAsset {
+                asset_id: second.clone(),
+                owner_id: mine.clone(),
+                album_id: elsewhere.clone(),
+                protocol_version: "2026-01-01".to_owned(),
+                crypto_suite_id: 1,
+                created_at: Timestamp::UNIX_EPOCH,
+            })
+            .await,
+        "reserve the second album's row",
+    );
+    record(
+        index,
+        &second,
+        BlobRecord {
+            role: BlobRole::Metadata,
+            address: held.clone(),
+            size: 1024,
+            finalized_at: Timestamp::UNIX_EPOCH,
+        },
+    )
+    .await;
+    assert_eq!(
+        ok(
+            index.find_by_address(&mine, &elsewhere, &held).await,
+            "look up the second album's copy"
+        ),
+        Some(second),
+    );
+    assert_eq!(
+        ok(
+            index.find_by_address(&mine, &album, &held).await,
+            "look up the first album's copy"
+        ),
+        Some(asset),
+        "the second album's row must not shadow the first album's answer",
     );
 }
 
@@ -639,7 +697,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     a_tombstone_reaches_every_reader(index).await;
     tombstoning_a_pending_row_publishes_nothing(index).await;
     a_late_blob_does_not_revive_a_tombstone(index).await;
-    find_by_address_is_owner_scoped(index).await;
+    the_duplicate_lookup_is_scoped_to_owner_and_album(index).await;
 }
 
 #[cfg(test)]

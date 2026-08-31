@@ -487,3 +487,85 @@ async fn the_feed_requires_a_credential() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+/// An upload through the real surface becomes a feed entry — E2E case 3's server half.
+///
+/// Every other case in this file reaches the index directly, which proves the feed reads what
+/// the index holds and nothing about whether an *upload* ever puts anything there. This is the
+/// case that fails if the two modules are wired to different stores, or if creation mints a
+/// fresh asset id per session instead of taking the manifest's.
+#[tokio::test]
+async fn an_upload_through_the_surface_becomes_a_feed_entry() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+
+    // The bundle's index tier, both blobs under the one asset the manifest names.
+    let manifest = upload(&fixture, &bearer, "provenance", 0xA1).await;
+    let metadata = upload(&fixture, &bearer, "metadata", 0xB2).await;
+
+    let body = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let entries = body["entries"].as_array().expect("entries");
+    assert_eq!(
+        entries.len(),
+        1,
+        "two blobs of one bundle became {} assets",
+        entries.len()
+    );
+
+    let entry = &entries[0];
+    assert_eq!(
+        entry["asset_id"], "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61",
+        "the feed's asset id is the manifest's `file_id`, not a server-minted one"
+    );
+    assert_eq!(entry["change"], "created");
+    assert_eq!(entry["album_id"], album().as_str());
+    assert_eq!(
+        entry["original_held"], false,
+        "the original has not landed, and the feed says so rather than implying it"
+    );
+    assert_eq!(entry["metadata_blob"], metadata.as_str());
+
+    let decoded = BASE64
+        .decode(
+            entry["manifest_cbor"]
+                .as_str()
+                .expect("the entry carries its manifest"),
+        )
+        .expect("the feed emits base64");
+    assert_eq!(
+        decoded,
+        support::payload(0xA1, 8192),
+        "the feed served something other than the provenance bytes the client uploaded"
+    );
+
+    // The original arrives afterwards and the flip is observable, which is what makes this a
+    // round trip rather than a snapshot.
+    let original = upload(&fixture, &bearer, "original", 0xC3).await;
+    let body = page(&fixture, &bearer, "", StatusCode::OK).await;
+    let entry = &body["entries"][0];
+    assert_eq!(entry["original_held"], true);
+    assert_eq!(entry["change"], "created", "still new to a reader at zero");
+    assert!(
+        entry["blobs"]
+            .as_array()
+            .expect("blob refs")
+            .iter()
+            .any(|blob| blob["hash"] == original.as_str()),
+        "the original's reference did not reach the feed"
+    );
+}
+
+/// Upload one blob of `role` end to end and return the address it committed to.
+async fn upload(fixture: &Fixture, bearer: &str, role: &str, marker: u8) -> ContentAddress {
+    let bytes = support::payload(marker, 8192);
+    let id = fixture.open_session(&bytes, role, bearer).await;
+    for offset in [0_u64, 4096] {
+        let start = usize::try_from(offset).expect("a test offset fits");
+        fixture
+            .chunk(&id, offset, &bytes[start..start + 4096], bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
+    ContentAddress::parse(&support::checksum(&bytes)).expect("a content address")
+}

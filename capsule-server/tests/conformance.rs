@@ -528,6 +528,39 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::NO_CONTENT);
 
+    // POST 409: the owner already holds these bytes (`S-C22`). Needs a blob that actually
+    // finalized, so one small session is opened and completed in a single chunk first — which
+    // is also the only place in this test where the index's durable half runs end to end.
+    let held = payload(b'c', 4096);
+    let completing: serde_json::Value = client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &held, "derivative"))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED)
+        .json();
+    let completing = completing["id"].as_str().expect("a session id").to_owned();
+    client
+        .patch(&format!("/v1/upload/{completing}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .header("x-capsule-offset", "0")
+        .header("x-capsule-checksum", &checksum(&held))
+        .body("application/octet-stream", held.clone())
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    client
+        .post("/v1/upload")
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .json(&create_request(&fixture.clock, &held, "derivative"))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
     // The four 500s: one collaborator, broken for four requests and repaired.
     fixture.uploads.set_unavailable(true);
     client

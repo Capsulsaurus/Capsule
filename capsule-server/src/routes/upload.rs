@@ -18,7 +18,7 @@
 //! | create `400` "Bad request" (untyped) | **deleted.** Never constructed with a code; the 400 a malformed body actually produces is the `Json` extractor's, which Kynos declares |
 //! | create `401` | kept, and now the framework's — `Auth<AccessToken>` declares it and fills the `WWW-Authenticate` challenge |
 //! | create `403` | kept — album access, device authorization, on-behalf refusal |
-//! | create `409 duplicate_blob` | **deleted as unreachable here.** It must name the existing asset, and this crate has no asset index; answering it from blob presence alone would tell one account what another holds. Owed to the asset index, with `S-C22`'s structured `existing_asset` field |
+//! | create `409 duplicate_blob` | **restored, with `S-C22`'s structured `existing_asset`.** It was deleted while this crate had no asset index, because it must name the existing asset and answering from blob presence alone would tell one account what another holds. `S-C37` answers it honestly and owner-scoped |
 //! | create `413` | kept — the declared size past the deployment ceiling |
 //! | create `426` | kept — the protocol handshake, now with the accepted window as problem extensions |
 //! | create `500` | kept — a collaborator that could not answer, with `error.upload.unavailable` |
@@ -53,11 +53,22 @@
 //! plain-JSON `Reply` variants, which would have cost them their `error.*` code — a worse
 //! trade, since the code is what a client switches on. Recorded rather than hidden.
 //!
+//! # `409 duplicate_blob` refuses, and nothing yet adopts
+//!
+//! The status says "you already hold these bytes" and names the asset that holds them. For a
+//! **retry** — the same asset, the same blob, a lost `201` — that is a complete answer. For
+//! genuine cross-asset deduplication, where a second asset legitimately shares a thumbnail with
+//! a first, it is only half of one: the requesting asset is refused a session and has no way to
+//! record the blob it now knows exists, so its feed entry will not list it.
+//!
+//! That gap is created by restoring the contracted status, not hidden by it. The alternative —
+//! silently recording the existing blob against the requesting asset and answering `200` — is a
+//! new reply variant and a wire-contract decision, and the idempotency table this surface is
+//! written against specifies the `409`. Filed rather than improvised.
+//!
 //! # What this port does not have
 //!
-//! **Quota, the pending asset row, the create-dedup `409`, the sync feed and the custody
-//! receipt.** Owned by `S-C6`, the asset index, `S-C22`, `S-C2` and `S-C15`; see
-//! [`crate::upload`].
+//! **Quota and the custody receipt**, owned by `S-C6` and `S-C15`; see [`crate::upload`].
 
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_i18n::error_codes;
@@ -70,7 +81,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
-use crate::blob::BlobError;
+use crate::blob::{BlobError, ContentAddress};
 use crate::store::{
     AcceptedChunk, AlbumId, AssetId, BlobRole, OwnerId, StoreError, UploadId, UploadSessionRecord,
     UploadSessionStatus, UserId,
@@ -381,6 +392,24 @@ pub enum CreateRejection {
     #[error("the declared size exceeds this server's per-file limit")]
     #[problem(status = 413, title = "File too large")]
     FileTooLarge {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// The owner already holds these bytes, in the asset named.
+    ///
+    /// The structured `existing_asset` is `S-C22`'s deliverable: the English detail is a
+    /// sentence, and a typed client needs the id to switch on. Owner-scoped by construction —
+    /// the lookup behind it takes an owner — because answering across owners would tell one
+    /// account that another holds a particular ciphertext, which content addressing makes a
+    /// real cross-tenant disclosure.
+    #[error("this library already holds these bytes")]
+    #[problem(status = 409, title = "Duplicate blob")]
+    DuplicateBlob {
+        /// The asset that already holds the blob.
+        #[problem(extension)]
+        existing_asset: String,
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -787,8 +816,7 @@ pub async fn create_upload(
     // Idempotent creation. The tuple is `(owner, hash, album)` and the *uploader's* live
     // sessions are where an active one for it can be: only the uploader may append, so
     // handing back a session opened by somebody else would hand back one this caller could not
-    // use. The finalized-hash half of this rule — `409 duplicate_blob` — needs the asset index
-    // this crate does not have; see the module docs.
+    // use.
     if let Some(existing) = active_session_for(&upload, &uploader, &owner, &request.hash, &album)
         .await
         .map_err(|error| {
@@ -812,6 +840,58 @@ pub async fn create_upload(
         ));
     }
 
+    // The finalized half of the same rule, and the same key: `(owner_id, hash, album_id)`.
+    // Both scopes sit in `find_by_address`'s signature rather than in a caller's discipline —
+    // owner because the blob store could say whether *anyone* holds these bytes and answering
+    // from that would tell one account what another holds, album because a `409` is the
+    // client's *merge* trigger and across two albums there is nothing to merge.
+    let address = ContentAddress::parse(&request.hash).map_err(|error| {
+        // Unreachable: invariant 3 has already run. Cheap guard on an earlier check's promise.
+        tracing::error!(%error, "a gate-passed hash is not a content address");
+        CreateRejection::unavailable()
+    })?;
+    if let Some(existing) = upload
+        .index()
+        .find_by_address(&owner, &album, &address)
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "look up a duplicate blob");
+            CreateRejection::unavailable()
+        })?
+    {
+        tracing::info!(%owner, existing_asset = %existing, "an upload was refused: already held");
+        return Err(CreateRejection::duplicate_blob(&existing));
+    }
+
+    // The asset the manifest names — "the same id across the bundle's members" — reserved
+    // before a session exists, so every blob of a bundle joins one row rather than minting one.
+    let asset_id = AssetId::new(&request.manifest_envelope.file_id);
+    match upload
+        .index()
+        .reserve(crate::index::PendingAsset {
+            asset_id: asset_id.clone(),
+            owner_id: owner.clone(),
+            album_id: album.clone(),
+            protocol_version: protocol_pin.clone(),
+            crypto_suite_id: request.crypto_suite_id,
+            created_at: now,
+        })
+        .await
+        .map_err(|error| {
+            store_unavailable(&error, "reserve an asset row");
+            CreateRejection::unavailable()
+        })? {
+        // A new bundle, or a sibling session of one already open. Both are the normal case.
+        crate::index::Reservation::Created(_) | crate::index::Reservation::Joined(_) => {}
+        // The id names a row this caller does not own, or one filed under a different album or
+        // pin. Answered as a plain refusal carrying nothing: the id is client-chosen, so a
+        // guess costs the caller nothing and must buy them nothing.
+        crate::index::Reservation::Conflict => {
+            tracing::info!(%owner, %asset_id, "an upload was refused: the asset id is not this caller's");
+            return Err(CreateRejection::album_access_denied());
+        }
+    }
+
     let upload_id = new_upload_id();
 
     // The stage first, the record second. A stage with no session is an orphan the startup
@@ -823,10 +903,10 @@ pub async fn create_upload(
 
     let record = UploadSessionRecord {
         upload_id: upload_id.clone(),
-        // Minted here and *not* durably reserved: the pending asset row belongs to an index
-        // this crate does not have. The id is the one the bundle's other blobs reference, so
-        // whichever slice lands the index must adopt it at creation rather than mint a second.
-        asset_id: AssetId::new(Uuid::now_v7().to_string()),
+        // The reserved row, above. Taken from the manifest and never minted here: a fresh id
+        // per session gave every blob of one bundle a different asset, which made the bundle
+        // ungroupable and the visibility gate a conjunction over nothing.
+        asset_id,
         owner_id: owner,
         upload_user_id: uploader,
         album_id: Some(album),
@@ -1322,6 +1402,14 @@ fn store_unavailable(error: &StoreError, doing: &'static str) {
 }
 
 impl CreateRejection {
+    /// The owner already holds these bytes, in the asset named.
+    fn duplicate_blob(existing: &AssetId) -> Self {
+        Self::DuplicateBlob {
+            existing_asset: existing.to_string(),
+            code: error_codes::UPLOAD_DUPLICATE_BLOB,
+        }
+    }
+
     /// Map the gate's verdict onto the taxonomy's status and code.
     fn from_gate(reject: GateReject) -> Self {
         let invalid = |code, detail: &str| Self::Invalid {
