@@ -222,7 +222,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | done | the ledger surface came with it; `last_active_at` moves as of `S-C48`, coalesced to a minute |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts + published key history land; the signed attestation half → `S-C32` |
-| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
+| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` landed with `S-C43` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | done\* | no admin surface places a hold, and the provenance record → `S-C8`; purge interaction → `S-C47` |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | done\* | `moved/{user}` stays post-v1; revocations have no write surface until federation lands |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
@@ -249,7 +249,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
-| S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
+| S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | done | the manifest is the act, and the projection's `ciphertext_hash` conflation is why |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
 | S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
@@ -2725,56 +2725,61 @@ written at finalization, after the bytes commit, so a reference without bytes me
   — *"(`create` **and `replace`**, and any derivative action carrying new bytes, ride the upload
   protocol instead — a write that moves blob bytes is an upload by definition.)"*;
   [Validation invariants 17 and 18](capsule-docs/src/content/docs/design/threat-model/validation.md).
-- **Gap** (found 2026-08-30 reading the ported `S-C1` gate against the doc): the Kynos upload
-  gate accepts **`create` and nothing else** — `check_create` refuses any other action with
-  `ActionNotAllowed`, and `only_a_create_may_open_an_upload_session` pins it. `S-C16` covers the
-  actions that reference already-stored blobs. So `replace` — a write that *does* move bytes and
-  is therefore explicitly not `S-C16`'s — is served by neither surface.
-- **The two `None`s this makes honest, and dishonest.** `envelope_context` passes
-  `stored_chain_head: None` and `stored_amk_version: None` into the shared battery. For a
-  `create` those are **correct**: there is no predecessor to chain onto and no prior epoch to
-  regress from, so invariants 17 and 18 are vacuous rather than skipped. The moment `replace` is
-  accepted they become wrong, and silently: the battery would compare against nothing and pass a
-  stale-revival that invariant 17 exists to catch. Whoever lands this slice has to feed the
-  asset row's chain head and `amk_version` in, which means `S-C37`'s row grows two fields.
-- **Deliverable:** the upload gate accepts `replace`, with `stored_chain_head` and
-  `stored_amk_version` read from the asset row inside the same transaction that mints the
-  sequence number, and the `409` stale-revival and `400` amk-regression rejections carrying
-  their `error.*` codes.
-- **Watch out:** a `replace` re-points a role the index deliberately refuses to re-point —
-  `BlobOutcome::Conflict` exists because letting a later session swap the bytes under a
-  signature that still verifies against the old ones is the defect it was written to stop. A
-  `replace` is the *authorized* form of exactly that, so it needs its own index operation rather
-  than a relaxation of `record_blob`, or the refusal stops meaning anything.
-- **Done when:** a signed `replace` bundle uploads, supersedes the prior original, appears on
-  the feed as an `Updated` entry, and a stale `prior_provenance_hash` is refused `409` with its
-  code. **Tier:** Unit + Smoke.
-- **Design analysis, 2026-08-31** (done while sizing this against the landed `S-C16` and
-  `S-C37` code; recorded so it is not re-derived):
-  - **The gate half is small.** `check_op` already demonstrates the shape: it allow-lists its
-    actions and then passes `core.prior_provenance_hash` straight into
-    `EnvelopeContext::stored_chain_head`, so the battery's invariants 17 and 18 are *vacuous by
-    construction* and the index is the authority. A `check_replace` sibling to `check_create`
-    does the same, and the two `None`s this row warns about stop being wrong because nothing
-    depends on them.
-  - **The index half is where the work is, and `apply_op` is already most of it.** Its critical
-    section checks 17 against `row.chain_head`, checks 18 against the album's high-water mark,
-    re-points the provenance blob through `set_singular`, and mints — which is every step a
-    `replace` needs except re-pointing the **original**. So the operation this row asks for is
-    `apply_op` with an `OpAction::Replace` and an `original: Option<ContentAddress>`, *not* a
-    relaxed `record_blob`: `BlobOutcome::Conflict` keeps meaning what it means, and the
-    authorized re-point is the one that also proves it chains onto the current head.
-  - **The sharp edge is bundle arity, and it is not obvious.** A `replace` bundle is three
-    blobs — original, metadata, provenance — arriving as three sessions that each carry *the
-    same* signed envelope. The first to finalize advances `chain_head` to the manifest hash;
-    the second then fails invariant 17, because the head is no longer the predecessor. And the
-    `applied` idempotency map cannot absorb it either: answering `Replayed` would drop the
-    second and third blobs' bytes on the floor. Whatever lands has to admit "this is another
-    blob of the manifest already at the head" as a distinct case — re-point, do **not** mint a
-    second sequence number — and that is a real extension to a well-tested operation's
-    contract, which is why it is worth stating before anyone starts.
-  - **The finalize seam is one function.** `upload::finalize::record_against_asset` is the only
-    place the upload path touches the index; a `replace` branches there and nowhere else.
+- **Gap** (found 2026-08-30 reading the ported `S-C1` gate against the doc): the upload gate
+  accepted **`create` and nothing else**, and the lifecycle route refuses everything that moves
+  bytes. So `replace` fell between the two surfaces that were supposed to cover it.
+- **Landed 2026-08-31.**
+
+**The finding that made it more than a widened allow-list.** A `create` assembles its bundle
+incrementally in a `Pending` row nobody can see — which is exactly why the protocol can promise
+**no wire ordering**. A `replace` mutates an asset that is *already visible*, so it cannot be
+assembled the same way: a window in which the new original is referenced by the old manifest is a
+window in which `verify_asset` fails for every client that fetches the asset. That is a
+correctness hole, not a latency one. So a replace is applied as **one act**, at the moment its
+manifest lands, and the other members commit their bytes and change nothing observable.
+
+**Which surfaced a modelling defect in the wire projection.** `manifest_envelope.ciphertext_hash`
+names *the blob this session is uploading*, not the manifest's own `ciphertext_hash` — the
+projection reuses a manifest field name for a per-session declaration. For a create that is
+invisible, because no member of the bundle has to name another. For a replace it is blocking: the
+manifest is the member that applies the change, so it is the member that has to say what the asset
+will hold, and its own `ciphertext_hash` is its own address. `original_blob_hash` is that
+commitment under a name that cannot be confused with it — optional on the wire, required on a
+replace, and the metadata hash is required there too.
+
+**The ordering rule this creates, stated rather than left to be discovered:** the manifest is the
+member of a replace bundle that lands **last**. A manifest arriving early is `409
+error.upload.replace_incomplete` — a status a client *acts* on rather than a `400` that says the
+request was wrong, because the request is not wrong, it is early. Applying it anyway would create
+a dangling reference on purpose, which is the shape the integrity scrub exists to report.
+
+**And what this row predicted correctly.** Both `None`s in `envelope_context` really were a trap.
+They are *correct* for a create — no predecessor, no prior epoch, so invariants 17 and 18 are
+vacuous rather than skipped — and wrong the instant a second action rides the surface: left alone
+they compare a real `prior_provenance_hash` against nothing and refuse every replace. The fix is
+the pass-through `check_op` already makes, and it is needed in **two** places, which is the part
+worth remembering: the open-time gate *and* `check_finalize`, which re-runs the same battery.
+Fixing only the first produces a session that opens and then fails at its last chunk.
+
+**It is an `apply_op`, not a relaxed `record_blob`, and that is the whole of the "watch out".**
+`BlobOutcome::Conflict` exists because an upload that re-pointed a singular role would swap bytes
+under a signature that still verifies against the old ones. A replace is the *authorized* form of
+exactly that, and what authorizes it is the chain check — so it goes through the operation that
+performs the check and the re-point in one critical section, and the refusal keeps meaning what it
+means. `a_replace_repoints_the_original_the_upload_path_may_not_move` asserts both halves against
+the same asset.
+
+**Bundle arity turned out not to be the problem the analysis predicted.** The earlier note assumed
+three sessions carrying *the same* signed envelope, and worried about the second failing invariant
+17 after the first advanced the head. The envelope is per-blob, so that never arises: only the
+manifest applies anything, and the other two never reach `apply_op` at all.
+
+- **Owed:** the client producer, with `S-D1`. Nothing in the tree emits a replace bundle yet.
+- **Done when:** ✅ `a_replace_bundle_supersedes_the_original_and_reaches_the_feed`,
+  `a_manifest_that_arrives_before_its_bundle_is_refused_and_retryable` and
+  `a_replace_that_does_not_chain_onto_the_head_is_refused` in `capsule-server/tests/replace.rs`,
+  plus `a_replace_must_chain_and_must_name_its_bundle` at the gate and the index-conformance case
+  so every adapter owes the same behaviour. **Tier:** Unit + Smoke.
 
 ### S-C44 — a swept blob's bytes are never credited back
 

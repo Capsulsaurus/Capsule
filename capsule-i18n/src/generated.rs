@@ -338,6 +338,9 @@ pub mod error_codes {
     /// `error.upload.receipt_not_available`
     pub const UPLOAD_RECEIPT_NOT_AVAILABLE: &str = "error.upload.receipt_not_available";
 
+    /// `error.upload.replace_incomplete`
+    pub const UPLOAD_REPLACE_INCOMPLETE: &str = "error.upload.replace_incomplete";
+
     /// `error.upload.session_not_active`
     pub const UPLOAD_SESSION_NOT_ACTIVE: &str = "error.upload.session_not_active";
 

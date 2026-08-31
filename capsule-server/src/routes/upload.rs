@@ -528,6 +528,35 @@ pub enum ChunkRejection {
         code: &'static str,
     },
 
+    /// A `replace`'s manifest arrived before the bundle it commits to (`S-C43`).
+    ///
+    /// Transient, and the only ordering rule this protocol has: a replace mutates an asset that
+    /// is already visible, so it is applied as one act at the moment its manifest lands — which
+    /// makes the manifest the member that lands **last**. Retrying it once the rest of the
+    /// bundle has committed succeeds, so this is a `409` a client acts on rather than a `400`
+    /// that says the request was wrong.
+    #[error("the replace names bytes the server does not hold yet")]
+    #[problem(status = 409, title = "Replace incomplete")]
+    ReplaceIncomplete {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A `replace` did not chain onto the asset's current state (`S-C43`).
+    ///
+    /// Invariant 17's stale revival, invariant 18's epoch regression, or an asset that has been
+    /// deleted since the session opened. One answer for all three: the client's move is the same
+    /// — re-read the asset and rebase — and distinguishing them would report on state the caller
+    /// may not be entitled to.
+    #[error("this manifest does not follow the asset's current state")]
+    #[problem(status = 409, title = "Stale revival")]
+    ReplaceRefused {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// The session is finalizing or already terminal; its bytes are settled.
     #[error("this session is no longer accepting chunks")]
     #[problem(status = 409, title = "Session not active")]
@@ -849,16 +878,28 @@ pub async fn create_upload(
         blob_role: request.blob_role.into(),
     };
     let now = upload.clock().now();
-    crate::upload::envelope::check_create(
-        &declared,
-        &request.manifest_envelope,
-        &GateContext {
-            policy: upload.policy(),
-            album_pin: &protocol_pin,
-            device_added_at,
-            server_clock: now,
-        },
-    )
+    let gate_context = GateContext {
+        policy: upload.policy(),
+        album_pin: &protocol_pin,
+        device_added_at,
+        server_clock: now,
+    };
+    // Two actions ride this surface and no others (`S-C43`): a write that moves blob bytes is an
+    // upload by definition, and `create` and `replace` are the two that do. The dispatch is on
+    // the envelope's own token so an unknown action reaches `check_create` and is refused there
+    // by name, rather than falling into a default arm that would have to guess.
+    match request.manifest_envelope.action.as_str() {
+        "replace" => crate::upload::envelope::check_replace(
+            &declared,
+            &request.manifest_envelope,
+            &gate_context,
+        ),
+        _ => crate::upload::envelope::check_create(
+            &declared,
+            &request.manifest_envelope,
+            &gate_context,
+        ),
+    }
     .map_err(CreateRejection::from_gate)?;
 
     // Idempotent creation. The tuple is `(owner, hash, album)` and the *uploader's* live
@@ -1484,8 +1525,18 @@ impl CreateRejection {
             ),
             GateReject::ActionNotAllowed => invalid(
                 error_codes::UPLOAD_INVALID_ACTION,
-                "an upload session may only be opened for a create",
+                "an upload session may only be opened for a create or a replace",
             ),
+            GateReject::ReplaceDoesNotChain => invalid(
+                error_codes::UPLOAD_INVALID_ACTION,
+                "a replace carries no prior_provenance_hash, and every non-create action chains",
+            ),
+            GateReject::ReplaceIncomplete(field) => Self::Invalid {
+                detail: format!(
+                    "a replace's manifest must name the bundle it commits to; {field} is absent"
+                ),
+                code: error_codes::UPLOAD_ENVELOPE_MISMATCH,
+            },
         }
     }
 
@@ -1637,6 +1688,12 @@ impl From<FinalizeFailure> for ChunkRejection {
             FinalizeFailure::ContentHashMismatch { .. } => Self::content_hash_mismatch(),
             FinalizeFailure::EnvelopeRejected(_) => Self::envelope_rejected(),
             FinalizeFailure::StorageInconsistent { .. } => Self::storage_inconsistent(),
+            FinalizeFailure::ReplaceIncomplete { .. } => Self::ReplaceIncomplete {
+                code: error_codes::UPLOAD_REPLACE_INCOMPLETE,
+            },
+            FinalizeFailure::ReplaceRefused { .. } => Self::ReplaceRefused {
+                code: error_codes::UPLOAD_STALE_REVIVAL,
+            },
             FinalizeFailure::Unavailable(_) => Self::unavailable(),
         }
     }

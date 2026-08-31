@@ -360,6 +360,7 @@ pub async fn apply_op(
             prior_provenance_hash: prior_hash(&request.manifest_envelope)?,
             amk_version: u64::from(request.manifest_envelope.amk_version),
             provenance,
+            original: None,
             metadata: metadata_address,
             retention_until: retention_floor(&request.manifest_envelope)?,
             at: now,
@@ -538,7 +539,9 @@ impl OpRejection {
                 error_codes::UPLOAD_ENVELOPE_MISMATCH,
                 "the manifest timestamp is unparseable or grossly drifted",
             ),
-            GateReject::ActionNotAllowed => invalid(
+            GateReject::ActionNotAllowed
+            | GateReject::ReplaceDoesNotChain
+            | GateReject::ReplaceIncomplete(_) => invalid(
                 error_codes::UPLOAD_INVALID_ACTION,
                 "that action moves blob bytes and is therefore an upload, not a lifecycle op",
             ),

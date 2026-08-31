@@ -392,9 +392,11 @@ impl AssetIndex for InMemoryAssetIndex {
             row.state = match op.action {
                 OpAction::Delete => AssetState::Tombstoned,
                 // A restore returns the asset to the live set. Every other action leaves the
-                // state alone — a metadata update to a tombstoned asset is still a tombstone.
+                // state alone — a metadata update to a tombstoned asset is still a tombstone,
+                // and so is a replace: re-uploading the bytes of something you deleted does not
+                // undelete it, because undeleting is what a `trash-restore` is for.
                 OpAction::TrashRestore => AssetState::Visible,
-                OpAction::MetadataUpdate | OpAction::Derivative => row.state,
+                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => row.state,
             };
             // The provenance blob is re-pointed on every op, which is the one place a singular
             // role legitimately moves: the chain *is* a succession of manifests, so the newest
@@ -403,13 +405,24 @@ impl AssetIndex for InMemoryAssetIndex {
             if let Some(metadata) = &op.metadata {
                 set_singular(&mut row, BlobRole::Metadata, metadata);
             }
+            // A replace's whole point (`S-C43`). It re-points the one role `record_blob`
+            // refuses to move, and the refusal keeps meaning what it means: an *upload* that
+            // swapped the original would swap bytes under a signature that still verifies
+            // against the old ones, while this arrives with a manifest that chains onto the one
+            // it supersedes — which is the difference between an authorized replacement and the
+            // defect `BlobOutcome::Conflict` was written to stop.
+            if let Some(original) = &op.original {
+                set_singular(&mut row, BlobRole::Original, original);
+            }
             row.chain_head = Some(op.manifest_hash);
             row.amk_version = op.amk_version;
             row.retention_until = match op.action {
                 OpAction::Delete => op.retention_until,
                 // Back in the live set: there is no window left to run out.
                 OpAction::TrashRestore => None,
-                OpAction::MetadataUpdate | OpAction::Derivative => row.retention_until,
+                OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => {
+                    row.retention_until
+                }
             };
             row.updated_at = op.at;
 

@@ -17259,6 +17259,16 @@
         }
       }
     },
+    "error.upload.replace_incomplete": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule is still receiving this photo's new version. It'll finish on its own."
+          }
+        }
+      }
+    },
     "error.upload.session_not_active": {
       "localizations": {
         "ar": {

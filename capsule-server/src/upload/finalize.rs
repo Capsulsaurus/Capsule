@@ -124,6 +124,29 @@ pub enum FinalizeFailure {
         on_disk: Option<u64>,
     },
 
+    /// A `replace` names a blob the store does not hold yet (`S-C43`).
+    ///
+    /// Transient and the client's to fix: the manifest is the member that applies a replace, so
+    /// it is the member that lands last. Retrying the manifest once the rest of the bundle has
+    /// committed succeeds.
+    #[error("the replace names a {field} blob the store does not hold")]
+    ReplaceIncomplete {
+        /// Which member is missing.
+        field: &'static str,
+    },
+
+    /// A `replace` was refused by the index (`S-C43`).
+    ///
+    /// Invariant 17's stale chain, invariant 18's epoch regression, or an asset that is no
+    /// longer there. One variant because the client's action is the same for all three — re-read
+    /// the asset and rebase — and because distinguishing them tells a caller about state it may
+    /// not be entitled to.
+    #[error("the replace was refused: {reason}")]
+    ReplaceRefused {
+        /// What the index decided, for the log line and the English detail.
+        reason: &'static str,
+    },
+
     /// A collaborator could not answer.
     #[error("finalization could not be completed: {0}")]
     Unavailable(String),
@@ -297,6 +320,17 @@ async fn record_against_asset(
     address: &ContentAddress,
     manifest_sha256: Option<Hash32>,
 ) -> Result<Option<u64>, FinalizeFailure> {
+    // `S-C43`: a replace is applied by the member that can carry the whole change, and the rest
+    // of its bundle deliberately touches the index not at all.
+    let envelope: super::envelope::ManifestEnvelope =
+        serde_json::from_str(&record.manifest_envelope).map_err(|error| {
+            tracing::error!(%error, "a stored envelope does not decode");
+            FinalizeFailure::Unavailable("the stored envelope does not decode".to_owned())
+        })?;
+    if envelope.action == "replace" {
+        return apply_replace(context, record, address, manifest_sha256, &envelope).await;
+    }
+
     let outcome = context
         .index()
         .record_blob(
@@ -345,6 +379,162 @@ async fn record_against_asset(
             ))
         }
     }
+}
+
+/// Apply one member of a `replace` bundle (`S-C43`).
+///
+/// # Why the manifest is the only member that writes
+///
+/// A `create` assembles its bundle incrementally: its row is `Pending`, nobody can see it, and
+/// no member has to know about another. A `replace` mutates an asset that is **already
+/// visible**, so it cannot be assembled the same way — a window in which the new original is
+/// referenced by the old manifest is a window in which `verify_asset` fails for every client
+/// that fetches the asset, and that is a correctness hole rather than a latency one.
+///
+/// So a replace is applied as one act, at the moment its provenance blob — the signed manifest —
+/// finalizes. The other members commit their bytes into the content-addressed store and record
+/// nothing. That makes the manifest the **last** member of a replace bundle to land, which is
+/// the one ordering rule this protocol has; the upload protocol's "no wire ordering" promise is
+/// about a `create`, whose bundle has nowhere to be half-applied.
+///
+/// # And why the manifest can name what it commits to
+///
+/// It could not, until this slice. `manifest_envelope.ciphertext_hash` names *the blob this
+/// session is uploading*, not the manifest's own — a conflation that is invisible for a create
+/// and blocking here, because the provenance session's value is the manifest's own address.
+/// `original_blob_hash` is the manifest's commitment under a name that cannot be confused with
+/// it, required on a replace and optional otherwise.
+///
+/// # A bundle whose bytes are not all there is refused, not partially applied
+///
+/// The named blobs are checked for presence *before* the index is touched. A `replace` that
+/// applied with a missing original would leave a visible asset pointing at bytes nobody holds —
+/// the dangling reference the integrity scrub exists to report, created on purpose.
+async fn apply_replace(
+    context: &UploadContext,
+    record: &UploadSessionRecord,
+    address: &ContentAddress,
+    manifest_sha256: Option<Hash32>,
+    envelope: &super::envelope::ManifestEnvelope,
+) -> Result<Option<u64>, FinalizeFailure> {
+    if record.blob_role != crate::store::BlobRole::Provenance {
+        // Bytes committed, index untouched. If the manifest never lands the blob is unreferenced
+        // and the collector reclaims it on its ordinary schedule, crediting the quota back
+        // (`S-C44`) — an abandoned replace costs its uploader nothing permanent.
+        tracing::debug!(
+            asset = %record.asset_id,
+            role = record.blob_role.as_str(),
+            "a replace's bytes landed; the manifest is what applies them"
+        );
+        return Ok(None);
+    }
+
+    let manifest_hash = manifest_sha256.ok_or_else(|| {
+        // Unreachable: `manifest_sha256` is `Some` for exactly the provenance role.
+        FinalizeFailure::Unavailable("a provenance blob has no manifest digest".to_owned())
+    })?;
+
+    let original = named_blob(context, envelope.original_blob_hash.as_deref(), "original").await?;
+    let metadata = named_blob(context, envelope.metadata_blob_hash.as_deref(), "metadata").await?;
+    let prior = match &envelope.prior_provenance_hash {
+        Some(hex) => Some(Hash32::from_hex(hex).map_err(|_| {
+            FinalizeFailure::EnvelopeRejected(GateReject::EnvelopeMismatch("prior_provenance_hash"))
+        })?),
+        // Refused at the gate (`GateReject::ReplaceDoesNotChain`), so reaching here would mean
+        // a session opened before that check existed.
+        None => {
+            return Err(FinalizeFailure::EnvelopeRejected(
+                GateReject::ReplaceDoesNotChain,
+            ));
+        }
+    };
+
+    let Some(album_id) = record.album_id.clone() else {
+        return Err(FinalizeFailure::EnvelopeRejected(
+            GateReject::EnvelopeMismatch("album_id"),
+        ));
+    };
+
+    let outcome = context
+        .index()
+        .apply_op(crate::index::LifecycleOp {
+            asset_id: record.asset_id.clone(),
+            owner_id: record.owner_id.clone(),
+            album_id,
+            action: crate::index::OpAction::Replace,
+            manifest_hash,
+            prior_provenance_hash: prior,
+            amk_version: u64::from(envelope.amk_version),
+            provenance: address.clone(),
+            metadata: Some(metadata),
+            original: Some(original),
+            retention_until: None,
+            at: context.clock().now(),
+        })
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, asset = %record.asset_id, "the index could not apply a replace");
+            FinalizeFailure::Unavailable("could not apply the replace".to_owned())
+        })?;
+
+    match outcome {
+        crate::index::OpOutcome::Applied { sync_seq, .. } => {
+            tracing::info!(asset = %record.asset_id, sync_seq, "a replace superseded an asset");
+            Ok(Some(sync_seq))
+        }
+        // The same manifest finalizing twice — a retried finalization, not a second replace.
+        crate::index::OpOutcome::Replayed { sync_seq } => Ok(Some(sync_seq)),
+        crate::index::OpOutcome::StaleChain { head } => {
+            tracing::info!(
+                asset = %record.asset_id,
+                stored_head = ?head,
+                "a replace was refused: it does not chain onto the stored head"
+            );
+            Err(FinalizeFailure::ReplaceRefused {
+                reason: "the manifest does not follow the asset's current chain head",
+            })
+        }
+        crate::index::OpOutcome::AmkRegressed { stored } => {
+            tracing::info!(asset = %record.asset_id, stored, "a replace was refused: epoch regression");
+            Err(FinalizeFailure::ReplaceRefused {
+                reason: "the album epoch this manifest was written under has been superseded",
+            })
+        }
+        // The asset is gone, or was never this caller's. Creation reserved the row, so this is
+        // a race with a delete rather than a server inconsistency.
+        crate::index::OpOutcome::NotFound => Err(FinalizeFailure::ReplaceRefused {
+            reason: "the asset this manifest replaces is no longer there",
+        }),
+    }
+}
+
+/// The address `hex` names, once the store confirms the bytes are there.
+///
+/// The presence check is the point: a replace applies every role at once, so a member whose
+/// bytes have not landed would be applied as a dangling reference.
+async fn named_blob(
+    context: &UploadContext,
+    hex: Option<&str>,
+    field: &'static str,
+) -> Result<ContentAddress, FinalizeFailure> {
+    let Some(hex) = hex else {
+        // Refused at the gate; reaching here means a session predates that check.
+        return Err(FinalizeFailure::EnvelopeRejected(
+            GateReject::ReplaceIncomplete(field),
+        ));
+    };
+    let address = ContentAddress::parse(hex)
+        .map_err(|_| FinalizeFailure::EnvelopeRejected(GateReject::EnvelopeMismatch(field)))?;
+    let present = context
+        .blobs()
+        .stat(&address)
+        .await
+        .map_err(blob_unavailable("stat a blob a replace names"))?;
+    if present.is_none() {
+        tracing::info!(%address, field, "a replace named a blob the store does not hold");
+        return Err(FinalizeFailure::ReplaceIncomplete { field });
+    }
+    Ok(address)
 }
 
 /// What one pass over the staged bytes established.

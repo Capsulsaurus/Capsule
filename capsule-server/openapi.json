@@ -5270,7 +5270,7 @@
           },
           "ciphertext_hash": {
             "type": "string",
-            "description": "The ciphertext content hash, lowercase hex. Must equal the top-level `hash`."
+            "description": "The ciphertext content hash, lowercase hex. Must equal the top-level `hash`.\n\n**This names the blob this session is uploading, not the manifest's own\n`ciphertext_hash`.** For the original the two coincide; for a metadata or provenance\nsession they do not, and the projection reuses the manifest's field name for a per-blob\ndeclaration. Invisible for a `create`, because the bundle is assembled in a pending row\nnobody can see and no member has to name another. It is not invisible for a `replace`,\nwhich is why [`Self::original_blob_hash`] exists (`S-C43`)."
           },
           "plaintext_size": {
             "type": "integer",
@@ -5296,6 +5296,13 @@
             ],
             "description": "The content hash of the bundle's metadata blob, when the manifest commits to one."
           },
+          "original_blob_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The content hash of the bundle's **original** blob, when the manifest commits to one\n(`S-C43`).\n\nThe manifest's own `ciphertext_hash`, under a name that cannot be confused with\n[`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a\n`replace`**: a replace re-points roles that already have bytes, so it has to be applied\nas one act, and the only member of the bundle that can carry the whole change is the\nmanifest — which therefore has to be able to name the original it commits to.\n\nA `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,\nso no member needs to name another and requiring it would be a wire change for no gain."
+          },
           "created_by_user": {
             "type": "string",
             "description": "The account that created the asset."
@@ -5314,7 +5321,7 @@
           },
           "action": {
             "type": "string",
-            "description": "The lifecycle action. `create` on this surface; see [`GateReject::ActionNotAllowed`]."
+            "description": "The lifecycle action. `create` or `replace` on this surface — the two that move blob\nbytes — and see [`GateReject::ActionNotAllowed`] for the rest."
           },
           "prior_provenance_hash": {
             "type": [

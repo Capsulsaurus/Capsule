@@ -153,6 +153,7 @@ impl Harness {
                 provenance: self
                     .store(format!("{asset}-delete-manifest").as_bytes())
                     .await,
+                original: None,
                 metadata: None,
                 retention_until,
                 at: self.clock.now(),
@@ -416,6 +417,7 @@ async fn a_restore_clears_the_retention_floor() {
             prior_provenance_hash: head,
             amk_version: 1,
             provenance: h.store(b"restored-manifest").await,
+            original: None,
             metadata: None,
             retention_until: None,
             at: h.clock.now(),

@@ -402,6 +402,16 @@ pub enum OpAction {
     MetadataUpdate,
     /// A derivative whose bytes the server already holds is attached, or re-pointed.
     Derivative,
+    /// The asset's bytes are replaced: a new original, a new metadata blob and a new manifest,
+    /// applied as one act (`S-C43`).
+    ///
+    /// **Not reachable from `POST /albums/{id}/ops`.** A write that moves blob bytes is an
+    /// upload by definition, so this arrives from `crate::upload::finalize` and the lifecycle
+    /// route's own gate refuses it. It is an [`OpAction`] anyway because it needs exactly what
+    /// the other four need — invariant 17 against the stored head, invariant 18 against the
+    /// album's epoch, the provenance re-point, and one sequence number — decided in one critical
+    /// section. A second operation would be a second copy of that.
+    Replace,
 }
 
 impl OpAction {
@@ -412,6 +422,7 @@ impl OpAction {
             Self::TrashRestore => "trash-restore",
             Self::MetadataUpdate => "metadata-update",
             Self::Derivative => "derivative",
+            Self::Replace => "replace",
         }
     }
 }
@@ -443,6 +454,11 @@ pub struct LifecycleOp {
     pub provenance: ContentAddress,
     /// The stored metadata blob, when the action carries one.
     pub metadata: Option<ContentAddress>,
+    /// The stored **original** blob, when the action carries one (`S-C43`).
+    ///
+    /// Only a [`OpAction::Replace`] does. The other four leave the asset's bytes alone by
+    /// definition, which is what makes them expressible on a route that never sees a byte.
+    pub original: Option<ContentAddress>,
     /// The retention floor the manifest signed, when it carries one.
     ///
     /// Meaningful on a `delete`. A `trash-restore` clears it, because an asset back in the live

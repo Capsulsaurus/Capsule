@@ -810,6 +810,7 @@ fn op(case: &str, n: u32, action: OpAction, prior: Option<Hash32>, hash: Hash32)
         prior_provenance_hash: prior,
         amk_version: 1,
         provenance: address(&format!("{case}prov{n}")),
+        original: None,
         metadata: None,
         retention_until: None,
         at: Timestamp::UNIX_EPOCH,
@@ -1042,6 +1043,89 @@ pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn 
         OpOutcome::NotFound,
     );
     let _ = asset;
+}
+
+/// A `replace` re-points the **original**, which is the role `record_blob` refuses to move
+/// (`S-C43`).
+///
+/// The refusal is not softened by this: an *upload* that swapped the original would swap bytes
+/// under a signature that still verifies against the old ones, and `BlobOutcome::Conflict` is
+/// what stops it. A replace arrives with a manifest that chains onto the one it supersedes, and
+/// that chain check is the difference between an authorized replacement and the defect — which
+/// is why it is an `apply_op` and not a relaxed `record_blob`.
+pub async fn a_replace_repoints_the_original_the_upload_path_may_not_move(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-repl", 1).await;
+    // `publish` lands the index tier — the manifest and the metadata blob — because that is what
+    // makes an asset visible. The original arrives afterwards, exactly as it does under a staged
+    // upload, and it is the role this case is about.
+    record(index, &asset, blob(BlobRole::Original, "op-repl-o1")).await;
+    let before = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .address_for(BlobRole::Original)
+        .cloned()
+        .expect("the original landed");
+
+    // The upload path cannot do this, and that is the property being contrasted.
+    assert_eq!(
+        ok(
+            index
+                .record_blob(&asset, blob(BlobRole::Original, "op-repl-newbytes"))
+                .await,
+            "record a second original"
+        ),
+        BlobOutcome::Conflict,
+        "an upload may never re-point a singular role; only an authorized write may"
+    );
+
+    let mut replace = op(
+        "op-repl",
+        1,
+        OpAction::Replace,
+        head_of(index, &asset).await,
+        manifest(77),
+    );
+    replace.original = Some(address("op-repl-newbytes"));
+    replace.metadata = Some(address("op-repl-newmeta"));
+    let sync_seq = match ok(index.apply_op(replace).await, "apply a replace") {
+        OpOutcome::Applied { sync_seq, .. } => sync_seq,
+        other => panic!("a replace answered {other:?}"),
+    };
+
+    let row = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_eq!(
+        row.address_for(BlobRole::Original),
+        Some(&address("op-repl-newbytes")),
+        "the asset holds the new bytes"
+    );
+    assert_ne!(row.address_for(BlobRole::Original), Some(&before));
+    assert_eq!(
+        row.address_for(BlobRole::Metadata),
+        Some(&address("op-repl-newmeta"))
+    );
+    assert_eq!(row.chain_head, Some(manifest(77)));
+    assert_eq!(
+        row.state,
+        AssetState::Visible,
+        "a replace changes an asset's bytes and not its lifecycle state"
+    );
+    assert_eq!(row.sync_seq, Some(sync_seq));
+
+    // And it is one write: a replace that does not chain onto the new head is refused, exactly
+    // as any other lifecycle write is.
+    let mut stale = op(
+        "op-repl",
+        1,
+        OpAction::Replace,
+        Some(manifest(1)),
+        manifest(78),
+    );
+    stale.original = Some(address("op-repl-newerbytes"));
+    assert_eq!(
+        ok(index.apply_op(stale).await, "apply a stale replace"),
+        OpOutcome::StaleChain {
+            head: Some(manifest(77))
+        }
+    );
 }
 
 /// A lifecycle write re-points the provenance blob, which is the one authorized way a singular
@@ -1340,6 +1424,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     an_epoch_that_regresses_the_album_is_refused(index).await;
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
+    a_replace_repoints_the_original_the_upload_path_may_not_move(index).await;
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
     a_restore_clears_the_retention_floor(index).await;

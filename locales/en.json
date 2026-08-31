@@ -467,6 +467,10 @@
         "message": "This change is based on an out-of-date version of the item.",
         "context": "HTTP 409 on POST /albums/{album_id}/ops, invariant 17: the manifest's prior_provenance_hash does not match the asset's current provenance-chain head (a stale or forked position, e.g. a peer replaying an old manifest to revive a deleted asset)."
     },
+    "error.upload.replace_incomplete": {
+        "message": "Capsule is still receiving this photo's new version. It'll finish on its own.",
+        "context": "HTTP 409 on PATCH /v1/upload/{id} (slice S-C43): a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
+    },
     "error.upload.amk_regressed": {
         "message": "This change references an older album key than the server has recorded.",
         "context": "HTTP 400 on POST /albums/{album_id}/ops, invariant 18: the manifest's amk_version regresses below the album's recorded epoch. The server counter is the monotonic backstop; MLS is the authoritative ceiling."

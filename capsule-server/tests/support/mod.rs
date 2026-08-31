@@ -2418,3 +2418,26 @@ pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
 
     SessionTokens::from_pkcs8(der.as_ref(), clock).expect("a key just generated parses")
 }
+
+/// A `POST /v1/upload` body for one member of a **replace** bundle (`S-C43`).
+///
+/// `prior` is the chain head the manifest supersedes. `bundle` is `Some((original, metadata))`
+/// on the manifest's own session and `None` on the others — which is the shape of the rule: a
+/// replace mutates an asset that is already visible, so it is applied as one act when its
+/// manifest lands, and only the manifest has to be able to name what the asset will hold.
+pub(crate) fn replace_request(
+    clock: &ManualClock,
+    bytes: &[u8],
+    role: &str,
+    prior: &str,
+    bundle: Option<(&str, &str)>,
+) -> serde_json::Value {
+    let mut body = create_request(clock, bytes, role);
+    body["manifest_envelope"]["action"] = "replace".into();
+    body["manifest_envelope"]["prior_provenance_hash"] = prior.into();
+    if let Some((original, metadata)) = bundle {
+        body["manifest_envelope"]["original_blob_hash"] = original.into();
+        body["manifest_envelope"]["metadata_blob_hash"] = metadata.into();
+    }
+    body
+}

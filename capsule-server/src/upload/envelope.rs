@@ -67,6 +67,13 @@ pub struct ManifestEnvelope {
     /// The album-key epoch the manifest was written under.
     pub amk_version: u32,
     /// The ciphertext content hash, lowercase hex. Must equal the top-level `hash`.
+    ///
+    /// **This names the blob this session is uploading, not the manifest's own
+    /// `ciphertext_hash`.** For the original the two coincide; for a metadata or provenance
+    /// session they do not, and the projection reuses the manifest's field name for a per-blob
+    /// declaration. Invisible for a `create`, because the bundle is assembled in a pending row
+    /// nobody can see and no member has to name another. It is not invisible for a `replace`,
+    /// which is why [`Self::original_blob_hash`] exists (`S-C43`).
     pub ciphertext_hash: String,
     /// The plaintext length the manifest commits to.
     pub plaintext_size: u64,
@@ -76,6 +83,19 @@ pub struct ManifestEnvelope {
     pub key_mode: String,
     /// The content hash of the bundle's metadata blob, when the manifest commits to one.
     pub metadata_blob_hash: Option<String>,
+    /// The content hash of the bundle's **original** blob, when the manifest commits to one
+    /// (`S-C43`).
+    ///
+    /// The manifest's own `ciphertext_hash`, under a name that cannot be confused with
+    /// [`Self::ciphertext_hash`]'s per-session meaning. Optional on the wire and **required on a
+    /// `replace`**: a replace re-points roles that already have bytes, so it has to be applied
+    /// as one act, and the only member of the bundle that can carry the whole change is the
+    /// manifest — which therefore has to be able to name the original it commits to.
+    ///
+    /// A `create` may omit it. Its bundle is assembled incrementally in a row nobody can see,
+    /// so no member needs to name another and requiring it would be a wire change for no gain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_blob_hash: Option<String>,
     /// The account that created the asset.
     pub created_by_user: String,
     /// The device that created it, as a UUID — invariant 7's subject.
@@ -84,7 +104,8 @@ pub struct ManifestEnvelope {
     pub client_version: String,
     /// The manifest's self-asserted RFC3339 timestamp — invariants 7 and 8's subject.
     pub timestamp: String,
-    /// The lifecycle action. `create` on this surface; see [`GateReject::ActionNotAllowed`].
+    /// The lifecycle action. `create` or `replace` on this surface — the two that move blob
+    /// bytes — and see [`GateReject::ActionNotAllowed`] for the rest.
     pub action: String,
     /// The provenance chain position this write continues from.
     pub prior_provenance_hash: Option<String>,
@@ -161,6 +182,15 @@ pub enum GateReject {
     TimestampOutOfRange,
     /// The manifest's `action` is not one this surface accepts.
     ActionNotAllowed,
+    /// A `replace` did not chain: `prior_provenance_hash` is absent (`S-C43`).
+    ///
+    /// Distinct from a stale chain, which is a `409` decided by the index against stored state.
+    /// This is a `400`: the manifest never claimed to follow anything, and every non-create
+    /// action chains by definition.
+    ReplaceDoesNotChain,
+    /// A `replace`'s manifest does not name the bundle it commits to (`S-C43`). Carries the
+    /// field that is missing.
+    ReplaceIncomplete(&'static str),
 }
 
 /// Run the create-time battery: invariants 1–8 and the 15-family consistency checks.
@@ -169,6 +199,27 @@ pub enum GateReject {
 /// thing the client is told about — a client that sent an unsupported protocol version learns
 /// that, rather than learning about a content type its next release would have changed anyway.
 pub fn check_create(
+    declared: &DeclaredBlob<'_>,
+    envelope: &ManifestEnvelope,
+    context: &GateContext<'_>,
+) -> Result<(), GateReject> {
+    check_shared(declared, envelope, context)?;
+
+    // Invariants 2, 6, 7, 8, 17, 18 over the reconstructed core.
+    let core = build_manifest_core(envelope)?;
+    if !core.action.is_create() {
+        return Err(GateReject::ActionNotAllowed);
+    }
+    run_battery(&core, context)
+}
+
+/// Invariants 1–5 and the 15-family consistency checks: everything an upload owes whatever it
+/// is *for*.
+///
+/// Shared by [`check_create`] and [`check_replace`] rather than duplicated, because a second
+/// copy of a battery is a second answer to a question the threat model allows one answer to —
+/// the same reason `capsule_core::validation` owns the invariants rather than this crate.
+fn check_shared(
     declared: &DeclaredBlob<'_>,
     envelope: &ManifestEnvelope,
     context: &GateContext<'_>,
@@ -212,14 +263,67 @@ pub fn check_create(
     }
 
     // Invariant 15 family.
-    check_consistency(declared, envelope)?;
+    check_consistency(declared, envelope)
+}
 
-    // Invariants 2, 6, 7, 8, 17, 18 over the reconstructed core.
+/// Run the same battery for a `replace`, plus the three things a replace must say (`S-C43`).
+///
+/// Everything invariants 1–8 and 15 check is identical — a replace is an upload, and the
+/// keyless battery does not care what the write is *for*. What differs is entirely about
+/// chaining and about the bundle:
+///
+/// - the action must be `replace`, because this is the surface's other accepted action and
+///   admitting the rest would let a `delete` move bytes;
+/// - `prior_provenance_hash` must be present, because a replace chains by definition. Absent is
+///   a `400` and not a `409`: a `409` tells a client to re-read and rebase, and a manifest that
+///   never claimed to follow anything cannot be rebased;
+/// - and on the **provenance** session the manifest must name the bundle it commits to, because
+///   that session is the one that applies the whole change.
+///
+/// Invariants 17 and 18 stay vacuous here, exactly as they are for a lifecycle op: the battery
+/// is handed the manifest's own claims and the **index** is the authority, because a check taken
+/// outside the write's critical section is a check on facts that can change before the write
+/// lands. Two concurrent replaces reading the same chain head would both pass a gate-side check
+/// and double-apply, which is the stale revival invariant 17 exists to catch, reintroduced by
+/// the code enforcing it.
+pub fn check_replace(
+    declared: &DeclaredBlob<'_>,
+    envelope: &ManifestEnvelope,
+    context: &GateContext<'_>,
+) -> Result<(), GateReject> {
+    check_shared(declared, envelope, context)?;
+
     let core = build_manifest_core(envelope)?;
-    if !core.action.is_create() {
+    if core.action != Action::Replace {
         return Err(GateReject::ActionNotAllowed);
     }
-    run_battery(&core, context)
+    if envelope.prior_provenance_hash.is_none() {
+        return Err(GateReject::ReplaceDoesNotChain);
+    }
+    if declared.blob_role == BlobRole::Provenance {
+        // The commit member. It has to be able to say what the asset will hold, because the
+        // moment it lands is the moment every role moves.
+        if envelope.original_blob_hash.is_none() {
+            return Err(GateReject::ReplaceIncomplete("original_blob_hash"));
+        }
+        if envelope.metadata_blob_hash.is_none() {
+            return Err(GateReject::ReplaceIncomplete("metadata_blob_hash"));
+        }
+    }
+
+    // The pass-through `check_op` makes, for the same reason and written the same way: 17 and 18
+    // are handed the manifest's own claims so they pass here unconditionally, and the index
+    // decides them where the comparison and the write are one operation. `check_create` leaves
+    // both `None` and is *correct* to — a create has no predecessor and no prior epoch, so the
+    // two predicates are vacuous rather than skipped. The moment `replace` is accepted that
+    // stops being true, which is the trap `S-C43` warned about: leaving them `None` here would
+    // compare a real `prior_provenance_hash` against nothing and refuse every replace.
+    let device_added_at = as_rfc3339(context.device_added_at);
+    let server_clock = as_rfc3339(context.server_clock);
+    let mut ctx = envelope_context(context, &device_added_at, &server_clock);
+    ctx.stored_chain_head = core.prior_provenance_hash;
+    ctx.stored_amk_version = Some(core.amk_version.0);
+    map_reject(check_manifest_envelope(&core, &ctx))
 }
 
 /// Re-run the battery at finalization (invariant 15), against the envelope the session stored
@@ -233,7 +337,20 @@ pub fn check_finalize(
     context: &GateContext<'_>,
 ) -> Result<(), GateReject> {
     let core = build_manifest_core(envelope)?;
-    run_battery(&core, context)
+    if core.action.is_create() {
+        return run_battery(&core, context);
+    }
+    // A `replace` re-runs the same battery under the same layering as its open-time gate: 17 and
+    // 18 are handed the manifest's own claims, and the index decides them. Without the
+    // pass-through this would refuse every replace at finalization — the two `None`s being
+    // correct for a create and wrong the moment a second action rides this surface, which is the
+    // trap `S-C43` named and the shape it takes when only half of it is fixed.
+    let device_added_at = as_rfc3339(context.device_added_at);
+    let server_clock = as_rfc3339(context.server_clock);
+    let mut ctx = envelope_context(context, &device_added_at, &server_clock);
+    ctx.stored_chain_head = core.prior_provenance_hash;
+    ctx.stored_amk_version = Some(core.amk_version.0);
+    map_reject(check_manifest_envelope(&core, &ctx))
 }
 
 /// The gate for a **lifecycle write** (`S-C16`): everything a `POST /albums/{id}/ops` manifest
@@ -494,6 +611,7 @@ mod tests {
             plaintext_size: 10,
             chunk_size: 65_536,
             key_mode: "derived".to_owned(),
+            original_blob_hash: None,
             metadata_blob_hash: None,
             created_by_user: "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e62".to_owned(),
             created_by_device: DEVICE.to_owned(),
@@ -758,7 +876,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_create_may_open_an_upload_session() {
+    fn only_a_create_or_a_replace_may_open_an_upload_session() {
+        // The two actions that move blob bytes, and no others (`S-C43`). An action that only
+        // re-points blobs the server already holds is a lifecycle op, and admitting one here
+        // would let a `delete` arrive carrying bytes.
         let policy = policy();
         let mut envelope = envelope();
         // A well-formed, in-the-closed-set action that is not this surface's.
@@ -768,6 +889,70 @@ mod tests {
         assert_eq!(
             check_create(&view, &envelope, &context(&policy)),
             Err(GateReject::ActionNotAllowed)
+        );
+        assert_eq!(
+            check_replace(&view, &envelope, &context(&policy)),
+            Err(GateReject::ActionNotAllowed)
+        );
+    }
+
+    #[test]
+    fn a_replace_must_chain_and_must_name_its_bundle() {
+        let policy = policy();
+        let mut envelope = envelope();
+        envelope.action = "replace".to_owned();
+
+        // Every non-create action chains by definition, and a manifest that never claimed to
+        // follow anything cannot be rebased — so this is a `400` rather than the `409` a stale
+        // chain gets.
+        assert_eq!(
+            check_replace(
+                &declared(&envelope, BlobRole::Original),
+                &envelope,
+                &context(&policy)
+            ),
+            Err(GateReject::ReplaceDoesNotChain)
+        );
+        envelope.prior_provenance_hash = Some(CIPHERTEXT_HASH.to_owned());
+
+        // A non-manifest member names only itself, and is accepted on that basis: it commits
+        // bytes and applies nothing.
+        assert_eq!(
+            check_replace(
+                &declared(&envelope, BlobRole::Original),
+                &envelope,
+                &context(&policy)
+            ),
+            Ok(())
+        );
+
+        // The manifest is the member that applies the whole change, so it is the one that has
+        // to be able to say what the asset will hold.
+        assert_eq!(
+            check_replace(
+                &declared(&envelope, BlobRole::Provenance),
+                &envelope,
+                &context(&policy)
+            ),
+            Err(GateReject::ReplaceIncomplete("original_blob_hash"))
+        );
+        envelope.original_blob_hash = Some(CIPHERTEXT_HASH.to_owned());
+        assert_eq!(
+            check_replace(
+                &declared(&envelope, BlobRole::Provenance),
+                &envelope,
+                &context(&policy)
+            ),
+            Err(GateReject::ReplaceIncomplete("metadata_blob_hash"))
+        );
+        envelope.metadata_blob_hash = Some(CIPHERTEXT_HASH.to_owned());
+        assert_eq!(
+            check_replace(
+                &declared(&envelope, BlobRole::Provenance),
+                &envelope,
+                &context(&policy)
+            ),
+            Ok(())
         );
     }
 
