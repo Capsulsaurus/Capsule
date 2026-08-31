@@ -216,7 +216,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | ready | |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
 | S-C9 | Device-directory publish/fetch | server | — | M | RETIRED | ready | upload device identity → `S-C20` |
-| S-C10 | Key-free media serving conformance | server | — | M | RETIRED | ready | takedown-gate fold → `S-C17` |
+| S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1 | M | RETIRED | ready | layout doc reconciled (filesystem/server.md, 2026-07-12) |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
@@ -245,6 +245,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
+| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
+| S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1149,7 +1151,30 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** ranged reads decrypt correctly at chunk boundaries (the encryption
   doc's ranged-read test against a real server); no plaintext-era route regressions.
 - **Tier:** Unit + Smoke. **Landed in retired code; re-scoped onto Kynos.**
-- **Owed:** takedown-gate fold → `S-C17`.
+- **Ported 2026-08-30 (`done\*`).** `GET /v1/blob/{hash}` in `capsule-server/src/routes/blob.rs`
+  over a `capsule-server/src/serve` module that composes the index and the blob store; 14 cases
+  in `capsule-server/tests/blob.rs`.
+- **The range rides on the port, not on a filesystem.** The Salvo route built a `NamedFile` and
+  let it write the range, which tied resumable serving to the store *being* a directory. Kynos's
+  `ByteSource` is a trait over spans, so an object-store adapter resumes with nothing above it
+  changing — and every byte case in the suite serves out of a `BTreeMap`, which is the proof
+  rather than the convenience.
+- **The content address is the validator.** `ETag::strong(address)` is not a construction, it is
+  the name itself, which is what makes `If-Range` honest: a resumed fetch cannot splice bytes
+  from a different representation, because a different representation has a different address.
+  `a_resumed_fetch_splices_into_the_whole` is the case.
+- **A liveness check that is a property rather than a coincidence:** a quarantined blob needs no
+  flag on this path, because `BlobStore::quarantine` moves the bytes *out* of the store, so it
+  presents as a reference with no bytes and resolves through the dangling arm. One less pair of
+  facts to keep in step.
+- **A defect in the retired resolution, not carried across:** it took the *newest* reference for
+  an address and would have answered `410` for a blob a live asset still holds. Content
+  addressing means two assets share a thumbnail, so deleting one must not take the other's bytes
+  — the lookup asks whether **any** live asset holds it, and
+  `a_shared_blob_survives_one_holders_deletion` is why that is not a matter of opinion.
+- **Owed:** takedown-gate fold → `S-C17` (there is no `served` flag on an asset row yet); GC
+  state (`collectable_since`, so a blob mid-collection is refused inside the grace window) →
+  `S-C11`; the contract's `403` → `S-C39`; the transient `409` → `S-C40`.
 
 ### S-C11 — Refcount GC + retention purge worker
 
@@ -1830,6 +1855,66 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** a test over the emitted document asserts that every declared problem response
   describes the extension members its variant renders — over the document, not per handler, for
   the same reason `S-C34` gates the document rather than the handlers. **Tier:** Unit + gate.
+
+### S-C39 — blob fetch has no read authority, so its `403` is unwritable
+
+- **Contract:** [Download & Sync — when an above-tier fetch cannot succeed](capsule-docs/src/content/docs/design/import/download-sync.md)
+  — *"A **`403`** is neither: it signals an authorization change, not a durability loss — the
+  client re-syncs its membership/capability state for the album before retrying, and only then
+  degrades (the asset may have been unshared)."*
+- **Gap** (found 2026-08-30 porting `S-C10`): **neither server renders that `403`.** The Salvo
+  route authorized a blob fetch on "a valid access token" and nothing else, and the Kynos port
+  does the same, because there is no per-album *read* authority to render one from —
+  `WriteAuthority` answers about writes, and the sharing and drop capabilities that would answer
+  about reads are `S-C4`/`S-C5` and have no port. The client half of this contract is written
+  against a status the server has never sent.
+- **What the current model actually is, stated so it can be argued with:** any authenticated
+  account may fetch any *live* content address it can name. That is a **capability** model, not
+  an authorization one — a content address is the hash of ciphertext, so producing one without
+  already holding the bytes is producing a preimage. It is defensible; it is not what the
+  contract describes, and the difference is invisible until someone is unshared from an album
+  and keeps fetching.
+- **Why it is not a one-line addition:** shared albums, drops and federated peers all fetch blobs
+  they do not own, so the authority cannot be "the caller owns the asset". It has to be the same
+  capability the share/drop surfaces issue, which fixes the ordering: this lands **with or
+  after** `S-C4`/`S-C5`, not before.
+- **Deliverable:** a read authority the serve path consults, and the `403` rendered from it, with
+  the disclosure question answered explicitly — a `403` for an album the caller cannot see is
+  itself an existence oracle, so the doc's `403`/`404` boundary needs stating rather than
+  assuming.
+- **Done when:** an account unshared from an album receives `403` (not `404`, not `200`) for a
+  blob only that album referenced, and the client's re-sync-then-degrade path is exercised
+  against it. **Tier:** Unit + Integration.
+
+### S-C40 — `awaiting-original` is not observable on the blob path
+
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
+  (*"`pending` is distinguishable from `410`"*), and the `error.blob.pending_upload` catalog
+  entry, which describes exactly this state.
+- **Gap** (found 2026-08-30 porting `S-C10`): the transient `409 error.blob.pending_upload` is
+  **unreachable** in the Kynos port and was therefore deleted rather than declared — a status the
+  code cannot reach is the `S-C28` defect, and declaring one here would have reproduced it in the
+  surface built to make it impossible.
+- **Why it is unreachable:** the asset index learns a blob's address at **finalization**, which
+  is after the bytes have committed. A referenced original therefore always has its bytes, and a
+  missing original has no reference — so the two answers are "served" and "unknown", never "still
+  coming". The Salvo schema differed: it created a pending asset row at *session creation*, so
+  the reference outlived the absence.
+- **The design question that decides the shape, and the reason this is filed rather than
+  fixed:** recording a *declared* original at reservation would make an abandoned session promise
+  an original forever — a permanent `409`, which is precisely the failure the `409`/`410` split
+  exists to prevent. Whatever lands needs an expiry or a reconciliation for that, and that is a
+  contract decision, not an index method.
+- **Worth knowing before anyone rushes it:** nothing can reach the state today even in principle.
+  A second device learns an original's address from the signed manifest, and the only party
+  holding an *unfinalized* original's address is the device uploading it, which does not need to
+  fetch it. The feed already carries `original_held: false`, so a client has the fact; what it
+  lacks is the answer when it asks anyway.
+- **Deliverable:** the declared original reaches the index at reservation with a stated lifetime,
+  and the serve path answers `409 error.blob.pending_upload` for it.
+- **Done when:** `an_originals_absence_is_indistinguishable_from_a_dangling_reference` in
+  `capsule-server/tests/blob.rs` is rewritten to assert `409` — it exists so that closing this
+  slice **fails a test** rather than quietly moving an unwatched status. **Tier:** Unit.
 
 ## Lane D — SDK / clients
 
