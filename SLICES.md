@@ -221,7 +221,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | ready | |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1, S-C11, S-C37 | M | RETIRED | done\* | four of six checks; the two that read signed CBOR → `S-C45` |
-| S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3 | M | RETIRED | ready | |
+| S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3, S-C46 | M | RETIRED | done\* | receipts land; the signed attestation half → `S-C32`; key publication → `S-C18` |
 | S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
@@ -1399,7 +1399,44 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   loss-proof composition, delete rebuttal, cross-server replay, rotation continuity).
 - **Tier:** Unit + Smoke. **Blocks:** the receipt half of `S-D4`'s release gate.
 - **Landed in retired code; re-scoped onto Kynos.** The client-side receipt verify +
-  persist half (`capsule-core::library::receipts`) is `ACTIVE` and stays.
+  persist half is `ACTIVE` and stays — it now sits in `capsule_core::crypto::receipts`
+  (`S-C46`), shared with this server rather than mirrored by it.
+- **Ported 2026-08-31, receipt half (`done\*`).** `capsule-server/src/attestation` — the signer
+  seam, the append-only log and its chain — plus issuance inside finalization and
+  `GET /v1/upload/{id}/receipt`; 6 port cases and 7 surface cases.
+- **The chain is minted where it is written.** `receipt_seq` and `prior_receipt_hash` are inside
+  the *signed* core, so the signature cannot be computed until the position is allocated —
+  which is why `ReceiptLog::issue` takes the signer and does all of it in one operation. A
+  caller that read the head, signed and then appended would let two concurrent finalizations
+  sign the same position, and the chain would fork with **both halves validly signed**. That is
+  the `S-C37` lesson in a place where getting it wrong manufactures forged-looking evidence
+  rather than losing an entry.
+- **The signer is passed in, not held by the log.** A log is a table; key material has no
+  business in one. The seam also means an HSM handle later changes nothing above it.
+- **Atomicity is an ordering, and the row says so.** The contract asks that the receipt and the
+  `uploaded` flip commit together; across two in-memory ports they cannot. The order chosen
+  guarantees the direction that matters — **no receipt without custody** — because a
+  receipt-less finalized blob is visible, reissuable and merely inconvenient, while a receipt
+  attesting to bytes the server does not hold is evidence that cannot be withdrawn from whoever
+  already has it. Real atomicity arrives with the Postgres adapter, where both are rows in one
+  transaction.
+- **`error.upload.receipt_not_available` is a state, not a failure.** A `409` rather than a
+  `404`: the upload exists, the caller may see it, and the receipt is coming. It is also what a
+  crash between custody and issuance looks like, which is why it must read as retryable.
+- **The receipt attests to what the server established**, never to what the client declared —
+  the address is the one finalization recomputed over the stored bytes, and the size is the
+  stage's own length. `the_receipt_names_the_bytes_the_server_hashed` checks the negative too:
+  a client that uploaded different bytes cannot match the receipt.
+- **Verified the way a client does.** `a_finalized_upload_yields_a_verifiable_receipt` runs
+  `capsule_core`'s own `verify_receipt` over the fetched bytes under the published key, because
+  a receipt the client cannot verify is worse than none — it is the server claiming
+  accountability it does not have.
+- **Owed:** the `signed`/`nonce` `StorageAttestation` on `POST /v1/storage/verify`, **blocked on
+  `S-C32`** for the same reason `S-C41` is — it is rate-limited like `deep`. The attestation
+  key's well-known publication and append-only key history belong with `S-C18`; without them a
+  client has no pinned key to verify against outside a test, so the *evidentiary* value of these
+  receipts is owed to that. `GET /assets/{asset_id}/receipts` is one more route over
+  `ReceiptLog::for_asset`, which already exists.
 
 ### S-C16 — Generic lifecycle-write endpoint
 
