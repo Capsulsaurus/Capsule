@@ -212,7 +212,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
-| S-C6 | Quota service | server | — | M | RETIRED | ready | |
+| S-C6 | Quota service | server | S-C25, S-C37 | M | RETIRED | done\* | federated-receive and purge-reclaim accounting owed to `S-C11`/federation |
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | ready | |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | ready | blob-path 410 → `S-C17`; MLS block half → `S-X4` |
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
@@ -1136,6 +1136,35 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** the quota doc's seven Validation bullets pass. **Tier:** Unit + Smoke.
   **Blocks:** S-C5.
 - **Landed in retired code; re-scoped onto Kynos.**
+- **Ported 2026-08-31 (`done\*`).** `capsule-server/src/quota` plus `GET /v1/quota`; 11 port
+  cases and 7 surface cases. Four of the doc's seven bullets pass — hard-limit enforcement,
+  dedup attribution, grace expiry, and status reporting. The other three are accounting the
+  server does not do yet: trash retention and derivative reclaim need the purge path (`S-C11`),
+  and federated receive needs federation.
+- **Attribution is keyed on the content address, globally.** A blob two accounts hold counts
+  against the first only — not as a courtesy but because without it a malicious user could
+  exhaust another account's quota by re-uploading blobs whose addresses they already know.
+- **Charge first, then check**, which looks backwards and is not. Dedup means a blob somebody
+  already holds costs this account nothing, and a check taken *before* the charge cannot know
+  that — it would refuse an upload that would have added zero bytes. So the ledger decides
+  whether anything was added, and a charge that turns out to cross the limit is released again.
+- **A finding worth writing down: an upload cannot reach `HardExceeded`.** Enforcement is on the
+  *projected* total, so a session that would cross never opens and one that opens leaves the
+  account under. Being over is reached by a **lowered limit**, or by growth the session check
+  did not project. That follows from the doc rather than contradicting it, and it is recorded
+  because it is easy to write a test assuming otherwise and then "fix" the enforcement when the
+  test fails — which is what happened here before the note existed.
+- **The one cell the design is emphatic about:** a `delete` or a `trash-restore` is admitted in
+  every state, grace-expired included. A user must be able to delete their way back under quota,
+  and the provenance record a delete produces is itself a write. A quota that could lock someone
+  out of freeing space would be a trap rather than a limit.
+- **Unlimited is the default and takes the same code path.** `hard_limit = u64::MAX` is never
+  crossed, so a self-hosted deployment runs the same predicates a limited one does rather than a
+  "quota off" branch nothing tests. The wire reports the limits as **absent**, not as
+  `u64::MAX`: a number that is not a limit is a number some client will put in a progress bar.
+- **Owed:** trash-retention and derivative-reclaim accounting ride the purge path (`S-C11`);
+  federated-receive accounting and the per-peer caching budget ride federation; the Postgres
+  adapter with the rest.
 
 ### S-C7 — Device-enrollment endpoints
 
