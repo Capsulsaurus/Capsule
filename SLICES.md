@@ -208,7 +208,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-B16 | Every import stamped by import time, not capture time | media/import | — | S | ACTIVE | done | found by the CLI round-trip test |
 | S-B17 | Repair capture timestamps written before `S-B16` | media/import | S-B16 | M | ACTIVE | ready | the wrong value is in *signed* bytes |
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
-| S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | ready | feed_seq race → `S-C21` |
+| S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
 | S-C3 | Storage-verification endpoint | server | — | M | RETIRED | ready | |
 | S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
@@ -227,8 +227,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
 | S-C20 | Invariant-7 floor grounded in the device directory | server | — | M | RETIRED | ready | |
-| S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | ready | |
-| S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | — | S | RETIRED | blocked | needs an asset index; answering from blob presence leaks |
+| S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
+| S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | — | M | RETIRED | ready | |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
 | S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
@@ -236,13 +236,15 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
 | S-C29 | The two storage ports + typed ceremony stores | server | S-C27 | L | RETIRED | done\* | Valkey + Postgres adapters owed; counters → `S-C32` |
-| S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | ready | found by `S-P1` |
+| S-C30 | Feed `manifest_cbor` carries the signed manifest | server | S-C1, S-C2 | M | RETIRED | done\* | server half stores and serves verbatim; client producer owed to `S-D1` |
 | S-C31 | Custody receipt attests a hash of server-invented bytes | server | S-C30 | M | RETIRED | ready | found by `S-C30` |
 | S-C32 | MFA-attempt and rate-limit counters have no port | server | S-C29 | M | RETIRED | ready | found by `S-C29`; blocks login `429` parity |
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
 | S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | wired by `S-C1`, which also found a missing operation |
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
+| S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
+| S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1047,7 +1049,18 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Landed in retired code:** shipped as the `capsule.sync.v1` **gRPC** feed (+ gRPC-web),
   served from the server root. **Re-scoped:** the rebuild is REST, per api-surfaces —
   the transport changes, the cursor/`sync_seq`/completeness contract does not.
-- **Owed:** feed_seq race → `S-C21`.
+- **Ported 2026-08-30 (`done\*`).** `GET /v1/sync` in `capsule-server/src/routes/sync.rs`, over
+  `S-C37`'s index. Fourteen cases in `capsule-server/tests/sync.rs`, including the one the
+  contract is actually about: the manifest bytes a client uploaded come back off the feed
+  **byte for byte**, not re-serialized (`S-C30`).
+- **The cursor's owner binding became a correctness requirement, not doc compliance.** Sequence
+  numbers are per owner, so a cursor replayed under another account would name a *different*
+  entry rather than a forbidden one. The owner is therefore MAC **input**, not a field beside
+  the MAC, and `another_owners_cursor_is_refused_even_under_the_right_key` is the case that
+  says so. The retired implementation never had the property its own design doc claimed.
+- **Owed:** the Postgres adapter behind `S-C37`, and key loading — nothing reads
+  `SYNC_CURSOR_MAC_KEY` or `JWT_ED25519_DER` yet, so the codec is constructed from a literal at
+  every call site including the tests.
 
 ### S-C3 — Storage-verification endpoint
 
@@ -1299,6 +1312,23 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   no entry is skipped across cursor pages. **Tier:** Unit + Smoke.
 - **Note:** carry this into the Kynos feed's design rather than re-introducing the bug
   and fixing it again.
+- **Closed 2026-08-30 by removing the second sequence, not by patching the first.** The race
+  needed *two* orderings that could disagree: a `bigserial feed_seq` allocated by `nextval`,
+  which is explicitly non-transactional and does not roll back, and the commit order readers
+  actually observe. `S-C37` allocates from a per-owner counter row with
+  `UPDATE … SET next_seq = next_seq + 1 … RETURNING`, so the lock is held to commit and
+  allocation order **is** commit order. There is no window left to page across.
+- **What this costs, stated rather than buried:** finalizations within one library serialize on
+  that library's counter row. That is the price of the property, and it is the right one — a
+  library's uploads are already serialized by the human doing them, while a skipped entry is
+  permanent and silent.
+- **What the test suite can and cannot show.** A single-process conformance suite cannot exhibit
+  a race between two concurrent transactions, and saying otherwise would repeat the `S-C35`
+  mistake in a new place. `capsule-server/src/index/conformance.rs` therefore asserts the
+  property's observable consequences — every minted number is reachable through the feed,
+  numbers strictly increase per owner, and paging at any page size sees every published asset
+  exactly once — and states in its own module docs that an adapter minting outside its critical
+  section passes the suite and is still wrong. The structural guarantee lives in the adapter.
 
 ### S-C22 — Structured duplicate ref + adopt in OpenAPI
 
@@ -1311,13 +1341,30 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** the SDK merge path switches on the structured field; schema gate
   green. **Tier:** Unit.
 
-- **Blocked, and on a disclosure argument rather than effort** (found 2026-08-29 porting `S-C1`): a
-  `409 duplicate_blob` must name the *existing asset*, and there is no asset index yet. The
+- **Was blocked on a disclosure argument rather than effort** (found 2026-08-29 porting `S-C1`): a
+  `409 duplicate_blob` must name the *existing asset*, and there was no asset index. The
   tempting shortcut — answering from blob presence alone — would tell one account that another
   account holds a particular blob. Content addressing makes that a real cross-tenant disclosure, so
-  the status is refused entirely until there is an index that can answer it honestly. Create-dedup
-  is scoped to the uploader in the meantime, since only the uploader may append and handing back
-  another party's session would hand back an unusable one.
+  the status was refused entirely until something could answer it honestly.
+- **Unblocked and landed 2026-08-30 by `S-C37` (`done\*`).** `CreateRejection::DuplicateBlob`
+  carries `existing_asset` as a problem extension, answered from
+  `AssetIndex::find_by_address`.
+- **The scope is in the signature, not in a caller's discipline.** The lookup takes
+  `(owner, album, address)` because that **is** the idempotency key
+  [validation.md](capsule-docs/src/content/docs/design/threat-model/validation.md) fixes for
+  session creation. Owner is the disclosure boundary above. **Album is the merge contract**, and
+  that half was got wrong first and caught by a test: the doc calls the `409` "the client's merge
+  trigger", and across two albums there is nothing to merge — the same thumbnail legitimately
+  belongs to an asset in each — so a second album's upload proceeds and the *blob store*
+  deduplicates it onto the occupied address. An owner-only lookup refused that upload, which is
+  why `identical_bytes_become_one_object` now uploads into two albums and
+  `the_same_bytes_in_the_same_album_are_refused_as_a_duplicate` holds the other half.
+- **Owed, and filed rather than improvised:** nothing *adopts*. For a retry the `409` is a
+  complete answer; for genuine cross-asset dedup within one album the requesting asset is
+  refused a session and has no way to record a blob it now knows exists. Silently recording it
+  and answering `200` is a new reply variant and a wire-contract decision, and the idempotency
+  table specifies the `409`. The `/drops/{id}/adopt` half of this slice's original deliverable
+  goes with `S-C5`; the undescribed `existing_asset` extension is `S-C38`.
 
 ### S-C23 — Revoke-all with master-key proof
 
@@ -1653,6 +1700,20 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Not blocking `S-P1`:** the SDK's sync-apply verb consumes the *contracted* shape and is
   proven against it end to end; what is missing is a producer that emits it. It **does** block
   a real second-device `S-P5` render, which is why this is indexed rather than noted.
+- **Server half landed 2026-08-30 (`done\*`).** The Kynos surface accepts a `provenance` blob,
+  stores it verbatim, and the feed reads those exact bytes back out of the blob store — proved
+  by `a_provenance_blob_is_stored_exactly_as_it_arrived` and
+  `the_feed_serves_the_uploaded_manifest_byte_for_byte`. Base64 is a transport encoding and not
+  a re-serialization: `decode(encode(b)) == b`, unlike re-encoding a parsed projection, which is
+  the distinction this slice exists to enforce. There is **no** `prepare_feed_input` on the
+  Kynos path; the re-serialization was not fixed, it was never written.
+- **The open question stays open, and is now stated in code.** The server gates publication on
+  the provenance blob's *presence*, never on its agreement with the validated envelope, because
+  a key-free server does not parse signed CBOR. That is detection after the fact, not
+  prevention — the normal position for this server, and recorded in
+  `capsule-server/src/upload/visibility.rs` rather than left implicit.
+- **Owed:** the producer. `capsule_core::lifecycle::upload_bundle` still emits no provenance
+  blob, so today only a test uploads one. That is `S-D1`'s to close.
 
 ### S-C31 — Custody receipt attests a hash of server-invented bytes
 
@@ -1698,6 +1759,77 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Done when:** no counter reaches storage through `AuthStateStore`; a conformance case proves an
   increment is never lost under concurrency; and the in-memory adapter is a test double rather than
   a deployment mode. **Tier:** Unit + conformance.
+
+### S-C37 — the asset index port, one sequence instead of two
+
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md),
+  [Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md),
+  [Validation invariant 22](capsule-docs/src/content/docs/design/threat-model/validation.md).
+- **Gap** (found 2026-08-29 porting `S-C1`, and named in three slices before it had an id): the
+  Kynos server had a session store, a blob store and a visibility *definition*, and **no durable
+  asset row to apply the definition to**. Three things rested on it and each was filed as a
+  separate absence — the pending row and `uploaded` flip (`S-C1`), the `409 duplicate_blob`
+  answer (`S-C22`), and the feed itself (`S-C2`). One missing port, three reported symptoms.
+- **Deliverable:** an `AssetIndex` port with a deterministic in-memory adapter and one
+  conformance suite, owning the asset row, the blob refs it holds, its lifecycle state, and the
+  **single** sequence a reader pages over.
+- **Why it is not in `crate::store`:** `store` is volatile TTL state — sessions and ceremonies,
+  the things Valkey holds. An asset row is the library. Filing them together would have made the
+  storage story "one bag of state" again, which is the shape `S-C29` exists to delete.
+- **One sequence, not two, which is what closes `S-C21`.** The retired schema had a per-album
+  `sync_seq` *and* a global `bigserial feed_seq`; two orderings that can disagree is exactly the
+  skip race. Here a row carries its current `sync_seq` and an immutable `first_seq`, allocated
+  from a per-owner counter row under a lock held to commit — so `ChangeKind` is *computed per
+  reader* from their cursor rather than stored, and a `Created` for a client at zero is an
+  `Updated` for a client that has already seen the asset. Latest-state feed, not an event log.
+- **`Reservation::Conflict` carries nothing.** The asset id is the manifest's `file_id` and
+  therefore client-chosen, so a guess must cost the caller nothing and buy them nothing; a
+  reservation that disagrees on owner, album or pin is a flat refusal with no disclosure.
+- **A defect this found, whose test agreed with it:** the visibility gate was written as
+  "does this role complete the index tier", one role at a time, and its test asserted the right
+  answer for the wrong reason. The tier is a **conjunction** — provenance *and* metadata — and
+  the arity was wrong, not the logic. Fixed as `bundle_is_publishable(held)` over a set, proved
+  non-vacuous by mutation (reverting to metadata-only fails two cases). The `capsule-api` copy of
+  the same defect stays frozen in the retiring tree.
+- **Done when:** every adapter passes one conformance suite; an upload becomes visible on the
+  feed of the account that made it and on no other; and no sequence number the index mints is
+  unreachable through paging. **Tier:** Unit + conformance.
+- **Landed to the in-memory tier — 2026-08-30 (`done\*`).** `capsule-server/src/index/`, 17
+  conformance cases, wired into both the upload path (reserve at create, record at finalize) and
+  the feed, so "upload it, then read it back" is a test of the server rather than of two
+  disconnected doubles. **Owed:** the Postgres adapter, which is where the row lock this design
+  depends on actually lives — the in-memory adapter's mutex stands in for it and proves nothing
+  about it.
+
+### S-C38 — problem extensions are absent from the OpenAPI document
+
+- **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md) (every rejection carries a
+  stable `error.*` code the client switches on),
+  [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) (the document is the
+  contract, and the client is generated from it).
+- **Gap** (found 2026-08-30 landing `S-C22`): Kynos's `#[problem(extension)]` is a **runtime**
+  attachment — the derive expands it to `problem.with_extension(name, value)` and nothing feeds
+  it into the emitted schema. So `capsule-server/openapi.json` declares one generic `Problem`
+  with `additionalProperties: true` and **zero** occurrences of `code` or `existing_asset`,
+  while every rejection the server actually renders carries a `code` and the `409` carries
+  `existing_asset`.
+- **Why this is worse than it sounds:** it is a **regression against the surface being
+  retired**. The Salvo document describes `code` in six places. A generated client therefore
+  loses the i18n contract's client half — the field it is supposed to localize offline is not in
+  the contract it is generated from — and `S-C22`'s "the SDK merge path switches on the
+  structured field" is satisfiable only by reaching past the generated type.
+- **Same class as `S-C28`, in the opposite direction.** `S-C28` was statuses the code returns
+  and the schema omits, and Kynos makes that unrepresentable because status is part of the
+  return type. This is *members* the code returns and the schema omits, which Kynos does not yet
+  make unrepresentable — so the class the rebuild claimed to close is only half closed.
+- **Deliverable:** extension members reach the document. Upstream in Kynos is the better fix and
+  the slower one (`#[problem(extension)]` would have to carry a schema, as `S-C36` also wants a
+  seam it does not have); a Capsule-side per-response schema override is the faster one. Decide
+  which, and note that `S-C36` wants the same seam for framework-generated problems, so they
+  should be decided together.
+- **Done when:** a test over the emitted document asserts that every declared problem response
+  describes the extension members its variant renders — over the document, not per handler, for
+  the same reason `S-C34` gates the document rather than the handlers. **Tier:** Unit + gate.
 
 ## Lane D — SDK / clients
 
