@@ -23,6 +23,21 @@
 //! microservices (design/module-map.md, "Planned Server Modules"). Authentication state and
 //! upload-session state stay behind separate Capsule-owned ports with Postgres, Valkey and
 //! deterministic in-memory adapters; no generic CAS, transfer or TTL abstraction is planned.
+//!
+//! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
+//! module that knows about HTTP: everything under it — [`album`], [`directory`], [`gc`],
+//! [`index`], [`quota`], [`scrub`], [`serve`], [`store`], [`sync`], [`upload`], [`verify`] — is
+//! framework-free and testable without a router, which is why the operator workers ([`gc`],
+//! [`scrub`]) have no wire surface at all and cost nothing to exercise.
+//!
+//! # Every adapter is in-memory
+//!
+//! Every port in this crate has a deterministic in-memory adapter and a conformance suite, and
+//! **no Postgres, Valkey or filesystem adapter is written** except the blob store's. That is a
+//! deliberate ordering rather than an omission: the contract and its suite are what a real
+//! adapter is written *against*, and a port with two implementations before it has one suite is
+//! a port whose two implementations will disagree. It is also why this crate's whole test suite
+//! runs without a container.
 
 pub mod album;
 pub mod app;
