@@ -247,7 +247,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
-| S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | ready | the counter `S-C32` owed it now exists |
+| S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
@@ -2615,6 +2615,36 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   than timed. **Tier:** Unit.
 - **Blocked on `S-C32`**, which owns the counter port. Genuinely blocked, not stale: there is
   nothing to rate-limit against until it exists.
+- **Landed 2026-08-31 (`done\*`)**, the same day `S-C32` unblocked it. `deep: bool` on the
+  request, a streamed re-hash, and the per-account budget.
+- **The finding is the point, and the test states it as one.** A corrupted blob is still
+  `stored` — that is a question about the filesystem — and only re-hashing tells the two apart.
+  `a_deep_scan_catches_corruption_a_structural_check_calls_stored` rots the bytes under a
+  committed address using the port's own `remove` + `put`, so the state it produces is one the
+  real store can genuinely be in rather than a test-only hook's fiction.
+- **`deep` is absent when no scan ran, and that absence is load-bearing.** It is the difference
+  between *"we did not look at the bytes"* and *"we looked and they were fine"*, and a client
+  deciding whether to release its only copy has to be able to tell those apart.
+- **Being throttled is a third verdict, not a silent downgrade.** Past the budget the structural
+  verdict still comes back and each blob reads `deep: rate_limited`. Refusing the whole request
+  would make the limiter cost a client more than it saves — and a client that stopped verifying
+  at all is the outcome nobody wants. A client that asked to look and silently got a structural
+  answer could not tell that from never having asked.
+- **A structural check is not charged.** It is cheap, and spending the deep budget on one would
+  throttle the operation clients actually run.
+- **The re-hash streams a mebibyte at a time.** Not for speed: a deep verify of a
+  multi-gigabyte original must not be a multi-gigabyte allocation, which would turn the
+  I/O-amplification attack the budget bounds into a memory one that it does not.
+- **A blob the asset does not hold is never re-hashed**, and the store is not asked about it at
+  all — the cross-account existence oracle `S-C3` built this surface to avoid.
+- **Coalescing is deliberately absent.** The slice asked for it, and the *watch out* it came
+  with is the reason not to have it: a coalesced deep verdict is a durability claim with an age,
+  and a client handed a minute-old integrity result as a current one may delete on the strength
+  of it. Adding a window means putting that window in the verdict and teaching every client to
+  read it — a real contract change, not an optimisation. The budget already bounds the work at
+  four scans an hour per account, which is the amplification this was meant to stop; coalescing
+  would only help a *single* account issuing concurrent duplicates, which the budget also
+  bounds. Recorded as a considered omission rather than an oversight.
 
 ### S-C42 — nothing verifies the device directory's own signature
 
