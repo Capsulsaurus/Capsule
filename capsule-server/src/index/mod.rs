@@ -347,20 +347,23 @@ impl ChangeKind {
 
 /// What the index knows about one content address, for the serving path.
 ///
-/// Deliberately **not** owner-scoped, unlike [`AssetIndex::find_by_address`], and the asymmetry
-/// is the point rather than an oversight. That lookup answers "which asset of *yours* holds
-/// these bytes" and hands the client an asset id, so scoping it is what stops one account
-/// learning another's holdings. This one answers "is this address live", and its answer reaches
-/// the client only as a status — served, gone, or unknown. A caller must already hold the
-/// content address to ask, and a content address is the hash of ciphertext nobody can produce
-/// without the key, so it is a capability rather than a guessable name.
-///
-/// See [`crate::serve`] for what the reachable disclosure actually is, and for the
-/// album-scoped `403` the download-sync contract describes and neither implementation renders.
+/// The lookup that produces it is deliberately **not** owner-scoped, unlike
+/// [`AssetIndex::find_by_address`], and the asymmetry is the point rather than an oversight.
+/// That lookup answers "which asset of *yours* holds these bytes" and hands the client an asset
+/// id; this one answers "what is this address", and it answers it to the *server*. The scoping
+/// happens above, in [`crate::serve`], which compares [`Self::owner_id`] against the caller and
+/// tells a stranger nothing — asking the index an unscoped question and refusing on the answer
+/// is what lets the refusal be uniform, and it keeps this port from having to know who is asking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobReference {
     /// The asset the reference belongs to.
     pub asset_id: AssetId,
+    /// The account that asset is filed under (`S-C39`).
+    ///
+    /// The fact the read authority decides on. Carried on the reference for the same reason
+    /// [`Self::hold`] is: the serving path must decide from the *same read* that found the
+    /// reference, or there is a window in which ownership and the decision disagree.
+    pub owner_id: OwnerId,
     /// The role the address holds in that asset's bundle.
     pub role: BlobRole,
     /// The asset's lifecycle state — `Tombstoned` is what turns a reference into a `410`.

@@ -2032,7 +2032,13 @@ impl Fixture {
                 UploadPolicy::default(),
             ),
             sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
-            serve: ServeContext::new(index.clone(), blobs.clone(), marks.clone(), uploads.clone()),
+            serve: ServeContext::new(
+                index.clone(),
+                blobs.clone(),
+                marks.clone(),
+                uploads.clone(),
+                capsule_server::serve::owned_assets(),
+            ),
             verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
@@ -2134,6 +2140,7 @@ impl Fixture {
                 blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
                 Arc::new(SwitchableUploads::new(clock.clone())),
+                capsule_server::serve::owned_assets(),
             ),
             verify: VerifyContext::new(
                 index,

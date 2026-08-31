@@ -776,3 +776,132 @@ async fn an_unreachable_index_is_a_coded_failure_not_a_missing_blob() {
         "a client told `404` here would delete its local copy over a transient outage"
     );
 }
+
+// ===========================================================================================
+// Who may fetch (`S-C39`)
+// ===========================================================================================
+
+/// A live blob of somebody else's is unknown, not served.
+///
+/// This is the hole `S-C39` closed. Before it, `GET /v1/blob/{hash}` authorized on "a valid
+/// access token" and nothing else, so **any** authenticated account could fetch **any** live
+/// ciphertext whose address it could name. The defence was that a content address is the hash of
+/// ciphertext and so a capability rather than a guessable name — true, and not the contract, and
+/// a capability that never expires because the address never changes.
+#[tokio::test]
+async fn another_accounts_live_blob_is_unknown_rather_than_served() {
+    let fixture = Fixture::working();
+    let owner = bearer(&fixture).await;
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "mine", &bytes).await;
+
+    // The owner is served, so the address really is live and the refusal below is about who is
+    // asking rather than about what is there.
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &owner)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &stranger)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// And the refusal is byte-identical to the one an address nothing references gets.
+///
+/// The disclosure property, asserted rather than assumed. A `403` here — or any answer that
+/// differed from the unknown-address answer — would confirm that the address is referenced by
+/// *somebody*, which is an existence oracle over content addresses handed to anyone who can name
+/// one. The `403` the contract describes is reserved for a caller the server can see once *had*
+/// access, and no such caller exists yet — see `S-C51`.
+#[tokio::test]
+async fn a_strangers_refusal_is_indistinguishable_from_an_unknown_address() {
+    let fixture = Fixture::working();
+    let owner_bearer = bearer(&fixture).await;
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "opaque", &bytes).await;
+    let _ = &owner_bearer;
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+
+    let refused = fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &stranger)
+        .header("accept", "application/problem+json")
+        .send()
+        .await;
+    refused.assert_status(StatusCode::NOT_FOUND);
+    let refused: serde_json::Value = refused.json();
+
+    let unknown = fixture
+        .client
+        .get(&format!("/v1/blob/{}", support::checksum(b"never existed")))
+        .header("authorization", &stranger)
+        .header("accept", "application/problem+json")
+        .send()
+        .await;
+    unknown.assert_status(StatusCode::NOT_FOUND);
+    let unknown: serde_json::Value = unknown.json();
+
+    assert_eq!(
+        refused, unknown,
+        "a live blob the caller may not have and an address nobody holds must be one answer, or \
+         the difference between them is the oracle"
+    );
+}
+
+/// A stranger cannot read another account's deletions or takedowns off the status line either.
+///
+/// The ordering property. Every refusal below the authority check — the tombstone `410`, the
+/// takedown `410`, the collection `410`, the dangling `410` — is a fact about somebody's asset.
+/// Deciding ownership last would have left all of them legible to anyone who could name the
+/// address.
+#[tokio::test]
+async fn a_stranger_cannot_tell_a_takedown_from_an_unknown_address() {
+    let fixture = Fixture::working();
+    let bytes = ciphertext();
+    let address = published_original(&fixture, "held", &bytes).await;
+    let held = AssetId::new("held");
+    assert_eq!(
+        fixture
+            .index
+            .set_hold(&held, Some(ServingHold::Takedown))
+            .await
+            .expect("the index holds"),
+        HoldOutcome::Applied
+    );
+
+    // The owner is told, because a user whose asset stops serving is never left to guess.
+    let owner = bearer(&fixture).await;
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &owner)
+        .send()
+        .await
+        .assert_status(StatusCode::GONE);
+
+    // A stranger is told nothing at all.
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &stranger)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}

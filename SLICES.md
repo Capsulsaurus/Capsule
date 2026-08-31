@@ -245,7 +245,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
-| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
+| S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | part | the authority lands and owner-scopes the path; the `403` needs a membership fact → `S-C51` |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
@@ -257,6 +257,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | done\* | fails closed as `401`; the honest `503` needs the seam `S-C36` wants |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
+| S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -2530,29 +2531,60 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   — *"A **`403`** is neither: it signals an authorization change, not a durability loss — the
   client re-syncs its membership/capability state for the album before retrying, and only then
   degrades (the asset may have been unshared)."*
-- **Gap** (found 2026-08-30 porting `S-C10`): **neither server renders that `403`.** The Salvo
-  route authorized a blob fetch on "a valid access token" and nothing else, and the Kynos port
-  does the same, because there is no per-album *read* authority to render one from —
-  `WriteAuthority` answers about writes, and the sharing and drop capabilities that would answer
-  about reads are `S-C4`/`S-C5` and have no port. The client half of this contract is written
-  against a status the server has never sent.
-- **What the current model actually is, stated so it can be argued with:** any authenticated
-  account may fetch any *live* content address it can name. That is a **capability** model, not
-  an authorization one — a content address is the hash of ciphertext, so producing one without
-  already holding the bytes is producing a preimage. It is defensible; it is not what the
-  contract describes, and the difference is invisible until someone is unshared from an album
-  and keeps fetching.
-- **Why it is not a one-line addition:** shared albums, drops and federated peers all fetch blobs
-  they do not own, so the authority cannot be "the caller owns the asset". It has to be the same
-  capability the share/drop surfaces issue, which fixes the ordering: this lands **with or
-  after** `S-C4`/`S-C5`, not before.
-- **Deliverable:** a read authority the serve path consults, and the `403` rendered from it, with
-  the disclosure question answered explicitly — a `403` for an album the caller cannot see is
-  itself an existence oracle, so the doc's `403`/`404` boundary needs stating rather than
-  assuming.
-- **Done when:** an account unshared from an album receives `403` (not `404`, not `200`) for a
-  blob only that album referenced, and the client's re-sync-then-degrade path is exercised
-  against it. **Tier:** Unit + Integration.
+- **Gap** (found 2026-08-30 porting `S-C10`): neither server rendered that `403`, and neither had
+  anything to render it *from*.
+- **Landed `part` 2026-08-31.** The authority exists and the path is owner-scoped. The `403` is
+  not rendered, and what was learned is *why*.
+
+**The bigger half was not the missing status — it was the missing check.** `GET /v1/blob/{hash}`
+authorized on "a valid access token" and nothing else, so **any authenticated account could fetch
+any live ciphertext whose address it could name**. That was defended as a capability model: a
+content address is the hash of ciphertext, so producing one without holding the bytes is producing
+a preimage. The defence is not wrong and it is not the contract, and it stacks badly — an address
+that leaks once through a backup, a log or a debug screenshot is a *permanent* capability, because
+the address never changes. `OwnedAssetAuthority` closes it: an account fetches the blobs of assets
+filed under it, everyone else gets `404`.
+
+**The `403`/`404` boundary, stated rather than assumed** — the slice asked for this explicitly. A
+`403` is a disclosure and a `404` is not: answering `403` to a caller with no relationship to an
+asset confirms the address is referenced by *somebody*, which is an existence oracle over content
+addresses handed to anyone who can name one. So `403` is reserved for a caller the server can see
+once **had** access, and every other refusal is byte-identical to the answer for an address the
+server never heard of — asserted, not assumed, in
+`a_strangers_refusal_is_indistinguishable_from_an_unknown_address`.
+
+**The authority is consulted *first*, before every policy refusal**, and that ordering is the
+security property rather than a style choice. The takedown `410`, the tombstone `410`, the
+collection `410` and the dangling `410` are all facts about somebody's asset; deciding ownership
+last would have left every one of them legible to anyone who could name the address.
+
+**Why the `403` still has no source, reduced to one sentence:** *this server has no record of album
+membership.* Album sharing between accounts is an MLS group whose roster the server cannot read by
+design, and the two surfaces that do let a non-owner reach ciphertext — `/s/{id}/blob/{hash}` and
+the drop paths — serve from their own capabilities and answer `404` when those are withdrawn.
+Neither routes through here. So no enum variant and no declared status was shipped for it: an arm
+nothing produces and a status nothing can reach are the same `S-C28` defect.
+
+**The gap changed shape, which is the useful part.** It was "there is no read authority" — a
+hypothesis about missing code, and a plausible afternoon's work that would have been wrong. It is
+now "there is no membership fact", a named thing the **write** path wants too:
+`AlbumWriteAccess::Denied` has been unable to widen from owner to member since `S-C25` for exactly
+the same reason. One fact unblocks both → `S-C51`.
+
+**One question left open on purpose.** Owner-scoping dissolved the argument that collapsed a
+serving hold into `410`: `crate::serve` justified it partly on not becoming a moderation oracle
+*for an anonymous fetcher*, and after this slice the only caller who can reach a held asset's blob
+is its owner. A `403` would arguably serve that owner better — a takedown is reversible, the bytes
+are untouched, and `410` tells a client to degrade permanently. It was not changed, because
+design/moderation.md states the per-surface rule as *"takedown of known content → `410`"* and
+re-reading a landed, tested contract on an inference is not this slice's to do. Recorded here for
+whoever owns that question.
+
+- **Done when:** the account unshared from an album receives `403` — **not met**, and blocked on
+  `S-C51`. ✅ what did land: `another_accounts_live_blob_is_unknown_rather_than_served`,
+  `a_strangers_refusal_is_indistinguishable_from_an_unknown_address`,
+  `a_stranger_cannot_tell_a_takedown_from_an_unknown_address`, and the authority's own unit cases.
+  **Tier:** Unit + Integration.
 
 ### S-C40 — `awaiting-original` is not observable on the blob path
 
@@ -3076,6 +3108,36 @@ them was incidental:
   and states the server's half as containment. `metadata.md`'s status note names the issuing
   client and points at `S-C4`. **The no-opt-out rule is unchanged**; only who honours it moved,
   and it moved to the one party that can.
+
+### S-C51 — server-side album membership, which two authorities are waiting on
+
+- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
+  (the `403` that signals an authorization change), and
+  [Authorization](capsule-docs/src/content/docs/design/authorization.md) via
+  `AlbumWriteAccess` — *"Sharing widens that set — an album writable by a member rather than only
+  its owner"*.
+- **Gap** (found 2026-08-31 landing `S-C39`): the server holds no fact about who, other than the
+  owner, may read or write an album. Two separate authorities are pinned to "owner only" by the
+  same absence:
+  - `OwnedAssetAuthority` cannot render the `403` the download contract describes, because there
+    is no membership to withdraw;
+  - `ProvisionedAuthority::album_write_access` has answered `Denied` for anything but the owner
+    since `S-C25`, with a comment deferring the widening to `S-C4`/`S-C5` — which landed as
+    **link** and **drop** capabilities and did not add it, correctly: a share link is not a
+    member.
+- **Why this is genuinely hard and not merely unwritten.** Album sharing between accounts is an
+  MLS group, and the server holds no key: it cannot read the roster, and that is the product
+  rather than a limitation to engineer around. So membership has to arrive as something the group
+  *tells* the server — a signed, revocable assertion the server can verify without reading the
+  group — and designing that is the slice. Every shortcut is worse: a client-asserted member list
+  is an authorization decision made from a spoofable string; a server-held roster is the thing
+  end-to-end encryption exists to avoid.
+- **Blocked on:** the same signed-capability primitive federation needs, so it should be designed
+  with `S-C49` rather than beside it.
+- **Done when:** a member of a shared album reads its blobs through `/v1/blob/{hash}` and writes
+  to it through the upload path; a former member receives `403` on the first and a write refusal
+  on the second; and a non-member remains unable to tell either from an address that does not
+  exist. **Tier:** Unit + Integration.
 
 ### S-D1 — SDK upload client
 
