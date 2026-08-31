@@ -252,6 +252,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | ready | found by `S-C11`; quota only ever goes up |
 | S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | ready | found by `S-C14`; the same open question `S-C30` left |
+| S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1387,7 +1388,12 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   `receipt_seq` chain; `GET /upload/{id}/receipt` + `GET /assets/{asset_id}/receipts`
   (`error.upload.receipt_not_available` before Completed); `signed`/`nonce` on
   `POST /storage/verify` returning `StorageAttestation`, rate-limited like `deep`.
-- **Depends on:** S-C1 (finalization transaction), S-C3 (verify endpoint).
+- **Depends on:** S-C1 (finalization transaction), S-C3 (verify endpoint), and — for the
+  Kynos port specifically — **`S-C46`**, which **has landed**: the receipt type moved to
+  `capsule_core::crypto::receipts`, so this server shares one definition rather than mirroring
+  it. The `signed`/`nonce` half remains **blocked on `S-C32`**, for the same reason `S-C41` is:
+  it is rate-limited like `deep`, and the counter port does not exist. The receipt half — the
+  issuance chain and `GET /upload/{id}/receipt` — is unblocked.
 - **Done when:** the storage-verification doc's receipt/attestation/proof-of-loss
   Validation bullets pass (issuance atomicity, log monotonicity, nonce echo,
   loss-proof composition, delete rebuttal, cross-server replay, rotation continuity).
@@ -2305,6 +2311,55 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   core rather than beside it.
 - **Done when:** an asset whose stored manifest disagrees with its index projection is reported
   with both values — or the contract no longer claims it is. **Tier:** Unit.
+
+### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
+
+- **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md);
+  the discipline in [Metadata — Canonical CBOR Encoding](capsule-docs/src/content/docs/design/metadata.md).
+- **Gap** (found 2026-08-31 sizing `S-C15`): `CustodyReceipt` and `CustodyReceiptCore` live in
+  `capsule_core::library::receipts`, and `library` is behind the **`native`** feature. The Kynos
+  server takes `capsule-core` with `default-features = false` — deliberately, because a key-free
+  server that turned on `native` would relink SQLite and MLS, which is precisely what
+  `b01dc76` undid. So the server cannot use the type that defines its own output.
+- **What happens if this is not fixed first:** the server defines its own copy, which is what the
+  retired one did — core's module docs say so in as many words, *"the receipt types here mirror
+  the server's canonical-CBOR wire form field-for-field"*. Two definitions of a **signed**
+  structure is the worst shape this codebase has: canonical CBOR sorts map keys, so byte-identity
+  depends on the two agreeing exactly on field names, types and wire-presence discipline
+  (absent optionals encoding as absent keys). One added field, one `Option` that serializes as
+  present-`null`, and every receipt the server issues stops verifying on every client — with the
+  failure surfacing as "the server is withholding receipts", which is the accusation the whole
+  mechanism exists to make checkable.
+- **Why it is not simply "ungate `library`":** `receipts.rs` mixes two things. The *types and
+  verification* need only `cbor`, `crypto::hash`, `crypto::keys::hybrid_sig` and a `BlobRole` —
+  all ungated. The *persistence* path takes `std::fs` and `library::paths`, and is genuinely the
+  client's. The file has to be split before either half can move.
+- **Deliverable:** the receipt core, the receipt, and its verification move to an ungated home —
+  `capsule_core::crypto::receipts` is the natural one, beside `provenance`, which is the same
+  kind of thing — with `library::receipts` keeping the append/persist path and re-exporting the
+  types so no existing path breaks. Then `capsule-server` uses the one definition, exactly as it
+  already shares `capsule_core::validation`.
+- **Watch out:** `crypto` is compiled for **wasm32** (`S-A6`'s sealing build), so whatever moves
+  must not pull in `std::fs`. That is the same constraint that put `albumstore` behind `native`,
+  and `build-check-wasm` will catch a mistake — which is the reason that gate exists.
+- **Done when:** `capsule-server` constructs and signs a `CustodyReceipt` from
+  `capsule_core`'s own type with `default-features = false`, and the client's existing receipt
+  tests still pass unchanged. **Tier:** Unit. **Blocks:** `S-C15`.
+- **Landed 2026-08-31 (`done`).** `capsule_core::crypto::receipts` holds `BlobRole`, the receipt
+  core, the receipt, `role_str`, `ReceiptExpectations`, `ReceiptRejection` and `verify_receipt`;
+  `library::receipts` keeps `load_receipts`/`append_receipt` and re-exports the rest, so every
+  path a client already used still resolves. The client's own receipt tests pass unchanged,
+  which is the point — this moved a definition, not a behaviour.
+- **The guard is a compile, not an assertion.** `the_server_can_sign_a_receipt_from_cores_own_type`
+  in `capsule-server` constructs, signs, verifies and round-trips one through canonical CBOR. It
+  is deliberately in the crate that links `capsule-core` with `default-features = false`: if
+  somebody moves the type back behind `native`, it stops compiling rather than stops passing.
+  `build-check-wasm` guards the other direction — `crypto` targets `wasm32`, so a `std::fs`
+  creeping into this module fails there.
+- **It also unifies `BlobRole`**, which the slimming audit had listed as a separate cleanup. The
+  receipt's `blob_role` is *written* from that enum through `role_str`, so the issuer and the
+  verifier having their own copies was the same hazard one level down.
+- **`S-C15` is now blocked only on `S-C32`**, and only for its `signed`/`nonce` half.
 
 ## Lane D — SDK / clients
 
