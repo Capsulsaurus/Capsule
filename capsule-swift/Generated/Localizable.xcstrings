@@ -14537,6 +14537,16 @@
         }
       }
     },
+    "error.share.malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That share link could not be created."
+          }
+        }
+      }
+    },
     "error.share.rate_limited": {
       "localizations": {
         "ar": {
@@ -14615,6 +14625,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.share.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach that share. Please try again."
           }
         }
       }

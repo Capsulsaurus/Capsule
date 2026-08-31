@@ -26,7 +26,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`], [`store`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`],
+//! [`share`], [`store`],
 //! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
 //! workers ([`gc`], [`scrub`]) have no wire surface at all and cost nothing to exercise.
@@ -58,6 +59,7 @@ pub mod quota;
 pub mod routes;
 pub mod scrub;
 pub mod serve;
+pub mod share;
 pub mod store;
 pub mod sync;
 pub mod upload;
@@ -87,7 +89,7 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Four `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // Five `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
         // next addition obvious rather than a puzzle. Each group is well under the cap, so a
@@ -137,6 +139,14 @@ pub fn router() -> ServerRouter {
             routes::sync::sync_feed,
             routes::blob::get_blob,
             routes::storage::verify_storage,
+        ])
+        // Share links: two owner operations, and the one path served without an account.
+        .mount(kynos::routes![
+            routes::share::issue_share,
+            routes::share::revoke_share,
+            routes::share::share_metadata,
+            routes::share::share_wrapped_secret,
+            routes::share::share_blob,
         ])
 }
 

@@ -3153,6 +3153,489 @@
           }
         ]
       }
+    },
+    "/v1/shares": {
+      "post": {
+        "summary": "Register a share link the caller's client has issued.",
+        "operationId": "issue_share",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IssueShareRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The share link is registered and servable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueShareResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/shares/{opaque_id}": {
+      "delete": {
+        "summary": "Revoke one of the caller's links.",
+        "description": "Idempotent from the caller's side and **indistinguishable**: a link that was never theirs, a\nlink that does not exist, and a link they already revoked are all `204`. Revocation is the\none operation where saying \"there was nothing to revoke\" would be a lookup.",
+        "operationId": "revoke_share",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/s/{opaque_id}": {
+      "get": {
+        "summary": "What a viewer needs to begin, for a live link.",
+        "operationId": "share_metadata",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SharedMetadataResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/s/{opaque_id}/wrapped-secret": {
+      "get": {
+        "summary": "The passphrase-wrapped scope material, when there is one.",
+        "description": "A link with no passphrase answers `404` rather than `204` or an empty body: whether a link is\npassphrase-protected is already disclosed by the metadata record, and a *second* way to ask\nthe same question with a different shape is a second thing to keep consistent.",
+        "operationId": "share_wrapped_secret",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/octet-stream": {
+                "schema": {}
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/s/{opaque_id}/blob/{hash}": {
+      "get": {
+        "summary": "Ciphertext for one of the link's blobs, ranged.",
+        "description": "The membership check is the security property: a link serves the addresses its record\nenumerates and nothing else, so it cannot be walked sideways into the album's unstripped\nmetadata. A blob the link does not name is the same `404` as a link that does not exist.",
+        "operationId": "share_blob",
+        "parameters": [
+          {
+            "name": "opaque_id",
+            "in": "path",
+            "description": "The opaque id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "path",
+            "description": "The blob's content address.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Range",
+            "in": "header",
+            "description": "The part of the representation to transfer, per RFC 9110 section 14.2. A field this operation cannot apply is ignored and the whole representation is sent.",
+            "schema": {
+              "type": "string",
+              "pattern": "^bytes=(?:\\d+-\\d*|-\\d+)(?:\\s*,\\s*(?:\\d+-\\d*|-\\d+)){0,7}$"
+            },
+            "example": "bytes=0-1023"
+          },
+          {
+            "name": "If-Range",
+            "in": "header",
+            "description": "The entity tag the client's partial copy came from, per RFC 9110 section 13.1.5. The `Range` is honoured only if it matches this representation under the strong comparison; otherwise the whole representation is sent.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "The entity tag the client already holds, per RFC 9110 section 13.1.2",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-Modified-Since",
+            "in": "header",
+            "description": "The date the client's copy carries, per RFC 9110 section 13.1.3",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "the whole representation",
+            "headers": {
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Last-Modified": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {}
+              }
+            }
+          },
+          "206": {
+            "description": "the part the request asked for",
+            "headers": {
+              "Accept-Ranges": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Last-Modified": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Content-Range": {
+                "description": "The part of the representation enclosed, and its complete length, per RFC 9110 section 14.4.",
+                "required": true,
+                "content": {
+                  "text/plain": {
+                    "schema": {
+                      "type": "string",
+                      "pattern": "^bytes \\d+-\\d+/\\d+$"
+                    }
+                  }
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {}
+              }
+            }
+          },
+          "304": {
+            "description": "the client's copy is current",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Last-Modified": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -4478,6 +4961,77 @@
           "verdicts"
         ],
         "description": "The `POST /v1/storage/verify` response."
+      },
+      "IssueShareRequest": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The 128-bit opaque id, 32 lowercase hex characters, drawn from the client's CSPRNG.\n\nMinted by the client rather than the server because the client is what knows the\nfragment secret the id is paired with; the server checks its shape and stores it."
+          },
+          "metadata_hash": {
+            "type": "string",
+            "description": "The metadata blob a viewer starts from. Must appear in `serves`."
+          },
+          "serves": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Every blob this link may serve, and nothing else.\n\nEnumerated by the issuing client, which is what makes the boundary-crossing strip\nstick: the client points the link at blobs it prepared for export, and the server has no\npath from an opaque id to anything outside this set."
+          },
+          "wrapped_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The passphrase-wrapped scope material, base64, when the link is passphrase-protected.\n\nOpaque to this server. The passphrase never crosses the wire — unwrap is client-side."
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When the link stops being live, RFC 3339. Absent means no expiry."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id",
+          "metadata_hash",
+          "serves"
+        ],
+        "description": "A link the owner's client has issued."
+      },
+      "IssueShareResponse": {
+        "properties": {
+          "opaque_id": {
+            "type": "string",
+            "description": "The opaque id, echoed."
+          }
+        },
+        "type": "object",
+        "required": [
+          "opaque_id"
+        ],
+        "description": "Confirmation that a link is now servable."
+      },
+      "SharedMetadataResponse": {
+        "properties": {
+          "metadata_hash": {
+            "type": "string",
+            "description": "The metadata blob's content address; fetch it from `/s/{opaque_id}/blob/{hash}`."
+          },
+          "passphrase_protected": {
+            "type": "boolean",
+            "description": "Whether a passphrase is required before the scope material can be opened.\n\nThe one property of the link this path discloses, and it has to: a viewer cannot know to\nask for a passphrase otherwise. It says nothing about *what* the link points at."
+          }
+        },
+        "type": "object",
+        "required": [
+          "metadata_hash",
+          "passphrase_protected"
+        ],
+        "description": "What a viewer needs to start."
       }
     },
     "securitySchemes": {

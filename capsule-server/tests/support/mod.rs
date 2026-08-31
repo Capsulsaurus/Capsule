@@ -65,6 +65,7 @@ use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
+use capsule_server::share::{InMemoryShares, ShareContext, ShareRecord, ShareStore};
 use capsule_server::store::memory::{
     InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
     InMemoryUploadSessions, ManualClock,
@@ -358,6 +359,68 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// A share store that can be made to fail on demand.
+///
+/// The switch matters more here than elsewhere: the public serve path's `500` is the one answer
+/// it gives that is *not* the indistinguishable `404`, and it exists because fail-closed means
+/// a process that cannot confirm a link is live must refuse without claiming it was revoked.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableShares {
+    inner: InMemoryShares,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableShares {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "shares",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ShareStore for SwitchableShares {
+    fn issue(&self, record: ShareRecord) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.issue(record)
+    }
+
+    fn resolve<'a>(&'a self, opaque_id: &'a str) -> StoreFuture<'a, Option<ShareRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.resolve(opaque_id)
+    }
+
+    fn revoke<'a>(
+        &'a self,
+        owner: &'a UserId,
+        opaque_id: &'a str,
+        at: Timestamp,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.revoke(owner, opaque_id, at)
     }
 }
 
@@ -1687,6 +1750,8 @@ pub(crate) struct Fixture {
     pub(crate) channels: Arc<SwitchableChannels>,
     /// The account's standing and moderation record.
     pub(crate) moderation: Arc<SwitchableModeration>,
+    /// The public share links.
+    pub(crate) shares: Arc<SwitchableShares>,
 }
 
 impl Fixture {
@@ -1737,6 +1802,7 @@ impl Fixture {
         let enrollments = Arc::new(SwitchableEnrollments::new(clock.clone()));
         let channels = Arc::new(SwitchableChannels::new(clock.clone()));
         let moderation = Arc::new(SwitchableModeration::new());
+        let shares = Arc::new(SwitchableShares::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1776,6 +1842,7 @@ impl Fixture {
                 clock.clone(),
             ),
             moderation: ModerationContext::new(moderation.clone()),
+            share: ShareContext::new(shares.clone(), blobs.clone(), clock.clone()),
         });
 
         Self {
@@ -1802,6 +1869,7 @@ impl Fixture {
             enrollments,
             channels,
             moderation,
+            shares,
         }
     }
 
@@ -1851,7 +1919,7 @@ impl Fixture {
             ),
             verify: VerifyContext::new(
                 index,
-                blobs,
+                blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
                 clock.clone(),
             ),
@@ -1884,6 +1952,11 @@ impl Fixture {
                 clock.clone(),
             ),
             moderation: ModerationContext::new(Arc::new(InMemoryModeration::new())),
+            share: ShareContext::new(
+                Arc::new(InMemoryShares::new()),
+                blobs.clone(),
+                clock.clone(),
+            ),
         });
         (app, clock)
     }

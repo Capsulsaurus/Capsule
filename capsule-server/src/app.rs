@@ -38,6 +38,7 @@ use crate::escrow::EscrowContext;
 use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
+use crate::share::ShareContext;
 use crate::sync::SyncContext;
 use crate::upload::UploadContext;
 use crate::verify::VerifyContext;
@@ -75,6 +76,8 @@ pub struct App {
     enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
     moderation: ModerationContext,
+    /// The share-link surface's collaborators.
+    share: ShareContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -112,6 +115,8 @@ pub struct Modules {
     pub enrollment: EnrollmentContext,
     /// The moderation record's collaborators.
     pub moderation: ModerationContext,
+    /// The share-link surface's collaborators.
+    pub share: ShareContext,
 }
 
 impl App {
@@ -131,6 +136,7 @@ impl App {
             escrow,
             enrollment,
             moderation,
+            share,
         } = modules;
         Self {
             auth,
@@ -146,6 +152,7 @@ impl App {
             escrow,
             enrollment,
             moderation,
+            share,
         }
     }
 }

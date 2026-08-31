@@ -17,6 +17,7 @@ pub mod moderation;
 pub mod ops;
 pub mod quota;
 pub mod receipts;
+pub mod share;
 pub mod storage;
 pub mod sync;
 pub mod upload;

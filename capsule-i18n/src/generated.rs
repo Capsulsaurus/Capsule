@@ -191,8 +191,14 @@ pub mod error_codes {
     /// `error.quota.unavailable`
     pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
 
+    /// `error.share.malformed`
+    pub const SHARE_MALFORMED: &str = "error.share.malformed";
+
     /// `error.share.rate_limited`
     pub const SHARE_RATE_LIMITED: &str = "error.share.rate_limited";
+
+    /// `error.share.unavailable`
+    pub const SHARE_UNAVAILABLE: &str = "error.share.unavailable";
 
     /// `error.storage.deep_rate_limited`
     pub const STORAGE_DEEP_RATE_LIMITED: &str = "error.storage.deep_rate_limited";

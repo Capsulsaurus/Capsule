@@ -247,6 +247,14 @@
         "message": "Too many deep storage checks. Please wait and try again.",
         "context": "HTTP 429 from POST /storage/verify with deep=true (slice S-C3): the caller exceeded its per-user deep re-hash budget for the current window. Deep scans are server-priced (rate-limited and coalesced) so they cannot be turned into an I/O-amplification attack."
     },
+    "error.share.malformed": {
+        "message": "That share link could not be created.",
+        "context": "HTTP 400 on POST /v1/shares (slice S-C4): the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
+    },
+    "error.share.unavailable": {
+        "message": "Capsule couldn't reach that share. Please try again.",
+        "context": "HTTP 500 on the share surface (slice S-C4): a store could not answer. Deliberately distinct from the public path's 404 — fail-closed means a serving process that cannot confirm a link is live refuses, and answering 404 would tell a client the link was revoked when it is perfectly good."
+    },
     "error.share.rate_limited": {
         "message": "Too many attempts. Please wait and try again.",
         "context": "HTTP 429 on the public share serve path (slice S-C4): the per-source-IP or per-{opaque-id} serve rate limit engaged. Both limiters are charged on every /s/{opaque-id} request (metadata, blob, wrapped-secret) to throttle link enumeration; a not-found/revoked/expired link is an indistinguishable bodyless 404, never a distinct code."

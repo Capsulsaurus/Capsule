@@ -128,6 +128,11 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/devices/enroll/channel/anything"),
         ("DELETE", "/v1/auth/devices/enroll/channel/anything"),
         ("GET", "/v1/moderation/record"),
+        ("POST", "/v1/shares"),
+        ("DELETE", "/v1/shares/anything"),
+        ("GET", "/s/anything"),
+        ("GET", "/s/anything/wrapped-secret"),
+        ("GET", "/s/anything/blob/deadbeef"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1808,6 +1813,189 @@ async fn every_declared_response_is_exercised() {
             .send()
             .await
             .assert_status(StatusCode::NO_CONTENT);
+    }
+
+    // ── Share links (`S-C4`) ───────────────────────────────────────────────────────────────
+    // The public path is walked last among the reads, because a revoked link is one of the
+    // answers and revoking it ends the only live link this block makes.
+    client
+        .post("/v1/shares")
+        .json(&serde_json::json!({ "opaque_id": "x", "metadata_hash": "y", "serves": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .delete("/v1/shares/anything")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/shares")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .json(&serde_json::json!({ "opaque_id": "x", "metadata_hash": "y", "serves": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete("/v1/shares/anything")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // The issue body's rejections.
+    client
+        .post("/v1/shares")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/shares")
+        .header("authorization", &bearer)
+        .body("application/json", "{ not json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/shares")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({ "opaque_id": 7, "metadata_hash": "y", "serves": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // A real link over a blob this walk already stored.
+    let share_metadata = payload(b's', 64);
+    let share_address =
+        capsule_server::blob::ContentAddress::parse(&checksum(&share_metadata)).expect("address");
+    fixture
+        .blobs
+        .put(&share_address, &share_metadata)
+        .await
+        .expect("the blob store accepts");
+    let share_id = "abcdef0123456789abcdef0123456789";
+    client
+        .post("/v1/shares")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({
+            "opaque_id": share_id,
+            "metadata_hash": share_address.as_str(),
+            "serves": [share_address.as_str()],
+            "wrapped_secret": "AAAA",
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+
+    // The public path: 200 on all three, then the `Path` extractor's 400, then the one 404.
+    client
+        .get(&format!("/s/{share_id}"))
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/s/{share_id}/wrapped-secret"))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    let served = client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .send()
+        .await;
+    served.assert_status(StatusCode::OK);
+    let share_etag = served.header("etag").expect("an etag").to_owned();
+
+    // 206 from a range, and 304 from the validator this surface hands out.
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("range", "bytes=0-15")
+        .send()
+        .await
+        .assert_status(StatusCode::PARTIAL_CONTENT);
+    client
+        .get(&format!("/s/{share_id}/blob/{share_address}"))
+        .header("if-none-match", &share_etag)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_MODIFIED);
+
+    for path in [
+        "/s/%FF".to_owned(),
+        "/s/%FF/wrapped-secret".to_owned(),
+        format!("/s/%FF/blob/{share_address}"),
+    ] {
+        client
+            .get(&path)
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+    client
+        .delete("/v1/shares/%FF")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500 on every share operation: the store cannot answer.
+    fixture.shares.set_unavailable(true);
+    client
+        .post("/v1/shares")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({
+            "opaque_id": share_id,
+            "metadata_hash": share_address.as_str(),
+            "serves": [share_address.as_str()],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete(&format!("/v1/shares/{share_id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    for path in [
+        format!("/s/{share_id}"),
+        format!("/s/{share_id}/wrapped-secret"),
+        format!("/s/{share_id}/blob/{share_address}"),
+    ] {
+        client
+            .get(&path)
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    fixture.shares.set_unavailable(false);
+
+    // 204 on revoke, and then the one 404 the public path gives for everything.
+    client
+        .delete(&format!("/v1/shares/{share_id}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    for path in [
+        format!("/s/{share_id}"),
+        format!("/s/{share_id}/wrapped-secret"),
+        format!("/s/{share_id}/blob/{share_address}"),
+    ] {
+        client
+            .get(&path)
+            .send()
+            .await
+            .assert_status(StatusCode::NOT_FOUND);
     }
 
     // ── The moderation record (`S-C8`) ─────────────────────────────────────────────────────
