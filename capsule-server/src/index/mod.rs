@@ -541,6 +541,21 @@ pub trait AssetIndex: std::fmt::Debug + Send + Sync {
     /// retention window it signed has passed, which is what makes trash recoverable.
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64>;
 
+    /// Up to `limit` rows in asset-id order, after `after`.
+    ///
+    /// The integrity scrub's walk. Paged and ordered so a store too large to hold in memory can
+    /// still be checked, and so an interrupted pass resumes where it stopped rather than
+    /// starting over — which for a store worth scrubbing is the difference between a check that
+    /// finishes and one that never does.
+    ///
+    /// Every row, whatever its state. A scrub that skipped pending or tombstoned rows would
+    /// skip exactly the rows a half-finished write leaves behind.
+    fn rows<'a>(
+        &'a self,
+        after: Option<&'a AssetId>,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<AssetRow>>;
+
     /// Up to `limit` tombstoned rows, oldest change first.
     ///
     /// The purge worker's input. Ordered so a bounded pass makes progress on the oldest

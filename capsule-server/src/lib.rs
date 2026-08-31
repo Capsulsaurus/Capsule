@@ -35,6 +35,7 @@ pub mod index;
 pub mod limits;
 pub mod quota;
 pub mod routes;
+pub mod scrub;
 pub mod serve;
 pub mod store;
 pub mod sync;

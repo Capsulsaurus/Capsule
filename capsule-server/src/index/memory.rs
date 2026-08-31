@@ -444,6 +444,31 @@ impl AssetIndex for InMemoryAssetIndex {
         })
     }
 
+    fn rows<'a>(
+        &'a self,
+        after: Option<&'a AssetId>,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<AssetRow>> {
+        Box::pin(async move {
+            let inner = lock(&self.inner);
+            // The map is keyed by asset id, so its own order *is* the contract's order and the
+            // cursor is a range bound rather than a scan-and-filter.
+            let range = match after {
+                Some(after) => inner
+                    .rows
+                    .range((
+                        std::ops::Bound::Excluded(after.clone()),
+                        std::ops::Bound::Unbounded,
+                    ))
+                    .take(limit)
+                    .map(|(_, row)| row.clone())
+                    .collect(),
+                None => inner.rows.values().take(limit).cloned().collect(),
+            };
+            Ok(range)
+        })
+    }
+
     fn tombstoned(&self, limit: usize) -> IndexFuture<'_, Vec<AssetRow>> {
         Box::pin(async move {
             let inner = lock(&self.inner);

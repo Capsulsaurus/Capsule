@@ -1023,6 +1023,17 @@ impl AssetIndex for SwitchableIndex {
         self.inner.apply_op(op)
     }
 
+    fn rows<'a>(
+        &'a self,
+        after: Option<&'a AssetId>,
+        limit: usize,
+    ) -> IndexFuture<'a, Vec<AssetRow>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.rows(after, limit)
+    }
+
     fn reference_count<'a>(&'a self, address: &'a ContentAddress) -> IndexFuture<'a, u64> {
         if self.is_down() {
             return Box::pin(async { Self::refuse() });
