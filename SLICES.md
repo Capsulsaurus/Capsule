@@ -210,7 +210,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C1 | Upload-server hardening (envelope gate + invariants) | server | — | L | RETIRED | done\* | discard worker, asset index and quota not ported |
 | S-C2 | Key-free sync feed | server | S-C1 | L | RETIRED | done\* | ported to Kynos REST; Postgres adapter + cursor-key loading owed |
 | S-C3 | Storage-verification endpoint | server | S-C35, S-C37 | M | RETIRED | done\* | structural verdict only; the `deep` re-hash → `S-C41`; GC state → `S-C11` |
-| S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | ready | |
+| S-C4 | Share-link serving endpoints | server | S-A5 | M | RETIRED | done\* | the serve-path privacy strip is unimplementable on a key-free server → `S-C50`; limiters → `S-C32` |
 | S-C5 | Drop store, inbox, atomic adoption | server | S-A6, S-C1, S-C6 | L | RETIRED | ready | OpenAPI row → `S-C22`; shared limiter → post-v1 |
 | S-C6 | Quota service | server | S-C25, S-C37 | M | RETIRED | done\* | federated-receive and purge-reclaim accounting owed to `S-C11`/federation |
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | done\* | the freshness gate needed `authenticated_at` and a re-auth verb; redemption rate limiting → `S-C32` |
@@ -256,6 +256,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | ready | found by `S-C23`; revocation is only as fast as the access-token TTL, and `touch_session` has no caller |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
+| S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | ready | found by `S-C4`; `share-links.md` and `metadata.md` disagree about where the strip happens |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -1119,6 +1120,45 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Depends on:** S-A5. **Blocks:** S-E1. **Done when:** the doc's six Validation
   bullets pass. **Tier:** Unit + Smoke.
 - **Landed in retired code; re-scoped onto Kynos.**
+- **Landed 2026-08-31 (`done\*`).** Five operations: `POST /v1/shares` and
+  `DELETE /v1/shares/{opaque_id}` for the owner, and `/s/{opaque-id}` plus its `blob/{hash}` and
+  `wrapped-secret` children served with **no credential at all** — the only such path on this
+  server.
+- **The privacy strip cannot run here, and writing one that could not run would have been the
+  worst outcome.** `share-links.md` says *"the serve path **always** applies the
+  boundary-crossing strip"*; the metadata a share serves is ciphertext sealed under material
+  this server does not hold, so there is nothing to read, let alone redact. `metadata.md` is the
+  document that agrees with the architecture — *"Stripping happens at the moment of export"*, in
+  `capsule_core::metadata::export_policy`, client-side. Filed as **`S-C50`** rather than
+  resolved unilaterally, because it is a contradiction between two design docs.
+- **What the server enforces instead is the property that makes the client's strip stick.** A
+  link serves **only the addresses its own record enumerates** — membership, never derivation —
+  so a link cannot be walked sideways into the album's unstripped metadata. There is no path
+  from an opaque id to an album's contents at all.
+  `a_link_cannot_be_walked_into_a_blob_it_does_not_name` puts the unstripped blob in the same
+  store, proves it is there, and then asserts the link will not serve it.
+- **Every refusal on the public path is one answer, asserted as bytes.** Not found, revoked,
+  expired, a malformed id, a blob outside the link, and a link with no wrapped secret all render
+  identically; the test compares whole problem documents rather than statuses, because a
+  differing `detail` is just as much of a signal. Never `410` — that would confirm a link once
+  existed.
+- **The `500` is the one thing the public path does distinguish, and that is the fail-closed
+  rule.** A serving process that cannot confirm a link is live must refuse; answering `404`
+  would be indistinguishable from "revoked" to a client that would then stop retrying a link
+  that is perfectly good.
+- **The revocation cache is a no-op, by the contract's own words** — *"a single-process
+  deployment reads revocation state directly and the cache is a no-op"* — because this port
+  resolves authoritatively per request. It becomes real with the first multi-replica deployment,
+  and the fail-closed rule above is what it has to be written to.
+- **Owed: the two rate limiters.** Per source IP and per `{opaque-id}`, both needing `S-C32`'s
+  counter. The `429` is **not declared** rather than declared and unreachable (`S-C28`). What
+  still holds without them is the defense the contract calls *independent of rate limiting*: 128
+  bits of opaque id, checked at issue, so a structured or short id is refused rather than
+  throttled later.
+- **Owed: the home-server pointer.** A share is served only by the album's home server, and a
+  peer answers a structured `{ home_server }` JSON pointer. There are no peers on this port —
+  every request reaches the home server by construction — so the pointer has no situation to be
+  returned in. It arrives with federation, and a `S-C49`-shaped hole, not this slice's.
 
 ### S-C5 — Drop store, inbox, adoption
 
@@ -2814,6 +2854,35 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   discovery and pinning, signed report intake with `S-C32`'s rate limit, the blocklist and its
   enforcement point, and whatever admin authentication the above needs.
 - **Blocked on:** the federation layer (`S-E2`'s territory) and `S-C32`. **Tier:** Unit + Smoke.
+
+### S-C50 — the share-link privacy strip is specified where it cannot run
+
+- **Contract:** [Share Links — Security Contract](capsule-docs/src/content/docs/design/share-links.md),
+  [Metadata — Privacy on Export](capsule-docs/src/content/docs/design/metadata.md).
+- **Gap** (found 2026-08-31 landing `S-C4`): the two docs disagree, and only one of them can be
+  built.
+  - `share-links.md`: *"The serve path **always** applies the boundary-crossing strip … There is
+    **no per-share opt-out**."*
+  - `metadata.md`: *"Stripping happens at the moment of export"*, implemented in
+    `capsule_core::metadata::export_policy` — which is **client-side**, in core.
+- **The serve path cannot be the one that strips.** A share's metadata is ciphertext sealed
+  under material derived from the URL fragment secret, which by the same document's design
+  *never reaches the server*. There is nothing on the serve path to read. This is not a matter
+  of effort: a server that could strip a share's metadata could read every share.
+- **What `S-C4` shipped instead**, and what the amendment should ratify: the strip is the
+  issuing client's, and the server enforces the property that makes it stick — a link serves
+  **only the addresses its record enumerates**, so a share cannot be walked sideways into the
+  album's unstripped metadata. `metadata.md`'s status note already says the strip is *enforced
+  on share-link serving*; what needs correcting is **where**, not whether.
+- **Deliverable:** amend `share-links.md`'s Security Contract so the mandatory strip is an
+  issue-time obligation with a serve-time *containment* guarantee, and correct `metadata.md`'s
+  status note to name the client as the enforcement point. The "no per-share opt-out" rule
+  survives unchanged — it just binds the issuing client.
+- **Watch out:** this is the second place a doc has asked a key-free server to read plaintext
+  (the first was the scrub's envelope-chain checks, `S-C45`). Both should be read as evidence
+  that "the server enforces X" needs a standing check against what the server can see.
+- **Done when:** both docs name the same enforcement point, and `S-C4`'s containment property is
+  stated as the server's half. **Tier:** Docs.
 
 ### S-D1 — SDK upload client
 
