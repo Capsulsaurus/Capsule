@@ -254,6 +254,31 @@ pub trait UploadSessionStore: std::fmt::Debug + Send + Sync {
     /// both views, together. Returns the record that was removed, or `None`.
     fn discard<'a>(&'a self, upload: &'a UploadId) -> StoreFuture<'a, Option<UploadSessionRecord>>;
 
+    /// The active session `owner` currently has open for `expected_hash`, if any (`S-C40`).
+    ///
+    /// The question the blob serve path asks when nothing references an address: *are these
+    /// exact bytes on their way?* An active upload session declaring that hash **is** the
+    /// promise, which is why this is a lookup and not a new record — a session already carries a
+    /// bounded lifetime ([`LIFETIME_CAP`]) and is already reconciled by the discard worker, so
+    /// an abandoned upload's promise expires on its own. A separate "declared original" row in
+    /// the asset index would have needed a second lifetime, a second reconciliation, and would
+    /// have made every in-flight upload look like a dangling reference to the integrity scrub.
+    ///
+    /// Scoped to an owner deliberately. Unscoped, this answers "is somebody, anywhere, uploading
+    /// these bytes right now" to any authenticated caller who can name the hash — a small but
+    /// real cross-account signal for no gain, since the case the transient answer exists for is
+    /// a *second device of the same account* fetching an original the first one is still
+    /// sending.
+    ///
+    /// Terminal sessions never match: a completed session's bytes are committed and a failed
+    /// one's are not coming. Adapters need a secondary index on `(owner_id, expected_hash)`;
+    /// scanning is acceptable only in the in-memory double.
+    fn pending_for_address<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        expected_hash: &'a str,
+    ) -> StoreFuture<'a, Option<UploadId>>;
+
     /// Up to `limit` active sessions that have not progressed since `not_progressed_since`,
     /// least recently progressed first.
     ///

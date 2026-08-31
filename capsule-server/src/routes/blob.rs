@@ -27,7 +27,7 @@
 //! | `200`/`206`/`416` | kept, and now derived — `Delivery` declares all three from its own type |
 //! | `404` | kept. Bodyless there, an RFC 9457 problem here: every `404` this route renders is byte-identical, so it discriminates nothing and gains the `error.*` code the i18n contract requires |
 //! | `410` | kept |
-//! | `409 error.blob.pending_upload` | **deleted as unreachable here**, and the reason is a real gap rather than a cleanup — see [`crate::serve`] and `S-C40` |
+//! | `409 error.blob.pending_upload` | **restored by `S-C40`**, and rendered from the caller's own in-flight upload rather than from a reference the index does not have — see [`crate::serve`] |
 //! | `401` | kept, and now the framework's, with the `WWW-Authenticate` challenge |
 //! | `500` | kept, with `error.blob.unavailable` |
 //!
@@ -59,10 +59,11 @@ pub struct BlobPath {
 
 /// Why no bytes were served.
 ///
-/// The split between these three is the whole contract, so each says what a client should do:
+/// The split between these four is the whole contract, so each says what a client should do:
 /// `404` and `410` are permanent and the client degrades to a representation it already holds;
-/// `500` is the server's and is retried. The transient `409` the Salvo surface also rendered is
-/// **absent because it is unreachable here** — see [`crate::serve`] and `S-C40`.
+/// `409` is **transient** and the client waits; `500` is the server's and is retried. Collapsing
+/// `409` into either neighbour is what makes a client give up on bytes that are on their way, or
+/// retry forever for bytes that are not.
 #[derive(Debug, thiserror::Error, ApiError)]
 pub enum BlobRejection {
     /// No live reference names the address — or it is not an address.
@@ -72,6 +73,21 @@ pub enum BlobRejection {
     #[error("no such blob")]
     #[problem(status = 404, title = "Not found")]
     NotFound {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Not referenced *yet*: the caller's own account has an upload of exactly these bytes in
+    /// flight (`S-C40`). Transient.
+    ///
+    /// Carries no session identifier and no progress. The fetcher is a different device from
+    /// the uploader, and telling it *which* upload or how far along would be reporting on
+    /// another device's transfer to satisfy nothing a client can act on — the action is "wait
+    /// and retry", which the status alone says.
+    #[error("the original has not finished uploading yet")]
+    #[problem(status = 409, title = "Upload in progress")]
+    Pending {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -104,6 +120,13 @@ impl BlobRejection {
         }
     }
 
+    /// On its way.
+    fn pending() -> Self {
+        Self::Pending {
+            code: error_codes::BLOB_PENDING_UPLOAD,
+        }
+    }
+
     /// Referenced but gone.
     fn gone() -> Self {
         Self::Gone {
@@ -125,6 +148,9 @@ impl BlobRejection {
 /// authenticated account may fetch any live address — see [`crate::serve`] for why that is a
 /// capability model rather than a hole, and for the `403` the contract describes and nothing
 /// implements.
+///
+/// The one answer that *is* account-scoped is the transient `409`: it reports the caller's own
+/// in-flight upload and nobody else's (`S-C40`).
 #[kynos::get("/v1/blob/{hash}", operation_id = "get_blob", tag = MediaTag)]
 pub async fn get_blob(
     Inject(serve): Inject<ServeContext>,
@@ -132,7 +158,12 @@ pub async fn get_blob(
     Path(path): Path<BlobPath>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, BlobRejection> {
-    let resolution = crate::serve::resolve(&serve, &path.hash)
+    // The caller files under itself. Nothing about *reading* is scoped by it today — any
+    // authenticated account may fetch any live address, see [`crate::serve`] — but the
+    // transient `409` is, and `S-C39` is where the read authority that would scope the rest
+    // arrives.
+    let owner = crate::store::OwnerId::new(credential.user.as_str());
+    let resolution = crate::serve::resolve(&serve, &owner, &path.hash)
         .await
         .map_err(|error| {
             tracing::error!(%error, user = %credential.user, "a blob fetch could not be resolved");
@@ -141,6 +172,7 @@ pub async fn get_blob(
 
     let (address, size) = match resolution {
         ServeResolution::Serve { address, size } => (address, size),
+        ServeResolution::AwaitingUpload { .. } => return Err(BlobRejection::pending()),
         ServeResolution::NotFound => return Err(BlobRejection::not_found()),
         ServeResolution::Gone => return Err(BlobRejection::gone()),
     };

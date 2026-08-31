@@ -1203,6 +1203,17 @@ impl UploadSessionStore for SwitchableUploads {
         self.inner.discard(upload)
     }
 
+    fn pending_for_address<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        expected_hash: &'a str,
+    ) -> StoreFuture<'a, Option<UploadId>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.pending_for_address(owner, expected_hash)
+    }
+
     fn least_recently_progressed(
         &self,
         not_progressed_since: Timestamp,
@@ -2021,7 +2032,7 @@ impl Fixture {
                 UploadPolicy::default(),
             ),
             sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
-            serve: ServeContext::new(index.clone(), blobs.clone(), marks.clone()),
+            serve: ServeContext::new(index.clone(), blobs.clone(), marks.clone(), uploads.clone()),
             verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
@@ -2122,6 +2133,7 @@ impl Fixture {
                 index.clone(),
                 blobs.clone(),
                 Arc::new(InMemoryCollection::new()),
+                Arc::new(SwitchableUploads::new(clock.clone())),
             ),
             verify: VerifyContext::new(
                 index,

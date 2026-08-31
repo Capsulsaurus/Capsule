@@ -216,7 +216,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C7 | Device-enrollment endpoints (code + relay channel) | server | S-C9 | M | RETIRED | done\* | the freshness gate needed `authenticated_at` and a re-auth verb; redemption rate limiting → `S-C32` |
 | S-C8 | Moderation hooks | server | S-C2 | M | RETIRED | part | suspension + the user's record land; federated intake and the blocklist need federation → `S-C49` |
 | S-C9 | Device-directory publish/fetch | server | S-C29 | M | RETIRED | done\* | invariant 23's *signature* clause is unenforced → `S-C42`; device identity → `S-C20` |
-| S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `403` → `S-C39`; the `409` → `S-C40` |
+| S-C10 | Key-free media serving conformance | server | S-C35, S-C37 | M | RETIRED | done\* | takedown → `S-C17`; GC state → `S-C11`; the `409` landed with `S-C40`; the `403` → `S-C39` |
 | S-C11 | Refcount GC + retention purge worker | server | S-C1, S-C16, S-C37 | M | RETIRED | done\* | discharges the GC-state debt on `S-C3` and `S-C10`; the `gc` binary rides the adapters |
 | S-C12 | Backup escrow server surface | server | — | S | RETIRED | done | `PUT` is the replace; there is deliberately no delete |
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | done | the ledger surface came with it; `last_active_at` moves as of `S-C48`, coalesced to a minute |
@@ -246,7 +246,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
 | S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | ready | found by `S-C10`; the contract names a status neither server renders |
-| S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | ready | found by `S-C10`; the `409`/`410` split has no `409` side |
+| S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | ready | found reading `S-C1` against the authorization doc; invariants 17 and 18 go live with it |
@@ -2559,30 +2559,46 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
   (*"`pending` is distinguishable from `410`"*), and the `error.blob.pending_upload` catalog
   entry, which describes exactly this state.
-- **Gap** (found 2026-08-30 porting `S-C10`): the transient `409 error.blob.pending_upload` is
+- **Gap** (found 2026-08-30 porting `S-C10`): the transient `409 error.blob.pending_upload` was
   **unreachable** in the Kynos port and was therefore deleted rather than declared — a status the
   code cannot reach is the `S-C28` defect, and declaring one here would have reproduced it in the
   surface built to make it impossible.
-- **Why it is unreachable:** the asset index learns a blob's address at **finalization**, which
-  is after the bytes have committed. A referenced original therefore always has its bytes, and a
-  missing original has no reference — so the two answers are "served" and "unknown", never "still
-  coming". The Salvo schema differed: it created a pending asset row at *session creation*, so
-  the reference outlived the absence.
-- **The design question that decides the shape, and the reason this is filed rather than
-  fixed:** recording a *declared* original at reservation would make an abandoned session promise
-  an original forever — a permanent `409`, which is precisely the failure the `409`/`410` split
-  exists to prevent. Whatever lands needs an expiry or a reconciliation for that, and that is a
-  contract decision, not an index method.
-- **Worth knowing before anyone rushes it:** nothing can reach the state today even in principle.
-  A second device learns an original's address from the signed manifest, and the only party
-  holding an *unfinalized* original's address is the device uploading it, which does not need to
-  fetch it. The feed already carries `original_held: false`, so a client has the fact; what it
-  lacks is the answer when it asks anyway.
-- **Deliverable:** the declared original reaches the index at reservation with a stated lifetime,
-  and the serve path answers `409 error.blob.pending_upload` for it.
-- **Done when:** `an_originals_absence_is_indistinguishable_from_a_dangling_reference` in
-  `capsule-server/tests/blob.rs` is rewritten to assert `409` — it exists so that closing this
-  slice **fails a test** rather than quietly moving an unwatched status. **Tier:** Unit.
+- **Landed 2026-08-31**, and the shape is *not* the one this row predicted.
+
+**The row expected the declaration to go into the asset index at reservation. It should not, and
+the reason is worth keeping.** That is what the Salvo schema did, and it fails twice:
+
+1. An abandoned session would leave a reference promising an original **forever** — a permanent
+   `409`, which is precisely the failure the `409`/`410` split exists to prevent. It would need a
+   lifetime and a reconciliation worker of its own, both invented for this.
+2. Every in-flight upload would become a **reference with no bytes** — exactly the shape the
+   integrity scrub (`S-C14`) exists to report as a dangling reference. The fix would have made a
+   normal Tuesday afternoon look like corruption.
+
+**The promise was already recorded somewhere with both properties.** An active upload session
+declaring that hash *is* the declaration: it carries a bounded lifetime (`LIFETIME_CAP`, 24
+hours), it is already reconciled by the discard worker, and it disappears when the upload is
+abandoned. So the serve path asks `UploadSessionStore::pending_for_address` in the arm where
+nothing references the address, and the transient status cannot outlive the thing that made it.
+No new record, no new lifetime, no new worker.
+
+**It is owner-scoped, which is a deliberate narrowing.** Unscoped, the `409` tells any
+authenticated caller who can name a hash that somebody, somewhere, is uploading those exact
+bytes. The case the transient answer exists for is a *second device of the same account* fetching
+an original the first is still sending, having learned the address from the signed manifest. A
+sharee or a federated peer keeps the `404` and waits for the feed's `original_held` to flip.
+This is also the first thing on the serve path scoped by caller at all, so it is where `resolve`
+gained the `OwnerId` argument that `S-C39` will need.
+
+**The `410` arm is untouched, and that is the other half of the reasoning.** A reference is
+written at finalization, after the bytes commit, so a reference without bytes means the bytes were
+*removed* — never that they have not arrived.
+
+- **Done when:** ✅ `an_original_still_uploading_is_transient_rather_than_unknown`,
+  `another_accounts_upload_is_not_this_accounts_pending_answer`,
+  `finalizing_discharges_the_promise` and `a_reference_without_bytes_is_gone_even_for_an_original`
+  in `capsule-server/tests/blob.rs`, plus two store-conformance cases so every adapter owes the
+  same answer. **Tier:** Unit.
 
 ### S-C41 — the `deep` re-hash, with the limiter that makes it safe
 

@@ -375,19 +375,147 @@ async fn a_shared_blob_survives_one_holders_deletion() {
     );
 }
 
-/// The `awaiting-original` state is **not observable here**, and this pins that rather than
-/// asserting the answer the contract wants.
+/// An original still uploading is a transient `409`, not a permanent `404` (`S-C40`).
 ///
-/// The Salvo surface answered a transient `409 error.blob.pending_upload` for an original still
-/// uploading. This port cannot: it learns an address at finalization, so a reference implies
-/// bytes and missing bytes imply no reference. Recording the promise at reservation instead
-/// would make an abandoned session promise an original forever — a permanent `409`, which is
-/// the exact failure the split exists to prevent — so the shape is `S-C40`'s to decide.
+/// The whole point of the status split: a client told `404` degrades to the representation it
+/// already holds and stops asking, which for an original that is thirty seconds from arriving
+/// is exactly the wrong behaviour.
 ///
-/// Until then a missing original is a dangling reference like any other. This case exists so
-/// that closing `S-C40` **fails a test** rather than quietly changing an unwatched status.
+/// The promise is the **upload session**, not an index row. That is what makes this reachable at
+/// all — the index records a reference at finalization, after the bytes commit, so it has
+/// nothing to say about bytes in flight — and it is what keeps the promise bounded: an
+/// abandoned session expires and takes the `409` with it, instead of leaving a permanent one.
 #[tokio::test]
-async fn an_originals_absence_is_indistinguishable_from_a_dangling_reference() {
+async fn an_original_still_uploading_is_transient_rather_than_unknown() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let bytes = payload(b'o', 8192);
+    let address = ContentAddress::parse(&support::checksum(&bytes)).expect("a content address");
+
+    // Nothing knows about it yet.
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // Now the account declares it. No bytes have been sent, no reference exists, and the index
+    // is exactly as ignorant as it was a moment ago — the answer changes because the *session*
+    // exists.
+    let upload = fixture.open_session(&bytes, "original", &bearer).await;
+    let response = fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    response.assert_status(StatusCode::CONFLICT);
+    let problem: serde_json::Value = response.json();
+    assert_eq!(problem["code"], "error.blob.pending_upload");
+    assert!(
+        problem.get("upload_id").is_none() && problem.get("received_bytes").is_none(),
+        "the fetcher is a different device from the uploader; which session and how far along \
+         are another device's business and nothing a client can act on"
+    );
+
+    // Abandoning the upload withdraws the promise, and the address goes back to being unknown.
+    // This is the property that made the session the right place to keep it: no reconciliation
+    // worker had to be written to stop a transient status becoming a permanent one.
+    fixture
+        .client
+        .delete(&format!("/v1/upload/{upload}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// The transient answer reports the caller's own upload and nobody else's (`S-C40`).
+#[tokio::test]
+async fn another_accounts_upload_is_not_this_accounts_pending_answer() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let bytes = payload(b'p', 8192);
+    let address = ContentAddress::parse(&support::checksum(&bytes)).expect("a content address");
+    fixture.open_session(&bytes, "original", &bearer).await;
+
+    // Unscoped, this would tell any authenticated caller who can name a hash that somebody,
+    // somewhere, is uploading those exact bytes. The case the `409` exists for is a second
+    // device of the *same* account, which learned the address from the signed manifest.
+    let stranger = fixture
+        .other_bearer("01937b7c-0000-7000-8000-0000000000ff")
+        .await;
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &stranger)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// Finalizing discharges the promise: the transient answer stops, because the thing that made
+/// it stopped (`S-C40`).
+///
+/// It does not become a `200` here, and that is not a gap in this slice. A blob is servable once
+/// a *visible* asset references it, and an upload alone leaves the asset row pending — the
+/// lifecycle op that publishes it is `S-C16`'s, and `a_live_blob_is_served_whole` covers the
+/// served end. What this case pins is the boundary the transient status owns: it is true exactly
+/// while an upload is in flight, and not one request longer.
+#[tokio::test]
+async fn finalizing_discharges_the_promise() {
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let bytes = payload(b'q', 8192);
+    let address = ContentAddress::parse(&support::checksum(&bytes)).expect("a content address");
+    let upload = fixture.open_session(&bytes, "original", &bearer).await;
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // One chunk carrying the whole declared size finalizes the session.
+    fixture
+        .chunk(&upload, 0, &bytes, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+    assert_eq!(
+        fixture
+            .blobs
+            .blob_for_test(&support::checksum(&bytes))
+            .await,
+        Some(bytes),
+        "the bytes committed, so the promise was kept rather than abandoned"
+    );
+
+    fixture
+        .client
+        .get(&format!("/v1/blob/{address}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+}
+
+/// A reference with no bytes is `410` whatever its role — a reference is written *after* the
+/// bytes commit, so its bytes being absent means they were removed, never that they have not
+/// arrived. This is why `S-C40`'s transient answer lives in the no-reference arm.
+#[tokio::test]
+async fn a_reference_without_bytes_is_gone_even_for_an_original() {
     let fixture = Fixture::working();
     let bearer = bearer(&fixture).await;
     let id = publish(&fixture, "awaiting").await;
@@ -405,11 +533,7 @@ async fn an_originals_absence_is_indistinguishable_from_a_dangling_reference() {
         .await;
     response.assert_status(StatusCode::GONE);
     let problem: serde_json::Value = response.json();
-    assert_eq!(
-        problem["code"], "error.blob.gone",
-        "when `S-C40` lands this becomes 409 error.blob.pending_upload, and this assertion is \
-         how anyone finds out the status moved"
-    );
+    assert_eq!(problem["code"], "error.blob.gone");
 }
 
 /// A referenced blob whose bytes are absent for any *other* reason is a dangling reference.

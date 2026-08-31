@@ -788,6 +788,26 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::NOT_FOUND);
 
+    // 409: nothing references the address *yet*, because the caller's own upload of exactly
+    // those bytes is still in flight (`S-C40`). Transient, and the only account-scoped answer
+    // this route gives.
+    let coming = payload(b'y', 4096);
+    let promised = checksum(&coming);
+    let in_flight = fixture.open_session(&coming, "original", &bearer).await;
+    client
+        .get(&format!("/v1/blob/{promised}"))
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .delete(&format!("/v1/upload/{in_flight}"))
+        .header("authorization", &bearer)
+        .header("x-capsule-protocol", PROTOCOL_VERSION)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
     // 200, 206 and 304 all come from one `Delivery`, which is why they are declared together.
     client
         .get(&format!("/v1/blob/{address}"))

@@ -29,7 +29,7 @@ use super::ceremony::{
     WEBAUTHN_CEREMONY_TTL, WebauthnCeremonyStore,
 };
 use super::ids::{
-    CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, SessionId, UploadId, UserId,
+    CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -565,6 +565,34 @@ impl UploadSessionStore for InMemoryUploadSessions {
             let removed = state.sessions.remove(upload).map(|entry| entry.record);
             tracing::info!(%upload, hit = removed.is_some(), "discarded upload session");
             Ok(removed)
+        })
+    }
+
+    fn pending_for_address<'a>(
+        &'a self,
+        owner: &'a OwnerId,
+        expected_hash: &'a str,
+    ) -> StoreFuture<'a, Option<UploadId>> {
+        Box::pin(async move {
+            let now = self.clock.now();
+            let mut state = lock(&self.state);
+            state.purge(now);
+            // A scan, and only defensible because this adapter is a double — a real one indexes
+            // `(owner_id, expected_hash)`. Ordered by upload id so two sessions declaring the
+            // same bytes give a deterministic answer rather than a map-iteration one.
+            let mut matches: Vec<&UploadId> = state
+                .sessions
+                .values()
+                .map(|entry| &entry.record)
+                .filter(|record| {
+                    record.status.is_active()
+                        && &record.owner_id == owner
+                        && record.expected_hash == expected_hash
+                })
+                .map(|record| &record.upload_id)
+                .collect();
+            matches.sort();
+            Ok(matches.first().map(|id| (*id).clone()))
         })
     }
 
@@ -1255,6 +1283,8 @@ mod tests {
         an_expired_session_leaves_no_listing_entry_behind,
         upload_session_round_trips_every_field,
         uploader_listing_is_ordered_and_scoped,
+        a_pending_address_is_owner_scoped_and_ends_with_the_session,
+        discarding_a_session_withdraws_its_pending_address,
         recording_progress_advances_bytes_clock_and_replay_together,
         chunk_replay_is_offset_addressed,
         finalization_is_claimed_exactly_once,

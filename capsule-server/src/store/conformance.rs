@@ -479,6 +479,88 @@ pub async fn uploader_listing_is_ordered_and_scoped(h: &dyn Harness) {
     );
 }
 
+/// An active session is the promise that bytes are coming; a terminal one is not (`S-C40`).
+pub async fn a_pending_address_is_owner_scoped_and_ends_with_the_session(h: &dyn Harness) {
+    let store = h.uploads();
+    let mine = upload("pending-addr", "mine", "uploader-a", 0);
+    let hash = mine.expected_hash.clone();
+    let owner = mine.owner_id.clone();
+    ok(store.open(mine.clone()).await, "open");
+
+    assert_eq!(
+        ok(
+            store.pending_for_address(&owner, &hash).await,
+            "pending_for_address"
+        ),
+        Some(mine.upload_id.clone()),
+        "an active session declaring the hash is the promise that its bytes are coming"
+    );
+
+    // Another account uploading the same bytes is not this account's answer. The scope is what
+    // keeps the serve path's transient status from reporting on somebody else's upload.
+    let stranger = OwnerId::new("someone-else");
+    assert_eq!(
+        ok(
+            store.pending_for_address(&stranger, &hash).await,
+            "pending_for_address"
+        ),
+        None,
+        "the promise is scoped to the account that made it"
+    );
+
+    // A hash nobody declared was never promised.
+    assert_eq!(
+        ok(
+            store.pending_for_address(&owner, &"f".repeat(64)).await,
+            "pending_for_address"
+        ),
+        None,
+        "an undeclared hash is not pending"
+    );
+
+    // And the promise ends when the session leaves the active states — a completed session's
+    // bytes are committed, a failed one's are not coming, and neither is "still uploading".
+    present(
+        ok(
+            store
+                .set_status(&mine.upload_id, UploadSessionStatus::Completed)
+                .await,
+            "set_status",
+        ),
+        "set_status",
+    );
+    assert_eq!(
+        ok(
+            store.pending_for_address(&owner, &hash).await,
+            "pending_for_address"
+        ),
+        None,
+        "a terminal session promises nothing"
+    );
+}
+
+/// A discarded session takes its promise with it (`S-C40`).
+pub async fn discarding_a_session_withdraws_its_pending_address(h: &dyn Harness) {
+    let store = h.uploads();
+    let record = upload("pending-discard", "a", "uploader", 0);
+    let hash = record.expected_hash.clone();
+    let owner = record.owner_id.clone();
+    ok(store.open(record.clone()).await, "open");
+    present(
+        ok(store.discard(&record.upload_id).await, "discard"),
+        "discard",
+    );
+
+    assert_eq!(
+        ok(
+            store.pending_for_address(&owner, &hash).await,
+            "pending_for_address"
+        ),
+        None,
+        "an abandoned upload's promise expires with it, which is why the promise does not need          a lifetime of its own"
+    );
+}
+
 /// Accepting a chunk advances the byte counter, the progress clock and the replay store — as
 /// one operation, because they describe one event.
 pub async fn recording_progress_advances_bytes_clock_and_replay_together(h: &dyn Harness) {
@@ -1400,6 +1482,8 @@ pub async fn run_all(h: &dyn Harness) {
 
     upload_session_round_trips_every_field(h).await;
     uploader_listing_is_ordered_and_scoped(h).await;
+    a_pending_address_is_owner_scoped_and_ends_with_the_session(h).await;
+    discarding_a_session_withdraws_its_pending_address(h).await;
     recording_progress_advances_bytes_clock_and_replay_together(h).await;
     chunk_replay_is_offset_addressed(h).await;
     finalization_is_claimed_exactly_once(h).await;

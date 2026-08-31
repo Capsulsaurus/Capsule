@@ -10,6 +10,7 @@
 //! | Resolution | Status | Meaning to a client |
 //! | --- | --- | --- |
 //! | [`ServeResolution::Serve`] | `200`, or `206` for a range | present ∧ indexed ∧ retrievable |
+//! | [`ServeResolution::AwaitingUpload`] | `409` | nothing references the address **yet** — the caller's own device has an upload of exactly these bytes in flight. **Transient**, so the client waits |
 //! | [`ServeResolution::NotFound`] | `404` | no live reference names the address, or it is malformed |
 //! | [`ServeResolution::Gone`] | `410` | referenced but not retrievable per policy — **permanent**, so the client degrades to a lower representation |
 //!
@@ -20,27 +21,38 @@
 //! taken down is exactly what a takedown does not owe a peer. The distinction is in the log
 //! line and, for the owner, in the audit record — not on the wire.
 //!
-//! # The `409 error.blob.pending_upload` arm is absent, and that is a finding
+//! # Where the transient `409` comes from, and where it deliberately does not (`S-C40`)
 //!
-//! The Salvo surface rendered a fourth status: an original that is legitimately still uploading
-//! is `409` and **transient**, explicitly not the permanent `410`, so a client waits instead of
-//! degrading. It is not here, because in this port it is **unreachable** — and a declared status
-//! nothing can reach is exactly the `S-C28` defect the rebuild exists to make impossible, so it
-//! is deleted rather than declared and left dark.
+//! An original that is legitimately still uploading is `409` and **transient**, explicitly not
+//! the permanent `410`, so a client waits instead of degrading to a thumbnail forever. The port
+//! could not render it at first, because the index learns a blob's address at **finalization**:
+//! a reference that exists always has its bytes, and bytes that are missing have no reference —
+//! "served" and "unknown", never "still coming". It was deleted rather than declared and left
+//! dark, which is the `S-C28` rule applied to a status this surface wanted.
 //!
-//! It is unreachable because the index learns a blob's address at **finalization**, which is
-//! after the bytes have committed. An original whose reference exists therefore always has its
-//! bytes, and one whose bytes are missing has no reference at all — so the two answers this
-//! surface can give are "served" and "unknown", never "still coming". The Salvo schema differed:
-//! it created a pending asset row at *session creation*, so the reference outlived the absence.
+//! **The declaration turned out to be somewhere it already was.** The obvious fix — and the one
+//! `S-C40` was filed predicting — was to record a *declared* original in the asset index at
+//! reservation. That is the Salvo schema, and it is worse than it looks:
 //!
-//! Restoring it is not a line of code. The index would have to record a **declared** original at
-//! reservation, which raises the question that decides the shape: an abandoned session would
-//! leave a reference promising an original forever, turning the transient `409` into a permanent
-//! one — the precise failure the `409`/`410` split exists to prevent. Filed as `S-C40` rather
-//! than guessed at. Note that nothing can reach the state today anyway: a second device learns
-//! an original's address from the signed manifest, and the only party holding an unfinalized
-//! original's address is the device uploading it.
+//! - an abandoned session would leave a reference promising an original forever, turning the
+//!   transient `409` into a permanent one — the precise failure the `409`/`410` split exists to
+//!   prevent — so it would need a lifetime and a reconciliation of its own;
+//! - and every in-flight upload would become a **reference with no bytes**, which is exactly
+//!   what the integrity scrub (`S-C14`) is built to report as a dangling reference. The fix
+//!   would have made a normal Tuesday afternoon look like corruption.
+//!
+//! An active upload session declaring that hash already *is* the promise. It already carries a
+//! bounded lifetime (24 hours, `LIFETIME_CAP`), is already reconciled by the discard worker, and
+//! is already removed when the upload is abandoned. So the resolution asks
+//! [`UploadSessionStore::pending_for_address`](crate::store::UploadSessionStore::pending_for_address)
+//! when nothing references an address, and the promise cannot outlive the thing that made it.
+//!
+//! **It is scoped to the caller's own account.** Unscoped, the `409` would tell any
+//! authenticated caller who can name a hash that *somebody, somewhere* is uploading those exact
+//! bytes. That is a small cross-account signal for no gain: the case the transient answer exists
+//! for is a second device of the **same account** fetching an original the first one is still
+//! sending, having learned its address from the signed manifest. A sharee or a federated peer
+//! gets the `404` they got before, and waits for the feed's `original_held` to flip instead.
 //!
 //! # Resolution order, and why it is an order
 //!
@@ -96,6 +108,7 @@ pub struct ServeContext {
     index: Arc<dyn AssetIndex>,
     blobs: Arc<dyn BlobStore>,
     marks: Arc<dyn crate::gc::CollectionStore>,
+    uploads: Arc<dyn crate::store::UploadSessionStore>,
 }
 
 impl ServeContext {
@@ -104,11 +117,13 @@ impl ServeContext {
         index: Arc<dyn AssetIndex>,
         blobs: Arc<dyn BlobStore>,
         marks: Arc<dyn crate::gc::CollectionStore>,
+        uploads: Arc<dyn crate::store::UploadSessionStore>,
     ) -> Self {
         Self {
             index,
             blobs,
             marks,
+            uploads,
         }
     }
 
@@ -127,6 +142,15 @@ impl ServeContext {
         self.marks.as_ref()
     }
 
+    /// The upload sessions, which are where an unfinalized blob's promise lives (`S-C40`).
+    ///
+    /// The **same** store the upload routes open sessions in, for the same reason the index is
+    /// the same one the feed reads: two stores would mean a transient answer about an upload
+    /// nobody is making.
+    pub fn uploads(&self) -> &dyn crate::store::UploadSessionStore {
+        self.uploads.as_ref()
+    }
+
     /// A handle to the store, for a [`BlobSource`] that outlives the request borrow.
     pub fn blob_handle(&self) -> Arc<dyn BlobStore> {
         Arc::clone(&self.blobs)
@@ -142,6 +166,16 @@ pub enum ServeResolution {
         address: ContentAddress,
         /// Its complete length, which every `Range` offset is relative to.
         size: u64,
+    },
+    /// Nothing references the address **yet**, and the caller has an upload of exactly these
+    /// bytes in flight (`S-C40`).
+    ///
+    /// Transient. The client waits and retries rather than degrading, which is the whole reason
+    /// this is not folded into [`Self::NotFound`].
+    AwaitingUpload {
+        /// The session that promised the bytes, for the log line. Never put on the wire: it is
+        /// another device's upload identifier and the fetcher has no use for it.
+        upload: crate::store::UploadId,
     },
     /// No live reference names the address, or it is not an address at all.
     NotFound,
@@ -160,9 +194,10 @@ pub struct ServeUnavailable(String);
 ///
 /// Returns [`ServeUnavailable`] when the index or the blob store could not answer — never for a
 /// blob that is simply absent, which is a decision rather than a failure.
-#[tracing::instrument(skip(context), fields(hash = %hash))]
+#[tracing::instrument(skip(context), fields(hash = %hash, owner = %owner))]
 pub async fn resolve(
     context: &ServeContext,
+    owner: &crate::store::OwnerId,
     hash: &str,
 ) -> Result<ServeResolution, ServeUnavailable> {
     // A string that is not a content address can address no committed blob. Answered as
@@ -182,6 +217,22 @@ pub async fn resolve(
         })?;
 
     let Some(reference) = reference else {
+        // Nothing references it. Before answering "unknown", ask whether the caller's own
+        // account is in the middle of putting it there (`S-C40`) — the difference between
+        // "never heard of it" and "your other device is still sending it" is the difference
+        // between a client degrading permanently and a client waiting.
+        if let Some(upload) = context
+            .uploads()
+            .pending_for_address(owner, hash)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "the upload sessions could not be asked about an address");
+                ServeUnavailable("the upload sessions could not answer".to_owned())
+            })?
+        {
+            tracing::debug!(%upload, "the address is not referenced yet: an upload is in flight");
+            return Ok(ServeResolution::AwaitingUpload { upload });
+        }
         tracing::debug!("no live reference names the address");
         return Ok(ServeResolution::NotFound);
     };
@@ -242,9 +293,12 @@ pub async fn resolve(
         });
     }
 
-    // No bytes behind a live reference. Every arm of this is a dangling reference in this port
-    // — see the `S-C40` note above for why the `awaiting-original` case cannot land here, and
-    // why `original_held` is carried on the reference against the slice that will need it.
+    // No bytes behind a live reference, and this stays `Gone` unconditionally. A reference is
+    // written at finalization, *after* the bytes commit, so a reference without bytes means the
+    // bytes were removed — never that they have not arrived. That is why `S-C40`'s transient
+    // answer is decided in the no-reference arm above and not here: putting it here would
+    // require the index to hold references to bytes that do not exist yet, which is the shape
+    // the integrity scrub reports as corruption.
     tracing::warn!(
         asset = %reference.asset_id,
         role = reference.role.as_str(),
