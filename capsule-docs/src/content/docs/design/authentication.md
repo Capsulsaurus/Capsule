@@ -51,7 +51,7 @@ Every well-known path Capsule serves, in one census. Each path's record format i
 | `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
 | `.well-known/capsule/attestation-keys` | The server's storage-attestation public keys + append-only key history.                                                        | [Storage Verification](/design/import/storage-verification/)                                              |
 
-**Status note.** `attestation-keys` is part of the v1 server contract (specified, and exercised end-to-end against the pre-teardown server); `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability). All of them are served by the planned `capsule-api` Kynos surface.
+**Status note.** `attestation-keys` is served today by the Kynos surface, with slice `S-C15` — publicly and without a credential, because a client pinning the key that checks the server's own liability must not need the server's permission to fetch it. `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability).
 
 ## Account Portability
 
