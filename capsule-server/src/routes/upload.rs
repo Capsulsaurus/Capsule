@@ -344,6 +344,20 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
+    /// The account is suspended (`S-C8`).
+    ///
+    /// Distinct from a quota refusal and from a permission one, deliberately: the three send a
+    /// client to three different screens, and design/moderation.md asks for a *structured*
+    /// code here precisely so the right remediation is surfaced. A suspension is access-level —
+    /// the user's data is untouched and the block is reversible.
+    #[error("this account is suspended and cannot upload")]
+    #[problem(status = 403, title = "Account suspended")]
+    AccountSuspended {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// Invariant 1: the protocol version is outside the window this server accepts.
     ///
     /// The accepted range rides as problem extensions rather than as the
@@ -761,6 +775,7 @@ impl SessionRejection {
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
+    Inject(moderation): Inject<crate::moderation::ModerationContext>,
     Auth(credential): Auth<AccessToken>,
     Headers(handshake): Headers<ProtocolHeader>,
     Json(request): Json<CreateUploadRequest>,
@@ -768,6 +783,26 @@ pub async fn create_upload(
     handshake_ok(upload.policy(), handshake.protocol.as_deref())?;
 
     let uploader = credential.user.clone();
+
+    // Account standing (`S-C8`), checked before anything is reserved. A suspension removes the
+    // ability to *write*, so refusing here — before a session exists, before a quota is charged
+    // — is what keeps a suspended account from leaving half-built state behind that a
+    // reinstatement would then have to reconcile.
+    let standing = moderation
+        .store()
+        .standing(&crate::store::UserId::new(uploader.as_str()))
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %uploader, "the moderation store could not answer");
+            CreateRejection::unavailable()
+        })?;
+    if !standing.may_write() {
+        tracing::info!(%uploader, "an upload was refused: the account is suspended");
+        return Err(CreateRejection::AccountSuspended {
+            code: error_codes::MODERATION_ACCOUNT_SUSPENDED,
+        });
+    }
+
     let owner = resolve_owner(&uploader, request.owner_id.as_deref())?;
 
     // Invariant 6, first half: this surface has no way to check an album it was not given.

@@ -1646,6 +1646,72 @@
         ]
       }
     },
+    "/v1/moderation/record": {
+      "get": {
+        "summary": "Serve the caller's own moderation record.",
+        "operationId": "moderation_record",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModerationRecordResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/.well-known/capsule/attestation-keys": {
       "get": {
         "summary": "Serve this server's storage-attestation keys and their append-only history.",
@@ -3593,6 +3659,66 @@
           "state"
         ],
         "description": "A user's quota snapshot."
+      },
+      "ModerationEventResponse": {
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "What was done: `suspended`, `reinstated`, `taken_down`, `legal_hold`, `hold_lifted`."
+          },
+          "asset_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The asset, when the action was about one rather than about the account."
+          },
+          "at": {
+            "type": "string",
+            "description": "When it happened, RFC 3339."
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why, where policy permits.\n\nAbsent is a real answer — a legal hold may come with an obligation not to disclose it —\nand reads as \"we are not able to say\", which is honest where a fabricated reason would\nnot be."
+          }
+        },
+        "type": "object",
+        "required": [
+          "action",
+          "at"
+        ],
+        "description": "One thing that was done to the account."
+      },
+      "ModerationRecordResponse": {
+        "properties": {
+          "standing": {
+            "type": "string",
+            "description": "`active` or `suspended`."
+          },
+          "suspended_since": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When a suspension began, RFC 3339. Absent while the account is active."
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/ModerationEventResponse"
+            },
+            "type": "array",
+            "description": "Everything done to this account, oldest first.\n\nA reinstatement does not erase the suspension it lifted: the record is what a user reads\nto understand their own account, and one that deleted its own history would leave them\nunable to see that anything ever happened."
+          }
+        },
+        "type": "object",
+        "required": [
+          "standing",
+          "events"
+        ],
+        "description": "The caller's moderation record."
       },
       "PublishedKeyResponse": {
         "properties": {

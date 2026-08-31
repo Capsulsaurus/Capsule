@@ -14117,6 +14117,16 @@
         }
       }
     },
+    "error.moderation.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach your account record. Please try again."
+          }
+        }
+      }
+    },
     "error.protocol.version_unsupported": {
       "localizations": {
         "ar": {

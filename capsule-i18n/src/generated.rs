@@ -173,6 +173,9 @@ pub mod error_codes {
     /// `error.moderation.server_blocked`
     pub const MODERATION_SERVER_BLOCKED: &str = "error.moderation.server_blocked";
 
+    /// `error.moderation.unavailable`
+    pub const MODERATION_UNAVAILABLE: &str = "error.moderation.unavailable";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 

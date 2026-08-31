@@ -13,6 +13,7 @@ pub mod devices;
 pub mod directory;
 pub mod enroll;
 pub mod escrow;
+pub mod moderation;
 pub mod ops;
 pub mod quota;
 pub mod receipts;

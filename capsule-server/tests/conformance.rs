@@ -127,6 +127,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/devices/enroll/channel/anything"),
         ("GET", "/v1/auth/devices/enroll/channel/anything"),
         ("DELETE", "/v1/auth/devices/enroll/channel/anything"),
+        ("GET", "/v1/moderation/record"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1808,6 +1809,37 @@ async fn every_declared_response_is_exercised() {
             .await
             .assert_status(StatusCode::NO_CONTENT);
     }
+
+    // ── The moderation record (`S-C8`) ─────────────────────────────────────────────────────
+    client
+        .get("/v1/moderation/record")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/moderation/record")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.moderation.set_unavailable(true);
+    client
+        .get("/v1/moderation/record")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.moderation.set_unavailable(false);
+    client
+        .get("/v1/moderation/record")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // ── The master-key escrow (`S-C12`) ────────────────────────────────────────────────────
     client

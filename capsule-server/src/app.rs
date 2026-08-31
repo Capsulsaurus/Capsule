@@ -35,6 +35,7 @@ use crate::directory::DeviceDirectoryContext;
 use crate::discovery::DiscoveryContext;
 use crate::enrollment::EnrollmentContext;
 use crate::escrow::EscrowContext;
+use crate::moderation::ModerationContext;
 use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
 use crate::sync::SyncContext;
@@ -72,6 +73,8 @@ pub struct App {
     escrow: EscrowContext,
     /// The cross-device add's collaborators.
     enrollment: EnrollmentContext,
+    /// The moderation record's collaborators.
+    moderation: ModerationContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -107,6 +110,8 @@ pub struct Modules {
     pub escrow: EscrowContext,
     /// The cross-device add's collaborators.
     pub enrollment: EnrollmentContext,
+    /// The moderation record's collaborators.
+    pub moderation: ModerationContext,
 }
 
 impl App {
@@ -125,6 +130,7 @@ impl App {
             discovery,
             escrow,
             enrollment,
+            moderation,
         } = modules;
         Self {
             auth,
@@ -139,6 +145,7 @@ impl App {
             discovery,
             escrow,
             enrollment,
+            moderation,
         }
     }
 }

@@ -212,6 +212,7 @@
     <string name="error_moderation_report_rate_limited">Too many reports from this source. Please wait and try again.</string>
     <string name="error_moderation_report_unsigned">The moderation report could not be verified.</string>
     <string name="error_moderation_server_blocked">This server is blocked from federating with us.</string>
+    <string name="error_moderation_unavailable">Capsule couldn\'t reach your account record. Please try again.</string>
     <string name="error_protocol_version_unsupported">This version of Capsule is no longer supported. Please update the app.</string>
     <string name="error_quota_exceeded">Your storage is full.</string>
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>

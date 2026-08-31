@@ -58,6 +58,9 @@ use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, HoldOutcome, IndexFuture,
     LifecycleOp, OpOutcome, PendingAsset, Reservation, ServingHold,
 };
+use capsule_server::moderation::{
+    InMemoryModeration, ModerationContext, ModerationEvent, ModerationStore, Standing,
+};
 use capsule_server::quota::{
     ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
@@ -355,6 +358,59 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// A moderation store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableModeration {
+    inner: InMemoryModeration,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableModeration {
+    /// A working store: every account active, nothing on record.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "moderation",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl ModerationStore for SwitchableModeration {
+    fn apply(&self, event: ModerationEvent, standing: Option<Standing>) -> StoreFuture<'_, ()> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.apply(event, standing)
+    }
+
+    fn standing<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Standing> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.standing(user)
+    }
+
+    fn events_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<ModerationEvent>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.events_for_user(user)
     }
 }
 
@@ -1629,6 +1685,8 @@ pub(crate) struct Fixture {
     pub(crate) enrollments: Arc<SwitchableEnrollments>,
     /// The enrollment relay channels.
     pub(crate) channels: Arc<SwitchableChannels>,
+    /// The account's standing and moderation record.
+    pub(crate) moderation: Arc<SwitchableModeration>,
 }
 
 impl Fixture {
@@ -1678,6 +1736,7 @@ impl Fixture {
         let cohorts = Arc::new(SwitchableCohorts::new());
         let enrollments = Arc::new(SwitchableEnrollments::new(clock.clone()));
         let channels = Arc::new(SwitchableChannels::new(clock.clone()));
+        let moderation = Arc::new(SwitchableModeration::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1716,6 +1775,7 @@ impl Fixture {
                 channels.clone(),
                 clock.clone(),
             ),
+            moderation: ModerationContext::new(moderation.clone()),
         });
 
         Self {
@@ -1741,6 +1801,7 @@ impl Fixture {
             cohorts,
             enrollments,
             channels,
+            moderation,
         }
     }
 
@@ -1822,6 +1883,7 @@ impl Fixture {
                 Arc::new(InMemoryChannels::new(clock.clone(), RELAY_CHANNEL_TTL)),
                 clock.clone(),
             ),
+            moderation: ModerationContext::new(Arc::new(InMemoryModeration::new())),
         });
         (app, clock)
     }

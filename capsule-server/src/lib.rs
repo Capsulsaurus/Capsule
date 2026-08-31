@@ -26,7 +26,7 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`quota`], [`scrub`], [`serve`], [`store`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`], [`store`],
 //! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
 //! workers ([`gc`], [`scrub`]) have no wire surface at all and cost nothing to exercise.
@@ -53,6 +53,7 @@ pub mod escrow;
 pub mod gc;
 pub mod index;
 pub mod limits;
+pub mod moderation;
 pub mod quota;
 pub mod routes;
 pub mod scrub;
@@ -119,6 +120,7 @@ pub fn router() -> ServerRouter {
         .mount(kynos::routes![
             routes::albums::provision_album,
             routes::quota::get_quota,
+            routes::moderation::moderation_record,
             routes::well_known::attestation_keys,
             routes::well_known::server_info,
             routes::well_known::deprecation_announcements,

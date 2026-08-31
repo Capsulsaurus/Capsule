@@ -199,6 +199,10 @@
         "message": "Too many reports from this source. Please wait and try again.",
         "context": "HTTP 429 on federated report intake (slice S-C8, threat-model invariant 24): the per-(reporting_server, reported_user) report budget for the current window is exhausted. Backpressure defeats the false-flag / mass-report abuse vector rather than amplifying it."
     },
+    "error.moderation.unavailable": {
+        "message": "Capsule couldn't reach your account record. Please try again.",
+        "context": "HTTP 500 on GET /v1/moderation/record (slice S-C8): the moderation store could not answer, so neither the account's standing nor its history could be read. Retryable, and it says nothing about whether anything is on record."
+    },
     "error.federation.capability_invalid": {
         "message": "This shared album's access could not be verified.",
         "context": "HTTP 401 on a federation pull (slice S-E2, threat-model invariant 19): the presented capability token failed structural verification — a missing claim, a bad Ed25519 signature, an unparseable RFC 3339 claim, a wrong issuer, a not-yet-valid (nbf) token, or an expiry window wider than the 24h ceiling. The token never establishes access; the peer must obtain a fresh, well-formed one."
