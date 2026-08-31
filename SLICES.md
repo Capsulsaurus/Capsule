@@ -256,7 +256,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | ready | found by `S-C23`; revocation is only as fast as the access-token TTL, and `touch_session` has no caller |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
-| S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | ready | found by `S-C4`; `share-links.md` and `metadata.md` disagree about where the strip happens |
+| S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -2883,6 +2883,12 @@ and its gRPC sync half is re-fronted on REST. The crate itself is
   that "the server enforces X" needs a standing check against what the server can see.
 - **Done when:** both docs name the same enforcement point, and `S-C4`'s containment property is
   stated as the server's half. **Tier:** Docs.
+- **Landed 2026-08-31 (`done`).** `share-links.md`'s Security Contract bullet now reads *"The
+  privacy strip is mandatory, and it happens at issue"*, says why the serve path cannot be the
+  enforcement point — *a server that could strip a share's metadata could read every share* —
+  and states the server's half as containment. `metadata.md`'s status note names the issuing
+  client and points at `S-C4`. **The no-opt-out rule is unchanged**; only who honours it moved,
+  and it moved to the one party that can.
 
 ### S-D1 — SDK upload client
 

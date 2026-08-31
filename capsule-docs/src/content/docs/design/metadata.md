@@ -156,7 +156,7 @@ Stripping happens at the moment of export — the encrypted sidecar inside the u
 
 Capsule's *own* devices syncing the *same user's* library do **not** trigger this redaction — that is intra-trust, not a boundary crossing.
 
-**Status note.** The strip table is implemented (`capsule_core::metadata::export_policy`) and enforced on the one export surface v1 ships: share-link serving (mandatory, no opt-out). The external-backup handoff crossing waits on a client file-export command, which is post-v1; federated peers receive ciphertext, so their strip applies when a share boundary is crossed, not on the pull itself.
+**Status note.** The strip table is implemented in `capsule_core::metadata::export_policy` and applied **client-side, at the moment a share link is issued** — which is the only place it can be applied, since the server holds no key to the metadata a share serves. The server's complementary guarantee is containment: a share link serves only the content addresses its own record enumerates, so a stripped share cannot be walked sideways into the unstripped blob (slices `S-C4`, `S-C50`). Together these are the one export surface v1 ships, mandatory and with no opt-out. The external-backup handoff crossing waits on a client file-export command, which is post-v1; federated peers receive ciphertext, so their strip applies when a share boundary is crossed, not on the pull itself.
 
 ## Collaborative Metadata
 
