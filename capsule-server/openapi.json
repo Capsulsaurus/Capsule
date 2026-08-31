@@ -410,6 +410,164 @@
         }
       }
     },
+    "/v1/auth/devices": {
+      "get": {
+        "summary": "List the caller's live sessions and the cohorts they group under.",
+        "description": "Scoped by credential with no path parameter, for the same reason the escrow is: the only\naccount entitled to a session ledger is its own, and making that structural beats enforcing\nit.",
+        "operationId": "list_devices",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevicesResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/devices/{session_id}": {
+      "delete": {
+        "summary": "Revoke one of the caller's sessions.",
+        "description": "Any live token may do this, including for the session making the request — signing this\ndevice out is a legitimate thing to ask for, and refusing it would only push a client into\ncalling `logout` and hoping the two behave the same.\n\n**Only the caller's own sessions.** The ownership check is against the record the store\nreturns rather than against a separate lookup, so there is no window between checking and\nclosing, and a session id belonging to another account answers exactly as an unknown one\ndoes.",
+        "operationId": "revoke_session",
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "description": "The session's identifier.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/auth/devices/directory": {
       "post": {
         "summary": "Publish the caller's signed device directory.",
@@ -2595,6 +2753,109 @@
           "revoked"
         ],
         "description": "What a global sign-out closed."
+      },
+      "SessionView": {
+        "properties": {
+          "session_id": {
+            "type": "string",
+            "description": "The session's identifier — what a revoke names."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When the session was opened, RFC 3339."
+          },
+          "last_active_at": {
+            "type": "string",
+            "description": "When it was last seen, RFC 3339.\n\nEqual to `created_at` until `S-C48` puts the session ledger on the request path. A\nclient must not label this \"last used\" before then."
+          },
+          "user_agent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The `User-Agent` the opening ceremony carried, if any."
+          },
+          "ip_address": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the opening ceremony came from, if any."
+          },
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The advisory cohort this session asserted, if any. Grouping only."
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory device the client claimed to be (`S-N3`), if any.\n\nA different identifier space from `cohort_hash`: this names one directory device, the\ncohort groups re-enrollments of one physical device. Both are client-asserted; neither\ngates anything."
+          },
+          "current": {
+            "type": "boolean",
+            "description": "Whether this is the session making the request.\n\nSo a client can label \"this device\" without comparing tokens it should not be handling,\nand so revoking the current session is a deliberate act rather than an accident."
+          }
+        },
+        "type": "object",
+        "required": [
+          "session_id",
+          "created_at",
+          "last_active_at",
+          "current"
+        ],
+        "description": "One live session."
+      },
+      "CohortView": {
+        "properties": {
+          "cohort_hash": {
+            "type": "string",
+            "description": "The advisory hash."
+          },
+          "first_seen": {
+            "type": "string",
+            "description": "The first time this account was seen under it, RFC 3339.\n\nWhat lets a client say *\"a device you've used before\"* about a session whose own\n`device_id` is new — which is the entire reason the map is durable."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "The most recent time, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "cohort_hash",
+          "first_seen",
+          "last_seen"
+        ],
+        "description": "One cohort this account has been seen under."
+      },
+      "DevicesResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionView"
+            },
+            "type": "array",
+            "description": "Every live session, oldest first."
+          },
+          "cohorts": {
+            "items": {
+              "$ref": "#/components/schemas/CohortView"
+            },
+            "type": "array",
+            "description": "Every cohort this account has ever been seen under, oldest first sighting first.\n\nServed **beside** the sessions rather than folded into them, because a cohort outlives\nthe sessions that carried it: a reinstall's new session groups with a cohort whose other\nsessions expired months ago, and a client that only had per-session cohorts could not\nsay \"you have used this device before\"."
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions",
+          "cohorts"
+        ],
+        "description": "The session ledger."
       },
       "PublishDirectoryResponse": {
         "properties": {

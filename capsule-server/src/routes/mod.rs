@@ -9,6 +9,7 @@
 pub mod albums;
 pub mod auth;
 pub mod blob;
+pub mod devices;
 pub mod directory;
 pub mod escrow;
 pub mod ops;

@@ -59,6 +59,9 @@ pub mod error_codes {
     /// `error.auth.session_expired`
     pub const AUTH_SESSION_EXPIRED: &str = "error.auth.session_expired";
 
+    /// `error.auth.session_not_found`
+    pub const AUTH_SESSION_NOT_FOUND: &str = "error.auth.session_not_found";
+
     /// `error.auth.unavailable`
     pub const AUTH_UNAVAILABLE: &str = "error.auth.unavailable";
 

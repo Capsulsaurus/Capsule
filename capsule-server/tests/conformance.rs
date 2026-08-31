@@ -119,6 +119,8 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/logout/all"),
         ("PUT", "/v1/auth/escrow"),
         ("GET", "/v1/auth/escrow"),
+        ("GET", "/v1/auth/devices"),
+        ("DELETE", "/v1/auth/devices/anything"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1383,6 +1385,135 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.revocations.set_unavailable(false);
+
+    // ── The session ledger (`S-C13`, `S-N3`) ───────────────────────────────────────────────
+    // Before the escrow block, and before the global sign-out at the end, because a revoke
+    // closes sessions the rest of the walk is using.
+    client
+        .get("/v1/auth/devices")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .delete("/v1/auth/devices/anything")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/auth/devices")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .delete("/v1/auth/devices/anything")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 404: no live session of this account has that id. 400 is the `Path` extractor's, reached
+    // the only way a `String` path parameter can be — a segment that is not a string.
+    client
+        .delete("/v1/auth/devices/01937b7c-0000-7000-8000-00000000dead")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .delete("/v1/auth/devices/%FF")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500 on both, from each of the two collaborators the listing reads.
+    fixture.sessions.set_unavailable(true);
+    client
+        .get("/v1/auth/devices")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .delete("/v1/auth/devices/anything")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.sessions.set_unavailable(false);
+    fixture.cohorts.set_unavailable(true);
+    client
+        .get("/v1/auth/devices")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.cohorts.set_unavailable(false);
+
+    // 200, then a 204 that revokes a session this walk is not using.
+    let ledger: serde_json::Value = client
+        .get("/v1/auth/devices")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let spare = ledger["sessions"]
+        .as_array()
+        .expect("a sessions array")
+        .iter()
+        .find(|s| s["current"] == serde_json::json!(false))
+        .map(|s| s["session_id"].as_str().expect("a session id").to_owned());
+    if let Some(spare) = spare {
+        client
+            .delete(&format!("/v1/auth/devices/{spare}"))
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    } else {
+        // No spare session to end, so a second sign-in provides one rather than the walk
+        // revoking the credential every block after this depends on.
+        let extra: capsule_server::routes::auth::TokenResponse = client
+            .post("/v1/auth/login")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({ "email": support::EMAIL, "password": support::PASSWORD }))
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        let ledger: serde_json::Value = client
+            .get("/v1/auth/devices")
+            .header("authorization", &format!("Bearer {}", extra.access_token))
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json();
+        let target = ledger["sessions"]
+            .as_array()
+            .expect("a sessions array")
+            .iter()
+            .find(|s| s["current"] == serde_json::json!(true))
+            .expect("the extra session")["session_id"]
+            .as_str()
+            .expect("a session id")
+            .to_owned();
+        client
+            .delete(&format!("/v1/auth/devices/{target}"))
+            .header("authorization", &bearer)
+            .send()
+            .await
+            .assert_status(StatusCode::NO_CONTENT);
+    }
 
     // ── The master-key escrow (`S-C12`) ────────────────────────────────────────────────────
     client

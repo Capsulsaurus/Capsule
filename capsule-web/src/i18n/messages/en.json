@@ -175,6 +175,7 @@
   "error.auth.revoke_proof_invalid": "That didn't confirm as you. Nothing was logged out.",
   "error.auth.revoke_proof_required": "Confirm with your account key to log out of all devices.",
   "error.auth.session_expired": "Your session has ended. Please sign in again.",
+  "error.auth.session_not_found": "That device is already signed out.",
   "error.auth.unavailable": "Capsule couldn't reach your account just now. Please try again.",
   "error.auth.user_already_exists": "An account with these details already exists.",
   "error.blob.gone": "That photo file is no longer available.",

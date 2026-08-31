@@ -62,12 +62,15 @@ use capsule_server::quota::{
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::store::memory::{
-    InMemoryAuthState, InMemoryChallenges, InMemoryUploadSessions, ManualClock,
+    InMemoryAuthState, InMemoryChallenges, InMemoryCohorts, InMemoryUploadSessions, ManualClock,
 };
 use capsule_server::store::{
-    AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, Clock,
-    FinalizeClaim, OwnerId, RevokeAllChallenge, SessionId, SessionRecord, StoreError, StoreFuture,
-    UploadId, UploadSessionRecord, UploadSessionStatus, UploadSessionStore, UserId,
+    AcceptedChunk, AlbumId, AssetId, AuthStateStore, ChallengeStore, ChallengeToken, ChannelId,
+    ChannelStore, Clock, CohortRecord, CohortStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
+    EnrollmentCode, EnrollmentStore, FinalizeClaim, OwnerId, PendingEnrollment, RELAY_CHANNEL_TTL,
+    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge, SessionId, SessionRecord,
+    StoreError, StoreFuture, UploadId, UploadSessionRecord, UploadSessionStatus,
+    UploadSessionStore, UserId,
 };
 use capsule_server::sync::{CURSOR_KEY_LEN, CursorCodec, SyncContext};
 use capsule_server::upload::authority::{
@@ -316,6 +319,61 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// A cohort map that can be made to fail on demand.
+///
+/// Delegating to the real in-memory one. The switch exists because the listing's `500` is
+/// otherwise reachable only through the *session* store, and a status that only one of two
+/// collaborators can produce is a status half-tested.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableCohorts {
+    inner: InMemoryCohorts,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableCohorts {
+    /// A working map.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "device-cohorts",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl CohortStore for SwitchableCohorts {
+    fn observe<'a>(
+        &'a self,
+        user: &'a UserId,
+        cohort_hash: &'a str,
+        at: Timestamp,
+    ) -> StoreFuture<'a, CohortRecord> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.observe(user, cohort_hash, at)
+    }
+
+    fn cohorts_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<CohortRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.cohorts_for_user(user)
     }
 }
 
@@ -1372,6 +1430,8 @@ pub(crate) struct Fixture {
     pub(crate) challenges: Arc<SwitchableChallenges>,
     /// The account's wrapped master key.
     pub(crate) escrows: Arc<SwitchableEscrow>,
+    /// The durable device-cohort map.
+    pub(crate) cohorts: Arc<SwitchableCohorts>,
 }
 
 impl Fixture {
@@ -1418,6 +1478,7 @@ impl Fixture {
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
         let escrows = Arc::new(SwitchableEscrow::new());
+        let cohorts = Arc::new(SwitchableCohorts::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1426,6 +1487,7 @@ impl Fixture {
                 sessions.clone(),
                 accounts.clone(),
                 challenges.clone(),
+                cohorts.clone(),
                 tokens.clone(),
                 clock.clone(),
             ),
@@ -1472,6 +1534,7 @@ impl Fixture {
             revocations,
             challenges,
             escrows,
+            cohorts,
         }
     }
 
@@ -1497,6 +1560,7 @@ impl Fixture {
                 Arc::new(SwitchableSessions::new(clock.clone())),
                 accounts,
                 Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
+                Arc::new(InMemoryCohorts::new()),
                 tokens.clone(),
                 clock.clone(),
             ),

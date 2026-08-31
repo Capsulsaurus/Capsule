@@ -75,6 +75,10 @@
         "message": "Your session has ended. Please sign in again.",
         "context": "HTTP 401 on POST /v1/auth/refresh: the presented refresh token did not verify, had expired, was the wrong kind of token, or named a session the server no longer holds. Every reason is surfaced identically so the endpoint is not an oracle; in all of them the client must re-authenticate interactively."
     },
+    "error.auth.session_not_found": {
+        "message": "That device is already signed out.",
+        "context": "HTTP 404 on DELETE /v1/auth/devices/{session_id} (slice S-C13): no live session of this account has that id. One answer for never-existed, already-closed, expired, and belonging to another account — distinguishing the last would make the endpoint an oracle over whether a guessed session id belongs to somebody else."
+    },
     "error.auth.unavailable": {
         "message": "Capsule couldn't reach your account just now. Please try again.",
         "context": "HTTP 500 on the /v1/auth surface: the account directory or the session store could not answer, so the request neither succeeded nor was refused. Retryable, unlike every other failure on these routes."

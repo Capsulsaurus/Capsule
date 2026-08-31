@@ -68,11 +68,12 @@ use std::pin::Pin;
 
 use jiff::{SignedDuration, Timestamp};
 
-pub use self::auth::{AuthStateStore, SessionRecord};
+pub use self::auth::{AuthStateStore, CohortRecord, CohortStore, SessionRecord};
 pub use self::ceremony::{
-    AuthenticationCeremony, CeremonyState, ChallengeStore, ChannelStore, Direction, DrainOutcome,
-    EnrollmentStore, PendingEnrollment, RegistrationCeremony, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, WebauthnCeremonyStore,
+    AuthenticationCeremony, CHALLENGE_TTL, CeremonyState, ChallengeStore, ChannelStore, Direction,
+    DrainOutcome, ENROLLMENT_CODE_TTL, EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL,
+    RegistrationCeremony, RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
+    WEBAUTHN_CEREMONY_TTL, WebauthnCeremonyStore,
 };
 pub use self::ids::{
     AlbumId, AssetId, CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId,

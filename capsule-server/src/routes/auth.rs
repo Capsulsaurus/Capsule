@@ -374,7 +374,7 @@ pub async fn login_user(
         // Both always `None` here, as in Salvo. See the module docs.
         user_agent: None,
         ip_address: None,
-        cohort_hash,
+        cohort_hash: cohort_hash.clone(),
         device_id,
     };
 
@@ -385,6 +385,22 @@ pub async fn login_user(
             store_unavailable(&error, "open a session");
             LoginRejection::unavailable()
         })?;
+
+    // The durable cohort map (`S-C13`), written **after** the session and **never** allowed to
+    // fail the sign-in. A cohort is legibility metadata: it groups a physical device's
+    // re-enrollments in the devices view and gates nothing. Refusing a sign-in because a
+    // grouping aid could not be recorded would let an advisory value take down the one
+    // operation an account cannot do without — which is the same reason a malformed cohort is
+    // dropped rather than rejected.
+    if let Some(cohort_hash) = cohort_hash.as_deref()
+        && let Err(error) = auth.cohorts().observe(&user, cohort_hash, now).await
+    {
+        tracing::warn!(
+            %error,
+            user_id = %user,
+            "the device-cohort map could not be updated; the sign-in stands"
+        );
+    }
 
     // Issued after the record exists, so a token can never name a session the store has not
     // heard of. The refresh lifetime is the store's own TTL rather than a second constant —

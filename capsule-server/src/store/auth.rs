@@ -27,6 +27,8 @@
 //!   revoke-all reports is `Vec::len()` of things that actually went away — there is no other
 //!   number to report.
 
+use std::fmt;
+
 use jiff::{SignedDuration, Timestamp};
 use uuid::Uuid;
 
@@ -130,4 +132,54 @@ pub trait AuthStateStore: std::fmt::Debug + Send + Sync {
     /// revoke-all signs the caller out too (slice `S-C23`) — the point of the ceremony, not an
     /// oversight. Running it twice returns an empty second time; there is no residue to count.
     fn close_all_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<SessionRecord>>;
+}
+
+// -------------------------------------------------------------------------------------------
+// Device cohorts
+// -------------------------------------------------------------------------------------------
+
+/// One physical device's history with an account (slice `S-C13`).
+///
+/// The durable half of the cohort story. A session store forgets a cohort exactly when the
+/// "have I seen this device before?" question becomes worth asking — a user reinstalls, gets a
+/// new `device_id` by design, and the sessions that carried the old one have long expired. So
+/// the map outlives sessions, and `first_seen` is what lets a client say *"a device you've used
+/// before (last seen March)"* rather than presenting a stranger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CohortRecord {
+    /// The account. Folded into the hash itself, so the same physical device under two accounts
+    /// yields unlinkable values and this field is a scoping key rather than a correlation one.
+    pub user_id: UserId,
+    /// The advisory hash the client asserted.
+    pub cohort_hash: String,
+    /// The first time this account saw it.
+    pub first_seen: Timestamp,
+    /// The most recent time.
+    pub last_seen: Timestamp,
+}
+
+/// The durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map.
+///
+/// **Advisory storage, structurally.** Nothing here is read by an authorization path, and the
+/// port offers no lookup that could tempt one: there is no "is this cohort trusted", no
+/// per-cohort flag, and no way to ask about a cohort across accounts. A client asserts the value
+/// and the server records it; that is the whole contract.
+pub trait CohortStore: fmt::Debug + Send + Sync {
+    /// Record that `user` was seen under `cohort_hash` at `at`.
+    ///
+    /// Sets `first_seen` on the first sighting and moves `last_seen` on every one. Idempotent in
+    /// the sense that matters: seeing the same cohort twice is one row, not two.
+    fn observe<'a>(
+        &'a self,
+        user: &'a UserId,
+        cohort_hash: &'a str,
+        at: Timestamp,
+    ) -> StoreFuture<'a, CohortRecord>;
+
+    /// Every cohort `user` has ever been seen under, oldest first seen first.
+    ///
+    /// The order is part of the contract for the same reason the session listing's is: this is a
+    /// user-visible surface, and a set-backed adapter must sort to conform rather than the suite
+    /// being loosened to accept whatever order it holds.
+    fn cohorts_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<CohortRecord>>;
 }

@@ -52,12 +52,13 @@ pub struct AuthContext {
     sessions: Arc<dyn AuthStateStore>,
     accounts: Arc<dyn AccountDirectory>,
     challenges: Arc<dyn crate::store::ChallengeStore>,
+    cohorts: Arc<dyn crate::store::CohortStore>,
     tokens: Arc<SessionTokens>,
     clock: Arc<dyn Clock>,
 }
 
 impl AuthContext {
-    /// Assembles the module from its five collaborators.
+    /// Assembles the module from its six collaborators.
     ///
     /// `clock` is passed separately rather than read back out of `tokens` because the session
     /// records and the token deadlines must be stamped from the *same* instant source; handing
@@ -67,6 +68,7 @@ impl AuthContext {
         sessions: Arc<dyn AuthStateStore>,
         accounts: Arc<dyn AccountDirectory>,
         challenges: Arc<dyn crate::store::ChallengeStore>,
+        cohorts: Arc<dyn crate::store::CohortStore>,
         tokens: Arc<SessionTokens>,
         clock: Arc<dyn Clock>,
     ) -> Self {
@@ -74,6 +76,7 @@ impl AuthContext {
             sessions,
             accounts,
             challenges,
+            cohorts,
             tokens,
             clock,
         }
@@ -92,6 +95,11 @@ impl AuthContext {
     /// The single-use revoke-all challenges (`S-C23`, `S-C29`).
     pub fn challenges(&self) -> &dyn crate::store::ChallengeStore {
         self.challenges.as_ref()
+    }
+
+    /// The durable device-cohort map (`S-C13`).
+    pub fn cohorts(&self) -> &dyn crate::store::CohortStore {
+        self.cohorts.as_ref()
     }
 
     /// The token signer.

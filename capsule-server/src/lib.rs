@@ -84,11 +84,12 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Two `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
-        // sixteen and the seventeenth operation is a compile error, so the split is forced —
-        // but grouping it by surface rather than splitting at the arbitrary boundary is what
-        // makes the next addition obvious rather than a puzzle.
-        // The account and library surfaces.
+        // Three `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // sixteen and the seventeenth operation is a compile error, so a split is forced — but
+        // grouping by surface rather than cutting at the arbitrary boundary is what makes the
+        // next addition obvious rather than a puzzle. Each group is well under the cap, so a
+        // new operation joins the surface it belongs to instead of wherever there is room.
+        // The account: who you are, what devices you have, and how you get your key back.
         .mount(kynos::routes![
             routes::version::get_version,
             routes::auth::login_user,
@@ -96,10 +97,15 @@ pub fn router() -> ServerRouter {
             routes::auth::logout,
             routes::auth::revoke_all_challenge,
             routes::auth::revoke_all,
+            routes::devices::list_devices,
+            routes::devices::revoke_session,
             routes::directory::publish_device_directory,
             routes::directory::fetch_device_directory,
             routes::escrow::store_escrow,
             routes::escrow::fetch_escrow,
+        ])
+        // The library's own surfaces, and the public record anybody may read.
+        .mount(kynos::routes![
             routes::albums::provision_album,
             routes::quota::get_quota,
             routes::well_known::attestation_keys,

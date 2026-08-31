@@ -38,7 +38,7 @@
 use jiff::{SignedDuration, Timestamp};
 use uuid::Uuid;
 
-use super::auth::{AuthStateStore, SessionRecord};
+use super::auth::{AuthStateStore, CohortStore, SessionRecord};
 use super::ceremony::{
     AuthenticationCeremony, CeremonyState, ChallengeStore, ChannelStore, Direction, DrainOutcome,
     EnrollmentStore, PendingEnrollment, RegistrationCeremony, RelayChannel, RelayOutcome,
@@ -72,6 +72,8 @@ pub trait Harness: Send + Sync {
     fn channels(&self) -> &dyn ChannelStore;
     /// The WebAuthn ceremony store under test.
     fn webauthn(&self) -> &dyn WebauthnCeremonyStore;
+    /// The durable device-cohort map under test.
+    fn cohorts(&self) -> &dyn CohortStore;
 
     /// Move every store in this harness `by` forward in its own time.
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()>;
@@ -1275,6 +1277,106 @@ pub async fn a_webauthn_ceremony_expires_with_its_store(h: &dyn Harness) {
     );
 }
 
+// -------------------------------------------------------------------------------------------
+// Device cohorts
+// -------------------------------------------------------------------------------------------
+
+/// A cohort is a fact about a device, not an event: seeing it twice is one row.
+pub async fn observing_a_cohort_twice_is_one_row_that_moves_last_seen(h: &dyn Harness) {
+    let user = UserId::new("cohort-user-1");
+    let at = Timestamp::UNIX_EPOCH;
+
+    let first = ok(
+        h.cohorts().observe(&user, "cohort-a", at).await,
+        "observe a cohort",
+    );
+    assert_eq!(first.first_seen, at);
+    assert_eq!(first.last_seen, at);
+
+    let later = crate::store::deadline(at, SignedDuration::from_hours(72));
+    let second = ok(
+        h.cohorts().observe(&user, "cohort-a", later).await,
+        "observe the same cohort again",
+    );
+    assert_eq!(
+        second.first_seen, at,
+        "first_seen never moves: it is what lets a client say `a device you've used before`"
+    );
+    assert_eq!(second.last_seen, later);
+
+    let held = ok(
+        h.cohorts().cohorts_for_user(&user).await,
+        "list an account's cohorts",
+    );
+    assert_eq!(held.len(), 1, "one physical device is one row");
+}
+
+/// Cohorts are listed oldest first sighting first, and the order is total.
+pub async fn cohorts_are_listed_oldest_first(h: &dyn Harness) {
+    let user = UserId::new("cohort-user-2");
+    let base = Timestamp::UNIX_EPOCH;
+    for (hash, hours) in [
+        ("cohort-third", 48),
+        ("cohort-first", 0),
+        ("cohort-second", 24),
+    ] {
+        ok(
+            h.cohorts()
+                .observe(
+                    &user,
+                    hash,
+                    crate::store::deadline(base, SignedDuration::from_hours(hours)),
+                )
+                .await,
+            "observe a cohort",
+        );
+    }
+
+    let held = ok(h.cohorts().cohorts_for_user(&user).await, "list cohorts");
+    let order: Vec<&str> = held.iter().map(|c| c.cohort_hash.as_str()).collect();
+    assert_eq!(order, ["cohort-first", "cohort-second", "cohort-third"]);
+}
+
+/// A cohort is scoped to its account, and the hash folds the account in besides.
+pub async fn a_cohort_is_scoped_to_its_account(h: &dyn Harness) {
+    let mine = UserId::new("cohort-user-3");
+    let theirs = UserId::new("cohort-user-4");
+    ok(
+        h.cohorts()
+            .observe(&mine, "shared-spelling", Timestamp::UNIX_EPOCH)
+            .await,
+        "observe a cohort",
+    );
+
+    assert!(
+        ok(h.cohorts().cohorts_for_user(&theirs).await, "list cohorts").is_empty(),
+        "one account's cohorts are not another's — and the hash folds `user_id` in besides, so \
+         the same physical device under two accounts does not even produce this spelling twice"
+    );
+}
+
+/// The cohort map does not expire with the sessions that carried it.
+pub async fn the_cohort_map_does_not_expire(h: &dyn Harness) {
+    // The one store in this module with no TTL, and deliberately: a cohort is worth recording
+    // precisely because it outlives the sessions that named it. A map that expired with them
+    // would forget exactly when "have I seen this device before?" starts being worth asking.
+    let user = UserId::new("cohort-user-5");
+    ok(
+        h.cohorts()
+            .observe(&user, "cohort-durable", Timestamp::UNIX_EPOCH)
+            .await,
+        "observe a cohort",
+    );
+
+    ok(
+        h.advance(SignedDuration::from_hours(24 * 365)).await,
+        "advance a year",
+    );
+
+    let held = ok(h.cohorts().cohorts_for_user(&user).await, "list cohorts");
+    assert_eq!(held.len(), 1, "a cohort a year old is still a cohort");
+}
+
 // ===========================================================================================
 // The whole suite
 // ===========================================================================================
@@ -1317,4 +1419,8 @@ pub async fn run_all(h: &dyn Harness) {
     a_webauthn_ceremony_is_consumed_by_its_finish(h).await;
     webauthn_registration_and_authentication_do_not_collide(h).await;
     a_webauthn_ceremony_expires_with_its_store(h).await;
+    observing_a_cohort_twice_is_one_row_that_moves_last_seen(h).await;
+    cohorts_are_listed_oldest_first(h).await;
+    a_cohort_is_scoped_to_its_account(h).await;
+    the_cohort_map_does_not_expire(h).await;
 }

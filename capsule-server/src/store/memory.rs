@@ -21,7 +21,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::auth::{AuthStateStore, DEFAULT_SESSION_TTL, SessionRecord};
+use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
     AuthenticationCeremony, CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome,
     ENROLLMENT_CODE_TTL, EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL,
@@ -583,6 +583,77 @@ impl UploadSessionStore for InMemoryUploadSessions {
 }
 
 // ===========================================================================================
+// Device cohorts
+// ===========================================================================================
+
+/// In-memory [`CohortStore`].
+///
+/// **No clock and no TTL.** Every other store in this module expires things; this one is the
+/// exception that makes the cohort story work at all. A cohort is worth recording precisely
+/// because it outlives the sessions that carried it — a user reinstalls, gets a new `device_id`
+/// by design, and the sessions that named the old one expired months ago. A map that expired
+/// with them would forget exactly when "have I seen this device before?" starts being worth
+/// asking.
+#[derive(Debug, Default)]
+pub struct InMemoryCohorts {
+    seen: Mutex<BTreeMap<(UserId, String), CohortRecord>>,
+}
+
+impl InMemoryCohorts {
+    /// An empty map.
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl CohortStore for InMemoryCohorts {
+    fn observe<'a>(
+        &'a self,
+        user: &'a UserId,
+        cohort_hash: &'a str,
+        at: Timestamp,
+    ) -> StoreFuture<'a, CohortRecord> {
+        Box::pin(async move {
+            let mut seen = lock(&self.seen);
+            let key = (user.clone(), cohort_hash.to_owned());
+            let record = seen
+                .entry(key)
+                .and_modify(|held| held.last_seen = at)
+                .or_insert_with(|| {
+                    tracing::info!(%user, "an account was seen under a new device cohort");
+                    CohortRecord {
+                        user_id: user.clone(),
+                        cohort_hash: cohort_hash.to_owned(),
+                        first_seen: at,
+                        last_seen: at,
+                    }
+                });
+            Ok(record.clone())
+        })
+    }
+
+    fn cohorts_for_user<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Vec<CohortRecord>> {
+        Box::pin(async move {
+            let seen = lock(&self.seen);
+            let mut found: Vec<CohortRecord> = seen
+                .iter()
+                .filter(|((held, _), _)| held == user)
+                .map(|(_, record)| record.clone())
+                .collect();
+            // Oldest first sighting first, ties broken by the hash so the order is total. A
+            // user-visible listing whose order depends on the backend is a listing that
+            // reshuffles itself between page loads.
+            found.sort_by(|a, b| {
+                a.first_seen
+                    .cmp(&b.first_seen)
+                    .then_with(|| a.cohort_hash.cmp(&b.cohort_hash))
+            });
+            Ok(found)
+        })
+    }
+}
+
+// ===========================================================================================
 // Ceremonies
 // ===========================================================================================
 
@@ -1028,6 +1099,8 @@ pub struct InMemoryStores {
     enrollments: InMemoryEnrollments,
     channels: InMemoryChannels,
     webauthn: InMemoryWebauthnCeremonies,
+    /// The one store here with no TTL and no clock — see [`InMemoryCohorts`].
+    cohorts: InMemoryCohorts,
 }
 
 impl InMemoryStores {
@@ -1071,6 +1144,7 @@ impl InMemoryStores {
             enrollments: InMemoryEnrollments::new(Arc::clone(&shared), enrollment),
             channels: InMemoryChannels::new(Arc::clone(&shared), channel),
             webauthn: InMemoryWebauthnCeremonies::new(Arc::clone(&shared), webauthn),
+            cohorts: InMemoryCohorts::new(),
             clock,
         }
     }
@@ -1102,6 +1176,10 @@ impl super::conformance::Harness for InMemoryStores {
 
     fn enrollments(&self) -> &dyn EnrollmentStore {
         &self.enrollments
+    }
+
+    fn cohorts(&self) -> &dyn CohortStore {
+        &self.cohorts
     }
 
     fn channels(&self) -> &dyn ChannelStore {

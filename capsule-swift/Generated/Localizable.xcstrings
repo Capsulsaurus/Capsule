@@ -11433,6 +11433,16 @@
         }
       }
     },
+    "error.auth.session_not_found": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That device is already signed out."
+          }
+        }
+      }
+    },
     "error.auth.unavailable": {
       "localizations": {
         "en": {
