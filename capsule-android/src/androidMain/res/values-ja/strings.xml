@@ -164,6 +164,7 @@
     <string name="error_share_rate_limited">試行回数が多すぎます。しばらくしてからもう一度お試しください。</string>
     <string name="error_storage_deep_rate_limited">ディープストレージチェックが多すぎます。しばらくしてからもう一度お試しください。</string>
     <string name="error_storage_invalid_request">ストレージ検証リクエストの形式が正しくありません。</string>
+    <string name="error_storage_unavailable">Capsule は写真が安全に保存されているか確認できませんでした。もう一度お試しください。</string>
     <string name="error_sync_cursor_invalid">同期セッションが最新ではありません。Capsule は最初から再同期します。</string>
     <string name="error_sync_unauthenticated">同期を続けるには、もう一度サインインしてください。</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>

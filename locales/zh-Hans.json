@@ -167,6 +167,10 @@
         "message": "存储验证请求格式不正确。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule 无法确认你的照片是否已安全存储，请重试。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "深度存储检查次数过多。请稍候再试。",
         "context": "Machine-translated seed pending human review."

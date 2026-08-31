@@ -164,6 +164,7 @@
     <string name="error_share_rate_limited">尝试次数过多。请稍候再试。</string>
     <string name="error_storage_deep_rate_limited">深度存储检查次数过多。请稍候再试。</string>
     <string name="error_storage_invalid_request">存储验证请求格式不正确。</string>
+    <string name="error_storage_unavailable">Capsule 无法确认你的照片是否已安全存储，请重试。</string>
     <string name="error_sync_cursor_invalid">同步会话已过期。Capsule 将从头重新同步。</string>
     <string name="error_sync_unauthenticated">请重新登录以继续同步。</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>

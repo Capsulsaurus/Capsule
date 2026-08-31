@@ -167,6 +167,10 @@
         "message": "स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule यह जाँच नहीं सका कि आपकी फ़ोटो सुरक्षित रूप से संग्रहित हैं या नहीं। कृपया फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
         "context": "Machine-translated seed pending human review."

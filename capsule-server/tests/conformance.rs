@@ -104,6 +104,7 @@ async fn every_declared_response_is_exercised() {
         ("DELETE", "/v1/upload/anything"),
         ("GET", "/v1/sync"),
         ("GET", "/v1/blob/deadbeef"),
+        ("POST", "/v1/storage/verify"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -772,6 +773,75 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::GONE);
+
+    // ── POST /v1/storage/verify ────────────────────────────────────────────────────────────
+    // 401 and 403 are the scheme's; 415 and 422 are the `Json` extractor's, declared on every
+    // operation that takes a body.
+    client
+        .post("/v1/storage/verify")
+        .json(&json!({ "assets": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/storage/verify")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .json(&json!({ "assets": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .json(&json!({ "assets": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 400: a well-formed body that is not a well-formed question.
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .json(&json!({ "assets": [] }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500: the index could not answer, which must never read as a durability finding.
+    fixture.index.set_unavailable(true);
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .json(&json!({
+            "assets": [{ "asset_id": "anything", "blob_hashes": [checksum(b"anything")] }],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.index.set_unavailable(false);
+
+    // 200: a verdict, even for an asset that does not exist — "not durable" is an answer, and
+    // refusing would make it indistinguishable from "could not check".
+    client
+        .post("/v1/storage/verify")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "assets": [{ "asset_id": "anything", "blob_hashes": [checksum(b"anything")] }],
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

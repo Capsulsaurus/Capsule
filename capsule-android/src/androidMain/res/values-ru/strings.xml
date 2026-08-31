@@ -164,6 +164,7 @@
     <string name="error_share_rate_limited">Слишком много попыток. Подождите и повторите попытку.</string>
     <string name="error_storage_deep_rate_limited">Слишком много глубоких проверок хранилища. Подождите и повторите попытку.</string>
     <string name="error_storage_invalid_request">Запрос на проверку хранилища имеет неверный формат.</string>
+    <string name="error_storage_unavailable">Capsule не удалось проверить, надёжно ли сохранены ваши фотографии. Повторите попытку.</string>
     <string name="error_sync_cursor_invalid">Сеанс синхронизации устарел. Capsule повторно синхронизируется с самого начала.</string>
     <string name="error_sync_unauthenticated">Войдите снова, чтобы продолжить синхронизацию.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>

@@ -34,6 +34,7 @@ pub mod serve;
 pub mod store;
 pub mod sync;
 pub mod upload;
+pub mod verify;
 
 use kynos::middleware::catch_panic::Propagate;
 use kynos::middleware::limits::BodySize;
@@ -70,6 +71,7 @@ pub fn router() -> ServerRouter {
             routes::upload::cancel_upload,
             routes::sync::sync_feed,
             routes::blob::get_blob,
+            routes::storage::verify_storage,
         ])
 }
 

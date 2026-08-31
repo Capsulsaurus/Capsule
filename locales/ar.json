@@ -167,6 +167,10 @@
         "message": "طلب التحقق من التخزين مُشوَّه.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "تعذّر على Capsule التحقق من تخزين صورك بأمان. يُرجى المحاولة مرة أخرى.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "عمليات فحص عميق للتخزين كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
         "context": "Machine-translated seed pending human review."

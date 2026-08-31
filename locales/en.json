@@ -195,6 +195,10 @@
         "message": "The storage-verification request was malformed.",
         "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule couldn't check whether your photos are safely stored. Please try again.",
+        "context": "HTTP 500 on POST /v1/storage/verify (slice S-C3): the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
+    },
     "error.storage.deep_rate_limited": {
         "message": "Too many deep storage checks. Please wait and try again.",
         "context": "HTTP 429 from POST /storage/verify with deep=true (slice S-C3): the caller exceeded its per-user deep re-hash budget for the current window. Deep scans are server-priced (rate-limited and coalesced) so they cannot be turned into an I/O-amplification attack."

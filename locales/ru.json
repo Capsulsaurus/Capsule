@@ -167,6 +167,10 @@
         "message": "Запрос на проверку хранилища имеет неверный формат.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule не удалось проверить, надёжно ли сохранены ваши фотографии. Повторите попытку.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "Слишком много глубоких проверок хранилища. Подождите и повторите попытку.",
         "context": "Machine-translated seed pending human review."

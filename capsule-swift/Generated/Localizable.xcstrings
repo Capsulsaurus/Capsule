@@ -14385,6 +14385,88 @@
         }
       }
     },
+    "error.storage.unavailable": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر على Capsule التحقق من تخزين صورك بأمان. يُرجى المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule konnte nicht prüfen, ob deine Fotos sicher gespeichert sind. Bitte versuche es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't check whether your photos are safely stored. Please try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule no pudo comprobar si tus fotos están guardadas de forma segura. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule n'a pas pu vérifier si vos photos sont stockées en sécurité. Veuillez réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule यह जाँच नहीं सका कि आपकी फ़ोटो सुरक्षित रूप से संग्रहित हैं या नहीं। कृपया फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule non è riuscito a verificare se le tue foto sono archiviate in sicurezza. Riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule は写真が安全に保存されているか確認できませんでした。もう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule이 사진이 안전하게 저장되었는지 확인하지 못했습니다. 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Capsule não conseguiu verificar se suas fotos estão armazenadas com segurança. Tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule не удалось проверить, надёжно ли сохранены ваши фотографии. Повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule 无法确认你的照片是否已安全存储，请重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule 無法確認你的相片是否已安全儲存，請重試。"
+          }
+        }
+      }
+    },
     "error.sync.cursor_invalid": {
       "localizations": {
         "ar": {

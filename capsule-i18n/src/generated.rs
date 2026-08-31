@@ -167,6 +167,9 @@ pub mod error_codes {
     /// `error.storage.invalid_request`
     pub const STORAGE_INVALID_REQUEST: &str = "error.storage.invalid_request";
 
+    /// `error.storage.unavailable`
+    pub const STORAGE_UNAVAILABLE: &str = "error.storage.unavailable";
+
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 

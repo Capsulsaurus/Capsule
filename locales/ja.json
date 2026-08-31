@@ -167,6 +167,10 @@
         "message": "ストレージ検証リクエストの形式が正しくありません。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule は写真が安全に保存されているか確認できませんでした。もう一度お試しください。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "ディープストレージチェックが多すぎます。しばらくしてからもう一度お試しください。",
         "context": "Machine-translated seed pending human review."

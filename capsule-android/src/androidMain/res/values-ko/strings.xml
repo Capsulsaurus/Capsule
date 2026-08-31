@@ -164,6 +164,7 @@
     <string name="error_share_rate_limited">시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.</string>
     <string name="error_storage_deep_rate_limited">심층 저장소 검사가 너무 많습니다. 잠시 후 다시 시도해 주세요.</string>
     <string name="error_storage_invalid_request">저장소 확인 요청의 형식이 올바르지 않습니다.</string>
+    <string name="error_storage_unavailable">Capsule이 사진이 안전하게 저장되었는지 확인하지 못했습니다. 다시 시도해 주세요.</string>
     <string name="error_sync_cursor_invalid">동기화 세션이 오래되었습니다. Capsule이 처음부터 다시 동기화합니다.</string>
     <string name="error_sync_unauthenticated">동기화를 계속하려면 다시 로그인해 주세요.</string>
     <string name="error_sync_unavailable">Capsule could not reach the server to sync. It will try again.</string>

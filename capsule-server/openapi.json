@@ -1254,6 +1254,113 @@
           }
         ]
       }
+    },
+    "/v1/storage/verify": {
+      "post": {
+        "summary": "Confirm that the server holds the copies a client is about to stop holding.",
+        "description": "A pure read: it writes no blob, no index row and no verdict. Soundness against a racing\ncollection comes from the standing GC grace window rather than from a per-request lease,\nwhich is why nothing here takes one.",
+        "operationId": "verify_storage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StorageVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StorageVerifyResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -1724,6 +1831,123 @@
           "has_more"
         ],
         "description": "A page of the feed."
+      },
+      "AssetVerifyRequest": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset."
+          },
+          "blob_hashes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Every content address the client would be trusting the server with. The verdict is a\nconjunction over exactly these, so a client asks about what it is about to delete."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "blob_hashes"
+        ],
+        "description": "One asset to verify, with the exact copies the client is relying on."
+      },
+      "StorageVerifyRequest": {
+        "properties": {
+          "assets": {
+            "items": {
+              "$ref": "#/components/schemas/AssetVerifyRequest"
+            },
+            "type": "array",
+            "description": "The assets to verify."
+          }
+        },
+        "type": "object",
+        "required": [
+          "assets"
+        ],
+        "description": "The `POST /v1/storage/verify` body."
+      },
+      "BlobVerdictResponse": {
+        "properties": {
+          "hash": {
+            "type": "string",
+            "description": "The address, as the client declared it."
+          },
+          "role": {
+            "type": "string",
+            "description": "The role the asset holds it under — `unknown` for a hash the asset does not hold."
+          },
+          "stored": {
+            "type": "boolean",
+            "description": "The bytes are present at that address."
+          },
+          "indexed": {
+            "type": "boolean",
+            "description": "A live asset of the caller's references the address."
+          },
+          "retrievable": {
+            "type": "boolean",
+            "description": "Nothing is withholding it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "hash",
+          "role",
+          "stored",
+          "indexed",
+          "retrievable"
+        ],
+        "description": "One declared blob's verdict."
+      },
+      "StorageVerdictResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the client asked about."
+          },
+          "durable": {
+            "type": "boolean",
+            "description": "Every declared blob is stored ∧ indexed ∧ retrievable. **This is the field that gates a\ndeletion**, so it is false whenever the server cannot say otherwise."
+          },
+          "blobs": {
+            "items": {
+              "$ref": "#/components/schemas/BlobVerdictResponse"
+            },
+            "type": "array",
+            "description": "One entry per declared hash, in declaration order and never shortened."
+          },
+          "checked_at": {
+            "type": "string",
+            "description": "The server's own clock at verification, RFC 3339. Never the client's."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "durable",
+          "blobs",
+          "checked_at"
+        ],
+        "description": "One asset's verdict."
+      },
+      "StorageVerifyResponse": {
+        "properties": {
+          "verdicts": {
+            "items": {
+              "$ref": "#/components/schemas/StorageVerdictResponse"
+            },
+            "type": "array",
+            "description": "One verdict per requested asset, in request order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "verdicts"
+        ],
+        "description": "The `POST /v1/storage/verify` response."
       }
     },
     "securitySchemes": {

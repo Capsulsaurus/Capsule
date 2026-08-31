@@ -29,7 +29,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use capsule_server::App;
 use capsule_server::auth::{
-    AccountDirectory, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
+    AccountDirectory, AuthContext, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
 };
 use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
@@ -52,6 +52,7 @@ use capsule_server::upload::authority::{
     AlbumWriteAccess, AuthorityError, AuthorityFuture, WriteAuthority,
 };
 use capsule_server::upload::{UploadContext, UploadPolicy};
+use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use kynos::test::{TestClient, TestRequest};
@@ -881,11 +882,13 @@ impl Fixture {
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
-        let app = App::with_auth(
-            sessions.clone(),
-            accounts.clone(),
-            tokens.clone(),
-            clock.clone(),
+        let app = App::new(
+            AuthContext::new(
+                sessions.clone(),
+                accounts.clone(),
+                tokens.clone(),
+                clock.clone(),
+            ),
             UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
@@ -896,6 +899,7 @@ impl Fixture {
             ),
             SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
             ServeContext::new(index.clone(), blobs.clone()),
+            VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
         );
 
         Self {
@@ -928,11 +932,13 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
-        let app = App::with_auth(
-            Arc::new(SwitchableSessions::new(clock.clone())),
-            accounts,
-            Arc::new(signer(clock.clone())),
-            clock.clone(),
+        let app = App::new(
+            AuthContext::new(
+                Arc::new(SwitchableSessions::new(clock.clone())),
+                accounts,
+                Arc::new(signer(clock.clone())),
+                clock.clone(),
+            ),
             UploadContext::new(
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 blobs.clone(),
@@ -946,7 +952,8 @@ impl Fixture {
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
             ),
-            ServeContext::new(index, blobs),
+            ServeContext::new(index.clone(), blobs.clone()),
+            VerifyContext::new(index, blobs, clock.clone()),
         );
         (app, clock)
     }

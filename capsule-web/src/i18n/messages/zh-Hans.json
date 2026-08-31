@@ -165,6 +165,7 @@
   "error.share.rate_limited": "尝试次数过多。请稍候再试。",
   "error.storage.deep_rate_limited": "深度存储检查次数过多。请稍候再试。",
   "error.storage.invalid_request": "存储验证请求格式不正确。",
+  "error.storage.unavailable": "Capsule 无法确认你的照片是否已安全存储，请重试。",
   "error.sync.cursor_invalid": "同步会话已过期。Capsule 将从头重新同步。",
   "error.sync.unauthenticated": "请重新登录以继续同步。",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

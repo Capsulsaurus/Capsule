@@ -165,6 +165,7 @@
   "error.share.rate_limited": "Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.",
   "error.storage.deep_rate_limited": "Zu viele tiefe Speicherprüfungen. Bitte warten Sie und versuchen Sie es erneut.",
   "error.storage.invalid_request": "Die Anfrage zur Speicherüberprüfung ist fehlerhaft.",
+  "error.storage.unavailable": "Capsule konnte nicht prüfen, ob deine Fotos sicher gespeichert sind. Bitte versuche es erneut.",
   "error.sync.cursor_invalid": "Die Synchronisierungssitzung ist veraltet. Capsule synchronisiert von vorne.",
   "error.sync.unauthenticated": "Bitte melden Sie sich erneut an, um die Synchronisierung fortzusetzen.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

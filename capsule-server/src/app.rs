@@ -16,17 +16,23 @@
 //! `Provides<T>` per field, and two fields of the same type is a derive error — so the shape
 //! here is "one bundle per cohesive module", which is also the shape design/module-map.md
 //! describes.
-
-use std::sync::Arc;
+//!
+//! [`App::new`] is the **only** constructor, and that is deliberate. There was a `with_auth`
+//! convenience taking the auth module's four collaborators inline beside the other bundles,
+//! which the two test fixtures were its only callers of. It grew by one argument per ported
+//! surface and was at eight when it was removed: a signature that lengthens every time a module
+//! is added is a signature that will eventually be got wrong positionally, and it was undoing
+//! the one-bundle-per-module shape this type exists to hold. A caller builds
+//! [`AuthContext`] like every other module's bundle.
 
 use kynos::prelude::*;
 use kynos::security::Authenticates;
 
-use crate::auth::{AccessToken, AccountDirectory, AuthContext, SessionTokens};
+use crate::auth::{AccessToken, AuthContext};
 use crate::serve::ServeContext;
-use crate::store::{AuthStateStore, Clock};
 use crate::sync::SyncContext;
 use crate::upload::UploadContext;
+use crate::verify::VerifyContext;
 
 /// Everything the server was built with.
 ///
@@ -43,6 +49,8 @@ pub struct App {
     sync: SyncContext,
     /// The media serving module's collaborators.
     serve: ServeContext,
+    /// The storage-verification module's collaborators.
+    verify: VerifyContext,
 }
 
 impl App {
@@ -55,35 +63,15 @@ impl App {
         upload: UploadContext,
         sync: SyncContext,
         serve: ServeContext,
+        verify: VerifyContext,
     ) -> Self {
         Self {
             auth,
             upload,
             sync,
             serve,
+            verify,
         }
-    }
-
-    /// Assembles the application from the auth module's four collaborators and the upload
-    /// module's own bundle.
-    ///
-    /// The convenience form, for a caller that is wiring the whole server rather than composing
-    /// modules.
-    pub fn with_auth(
-        sessions: Arc<dyn AuthStateStore>,
-        accounts: Arc<dyn AccountDirectory>,
-        tokens: Arc<SessionTokens>,
-        clock: Arc<dyn Clock>,
-        upload: UploadContext,
-        sync: SyncContext,
-        serve: ServeContext,
-    ) -> Self {
-        Self::new(
-            AuthContext::new(sessions, accounts, tokens, clock),
-            upload,
-            sync,
-            serve,
-        )
     }
 }
 

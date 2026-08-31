@@ -165,6 +165,7 @@
   "error.share.rate_limited": "嘗試次數過多。請稍候再試。",
   "error.storage.deep_rate_limited": "深度儲存檢查次數過多。請稍候再試。",
   "error.storage.invalid_request": "儲存驗證請求格式不正確。",
+  "error.storage.unavailable": "Capsule 無法確認你的相片是否已安全儲存，請重試。",
   "error.sync.cursor_invalid": "同步工作階段已過期。Capsule 會從頭重新同步。",
   "error.sync.unauthenticated": "請重新登入以繼續同步。",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

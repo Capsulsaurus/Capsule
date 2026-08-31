@@ -165,6 +165,7 @@
   "error.share.rate_limited": "Troppi tentativi. Attendi e riprova.",
   "error.storage.deep_rate_limited": "Troppi controlli approfonditi dello spazio di archiviazione. Attendi e riprova.",
   "error.storage.invalid_request": "La richiesta di verifica dello spazio di archiviazione è malformata.",
+  "error.storage.unavailable": "Capsule non è riuscito a verificare se le tue foto sono archiviate in sicurezza. Riprova.",
   "error.sync.cursor_invalid": "La sessione di sincronizzazione non è aggiornata. Capsule risincronizzerà dall'inizio.",
   "error.sync.unauthenticated": "Accedi di nuovo per continuare la sincronizzazione.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

@@ -165,6 +165,7 @@
   "error.share.rate_limited": "Слишком много попыток. Подождите и повторите попытку.",
   "error.storage.deep_rate_limited": "Слишком много глубоких проверок хранилища. Подождите и повторите попытку.",
   "error.storage.invalid_request": "Запрос на проверку хранилища имеет неверный формат.",
+  "error.storage.unavailable": "Capsule не удалось проверить, надёжно ли сохранены ваши фотографии. Повторите попытку.",
   "error.sync.cursor_invalid": "Сеанс синхронизации устарел. Capsule повторно синхронизируется с самого начала.",
   "error.sync.unauthenticated": "Войдите снова, чтобы продолжить синхронизацию.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

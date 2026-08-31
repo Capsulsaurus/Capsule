@@ -167,6 +167,10 @@
         "message": "儲存驗證請求格式不正確。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule 無法確認你的相片是否已安全儲存，請重試。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "深度儲存檢查次數過多。請稍候再試。",
         "context": "Machine-translated seed pending human review."

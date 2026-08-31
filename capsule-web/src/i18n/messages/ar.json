@@ -165,6 +165,7 @@
   "error.share.rate_limited": "محاولات كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
   "error.storage.deep_rate_limited": "عمليات فحص عميق للتخزين كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.",
   "error.storage.invalid_request": "طلب التحقق من التخزين مُشوَّه.",
+  "error.storage.unavailable": "تعذّر على Capsule التحقق من تخزين صورك بأمان. يُرجى المحاولة مرة أخرى.",
   "error.sync.cursor_invalid": "جلسة المزامنة قديمة. سيعيد Capsule المزامنة من البداية.",
   "error.sync.unauthenticated": "يُرجى تسجيل الدخول مرة أخرى لمتابعة المزامنة.",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",

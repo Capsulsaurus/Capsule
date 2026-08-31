@@ -167,6 +167,10 @@
         "message": "Die Anfrage zur Speicherüberprüfung ist fehlerhaft.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "Capsule konnte nicht prüfen, ob deine Fotos sicher gespeichert sind. Bitte versuche es erneut.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "Zu viele tiefe Speicherprüfungen. Bitte warten Sie und versuchen Sie es erneut.",
         "context": "Machine-translated seed pending human review."

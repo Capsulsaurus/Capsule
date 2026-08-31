@@ -8,6 +8,7 @@
 
 pub mod auth;
 pub mod blob;
+pub mod storage;
 pub mod sync;
 pub mod upload;
 pub mod version;

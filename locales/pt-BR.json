@@ -167,6 +167,10 @@
         "message": "A solicitação de verificação de armazenamento está malformada.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.unavailable": {
+        "message": "O Capsule não conseguiu verificar se suas fotos estão armazenadas com segurança. Tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.storage.deep_rate_limited": {
         "message": "Muitas verificações profundas de armazenamento. Aguarde e tente novamente.",
         "context": "Machine-translated seed pending human review."

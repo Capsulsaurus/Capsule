@@ -165,6 +165,7 @@
   "error.share.rate_limited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
   "error.storage.deep_rate_limited": "ディープストレージチェックが多すぎます。しばらくしてからもう一度お試しください。",
   "error.storage.invalid_request": "ストレージ検証リクエストの形式が正しくありません。",
+  "error.storage.unavailable": "Capsule は写真が安全に保存されているか確認できませんでした。もう一度お試しください。",
   "error.sync.cursor_invalid": "同期セッションが最新ではありません。Capsule は最初から再同期します。",
   "error.sync.unauthenticated": "同期を続けるには、もう一度サインインしてください。",
   "error.sync.unavailable": "Capsule could not reach the server to sync. It will try again.",
