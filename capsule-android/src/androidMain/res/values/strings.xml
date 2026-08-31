@@ -197,6 +197,8 @@
     <string name="error_enrollment_rate_limited">Too many device-add attempts. Please wait and try again.</string>
     <string name="error_enrollment_relay_malformed">The device-add request could not be read.</string>
     <string name="error_escrow_malformed">The recovery backup could not be saved.</string>
+    <string name="error_escrow_not_stored">No recovery backup is saved for this account.</string>
+    <string name="error_escrow_unavailable">Capsule couldn\'t reach the recovery backup. Please try again.</string>
     <string name="error_federation_audience_mismatch">This access grant is for a different album.</string>
     <string name="error_federation_capability_expired">This shared album\'s access has expired.</string>
     <string name="error_federation_capability_invalid">This shared album\'s access could not be verified.</string>

@@ -117,9 +117,12 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/.well-known/capsule/revoked-jti"),
         ("POST", "/v1/auth/logout/all/challenge"),
         ("POST", "/v1/auth/logout/all"),
+        ("PUT", "/v1/auth/escrow"),
+        ("GET", "/v1/auth/escrow"),
     ] {
         let request = match method {
             "GET" => client.get(path),
+            "PUT" => client.put(path),
             "PATCH" => client.patch(path),
             "HEAD" => client.head(path),
             "DELETE" => client.delete(path),
@@ -1380,6 +1383,95 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::SERVICE_UNAVAILABLE);
     fixture.revocations.set_unavailable(false);
+
+    // ── The master-key escrow (`S-C12`) ────────────────────────────────────────────────────
+    client
+        .put("/v1/auth/escrow")
+        .body("application/octet-stream", vec![7_u8; 64])
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/auth/escrow")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .put("/v1/auth/escrow")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .body("application/octet-stream", vec![7_u8; 64])
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .get("/v1/auth/escrow")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415: not octet-stream. 400: a body that cannot be an escrow at any version.
+    client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .body("application/json", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .body("application/octet-stream", Vec::<u8>::new())
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: nothing escrowed yet — asserted before the store, which is why this order matters.
+    client
+        .get("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 500 on both: the store cannot answer.
+    fixture.escrows.set_unavailable(true);
+    client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .body("application/octet-stream", vec![7_u8; 64])
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .get("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.escrows.set_unavailable(false);
+
+    // 200 on both.
+    client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body("application/octet-stream", vec![7_u8; 64])
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The

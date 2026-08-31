@@ -26,7 +26,7 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`gc`], [`index`], [`quota`], [`scrub`], [`serve`], [`store`], [`sync`], [`upload`],
+//! [`escrow`], [`gc`], [`index`], [`quota`], [`scrub`], [`serve`], [`store`], [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
 //! workers ([`gc`], [`scrub`]) have no wire surface at all and cost nothing to exercise.
 //!
@@ -47,6 +47,7 @@ pub mod blob;
 pub mod body;
 pub mod directory;
 pub mod discovery;
+pub mod escrow;
 pub mod gc;
 pub mod index;
 pub mod limits;
@@ -97,6 +98,8 @@ pub fn router() -> ServerRouter {
             routes::auth::revoke_all,
             routes::directory::publish_device_directory,
             routes::directory::fetch_device_directory,
+            routes::escrow::store_escrow,
+            routes::escrow::fetch_escrow,
             routes::albums::provision_album,
             routes::quota::get_quota,
             routes::well_known::attestation_keys,

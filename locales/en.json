@@ -151,6 +151,14 @@
         "message": "The recovery backup could not be saved.",
         "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
     },
+    "error.escrow.not_stored": {
+        "message": "No recovery backup is saved for this account.",
+        "context": "HTTP 404 on GET /v1/auth/escrow (slice S-C12): this account has never stored a wrapped master key. Distinct from a store failure so a client can tell \"you have no recovery backup\" from \"we could not read it\" — the first is a setup prompt and the second is a retry."
+    },
+    "error.escrow.unavailable": {
+        "message": "Capsule couldn't reach the recovery backup. Please try again.",
+        "context": "HTTP 500 on the master-key escrow surface (slice S-C12): the store could not answer, so nothing was written or read. Retryable, and it says nothing about whether an escrow exists."
+    },
     "error.enrollment.local_auth_required": {
         "message": "Confirm it's you on this device to add another device.",
         "context": "HTTP 403 on POST /devices/enroll (slice S-C7): the access token is not fresh enough to stand in for the doc's fresh local device authorization. A valid session token alone cannot start a cross-device add — the caller must re-authenticate locally so a stolen, stale token cannot enroll a rogue device."

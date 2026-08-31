@@ -33,6 +33,7 @@ use crate::attestation::AttestationContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
 use crate::discovery::DiscoveryContext;
+use crate::escrow::EscrowContext;
 use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
 use crate::sync::SyncContext;
@@ -66,6 +67,8 @@ pub struct App {
     attestation: AttestationContext,
     /// The public discovery record's collaborators.
     discovery: DiscoveryContext,
+    /// The master-key escrow's collaborators.
+    escrow: EscrowContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -97,6 +100,8 @@ pub struct Modules {
     pub attestation: AttestationContext,
     /// The public discovery record's collaborators.
     pub discovery: DiscoveryContext,
+    /// The master-key escrow's collaborators.
+    pub escrow: EscrowContext,
 }
 
 impl App {
@@ -113,6 +118,7 @@ impl App {
             quota,
             attestation,
             discovery,
+            escrow,
         } = modules;
         Self {
             auth,
@@ -125,6 +131,7 @@ impl App {
             quota,
             attestation,
             discovery,
+            escrow,
         }
     }
 }

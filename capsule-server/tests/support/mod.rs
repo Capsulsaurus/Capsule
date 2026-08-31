@@ -50,6 +50,7 @@ use capsule_server::discovery::revocation::{
     InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
 };
 use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
+use capsule_server::escrow::{EscrowContext, EscrowRecord, EscrowStore, InMemoryEscrow, Replaced};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
@@ -315,6 +316,56 @@ impl SwitchableSessions {
 
     fn is_down(&self) -> bool {
         self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+/// An escrow store that can be made to fail on demand.
+///
+/// Delegating to the real in-memory one. The switch exists because the `500` on both escrow
+/// operations is otherwise unreachable, and a declared status nothing can reach is the `S-C28`
+/// defect this rebuild exists to make impossible.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableEscrow {
+    inner: InMemoryEscrow,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableEscrow {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "escrow",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl EscrowStore for SwitchableEscrow {
+    fn store(&self, record: EscrowRecord) -> StoreFuture<'_, Replaced> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.store(record)
+    }
+
+    fn fetch<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, Option<EscrowRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.fetch(user)
     }
 }
 
@@ -1319,6 +1370,8 @@ pub(crate) struct Fixture {
     pub(crate) revocations: Arc<SwitchableRevocations>,
     /// The single-use revoke-all challenges.
     pub(crate) challenges: Arc<SwitchableChallenges>,
+    /// The account's wrapped master key.
+    pub(crate) escrows: Arc<SwitchableEscrow>,
 }
 
 impl Fixture {
@@ -1364,6 +1417,7 @@ impl Fixture {
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
+        let escrows = Arc::new(SwitchableEscrow::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1395,6 +1449,7 @@ impl Fixture {
                 Timestamp::UNIX_EPOCH,
             ),
             discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
+            escrow: EscrowContext::new(escrows.clone(), clock.clone()),
         });
 
         Self {
@@ -1416,6 +1471,7 @@ impl Fixture {
             attestation_key,
             revocations,
             challenges,
+            escrows,
         }
     }
 
@@ -1490,6 +1546,7 @@ impl Fixture {
                 Arc::new(server_info(&tokens)),
                 Arc::new(SwitchableRevocations::new(clock.clone())),
             ),
+            escrow: EscrowContext::new(Arc::new(SwitchableEscrow::new()), clock.clone()),
         });
         (app, clock)
     }

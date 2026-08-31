@@ -13175,6 +13175,26 @@
         }
       }
     },
+    "error.escrow.not_stored": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No recovery backup is saved for this account."
+          }
+        }
+      }
+    },
+    "error.escrow.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't reach the recovery backup. Please try again."
+          }
+        }
+      }
+    },
     "error.federation.audience_mismatch": {
       "localizations": {
         "ar": {

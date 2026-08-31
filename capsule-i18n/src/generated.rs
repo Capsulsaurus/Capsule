@@ -128,6 +128,12 @@ pub mod error_codes {
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 
+    /// `error.escrow.not_stored`
+    pub const ESCROW_NOT_STORED: &str = "error.escrow.not_stored";
+
+    /// `error.escrow.unavailable`
+    pub const ESCROW_UNAVAILABLE: &str = "error.escrow.unavailable";
+
     /// `error.federation.audience_mismatch`
     pub const FEDERATION_AUDIENCE_MISMATCH: &str = "error.federation.audience_mismatch";
 

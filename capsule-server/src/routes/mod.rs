@@ -10,6 +10,7 @@ pub mod albums;
 pub mod auth;
 pub mod blob;
 pub mod directory;
+pub mod escrow;
 pub mod ops;
 pub mod quota;
 pub mod receipts;
