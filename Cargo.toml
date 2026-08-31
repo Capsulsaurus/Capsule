@@ -145,3 +145,15 @@ split-debuginfo = "unpacked"
 # 6.8 GB in another, against a ~90s cold workspace build. With several worktrees in flight
 # that is the difference between building and running out of disk. Full builds it is.
 incremental = false
+
+# The same settings for the test profile, spelled out rather than inherited.
+#
+# `profile.test` inherits `debug` from `dev` and does **not** inherit `split-debuginfo`, so every
+# test binary was linked `packed` — a `.dSYM` bundle per binary, on top of the same DWARF already
+# in the per-object files. Measured at 6.7 GB of pure duplication across this workspace's test
+# binaries, which is enough to fill a dev machine's disk mid-run and fail a link with `errno=28`.
+# The reasoning above applies unchanged; only the inheritance did not.
+[profile.test]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+incremental = false
