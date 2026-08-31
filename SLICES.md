@@ -226,12 +226,12 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
-| S-C20 | Invariant-7 floor grounded in the device directory | server | — | M | RETIRED | ready | |
+| S-C20 | Invariant-7 floor grounded in the device directory | server | S-C9 | M | RETIRED | done\* | the account-creation fallback is gone, not kept |
 | S-C21 | `feed_seq` visibility-order race fix | server | — | M | RETIRED | done | unrepresentable: one sequence, minted under the row lock (`S-C37`) |
 | S-C22 | Structured `duplicate_blob` ref + adopt in OpenAPI | server | S-C37 | S | RETIRED | done\* | server half; adopt endpoint → `S-C5`; undescribed extension → `S-C38` |
 | S-C23 | `revoke_all_sessions` with master-key proof | server | — | M | RETIRED | ready | |
 | S-C24 | Album-upgrade server halves (quiescence/drain/lineage) | server | — | M-L | RETIRED | ready | |
-| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | — | M | RETIRED | ready | |
+| S-C25 | Album provisioning + UUID album ids (unblocks push) | server | S-C29 | M | RETIRED | done\* | also lands the first real `WriteAuthority`; sharing widens it → `S-C4`/`S-C5` |
 | S-C26 | Retire the plaintext album name/description columns | server | S-C25 | S | RETIRED | ready | |
 | S-C27 | Wire-contract types on plain serde behind an adapter | server | — | M | RETIRED | part 1 done | DTO move → Kynos rebuild; status gaps → `S-C28` |
 | S-C28 | Publish the statuses the server actually returns | server | S-C27 | S | RETIRED | done\* | auth surface closed; folds into each remaining port |
@@ -1420,6 +1420,20 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   fallback for directory-less accounts. The wire and envelope battery need no change.
 - **Done when:** invariant 7's test uses a real directory entry's `added_at` (pre-dating
   entry accepted; post-dating rejected; unknown device rejected). **Tier:** Unit + Smoke.
+- **Landed 2026-08-30 (`done\*`)** as part of the first real
+  [`WriteAuthority`](#s-c25--album-provisioning-and-uuid-album-ids):
+  `capsule-server/src/album/authority.rs` reads the floor out of the account's published
+  directory entry.
+- **The account-creation fallback is gone rather than kept**, which is a deliberate departure
+  from this slice's own wording. An account with no published directory now has **no** floor and
+  every device is refused. The fallback made invariant 7 vacuous for exactly the accounts most
+  likely to be wrong about their devices, and the honest answer to "was this device in the
+  directory" for an account with no directory is *no*. A client publishes at first-device
+  enrollment, so the state is transient by design.
+- **A revoked device is refused outright**, whatever its `added_at`. The entry is retained
+  rather than deleted so manifests it signed *before* revocation stay verifiable forever, and
+  `revoked_at` is what makes the difference expressible.
+- **Owed:** the Postgres adapters behind both stores.
 
 ### S-C21 — `feed_seq` visibility-order fix
 
@@ -1544,6 +1558,31 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   against the Salvo server; the CLI push round trip puts bytes on the server today.
   **Re-scoped onto Kynos** — the UUID column widths and the idempotent provisioning
   contract are the two things the rebuilt schema and surface must reproduce.
+- **Ported 2026-08-30 (`done\*`).** `POST /v1/albums` over a `capsule-server/src/album` port;
+  8 port cases and 7 surface cases. The column-width half of the original gap is
+  unrepresentable rather than fixed: the Kynos schema is designed from the contract and there is
+  no legacy nanoid column to widen.
+- **It also lands the first real [`WriteAuthority`].** Until this, the only implementation was a
+  test double, so every write path was proven against facts a fixture asserted rather than facts
+  the server holds. `ProvisionedAuthority` answers invariant 6 from the album store and
+  invariant 7 from the published device directory — which is `S-C20`, closed here because the
+  two are one seam.
+- **The pin is the server's and it is fixed at provisioning.** `S-C19` in one line: invariant 6
+  compares a write against the album's own pin, and an album whose pin came from a request would
+  be comparing a request against itself. Moving one forward is an album upgrade (`S-C24`), a
+  ceremony rather than a field. The pin comes back in the response so a client learns it without
+  a second call.
+- **Canonical spelling, not merely parseable.** `Uuid::parse_str` accepts braced, urn and
+  mixed-case forms; an album whose id round-trips to a different string is an album two devices
+  would disagree about, and the id is *derived* so its spelling has to be the same everywhere.
+- **The name refusal is a `422`, not a silent drop.** The body is strict, so a `name` or
+  `description` is refused — a client is told the server will not hold album titles rather than
+  left to assume it did. `S-C26` retires the columns themselves.
+- **Owed:** sharing widens "writable" from *owner* to *member*, which is `S-C4`/`S-C5`; until
+  then an album is writable only by the account it was provisioned to, which is the safe
+  direction. The Postgres adapter is owed with the rest.
+
+[`WriteAuthority`]: #s-c20--ground-invariant-7s-floor-in-the-device-directory
 
 ### S-C26 — Retire the plaintext album name/description columns
 
