@@ -135,6 +135,39 @@ pub struct AssetQuery {
     pub blob_hashes: Vec<ContentAddress>,
 }
 
+/// How hard to look.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+    /// Ask the index and the store whether the bytes are there. Cheap, and the default.
+    Structural,
+    /// Also re-read and re-hash them (`S-C41`).
+    ///
+    /// Rate-limited per account, because a deep scan reads and hashes every declared blob: an
+    /// unbounded one is an I/O-amplification attack costing the attacker one small JSON body.
+    /// The contract calls the limiter *half of the feature*, and this port agrees — the flag and
+    /// the budget landed together.
+    Deep,
+    /// A deep scan was asked for and the account's budget is spent.
+    ///
+    /// A third state rather than falling back to [`Depth::Structural`], because the *verdict*
+    /// has to say so. A client that asked to look at the bytes and silently got a structural
+    /// answer would read `deep` as absent and conclude nobody had looked — which is true, but
+    /// indistinguishable from never having asked, and it is the difference between retrying
+    /// later and giving up.
+    RateLimited,
+}
+
+impl DeepVerdict {
+    /// The name this verdict travels under.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Intact => "intact",
+            Self::Corrupt => "corrupt",
+            Self::RateLimited => "rate_limited",
+        }
+    }
+}
+
 /// One declared blob's verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BlobVerdict {
@@ -148,6 +181,32 @@ pub struct BlobVerdict {
     pub indexed: bool,
     /// Nothing is withholding it.
     pub retrievable: bool,
+    /// What a **deep** scan found, when one was asked for and admitted (`S-C41`).
+    ///
+    /// `None` on a structural check, and that absence is load-bearing: it is the difference
+    /// between *"we did not look at the bytes"* and *"we looked and they were fine"*, and a
+    /// client deciding whether to delete its only copy must be able to tell those apart.
+    pub deep: Option<DeepVerdict>,
+}
+
+/// What re-reading and re-hashing a blob's bytes found (`S-C41`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeepVerdict {
+    /// The bytes on disk hash to the address they are filed under.
+    Intact,
+    /// They do not. The blob is corrupt, whatever the structural check said.
+    ///
+    /// The contract's own validation bullet: *"corrupt a stored blob's bytes on disk; assert the
+    /// structural check still reports `stored = true` but `deep = true` reports a hash
+    /// mismatch."* `stored` is a question about the filesystem and this is a question about the
+    /// bytes, and silent corruption is exactly where the two diverge.
+    Corrupt,
+    /// The deep scan did not run, because this account has spent its budget.
+    ///
+    /// Reported rather than refused for the whole request: a deep scan is an *addition* to a
+    /// structural verdict, and throwing away a perfectly good structural answer because the
+    /// optional half was throttled would make the limiter cost more than it saves.
+    RateLimited,
 }
 
 impl BlobVerdict {
@@ -159,6 +218,10 @@ impl BlobVerdict {
             stored: false,
             indexed: false,
             retrievable: false,
+            // A blob this asset does not hold is not re-hashed even on a deep scan: the store
+            // is deliberately not asked about it at all, because answering would be a
+            // cross-account existence oracle.
+            deep: None,
         }
     }
 
@@ -202,11 +265,12 @@ pub async fn verify(
     context: &VerifyContext,
     owner: &OwnerId,
     queries: &[AssetQuery],
+    depth: Depth,
 ) -> Result<Vec<AssetVerdict>, VerifyUnavailable> {
     let checked_at = context.clock().now();
     let mut verdicts = Vec::with_capacity(queries.len());
     for query in queries {
-        verdicts.push(verify_one(context, owner, query, checked_at).await?);
+        verdicts.push(verify_one(context, owner, query, checked_at, depth).await?);
     }
     Ok(verdicts)
 }
@@ -217,6 +281,7 @@ async fn verify_one(
     owner: &OwnerId,
     query: &AssetQuery,
     checked_at: Timestamp,
+    depth: Depth,
 ) -> Result<AssetVerdict, VerifyUnavailable> {
     let row = context
         .index()
@@ -278,11 +343,21 @@ async fn verify_one(
             })?
             .is_some();
 
+        // The deep scan, when one was asked for. Only for a blob that is actually there —
+        // re-hashing an absent blob has nothing to compare, and `stored = false` already says
+        // everything a client needs.
+        let deep = match (depth, stored) {
+            (Depth::Structural, _) | (Depth::Deep | Depth::RateLimited, false) => None,
+            (Depth::RateLimited, true) => Some(DeepVerdict::RateLimited),
+            (Depth::Deep, true) => Some(rehash(context, hash).await?),
+        };
+
         blobs.push(BlobVerdict {
             hash: hash.clone(),
             role: Some(held.role),
             stored,
             indexed: true,
+            deep,
             // A held asset's bytes are present and will stay present — but the server will not
             // hand them over, so promising `retrievable` would be telling a client it can drop
             // its only copy of something it can never fetch back. `stored` stays true, which is
@@ -301,6 +376,62 @@ async fn verify_one(
         blobs,
         checked_at,
     })
+}
+
+/// How much of a blob is read into memory at once during a deep scan.
+///
+/// A megabyte. The point of streaming here is not speed, it is that a deep verify of a
+/// multi-gigabyte original must not be a multi-gigabyte allocation — which would turn the
+/// I/O-amplification attack this feature is rate-limited against into a memory one that no
+/// budget bounds.
+const REHASH_CHUNK_BYTES: usize = 1024 * 1024;
+
+/// Re-read `address` and compare what it hashes to against the address it is filed under.
+///
+/// Streams through [`BlobStore::read_at`](crate::blob::BlobStore::read_at) a megabyte at a time
+/// and never holds the whole blob. A short read ends the walk: the store is append-only and
+/// committed, so fewer bytes than the address implies is itself corruption, and the digest will
+/// say so.
+async fn rehash(
+    context: &VerifyContext,
+    address: &ContentAddress,
+) -> Result<DeepVerdict, VerifyUnavailable> {
+    use capsule_core::crypto::hash::Sha256Hasher;
+
+    let mut hasher = Sha256Hasher::new();
+    let mut offset = 0_u64;
+    loop {
+        let chunk = context
+            .blobs()
+            .read_at(address, offset, REHASH_CHUNK_BYTES)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %address, "a deep verify could not read a blob");
+                VerifyUnavailable("the blob store could not be read".to_owned())
+            })?;
+        let Some(chunk) = chunk.filter(|chunk| !chunk.is_empty()) else {
+            break;
+        };
+        offset = offset.saturating_add(chunk.len() as u64);
+        hasher.update(&chunk);
+        if chunk.len() < REHASH_CHUNK_BYTES {
+            break;
+        }
+    }
+
+    let actual = hasher.finalize().to_hex();
+    if actual == address.as_str() {
+        Ok(DeepVerdict::Intact)
+    } else {
+        // The finding the whole feature exists for: `stored` is a question about the filesystem
+        // and this is a question about the bytes. Silent corruption is exactly where they part.
+        tracing::error!(
+            %address,
+            found = %actual,
+            "a deep verify found a blob whose bytes are not its address"
+        );
+        Ok(DeepVerdict::Corrupt)
+    }
 }
 
 #[cfg(test)]

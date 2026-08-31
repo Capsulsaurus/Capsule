@@ -62,6 +62,20 @@ pub struct AssetVerifyRequest {
 pub struct StorageVerifyRequest {
     /// The assets to verify.
     pub assets: Vec<AssetVerifyRequest>,
+    /// Also re-read and re-hash the bytes (`S-C41`).
+    ///
+    /// Absent or `false` is the structural check: ask the index and the store whether the bytes
+    /// are there. `true` additionally re-hashes them, which is the only way to catch silent
+    /// corruption — `stored` is a question about the filesystem, and a corrupt blob is still
+    /// stored.
+    ///
+    /// **Rate-limited per account**, because a deep scan reads and hashes every declared blob
+    /// and an unbounded one is an I/O-amplification attack costing the caller one small JSON
+    /// body. Past the budget the *structural* verdict still comes back and each blob's `deep`
+    /// reads `rate_limited`: throwing away a good structural answer because the optional half
+    /// was throttled would make the limiter cost more than it saves.
+    #[serde(default)]
+    pub deep: bool,
 }
 
 /// One declared blob's verdict.
@@ -77,6 +91,13 @@ pub struct BlobVerdictResponse {
     pub indexed: bool,
     /// Nothing is withholding it.
     pub retrievable: bool,
+    /// What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).
+    ///
+    /// **Absent when no deep scan ran**, and the absence is load-bearing: it is the difference
+    /// between "we did not look at the bytes" and "we looked and they were fine", and a client
+    /// deciding whether to release its only copy has to be able to tell those apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deep: Option<String>,
 }
 
 /// One asset's verdict.
@@ -165,6 +186,7 @@ impl VerifyRejection {
 )]
 pub async fn verify_storage(
     Inject(verify): Inject<VerifyContext>,
+    Inject(counters): Inject<crate::counter::CounterContext>,
     Auth(credential): Auth<AccessToken>,
     Json(request): Json<StorageVerifyRequest>,
 ) -> Result<Json<StorageVerifyResponse>, VerifyRejection> {
@@ -173,7 +195,43 @@ pub async fn verify_storage(
     // a verdict about another account's asset is disclosure about another account.
     let owner = OwnerId::new(credential.user.as_str());
 
-    let verdicts = crate::verify::verify(&verify, &owner, &queries)
+    // The limiter is half the feature, not a refinement of it (`S-C41`): a deep scan reads and
+    // re-hashes every declared blob, so an unbounded one lets one authenticated account make
+    // the server walk its whole store, repeatedly, for the price of a small JSON body.
+    //
+    // Charged only when a deep scan is *asked for*. A structural check is cheap and unlimited,
+    // and spending the deep budget on one would throttle the operation clients actually run.
+    let depth = if request.deep {
+        let admitted = counters
+            .hit(
+                &crate::counter::CounterKey::DeepVerify(crate::store::UserId::new(
+                    credential.user.as_str(),
+                )),
+                crate::counter::budgets::DEEP_VERIFY,
+            )
+            .await
+            .map_err(|error| {
+                // Fail closed, like every other limiter: one that an attacker turns off by
+                // loading the counter store is not a limiter.
+                tracing::error!(%error, %owner, "the deep-verify limiter could not be reached");
+                VerifyRejection::unavailable()
+            })?
+            .admits();
+        if admitted {
+            crate::verify::Depth::Deep
+        } else {
+            // Deliberately **not** a `429` for the whole request. A deep scan is an addition to
+            // a structural verdict; refusing the structural half because the optional half was
+            // throttled would make the limiter cost a client more than it saves them, and a
+            // client that stopped verifying at all is the outcome nobody wants.
+            tracing::info!(%owner, "a deep verify was throttled to a structural one");
+            crate::verify::Depth::RateLimited
+        }
+    } else {
+        crate::verify::Depth::Structural
+    };
+
+    let verdicts = crate::verify::verify(&verify, &owner, &queries, depth)
         .await
         .map_err(|error| {
             tracing::error!(%error, %owner, "a storage verdict could not be computed");
@@ -197,6 +255,7 @@ pub async fn verify_storage(
                         stored: blob.stored,
                         indexed: blob.indexed,
                         retrievable: blob.retrievable,
+                        deep: blob.deep.map(|deep| deep.as_str().to_owned()),
                     })
                     .collect(),
                 checked_at: verdict.checked_at.to_string(),

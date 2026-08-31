@@ -5644,6 +5644,10 @@
             },
             "type": "array",
             "description": "The assets to verify."
+          },
+          "deep": {
+            "type": "boolean",
+            "description": "Also re-read and re-hash the bytes (`S-C41`).\n\nAbsent or `false` is the structural check: ask the index and the store whether the bytes\nare there. `true` additionally re-hashes them, which is the only way to catch silent\ncorruption — `stored` is a question about the filesystem, and a corrupt blob is still\nstored.\n\n**Rate-limited per account**, because a deep scan reads and hashes every declared blob\nand an unbounded one is an I/O-amplification attack costing the caller one small JSON\nbody. Past the budget the *structural* verdict still comes back and each blob's `deep`\nreads `rate_limited`: throwing away a good structural answer because the optional half\nwas throttled would make the limiter cost more than it saves."
           }
         },
         "type": "object",
@@ -5673,6 +5677,13 @@
           "retrievable": {
             "type": "boolean",
             "description": "Nothing is withholding it."
+          },
+          "deep": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What a deep scan found: `intact`, `corrupt`, or `rate_limited` (`S-C41`).\n\n**Absent when no deep scan ran**, and the absence is load-bearing: it is the difference\nbetween \"we did not look at the bytes\" and \"we looked and they were fine\", and a client\ndeciding whether to release its only copy has to be able to tell those apart."
           }
         },
         "type": "object",

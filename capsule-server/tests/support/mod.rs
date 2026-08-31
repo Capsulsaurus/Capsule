@@ -1230,6 +1230,26 @@ impl SwallowingBlobs {
             .expect("the in-memory store answers")
     }
 
+    /// Rot the bytes under `address`, exactly as a failing disk would.
+    ///
+    /// Built from the port's own `remove` + `put` rather than from a test-only hook, so what it
+    /// produces is a state the real store can genuinely be in: a committed address whose bytes
+    /// are not its digest. That is the state a deep verify exists to find and a structural one
+    /// cannot (`S-C41`).
+    pub(crate) async fn corrupt(&self, address: &ContentAddress) {
+        self.inner
+            .remove(address)
+            .await
+            .expect("the in-memory store removes");
+        self.inner
+            .put(
+                address,
+                b"these are not the bytes that hash to this address",
+            )
+            .await
+            .expect("the in-memory store puts");
+    }
+
     /// The committed blob at `hash`, whole.
     pub(crate) async fn blob_for_test(&self, hash: &str) -> Option<Vec<u8>> {
         let address = ContentAddress::parse(hash).expect("a content address");

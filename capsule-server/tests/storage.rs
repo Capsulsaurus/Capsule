@@ -519,3 +519,120 @@ async fn verification_requires_a_credential() {
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
 }
+
+#[tokio::test]
+async fn a_deep_scan_catches_corruption_a_structural_check_calls_stored() {
+    // The contract's own deep-scan bullet, and the whole reason the option exists: `stored` is a
+    // question about the filesystem, and a blob whose bytes have rotted underneath it is still
+    // stored. Only re-hashing tells the two apart.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "deep").await;
+
+    // Structural first: everything is fine, and `deep` is absent because nobody looked.
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])] }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"].as_array().expect("blobs");
+    assert_eq!(blobs[0]["stored"], true);
+    assert!(
+        blobs[0].get("deep").is_none(),
+        "absent means nobody looked at the bytes, which is not the same as looking and finding \
+         them fine"
+    );
+
+    // Now a deep scan over intact bytes.
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])], "deep": true }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"].as_array().expect("blobs");
+    assert_eq!(blobs[0]["deep"], "intact");
+    assert_eq!(body["verdicts"][0]["durable"], true);
+
+    // Rot the bytes under the address, exactly as a failing disk would.
+    fixture.blobs.corrupt(&provenance).await;
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])], "deep": true }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"].as_array().expect("blobs");
+    assert_eq!(
+        blobs[0]["stored"], true,
+        "the structural check still says stored, which is the point"
+    );
+    assert_eq!(blobs[0]["deep"], "corrupt");
+}
+
+#[tokio::test]
+async fn the_deep_budget_throttles_the_deep_half_and_keeps_the_structural_one() {
+    // A deep scan is an *addition* to a structural verdict. Refusing the whole request when the
+    // optional half is throttled would make the limiter cost a client more than it saves, and a
+    // client that stopped verifying at all is the outcome nobody wants.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, metadata) = publish(&fixture, "budget").await;
+    let request = json!({ "assets": [declare(&asset, &[&provenance, &metadata])], "deep": true });
+
+    for _ in 0..4 {
+        let body = verify(&fixture, &bearer, &request, StatusCode::OK).await;
+        assert_eq!(body["verdicts"][0]["blobs"][0]["deep"], "intact");
+    }
+
+    let body = verify(&fixture, &bearer, &request, StatusCode::OK).await;
+    assert_eq!(
+        body["verdicts"][0]["blobs"][0]["deep"], "rate_limited",
+        "the client is told the bytes were not read, rather than left to infer it from an \
+         absent field that also means `you did not ask`"
+    );
+    assert_eq!(
+        body["verdicts"][0]["durable"], true,
+        "and the structural verdict is still there and still usable"
+    );
+
+    // A structural request is not throttled at all: it is cheap, and spending the deep budget on
+    // one would throttle the operation clients actually run.
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &metadata])] }),
+        StatusCode::OK,
+    )
+    .await;
+    assert!(body["verdicts"][0]["blobs"][0].get("deep").is_none());
+}
+
+#[tokio::test]
+async fn a_blob_the_asset_does_not_hold_is_never_re_hashed() {
+    // The store is deliberately not asked about it even on a deep scan: answering would be a
+    // cross-account existence oracle, which is the property `S-C3` built this surface around.
+    let fixture = Fixture::working();
+    let bearer = bearer(&fixture).await;
+    let (asset, provenance, _) = publish(&fixture, "unassociated-deep").await;
+    let stranger = store(&fixture, b"somebody else's bytes").await;
+
+    let body = verify(
+        &fixture,
+        &bearer,
+        &json!({ "assets": [declare(&asset, &[&provenance, &stranger])], "deep": true }),
+        StatusCode::OK,
+    )
+    .await;
+    let blobs = body["verdicts"][0]["blobs"].as_array().expect("blobs");
+    assert_eq!(blobs[1]["stored"], false);
+    assert!(
+        blobs[1].get("deep").is_none(),
+        "a hash this asset does not hold has no deep verdict, however much the store may hold it"
+    );
+}
