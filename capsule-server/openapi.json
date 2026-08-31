@@ -646,6 +646,28 @@
         ]
       }
     },
+    "/.well-known/capsule/attestation-keys": {
+      "get": {
+        "summary": "Serve this server's storage-attestation keys and their append-only history.",
+        "description": "Cacheable and unauthenticated. It changes only when a key rotates, and a client that pinned\na stale copy still resolves every receipt signed before it fetched — which is the property\nthe append-only ordering buys.",
+        "operationId": "attestation_keys",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttestationKeysResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
     "/v1/upload": {
       "post": {
         "summary": "Open an upload session for one blob of an asset bundle.",
@@ -2204,6 +2226,62 @@
           "state"
         ],
         "description": "A user's quota snapshot."
+      },
+      "PublishedKeyResponse": {
+        "properties": {
+          "key_id": {
+            "type": "string",
+            "description": "The fingerprint a receipt's `server_key_id` selects on, lowercase hex."
+          },
+          "public": {
+            "type": "string",
+            "description": "The hybrid public key, base64 (Ed25519 ‖ ML-DSA-65)."
+          },
+          "algorithm": {
+            "type": "string",
+            "description": "The signature algorithm this key is used with."
+          },
+          "active_from": {
+            "type": "string",
+            "description": "When it began signing, RFC 3339."
+          },
+          "active_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When it stopped, or absent while it is the active key."
+          }
+        },
+        "type": "object",
+        "required": [
+          "key_id",
+          "public",
+          "algorithm",
+          "active_from"
+        ],
+        "description": "One published attestation key."
+      },
+      "AttestationKeysResponse": {
+        "properties": {
+          "server_id": {
+            "type": "string",
+            "description": "This server's canonical origin — the other half of the binding that refuses a\ncross-server replay."
+          },
+          "keys": {
+            "items": {
+              "$ref": "#/components/schemas/PublishedKeyResponse"
+            },
+            "type": "array",
+            "description": "Every key this server has signed with, oldest first, the active one last."
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_id",
+          "keys"
+        ],
+        "description": "The `.well-known/capsule/attestation-keys` record."
       },
       "WireBlobRole": {
         "type": "string",

@@ -1205,7 +1205,11 @@ impl Fixture {
             directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
             albums: AlbumContext::new(albums.clone(), clock.clone()),
             quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
-            attestation: AttestationContext::new(receipts.clone(), attestation_key.clone()),
+            attestation: AttestationContext::new(
+                receipts.clone(),
+                attestation_key.clone(),
+                Timestamp::UNIX_EPOCH,
+            ),
         });
 
         Self {
@@ -1291,6 +1295,7 @@ impl Fixture {
                     "capsule.test",
                     capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
                 )),
+                Timestamp::UNIX_EPOCH,
             ),
         });
         (app, clock)

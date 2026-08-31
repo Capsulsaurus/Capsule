@@ -186,3 +186,65 @@ fn a_key_never_reaches_a_log_line() {
         "the identity is printable and the secret is not, which is why `Debug` is hand-written"
     );
 }
+
+#[test]
+fn the_active_key_is_always_published() {
+    let key = std::sync::Arc::new(attestation_key());
+    let context = AttestationContext::new(
+        std::sync::Arc::new(InMemoryReceipts::new()),
+        key.clone(),
+        Timestamp::UNIX_EPOCH,
+    );
+
+    assert_eq!(context.history().len(), 1);
+    assert_eq!(
+        context.resolve(&key.key_id()).map(|k| k.key_id),
+        Some(key.key_id()),
+        "the entry is derived from the signer, so a server cannot publish a set that omits the \
+         key it is currently signing with"
+    );
+    assert_eq!(context.history()[0].active_to, None);
+}
+
+#[tokio::test]
+async fn a_retired_key_still_resolves_a_receipt_it_signed() {
+    let retired = attestation_key();
+    let log = InMemoryReceipts::new();
+    let old_receipt = log
+        .issue(draft("u1", "a1", b"signed before the rotation"), &retired)
+        .await
+        .expect("issue");
+
+    // Rotate: a new active key, with the old one kept in the published history.
+    let active = std::sync::Arc::new(attestation_key());
+    let context = AttestationContext::new(
+        std::sync::Arc::new(InMemoryReceipts::new()),
+        active.clone(),
+        Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24),
+    )
+    .with_retired(vec![PublishedKey {
+        key_id: retired.key_id(),
+        public: retired.verifying_key(),
+        active_from: Timestamp::UNIX_EPOCH,
+        active_to: Some(Timestamp::UNIX_EPOCH + jiff::SignedDuration::from_hours(24)),
+    }]);
+
+    let resolved = context
+        .resolve(&old_receipt.core.server_key_id)
+        .expect("a pre-rotation key still resolves");
+    assert!(
+        old_receipt.verify_under(&resolved.public),
+        "a receipt is evidence for the life of the asset it covers, so retiring a key must not \
+         repudiate everything signed under it"
+    );
+
+    assert_eq!(
+        context
+            .history()
+            .iter()
+            .map(|k| k.key_id)
+            .collect::<Vec<_>>(),
+        vec![retired.key_id(), active.key_id()],
+        "oldest first, active last — the order a reader walking for a `server_key_id` wants"
+    );
+}

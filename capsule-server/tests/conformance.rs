@@ -111,6 +111,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/albums"),
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/anything/receipt"),
+        ("GET", "/.well-known/capsule/attestation-keys"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1298,6 +1299,17 @@ async fn every_declared_response_is_exercised() {
     client
         .get(&format!("/v1/upload/{receipt_session}/receipt"))
         .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // ── GET /.well-known/capsule/attestation-keys ──────────────────────────────────────────
+    // The one operation with no credential, deliberately: a client pinning the key that checks
+    // the server's own liability must not need the server's permission to fetch it. So there is
+    // no 401 to cover here, and its absence from the declared set is the assertion.
+    client
+        .get("/.well-known/capsule/attestation-keys")
+        .header("accept", "application/json")
         .send()
         .await
         .assert_status(StatusCode::OK);

@@ -8,6 +8,7 @@
 
 mod support;
 
+use base64::Engine as _;
 use capsule_core::crypto::hash::hash_bytes;
 use capsule_core::crypto::receipts::{
     BlobRole, CustodyReceipt, ReceiptExpectations, ReceiptRejection, verify_receipt,
@@ -285,4 +286,54 @@ async fn a_receipt_requires_a_credential() {
         .send()
         .await
         .assert_status(StatusCode::UNAUTHORIZED);
+}
+
+/// The published key resolves the receipt, which is what makes it evidence rather than a blob.
+#[tokio::test]
+async fn the_published_key_history_verifies_a_fetched_receipt() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (first, second, whole) = blob();
+    let id = upload(&fixture, &bearer, &first, &second, &whole).await;
+
+    let receipt = CustodyReceipt::from_canonical_cbor(
+        fetch(&fixture, &bearer, &id, StatusCode::OK).await.bytes(),
+    )
+    .expect("a receipt");
+
+    // The registry record is public: no credential, because a client pinning the key that
+    // checks the server's own liability must not need the server's permission to do it.
+    let published: Value = fixture
+        .client
+        .get("/.well-known/capsule/attestation-keys")
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+
+    assert_eq!(published["server_id"], receipt.core.server_id);
+    let keys = published["keys"].as_array().expect("a key history");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(
+        keys[0]["key_id"],
+        receipt.core.server_key_id.to_hex(),
+        "a receipt names the key that signed it, and that key has to resolve in the record"
+    );
+    assert_eq!(keys[0]["algorithm"], "hybrid-ed25519-mldsa65");
+    assert_eq!(
+        keys[0]["active_to"],
+        Value::Null,
+        "the active key has not stopped signing"
+    );
+
+    // And the published bytes are the key that actually verifies it.
+    let public = base64::engine::general_purpose::STANDARD
+        .decode(keys[0]["public"].as_str().expect("a base64 key"))
+        .expect("base64");
+    assert_eq!(
+        public,
+        fixture.attestation_key.verifying_key().to_bytes(),
+        "publishing a key the server does not sign with would emit evidence nobody can check"
+    );
 }

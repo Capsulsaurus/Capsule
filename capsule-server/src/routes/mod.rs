@@ -17,3 +17,4 @@ pub mod storage;
 pub mod sync;
 pub mod upload;
 pub mod version;
+pub mod well_known;

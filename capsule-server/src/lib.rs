@@ -96,6 +96,7 @@ pub fn router() -> ServerRouter {
             routes::directory::fetch_device_directory,
             routes::albums::provision_album,
             routes::quota::get_quota,
+            routes::well_known::attestation_keys,
         ])
         // The asset surfaces: getting bytes in, changing what they mean, and reading them back.
         .mount(kynos::routes![

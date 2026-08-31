@@ -47,6 +47,7 @@ use std::sync::{Arc, Mutex};
 use capsule_core::crypto::hash::{Hash32, hash_bytes};
 use capsule_core::crypto::keys::hybrid_sig::{HybridSignature, HybridSigningKey};
 use capsule_core::crypto::receipts::{CustodyReceipt, CustodyReceiptCore};
+use jiff::Timestamp;
 
 use crate::store::{AssetId, StoreFuture, UploadId};
 
@@ -68,6 +69,14 @@ pub trait ReceiptSigner: std::fmt::Debug + Send + Sync {
     /// The attestation key's fingerprint. Survives rotation: a pre-rotation receipt still
     /// verifies because it names the key that signed it.
     fn key_id(&self) -> Hash32;
+
+    /// The public half.
+    ///
+    /// On the *signer* rather than beside it, because a key that cannot be published cannot
+    /// produce verifiable receipts — and a receipt nobody can verify is the server claiming
+    /// accountability it does not have. Requiring it here makes publishing the active key a
+    /// consequence of being able to sign at all.
+    fn verifying_key(&self) -> capsule_core::crypto::keys::HybridVerifyingKey;
 
     /// Sign the canonical core bytes.
     fn sign(&self, bytes: &[u8]) -> HybridSignature;
@@ -121,6 +130,24 @@ impl LocalAttestationKey {
     }
 }
 
+/// One key in the published, append-only history.
+///
+/// Append-only is what makes a receipt verifiable for the life of the asset it covers: a
+/// receipt names the key that signed it, so a key retired years ago must still be resolvable
+/// or every receipt under it becomes unverifiable at once — which is indistinguishable, from
+/// the outside, from the server having forged them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishedKey {
+    /// The fingerprint a receipt's `server_key_id` selects on.
+    pub key_id: Hash32,
+    /// The public half.
+    pub public: capsule_core::crypto::keys::HybridVerifyingKey,
+    /// When it began signing.
+    pub active_from: Timestamp,
+    /// When it stopped, or `None` while it is the active key.
+    pub active_to: Option<Timestamp>,
+}
+
 impl ReceiptSigner for LocalAttestationKey {
     fn server_id(&self) -> &str {
         &self.server_id
@@ -128,6 +155,10 @@ impl ReceiptSigner for LocalAttestationKey {
 
     fn key_id(&self) -> Hash32 {
         self.key_id
+    }
+
+    fn verifying_key(&self) -> capsule_core::crypto::keys::HybridVerifyingKey {
+        self.signing.verifying_key()
     }
 
     fn sign(&self, bytes: &[u8]) -> HybridSignature {
@@ -301,12 +332,57 @@ impl ReceiptLog for InMemoryReceipts {
 pub struct AttestationContext {
     receipts: Arc<dyn ReceiptLog>,
     signer: Arc<dyn ReceiptSigner>,
+    history: Vec<PublishedKey>,
 }
 
 impl AttestationContext {
-    /// Assembles the module from its log and its key.
-    pub fn new(receipts: Arc<dyn ReceiptLog>, signer: Arc<dyn ReceiptSigner>) -> Self {
-        Self { receipts, signer }
+    /// Assembles the module from its log and its active key.
+    ///
+    /// The active key's published entry is **derived from the signer**, never supplied
+    /// alongside it. A server that issued receipts naming a key it did not publish would emit
+    /// evidence nobody can check, and that failure is silent on the issuing side — so it is
+    /// made unrepresentable rather than validated.
+    pub fn new(
+        receipts: Arc<dyn ReceiptLog>,
+        signer: Arc<dyn ReceiptSigner>,
+        active_from: Timestamp,
+    ) -> Self {
+        let history = vec![PublishedKey {
+            key_id: signer.key_id(),
+            public: signer.verifying_key(),
+            active_from,
+            active_to: None,
+        }];
+        Self {
+            receipts,
+            signer,
+            history,
+        }
+    }
+
+    /// The same, with keys this server has retired.
+    ///
+    /// Prepended, so the published history reads oldest-first and the active key is last —
+    /// which is the order a reader walking for a `server_key_id` wants and the order a rotation
+    /// appends in.
+    #[must_use]
+    pub fn with_retired(mut self, retired: Vec<PublishedKey>) -> Self {
+        let mut history = retired;
+        history.extend(self.history);
+        self.history = history;
+        self
+    }
+
+    /// The published, append-only key history — oldest first, active last.
+    pub fn history(&self) -> &[PublishedKey] {
+        &self.history
+    }
+
+    /// The published key `key_id` names, if this server has ever signed with it.
+    ///
+    /// What a `server_key_id` resolves through, and what makes rotation continuous.
+    pub fn resolve(&self, key_id: &Hash32) -> Option<&PublishedKey> {
+        self.history.iter().find(|key| &key.key_id == key_id)
     }
 
     /// The append-only log.
