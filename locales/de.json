@@ -71,6 +71,10 @@
         "message": "Diese Quelle hat ihr Caching-Limit für Ihr Konto erreicht.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule konnte deine Speichernutzung nicht prüfen. Bitte versuche es erneut.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "Das Originalfoto wurde noch nicht von seinem Gerät hochgeladen.",
         "context": "Machine-translated seed pending human review."

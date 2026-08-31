@@ -71,6 +71,10 @@
         "message": "この提供元は、あなたのアカウントでのキャッシュ上限に達しました。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule はストレージ使用量を確認できませんでした。もう一度お試しください。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "元の写真はまだデバイスからアップロードされていません。",
         "context": "Machine-translated seed pending human review."

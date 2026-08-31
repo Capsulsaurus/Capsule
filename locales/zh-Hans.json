@@ -71,6 +71,10 @@
         "message": "此来源在您账户上的缓存已达到上限。",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule 无法检查你的存储使用情况，请重试。",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "原始照片尚未从其设备上传。",
         "context": "Machine-translated seed pending human review."

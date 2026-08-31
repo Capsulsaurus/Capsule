@@ -71,6 +71,10 @@
         "message": "इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule आपके संग्रहण उपयोग की जाँच नहीं कर सका। कृपया फिर से प्रयास करें।",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "मूल फ़ोटो अभी तक उसके डिवाइस से अपलोड नहीं हुई है।",
         "context": "Machine-translated seed pending human review."

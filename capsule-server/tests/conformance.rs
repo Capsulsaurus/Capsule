@@ -109,6 +109,7 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/devices/directory/anyone"),
         ("POST", "/v1/albums/anything/ops"),
         ("POST", "/v1/albums"),
+        ("GET", "/v1/quota"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1184,6 +1185,37 @@ async fn every_declared_response_is_exercised() {
         .header("authorization", &bearer)
         .header("accept", "application/json")
         .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // ── GET /v1/quota ──────────────────────────────────────────────────────────────────────
+    client
+        .get("/v1/quota")
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .get("/v1/quota")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.quotas.set_unavailable(true);
+    client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.quotas.set_unavailable(false);
+    client
+        .get("/v1/quota")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
         .send()
         .await
         .assert_status(StatusCode::OK);

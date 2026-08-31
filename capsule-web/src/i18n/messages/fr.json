@@ -165,6 +165,7 @@
   "error.quota.exceeded": "Votre espace de stockage est plein.",
   "error.quota.grace_locked": "Votre stockage est resté plein au-delà du délai de grâce ; les modifications sont suspendues jusqu'à ce que vous libériez de l'espace.",
   "error.quota.peer_budget_exceeded": "Cette source a atteint sa limite de mise en cache sur votre compte.",
+  "error.quota.unavailable": "Capsule n'a pas pu vérifier votre utilisation du stockage. Veuillez réessayer.",
   "error.share.rate_limited": "Trop de tentatives. Veuillez patienter et réessayer.",
   "error.storage.deep_rate_limited": "Trop de vérifications approfondies du stockage. Veuillez patienter et réessayer.",
   "error.storage.invalid_request": "La demande de vérification du stockage est mal formée.",

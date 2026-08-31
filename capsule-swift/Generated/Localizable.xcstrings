@@ -14395,6 +14395,88 @@
         }
       }
     },
+    "error.quota.unavailable": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذّر على Capsule التحقق من استخدام مساحة التخزين. يُرجى المحاولة مرة أخرى."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule konnte deine Speichernutzung nicht prüfen. Bitte versuche es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't check your storage use. Please try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule no pudo comprobar tu uso de almacenamiento. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule n'a pas pu vérifier votre utilisation du stockage. Veuillez réessayer."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule आपके संग्रहण उपयोग की जाँच नहीं कर सका। कृपया फिर से प्रयास करें।"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule non è riuscito a verificare l'utilizzo dello spazio. Riprova."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule はストレージ使用量を確認できませんでした。もう一度お試しください。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule이 저장 공간 사용량을 확인하지 못했습니다. 다시 시도해 주세요."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O Capsule não conseguiu verificar seu uso de armazenamento. Tente novamente."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule не удалось проверить использование хранилища. Повторите попытку."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule 无法检查你的存储使用情况，请重试。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule 無法檢查你的儲存空間使用情況，請重試。"
+          }
+        }
+      }
+    },
     "error.share.rate_limited": {
       "localizations": {
         "ar": {

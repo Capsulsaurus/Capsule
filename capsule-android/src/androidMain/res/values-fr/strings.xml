@@ -164,6 +164,7 @@
     <string name="error_quota_exceeded">Votre espace de stockage est plein.</string>
     <string name="error_quota_grace_locked">Votre stockage est resté plein au-delà du délai de grâce ; les modifications sont suspendues jusqu\'à ce que vous libériez de l\'espace.</string>
     <string name="error_quota_peer_budget_exceeded">Cette source a atteint sa limite de mise en cache sur votre compte.</string>
+    <string name="error_quota_unavailable">Capsule n\'a pas pu vérifier votre utilisation du stockage. Veuillez réessayer.</string>
     <string name="error_share_rate_limited">Trop de tentatives. Veuillez patienter et réessayer.</string>
     <string name="error_storage_deep_rate_limited">Trop de vérifications approfondies du stockage. Veuillez patienter et réessayer.</string>
     <string name="error_storage_invalid_request">La demande de vérification du stockage est mal formée.</string>

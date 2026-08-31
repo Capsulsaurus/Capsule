@@ -71,6 +71,10 @@
         "message": "Этот источник достиг лимита кэширования в вашей учётной записи.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule не удалось проверить использование хранилища. Повторите попытку.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "Оригинальное фото ещё не загружено с устройства.",
         "context": "Machine-translated seed pending human review."

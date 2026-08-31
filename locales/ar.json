@@ -71,6 +71,10 @@
         "message": "بلغ هذا المصدر حدّ التخزين المؤقت على حسابك.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "تعذّر على Capsule التحقق من استخدام مساحة التخزين. يُرجى المحاولة مرة أخرى.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "لم يتم رفع الصورة الأصلية من جهازها بعد.",
         "context": "Machine-translated seed pending human review."

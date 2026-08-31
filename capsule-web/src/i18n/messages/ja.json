@@ -165,6 +165,7 @@
   "error.quota.exceeded": "ストレージがいっぱいです。",
   "error.quota.grace_locked": "ストレージが猶予期間を過ぎてもいっぱいのままのため、空き容量を確保するまで編集は一時停止されます。",
   "error.quota.peer_budget_exceeded": "この提供元は、あなたのアカウントでのキャッシュ上限に達しました。",
+  "error.quota.unavailable": "Capsule はストレージ使用量を確認できませんでした。もう一度お試しください。",
   "error.share.rate_limited": "試行回数が多すぎます。しばらくしてからもう一度お試しください。",
   "error.storage.deep_rate_limited": "ディープストレージチェックが多すぎます。しばらくしてからもう一度お試しください。",
   "error.storage.invalid_request": "ストレージ検証リクエストの形式が正しくありません。",

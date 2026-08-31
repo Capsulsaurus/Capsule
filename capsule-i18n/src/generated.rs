@@ -170,6 +170,9 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.quota.unavailable`
+    pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
+
     /// `error.share.rate_limited`
     pub const SHARE_RATE_LIMITED: &str = "error.share.rate_limited";
 

@@ -165,6 +165,7 @@
   "error.quota.exceeded": "您的存储空间已满。",
   "error.quota.grace_locked": "您的存储空间已超出宽限期仍处于已满状态，因此在您释放空间前编辑将被暂停。",
   "error.quota.peer_budget_exceeded": "此来源在您账户上的缓存已达到上限。",
+  "error.quota.unavailable": "Capsule 无法检查你的存储使用情况，请重试。",
   "error.share.rate_limited": "尝试次数过多。请稍候再试。",
   "error.storage.deep_rate_limited": "深度存储检查次数过多。请稍候再试。",
   "error.storage.invalid_request": "存储验证请求格式不正确。",

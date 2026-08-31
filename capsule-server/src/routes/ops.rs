@@ -175,6 +175,19 @@ pub enum OpRejection {
         code: &'static str,
     },
 
+    /// The account is past its grace window, and this write would grow stored metadata.
+    ///
+    /// Never returned for a `delete` or a `trash-restore`: a user must be able to delete their
+    /// way back under quota, and the provenance record a delete produces is itself a write. A
+    /// quota that could lock someone out of freeing space would be a trap rather than a limit.
+    #[error("this account is over its storage limit and past the grace window")]
+    #[problem(status = 403, title = "Quota grace expired")]
+    QuotaGraceExpired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer.
     #[error("the lifecycle write could not be applied")]
     #[problem(status = 500, title = "Internal server error")]
@@ -197,6 +210,7 @@ pub enum OpRejection {
 )]
 pub async fn apply_op(
     Inject(upload): Inject<UploadContext>,
+    Inject(quota): Inject<crate::quota::QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<AlbumPath>,
     Json(request): Json<OpRequest>,
@@ -291,6 +305,26 @@ pub async fn apply_op(
             ));
         }
     };
+
+    // Quota (`S-C6`), classified by what the op actually costs. A metadata blob is storage; a
+    // delete or a restore is not, and is admitted in every state.
+    let class = if metadata.is_some() {
+        crate::quota::WriteClass::MetadataGrowth
+    } else {
+        crate::quota::WriteClass::Lifecycle
+    };
+    let state = crate::quota::current_state(&quota, &caller)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %caller, "the quota ledger could not answer");
+            OpRejection::unavailable()
+        })?;
+    if !crate::quota::admits(state, class, 0, 0, quota.limits()) {
+        tracing::info!(%caller, ?state, "a lifecycle write was refused: past the grace window");
+        return Err(OpRejection::QuotaGraceExpired {
+            code: error_codes::QUOTA_GRACE_LOCKED,
+        });
+    }
 
     // The manifest's own content hash: the chain head this op will become, and the idempotency
     // key a replay is recognised by.

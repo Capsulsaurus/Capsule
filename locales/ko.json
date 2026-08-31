@@ -71,6 +71,10 @@
         "message": "이 원본은 계정의 캐싱 한도에 도달했습니다.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "Capsule이 저장 공간 사용량을 확인하지 못했습니다. 다시 시도해 주세요.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "원본 사진이 아직 해당 기기에서 업로드되지 않았습니다.",
         "context": "Machine-translated seed pending human review."

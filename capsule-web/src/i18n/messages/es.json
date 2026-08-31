@@ -165,6 +165,7 @@
   "error.quota.exceeded": "Tu almacenamiento está lleno.",
   "error.quota.grace_locked": "Tu almacenamiento ha estado lleno más allá del período de gracia, por lo que las ediciones están en pausa hasta que liberes espacio.",
   "error.quota.peer_budget_exceeded": "Esta fuente ha alcanzado su límite de almacenamiento en caché en tu cuenta.",
+  "error.quota.unavailable": "Capsule no pudo comprobar tu uso de almacenamiento. Inténtalo de nuevo.",
   "error.share.rate_limited": "Demasiados intentos. Espera e inténtalo de nuevo.",
   "error.storage.deep_rate_limited": "Demasiadas comprobaciones profundas de almacenamiento. Espera e inténtalo de nuevo.",
   "error.storage.invalid_request": "La solicitud de verificación de almacenamiento está mal formada.",

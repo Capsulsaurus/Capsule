@@ -165,6 +165,7 @@
   "error.quota.exceeded": "Ihr Speicher ist voll.",
   "error.quota.grace_locked": "Ihr Speicher ist über die Nachfrist hinaus voll geblieben, daher sind Bearbeitungen pausiert, bis Sie Speicherplatz freigeben.",
   "error.quota.peer_budget_exceeded": "Diese Quelle hat ihr Caching-Limit für Ihr Konto erreicht.",
+  "error.quota.unavailable": "Capsule konnte deine Speichernutzung nicht prüfen. Bitte versuche es erneut.",
   "error.share.rate_limited": "Zu viele Versuche. Bitte warten Sie und versuchen Sie es erneut.",
   "error.storage.deep_rate_limited": "Zu viele tiefe Speicherprüfungen. Bitte warten Sie und versuchen Sie es erneut.",
   "error.storage.invalid_request": "Die Anfrage zur Speicherüberprüfung ist fehlerhaft.",

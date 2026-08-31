@@ -71,6 +71,10 @@
         "message": "Esta fonte atingiu o limite de cache na sua conta.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.quota.unavailable": {
+        "message": "O Capsule não conseguiu verificar seu uso de armazenamento. Tente novamente.",
+        "context": "Machine-translated seed pending human review."
+    },
     "error.blob.pending_upload": {
         "message": "A foto original ainda não foi enviada do dispositivo dela.",
         "context": "Machine-translated seed pending human review."

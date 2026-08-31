@@ -164,6 +164,7 @@
     <string name="error_quota_exceeded">Ваше хранилище заполнено.</string>
     <string name="error_quota_grace_locked">Ваше хранилище оставалось заполненным дольше льготного периода, поэтому изменения приостановлены, пока вы не освободите место.</string>
     <string name="error_quota_peer_budget_exceeded">Этот источник достиг лимита кэширования в вашей учётной записи.</string>
+    <string name="error_quota_unavailable">Capsule не удалось проверить использование хранилища. Повторите попытку.</string>
     <string name="error_share_rate_limited">Слишком много попыток. Подождите и повторите попытку.</string>
     <string name="error_storage_deep_rate_limited">Слишком много глубоких проверок хранилища. Подождите и повторите попытку.</string>
     <string name="error_storage_invalid_request">Запрос на проверку хранилища имеет неверный формат.</string>

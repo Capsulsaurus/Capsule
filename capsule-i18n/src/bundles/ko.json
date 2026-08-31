@@ -165,6 +165,7 @@
   "error.quota.exceeded": "저장 공간이 가득 찼습니다.",
   "error.quota.grace_locked": "저장 공간이 유예 기간이 지나도록 가득 차 있어 공간을 확보할 때까지 편집이 일시 중지됩니다.",
   "error.quota.peer_budget_exceeded": "이 원본은 계정의 캐싱 한도에 도달했습니다.",
+  "error.quota.unavailable": "Capsule이 저장 공간 사용량을 확인하지 못했습니다. 다시 시도해 주세요.",
   "error.share.rate_limited": "시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
   "error.storage.deep_rate_limited": "심층 저장소 검사가 너무 많습니다. 잠시 후 다시 시도해 주세요.",
   "error.storage.invalid_request": "저장소 확인 요청의 형식이 올바르지 않습니다.",

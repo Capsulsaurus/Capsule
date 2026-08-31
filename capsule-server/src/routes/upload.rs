@@ -415,6 +415,19 @@ pub enum CreateRejection {
         code: &'static str,
     },
 
+    /// The declared size would cross the account's hard quota limit.
+    ///
+    /// The **only** hard enforcement point. Once a session is open the declared size is the
+    /// cap and the transfer is allowed to finish: refusing at finalization would refuse bytes
+    /// the server already holds, which costs storage rather than saving it.
+    #[error("this upload would cross the account's storage limit")]
+    #[problem(status = 403, title = "Quota exceeded")]
+    QuotaExceeded {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A collaborator could not answer, so the session neither opened nor was refused.
     #[error("the upload session could not be opened")]
     #[problem(status = 500, title = "Internal server error")]
@@ -747,6 +760,7 @@ impl SessionRejection {
 #[kynos::post("/v1/upload", operation_id = "create_upload", tag = UploadTag)]
 pub async fn create_upload(
     Inject(upload): Inject<UploadContext>,
+    Inject(quota): Inject<crate::quota::QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Headers(handshake): Headers<ProtocolHeader>,
     Json(request): Json<CreateUploadRequest>,
@@ -889,6 +903,19 @@ pub async fn create_upload(
         crate::index::Reservation::Conflict => {
             tracing::info!(%owner, %asset_id, "an upload was refused: the asset id is not this caller's");
             return Err(CreateRejection::album_access_denied());
+        }
+    }
+
+    // Quota's one hard enforcement point (`S-C6`). After the duplicate check and the
+    // reservation, because a refused duplicate must not be charged; before the stage, because a
+    // refusal must not leave bytes. The reserved-but-unpublished row a refusal leaves behind
+    // publishes nothing and is the discard worker's, exactly as an abandoned session's is.
+    match crate::quota::charge_upload(&quota, &uploader, &address, request.size).await {
+        Ok(crate::quota::UploadCharge::Admitted) => {}
+        Ok(crate::quota::UploadCharge::Refused) => return Err(CreateRejection::quota_exceeded()),
+        Err(error) => {
+            store_unavailable(&error, "charge an upload against its quota");
+            return Err(CreateRejection::unavailable());
         }
     }
 
@@ -1171,6 +1198,7 @@ pub async fn head_upload(
 #[kynos::delete("/v1/upload/{id}", operation_id = "cancel_upload", tag = UploadTag)]
 pub async fn cancel_upload(
     Inject(upload): Inject<UploadContext>,
+    Inject(quota): Inject<crate::quota::QuotaContext>,
     Auth(credential): Auth<AccessToken>,
     Path(path): Path<UploadPath>,
     Headers(handshake): Headers<ProtocolHeader>,
@@ -1198,6 +1226,18 @@ pub async fn cancel_upload(
         store_unavailable(&error, "discard a cancelled session");
         CancelRejection::unavailable()
     })?;
+
+    // The reservation goes back (`S-C6`). Best-effort and logged rather than fatal: the session
+    // is already gone, so failing the response here would tell a client its cancellation did
+    // not happen when it did. A stranded attribution is what the scrub reconciles.
+    if let Ok(address) = ContentAddress::parse(&record.expected_hash)
+        && let Err(error) = quota
+            .quotas()
+            .release(&record.upload_user_id, &address)
+            .await
+    {
+        tracing::error!(%error, upload_id = %id, "a cancelled upload's quota was not released");
+    }
 
     tracing::info!(upload_id = %id, "cancelled an upload session");
     Ok(NoContent)
@@ -1402,6 +1442,13 @@ fn store_unavailable(error: &StoreError, doing: &'static str) {
 }
 
 impl CreateRejection {
+    /// The upload would cross the hard quota limit.
+    fn quota_exceeded() -> Self {
+        Self::QuotaExceeded {
+            code: error_codes::QUOTA_EXCEEDED,
+        }
+    }
+
     /// The owner already holds these bytes, in the asset named.
     fn duplicate_blob(existing: &AssetId) -> Self {
         Self::DuplicateBlob {

@@ -31,6 +31,7 @@ use kynos::security::Authenticates;
 use crate::album::AlbumContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
+use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
 use crate::sync::SyncContext;
 use crate::upload::UploadContext;
@@ -57,22 +58,50 @@ pub struct App {
     directories: DeviceDirectoryContext,
     /// The album-provisioning module's collaborators.
     albums: AlbumContext,
+    /// The quota module's collaborators.
+    quota: QuotaContext,
+}
+
+/// The modules an [`App`] is assembled from.
+///
+/// One argument rather than eight positional ones, and named rather than ordered. `App::new`
+/// grew by a parameter per ported surface until clippy refused it, which is the same failure
+/// the removed `with_auth` had: a signature that lengthens every time a module is added will
+/// eventually be got wrong positionally, and two contexts of similar shape swapped at a call
+/// site is a compile error only by luck. Adding a module is now a field.
+#[derive(Debug)]
+pub struct Modules {
+    /// The authentication module's collaborators.
+    pub auth: AuthContext,
+    /// The upload module's collaborators.
+    pub upload: UploadContext,
+    /// The sync feed's collaborators.
+    pub sync: SyncContext,
+    /// The media serving module's collaborators.
+    pub serve: ServeContext,
+    /// The storage-verification module's collaborators.
+    pub verify: VerifyContext,
+    /// The device-directory module's collaborators.
+    pub directories: DeviceDirectoryContext,
+    /// The album-provisioning module's collaborators.
+    pub albums: AlbumContext,
+    /// The quota module's collaborators.
+    pub quota: QuotaContext,
 }
 
 impl App {
     /// Assembles the application from its modules.
-    ///
-    /// Takes already-built module bundles rather than their parts, so that adding a
-    /// collaborator to a module is not a change to this signature.
-    pub fn new(
-        auth: AuthContext,
-        upload: UploadContext,
-        sync: SyncContext,
-        serve: ServeContext,
-        verify: VerifyContext,
-        directories: DeviceDirectoryContext,
-        albums: AlbumContext,
-    ) -> Self {
+    pub fn new(modules: Modules) -> Self {
+        let Modules {
+            auth,
+            upload,
+            sync,
+            serve,
+            verify,
+            directories,
+            albums,
+            quota,
+        } = modules;
         Self {
             auth,
             upload,
@@ -81,6 +110,7 @@ impl App {
             verify,
             directories,
             albums,
+            quota,
         }
     }
 }

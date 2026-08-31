@@ -164,6 +164,7 @@
     <string name="error_quota_exceeded">आपका स्टोरेज भर गया है।</string>
     <string name="error_quota_grace_locked">आपका स्टोरेज छूट अवधि के बाद भी भरा रहा है, इसलिए जब तक आप जगह ख़ाली नहीं करते तब तक संपादन रोक दिए गए हैं।</string>
     <string name="error_quota_peer_budget_exceeded">इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।</string>
+    <string name="error_quota_unavailable">Capsule आपके संग्रहण उपयोग की जाँच नहीं कर सका। कृपया फिर से प्रयास करें।</string>
     <string name="error_share_rate_limited">बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_storage_deep_rate_limited">बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_storage_invalid_request">स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।</string>

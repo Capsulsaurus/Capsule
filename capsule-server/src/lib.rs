@@ -32,6 +32,7 @@ pub mod body;
 pub mod directory;
 pub mod index;
 pub mod limits;
+pub mod quota;
 pub mod routes;
 pub mod serve;
 pub mod store;
@@ -79,6 +80,7 @@ pub fn router() -> ServerRouter {
             routes::directory::fetch_device_directory,
             routes::ops::apply_op,
             routes::albums::provision_album,
+            routes::quota::get_quota,
         ])
 }
 

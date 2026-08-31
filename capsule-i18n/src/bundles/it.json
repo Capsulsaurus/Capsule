@@ -165,6 +165,7 @@
   "error.quota.exceeded": "Lo spazio di archiviazione è pieno.",
   "error.quota.grace_locked": "Lo spazio di archiviazione è rimasto pieno oltre il periodo di tolleranza, quindi le modifiche sono sospese finché non liberi spazio.",
   "error.quota.peer_budget_exceeded": "Questa fonte ha raggiunto il limite di memorizzazione nella cache sul tuo account.",
+  "error.quota.unavailable": "Capsule non è riuscito a verificare l'utilizzo dello spazio. Riprova.",
   "error.share.rate_limited": "Troppi tentativi. Attendi e riprova.",
   "error.storage.deep_rate_limited": "Troppi controlli approfonditi dello spazio di archiviazione. Attendi e riprova.",
   "error.storage.invalid_request": "La richiesta di verifica dello spazio di archiviazione è malformata.",

@@ -1817,6 +1817,73 @@
           }
         ]
       }
+    },
+    "/v1/quota": {
+      "get": {
+        "summary": "Report the authenticated uploader's storage-quota snapshot.",
+        "description": "Scoped to the caller, and to nobody else: quota is accounted to the *uploader*, and one\naccount's storage use is not another's business.",
+        "operationId": "get_quota",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2510,6 +2577,44 @@
           "created"
         ],
         "description": "What provisioning did."
+      },
+      "QuotaResponse": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Bytes charged to the caller."
+          },
+          "soft_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Where the warning starts, or absent on an unlimited deployment."
+          },
+          "hard_limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Where uploads stop, or absent on an unlimited deployment."
+          },
+          "state": {
+            "type": "string",
+            "description": "The classified state: `ok`, `soft_warning`, `hard_exceeded`, `grace_expired`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "state"
+        ],
+        "description": "A user's quota snapshot."
       }
     },
     "securitySchemes": {

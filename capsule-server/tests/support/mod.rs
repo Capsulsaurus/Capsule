@@ -31,6 +31,7 @@ use capsule_server::App;
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
 };
+use capsule_server::app::Modules;
 use capsule_server::auth::{
     AccountDirectory, AuthContext, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
 };
@@ -46,6 +47,9 @@ use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
     AssetIndex, AssetRow, BlobOutcome, BlobRecord, FeedEntry, IndexFuture, LifecycleOp, OpOutcome,
     PendingAsset, Reservation,
+};
+use capsule_server::quota::{
+    ChargeOutcome, InMemoryQuota, QuotaContext, QuotaLimits, QuotaStore, StoredUsage,
 };
 use capsule_server::serve::ServeContext;
 use capsule_server::store::memory::{InMemoryAuthState, InMemoryUploadSessions, ManualClock};
@@ -792,6 +796,70 @@ pub(crate) struct SwitchableIndex {
     unavailable: AtomicBool,
 }
 
+/// A quota ledger that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableQuota {
+    inner: InMemoryQuota,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableQuota {
+    /// A working ledger.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "quota",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl QuotaStore for SwitchableQuota {
+    fn usage<'a>(&'a self, user: &'a UserId) -> StoreFuture<'a, StoredUsage> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.usage(user)
+    }
+
+    fn charge<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+        size: u64,
+        at: Timestamp,
+        limits: QuotaLimits,
+    ) -> StoreFuture<'a, ChargeOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.charge(user, address, size, at, limits)
+    }
+
+    fn release<'a>(
+        &'a self,
+        user: &'a UserId,
+        address: &'a ContentAddress,
+    ) -> StoreFuture<'a, bool> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.release(user, address)
+    }
+}
+
 /// An album store that can be made to fail on demand.
 #[derive(Debug, Default)]
 pub(crate) struct SwitchableAlbums {
@@ -1027,12 +1095,21 @@ pub(crate) struct Fixture {
     pub(crate) directories: Arc<SwitchableDirectories>,
     /// The albums the server has provisioned.
     pub(crate) albums: Arc<SwitchableAlbums>,
+    /// The quota ledger the server charges against.
+    pub(crate) quotas: Arc<SwitchableQuota>,
 }
 
 impl Fixture {
     /// A server whose collaborators all work, with one account, one writable album and one
     /// directory device seeded.
     pub(crate) fn working() -> Self {
+        // Unlimited, which is what a self-hosted deployment runs and what every case that is
+        // not about quota wants.
+        Self::with_quota(QuotaLimits::unlimited())
+    }
+
+    /// The same server, with a deployment's quota thresholds.
+    pub(crate) fn with_quota(quota_limits: QuotaLimits) -> Self {
         let clock = Arc::new(ManualClock::default());
         let sessions = Arc::new(SwitchableSessions::new(clock.clone()));
         let accounts = Arc::new(InMemoryAccounts::new());
@@ -1053,17 +1130,18 @@ impl Fixture {
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
         let albums = Arc::new(SwitchableAlbums::new());
+        let quotas = Arc::new(SwitchableQuota::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
-        let app = App::new(
-            AuthContext::new(
+        let app = App::new(Modules {
+            auth: AuthContext::new(
                 sessions.clone(),
                 accounts.clone(),
                 tokens.clone(),
                 clock.clone(),
             ),
-            UploadContext::new(
+            upload: UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
                 index.clone(),
@@ -1071,12 +1149,13 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
-            ServeContext::new(index.clone(), blobs.clone()),
-            VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
-            DeviceDirectoryContext::new(directories.clone(), clock.clone()),
-            AlbumContext::new(albums.clone(), clock.clone()),
-        );
+            sync: SyncContext::new(index.clone(), blobs.clone(), cursors.clone()),
+            serve: ServeContext::new(index.clone(), blobs.clone()),
+            verify: VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
+            directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
+            albums: AlbumContext::new(albums.clone(), clock.clone()),
+            quota: QuotaContext::new(quotas.clone(), clock.clone(), quota_limits),
+        });
 
         Self {
             client: TestClient::new(capsule_server::service(app).expect("the router builds")),
@@ -1091,6 +1170,7 @@ impl Fixture {
             cursors,
             directories,
             albums,
+            quotas,
         }
     }
 
@@ -1110,14 +1190,14 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
-        let app = App::new(
-            AuthContext::new(
+        let app = App::new(Modules {
+            auth: AuthContext::new(
                 Arc::new(SwitchableSessions::new(clock.clone())),
                 accounts,
                 Arc::new(signer(clock.clone())),
                 clock.clone(),
             ),
-            UploadContext::new(
+            upload: UploadContext::new(
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 blobs.clone(),
                 index.clone(),
@@ -1125,16 +1205,24 @@ impl Fixture {
                 clock.clone(),
                 UploadPolicy::default(),
             ),
-            SyncContext::new(
+            sync: SyncContext::new(
                 index.clone(),
                 blobs.clone(),
                 Arc::new(CursorCodec::new(&CURSOR_KEY)),
             ),
-            ServeContext::new(index.clone(), blobs.clone()),
-            VerifyContext::new(index, blobs, clock.clone()),
-            DeviceDirectoryContext::new(Arc::new(SwitchableDirectories::new()), clock.clone()),
-            AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
-        );
+            serve: ServeContext::new(index.clone(), blobs.clone()),
+            verify: VerifyContext::new(index, blobs, clock.clone()),
+            directories: DeviceDirectoryContext::new(
+                Arc::new(SwitchableDirectories::new()),
+                clock.clone(),
+            ),
+            albums: AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
+            quota: QuotaContext::new(
+                Arc::new(SwitchableQuota::new()),
+                clock.clone(),
+                QuotaLimits::unlimited(),
+            ),
+        });
         (app, clock)
     }
 
