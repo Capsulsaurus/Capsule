@@ -222,7 +222,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C13 | Session device-cohort storage + grouping | server | — | S | RETIRED | ready | wire device_id + ceremony cohort → `S-N3` |
 | S-C14 | Server integrity scrub (Postgres⇄blob-store) | server | S-C1 | M | RETIRED | ready | |
 | S-C15 | Custody receipts + signed storage attestation | server | S-C1, S-C3 | M | RETIRED | ready | |
-| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1 | M | RETIRED | ready | pin column → `S-C19` |
+| S-C16 | Generic lifecycle-write endpoint (`/albums/{id}/ops`) | server | S-C1, S-C37 | M | RETIRED | done\* | the feed's only tombstone producer; quota → `S-C6`; `replace` → `S-C43` |
 | S-C17 | Takedown 410 gate on `/blob/{hash}` + legacy route del | server | — | M | RETIRED | ready | |
 | S-C18 | `.well-known/capsule` registry completion | server | — | M | RETIRED | ready | |
 | S-C19 | Authoritative album `protocol_version` pin | server | — | M | RETIRED | done | unrepresentable via `WriteAuthority` (`S-C1`) |
@@ -1321,7 +1321,50 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   the sync feed in order.
 - **Tier:** Unit + Smoke + E2E case 7 (`S-Q3`).
 - **Landed in retired code; re-scoped onto Kynos.**
-- **Owed:** pin column → `S-C19`.
+- **Ported 2026-08-30 (`done\*`).** `POST /v1/albums/{album_id}/ops` in
+  `capsule-server/src/routes/ops.rs` over `AssetIndex::apply_op`; 14 surface cases in
+  `capsule-server/tests/ops.rs` and 6 more in the index conformance suite.
+- **This is the feed's only tombstone producer.** Before it, `ChangeKind::Deleted` was
+  reachable in tests and by nothing else, so half of what the surface cases assert is not about
+  the response at all — it is about what a second device reads off `/v1/sync` afterwards. A
+  delete that answers `200` and never reaches the feed has deleted nothing as far as every other
+  device is concerned.
+- **Where each invariant is decided, and why they are not all in one place.** 1, 2, 6, 7, 8, 15
+  and 16 are pure over the request and live in `check_op`; 25 compares bytes in hand against a
+  manifest field and lives in the route; **17 and 18 live in the index**. Those two are the only
+  ones whose answer depends on stored state, and a check taken outside the write's critical
+  section is a check on facts that can change before the write lands — two concurrent ops
+  reading the same chain head would both pass a handler-side check and double-apply, which is
+  the stale revival invariant 17 exists to catch, reintroduced by the code enforcing it. The
+  gate is therefore handed the manifest's own claims for those two, and says so in its docs
+  rather than looking like an oversight.
+- **Idempotency without remembering any bytes.** The contract asks for a byte-identical prior
+  response; the retired implementation kept the serialized response in a table beside the op.
+  Here the body is a pure function of `(asset_id, action, sync_seq)` and all three are stored
+  facts, so byte-identity follows from determinism instead of from a second copy of something
+  derivable. The ordering is load-bearing: the index checks the replay key **before** invariant
+  17, because a client that lost an acknowledgement is resubmitting a manifest whose predecessor
+  is no longer the head, and checking the chain first would answer `409` to a client whose only
+  fault was not hearing the first answer.
+- **Two modelling gaps this found, both fixed here rather than filed.** A `create`'s manifest
+  never became a chain head, so the *first* lifecycle op on any asset could chain onto nothing
+  and invariant 17 was unsatisfiable; `record_blob` now sets the head when a provenance blob
+  lands, with the `S-C31` trap written down — the head is the provenance blob's content address
+  only because the shipped suite's digest **is** SHA-256, and a suite that picked another would
+  make it unknowable rather than wrong. And `check_op` originally refused only `create`, letting
+  `replace` through to fail confusingly downstream; it is now an allow-list, so an action added
+  to core's enum fails loudly instead of silently becoming a lifecycle op.
+- **A distinction the taxonomy needed:** a non-`create` manifest carrying **no**
+  `prior_provenance_hash` is `400`, not `409`. A `409` tells a client to re-read and rebase, and
+  this cannot be rebased — the manifest never claimed to follow anything, and every non-create
+  action chains by definition.
+- **The `S-C28` win here is structural.** The retired handler chose its status at run time
+  (`StatusCode::from_u16(result.status)`), which is why salvo-oapi could describe *no responses
+  at all* for this operation and spargen 0.4 refuses it outright. The value was unconditionally
+  `200` every time. Kynos makes the status part of the return type, so the operation describes
+  itself and the narrowing disappears.
+- **Owed:** quota accounting on a metadata-growth op → `S-C6`; the album pin column →
+  `S-C19`; `replace` → `S-C43`; E2E case 7 → `S-Q3`.
 
 ### S-C17 — Takedown gate on the content-addressed path
 
