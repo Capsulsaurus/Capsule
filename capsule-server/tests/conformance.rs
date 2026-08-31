@@ -1691,6 +1691,21 @@ async fn every_declared_response_is_exercised() {
         .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
     fixture.channels.set_unavailable(false);
 
+    // 429 on redeem: the per-code budget, spent against one consistent wrong guess (`S-C32`).
+    for _ in 0..10 {
+        client
+            .post("/v1/auth/devices/enroll/redeem")
+            .json(&serde_json::json!({ "code": "conformance-grind" }))
+            .send()
+            .await;
+    }
+    client
+        .post("/v1/auth/devices/enroll/redeem")
+        .json(&serde_json::json!({ "code": "conformance-grind" }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
     // 500 on redeem: the enrollment store cannot answer.
     fixture.enrollments.set_unavailable(true);
     client
@@ -1974,6 +1989,24 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::BAD_REQUEST);
+
+    // 429 on all three public operations: the per-link budget (`S-C32`), spent against an id
+    // that does not exist so the live link this block made is untouched.
+    let probed = "abcdef0123456789abcdef01234567dd";
+    for _ in 0..60 {
+        client.get(&format!("/s/{probed}")).send().await;
+    }
+    for path in [
+        format!("/s/{probed}"),
+        format!("/s/{probed}/wrapped-secret"),
+        format!("/s/{probed}/blob/{share_address}"),
+    ] {
+        client
+            .get(&path)
+            .send()
+            .await
+            .assert_status(StatusCode::TOO_MANY_REQUESTS);
+    }
 
     // 500 on every share operation: the store cannot answer.
     fixture.shares.set_unavailable(true);
@@ -2723,6 +2756,23 @@ async fn drops_block(
         .send()
         .await
         .assert_status(StatusCode::FORBIDDEN);
+
+    // 429 on creation: the per-link budget (invariant 31, `S-C32`). Against a link that does
+    // not exist, so it spends no cap and disturbs nothing else in this walk.
+    let hammered = "abcdef0123456789abcdef01234567cc";
+    for _ in 0..30 {
+        client
+            .post(&format!("/d/{hammered}"))
+            .json(&drop_declaration)
+            .send()
+            .await;
+    }
+    client
+        .post(&format!("/d/{hammered}"))
+        .json(&drop_declaration)
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
 
     // 500 on every drop operation: the store cannot answer.
     fixture.dropstore.set_unavailable(true);

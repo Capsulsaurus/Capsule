@@ -394,3 +394,58 @@ async fn issuing_and_revoking_need_a_credential_and_serving_does_not() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn the_public_path_is_rate_limited_per_link_across_all_three_operations() {
+    // Enumeration does not care which of the three endpoints it probes with, so all three
+    // charge the same budget. And the refusal is a `429` rather than the indistinguishable
+    // `404`: a `404` that was really a throttle would teach a legitimate viewer that a live
+    // link is dead.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (id, _, original) = live_link(&fixture, &bearer, 1).await;
+
+    // Spend the budget across a mix of the three, so no single one is carrying the count.
+    for step in 0..60 {
+        let path = match step % 3 {
+            0 => format!("/s/{id}"),
+            1 => format!("/s/{id}/wrapped-secret"),
+            _ => format!("/s/{id}/blob/{original}"),
+        };
+        fixture.client.get(&path).send().await;
+    }
+
+    for path in [
+        format!("/s/{id}"),
+        format!("/s/{id}/wrapped-secret"),
+        format!("/s/{id}/blob/{original}"),
+    ] {
+        let problem: Value = fetch(&fixture, &path, StatusCode::TOO_MANY_REQUESTS)
+            .await
+            .json();
+        assert_eq!(problem["code"], "error.share.rate_limited");
+    }
+
+    // A different link has its own budget: one probed link must not take every other share on
+    // the server down with it.
+    let (other, _, _) = live_link(&fixture, &bearer, 2).await;
+    fetch(&fixture, &format!("/s/{other}"), StatusCode::OK).await;
+}
+
+#[tokio::test]
+async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
+    // Charged before the link is resolved. A limiter that only ran for real links would be a
+    // free oracle for every id that is not one.
+    let fixture = Fixture::working();
+    let unknown = opaque(9);
+
+    for _ in 0..60 {
+        fixture.client.get(&format!("/s/{unknown}")).send().await;
+    }
+    fetch(
+        &fixture,
+        &format!("/s/{unknown}"),
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+    .await;
+}

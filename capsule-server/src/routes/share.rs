@@ -46,6 +46,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::serve::BlobSource;
 use crate::share::{ShareContext, ShareRecord, is_opaque_id};
 use crate::store::UserId;
@@ -173,6 +174,20 @@ pub enum ShareRejection {
     #[error("not found")]
     #[problem(status = 404, title = "Not found")]
     NotFound,
+
+    /// Too many requests against this link, or from this source.
+    ///
+    /// Charged on **every** `/s/{opaque-id}` request — metadata, blob and wrapped-secret alike —
+    /// because enumeration does not care which of the three it probes with. Deliberately *not*
+    /// folded into the indistinguishable `404`: a `404` that was really a throttle would teach a
+    /// legitimate viewer that a live link is dead.
+    #[error("too many requests")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
 
     /// The store could not answer.
     ///
@@ -302,8 +317,10 @@ pub async fn revoke_share(
 #[kynos::get("/s/{opaque_id}", operation_id = "share_metadata", tag = SharesTag)]
 pub async fn share_metadata(
     Inject(share): Inject<ShareContext>,
+    Inject(counters): Inject<CounterContext>,
     Path(path): Path<SharePath>,
 ) -> Result<Json<SharedMetadataResponse>, ShareRejection> {
+    throttle(&counters, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
     Ok(Json(SharedMetadataResponse {
         metadata_hash: record.metadata.as_str().to_owned(),
@@ -323,8 +340,10 @@ pub async fn share_metadata(
 )]
 pub async fn share_wrapped_secret(
     Inject(share): Inject<ShareContext>,
+    Inject(counters): Inject<CounterContext>,
     Path(path): Path<SharePath>,
 ) -> Result<Binary<OctetStream>, ShareRejection> {
+    throttle(&counters, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
     let Some(wrapped) = record.wrapped_secret else {
         return Err(ShareRejection::NotFound);
@@ -344,9 +363,11 @@ pub async fn share_wrapped_secret(
 )]
 pub async fn share_blob(
     Inject(share): Inject<ShareContext>,
+    Inject(counters): Inject<CounterContext>,
     Path(path): Path<ShareBlobPath>,
     conditions: Conditions,
 ) -> Result<Delivery<OctetStream>, ShareRejection> {
+    throttle(&counters, &path.opaque_id).await?;
     let record = live(&share, &path.opaque_id).await?;
 
     let Ok(address) = ContentAddress::parse(&path.hash) else {
@@ -379,6 +400,37 @@ pub async fn share_blob(
             tracing::error!(%error, "a shared blob vanished between resolution and delivery");
             ShareRejection::unavailable()
         })
+}
+
+/// Charge the per-link limiter, and refuse if it is spent (`S-C4`, `S-C32`).
+///
+/// Charged **before** the link is resolved, so probing costs the prober whether or not the id
+/// exists — a limiter that only ran for real links would be a free oracle for the rest.
+///
+/// The contract names *two* limiters, per link and per source address. Only the first is here:
+/// this server's request type carries no client address, because it is driven in-process by
+/// `TestClient` and behind a proxy in production, where the address that matters is a header a
+/// deployment must be configured to trust. Wiring a per-source key to an untrusted header would
+/// be worse than having none — it would throttle by a value the attacker chooses. Recorded as
+/// owed rather than faked; the key exists in [`CounterKey::ShareSource`] for when there is a
+/// trusted address to put in it.
+async fn throttle(counters: &CounterContext, opaque_id: &str) -> Result<(), ShareRejection> {
+    let key = CounterKey::ShareLink(opaque_id.to_owned());
+    let verdict = counters
+        .hit(&key, budgets::SHARE_LINK)
+        .await
+        .map_err(|error| {
+            // Fail closed, like every other limiter here.
+            tracing::error!(%error, "the share limiter could not be reached");
+            ShareRejection::unavailable()
+        })?;
+    if verdict.admits() {
+        Ok(())
+    } else {
+        Err(ShareRejection::RateLimited {
+            code: error_codes::SHARE_RATE_LIMITED,
+        })
+    }
 }
 
 /// Resolve `opaque_id` to a link that may serve right now, or refuse.

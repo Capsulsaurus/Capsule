@@ -31,6 +31,7 @@ use kynos::security::Authenticates;
 use crate::album::AlbumContext;
 use crate::attestation::AttestationContext;
 use crate::auth::{AccessToken, AuthContext};
+use crate::counter::CounterContext;
 use crate::directory::DeviceDirectoryContext;
 use crate::discovery::DiscoveryContext;
 use crate::drop::DropContext;
@@ -81,6 +82,8 @@ pub struct App {
     share: ShareContext,
     /// The guest-drop surface's collaborators.
     drops: DropContext,
+    /// The rate-limit counters (`S-C32`).
+    counters: CounterContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -122,6 +125,8 @@ pub struct Modules {
     pub share: ShareContext,
     /// The guest-drop surface's collaborators.
     pub drops: DropContext,
+    /// The rate-limit counters (`S-C32`).
+    pub counters: CounterContext,
 }
 
 impl App {
@@ -143,6 +148,7 @@ impl App {
             moderation,
             share,
             drops,
+            counters,
         } = modules;
         Self {
             auth,
@@ -160,6 +166,7 @@ impl App {
             moderation,
             share,
             drops,
+            counters,
         }
     }
 }

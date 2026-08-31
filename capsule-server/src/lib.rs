@@ -47,6 +47,7 @@ pub mod attestation;
 pub mod auth;
 pub mod blob;
 pub mod body;
+pub mod counter;
 pub mod directory;
 pub mod discovery;
 pub mod drop;

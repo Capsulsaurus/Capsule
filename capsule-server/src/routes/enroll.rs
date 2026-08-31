@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{AccessToken, AuthContext};
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::enrollment::{EnrollmentContext, MAX_RELAY_BYTES};
 use crate::store::{
     ChannelId, Direction, DrainOutcome, EnrollmentCode, PendingEnrollment, RelayChannel,
@@ -140,6 +141,19 @@ pub enum RedeemRejection {
     #[error("that code cannot be redeemed")]
     #[problem(status = 404, title = "Code refused")]
     Refused {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// Too many redemption attempts against this code.
+    ///
+    /// The limiter design/device-enrollment.md names as the reason the **shorter transcribable
+    /// fallback** is safe to offer: it trades entropy for transcribability, and what keeps that
+    /// trade honest is that the code cannot be ground through inside its ten-minute life.
+    #[error("too many attempts against this code")]
+    #[problem(status = 429, title = "Too many attempts")]
+    RateLimited {
         /// The stable catalog code.
         #[problem(extension)]
         code: &'static str,
@@ -264,9 +278,37 @@ pub async fn issue_enrollment_code(
 )]
 pub async fn redeem_enrollment_code(
     Inject(enrollment): Inject<EnrollmentContext>,
+    Inject(counters): Inject<CounterContext>,
     Json(request): Json<RedeemRequest>,
 ) -> Result<Json<ChannelResponse>, RedeemRejection> {
     let presented = EnrollmentCode::new(request.code.trim());
+
+    // Charged **before** the redemption is attempted, and charged on every attempt whatever the
+    // outcome (`S-C32`). A limiter that only counted failures would let a caller who guesses
+    // right on the last try escape it, and one charged after the fact would let a burst through
+    // while the first attempt was still resolving.
+    //
+    // Keyed on the presented code rather than on a source address, because the contract's
+    // budget is per *pending enrollment* — the thing being guessed — and a caller behind many
+    // addresses is exactly the caller a per-address key would miss.
+    let key = CounterKey::EnrollmentRedemption(request.code.trim().to_owned());
+    let verdict = counters
+        .hit(&key, budgets::ENROLLMENT_REDEMPTION)
+        .await
+        .map_err(|error| {
+            // Fail closed. A limiter an attacker turns off by loading the counter store is not
+            // a limiter.
+            tracing::error!(%error, "the redemption counter could not be reached");
+            RedeemRejection::Unavailable {
+                code: error_codes::AUTH_UNAVAILABLE,
+            }
+        })?;
+    if !verdict.admits() {
+        return Err(RedeemRejection::RateLimited {
+            code: error_codes::ENROLLMENT_RATE_LIMITED,
+        });
+    }
+
     let redeemed = enrollment
         .enrollments()
         .redeem(&presented)

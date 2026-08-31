@@ -379,3 +379,48 @@ async fn issuing_a_code_requires_a_credential_and_redeeming_one_does_not() {
     redeem(&fixture, "not a real code", StatusCode::NOT_FOUND).await;
     let _ = EMAIL;
 }
+
+#[tokio::test]
+async fn redemption_is_rate_limited_per_code() {
+    // The limiter design/device-enrollment.md names as the reason the shorter transcribable
+    // fallback is safe to offer at all: it trades entropy for transcribability, and what keeps
+    // that trade honest is that the code cannot be ground through inside its ten-minute life.
+    let fixture = Fixture::working();
+    let bearer = fresh(&fixture).await;
+    let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
+    let code = issued["code"].as_str().expect("a code").to_owned();
+
+    // Wrong guesses against the *same* string are what the budget counts.
+    for _ in 0..10 {
+        redeem(&fixture, "wrong-but-consistent", StatusCode::NOT_FOUND).await;
+    }
+    let problem: Value = redeem(
+        &fixture,
+        "wrong-but-consistent",
+        StatusCode::TOO_MANY_REQUESTS,
+    )
+    .await
+    .json();
+    assert_eq!(problem["code"], "error.enrollment.rate_limited");
+
+    // A different code has its own budget — the limit is per pending enrollment, not global,
+    // so one attacker cannot lock every guest out of their own add.
+    redeem(&fixture, &code, StatusCode::OK).await;
+}
+
+#[tokio::test]
+async fn the_redemption_limiter_counts_successes_too() {
+    // Charged on every attempt whatever the outcome. A limiter that only counted failures would
+    // let a caller who guesses right on the last try escape it entirely.
+    let fixture = Fixture::working();
+    let bearer = fresh(&fixture).await;
+
+    for _ in 0..10 {
+        redeem(&fixture, "one-string", StatusCode::NOT_FOUND).await;
+    }
+    // Even the *right* code, presented under a spent budget, is refused — because the budget is
+    // keyed on the string presented, and this one has been presented ten times.
+    let issued: Value = issue(&fixture, &bearer, StatusCode::OK).await.json();
+    let _ = issued;
+    redeem(&fixture, "one-string", StatusCode::TOO_MANY_REQUESTS).await;
+}

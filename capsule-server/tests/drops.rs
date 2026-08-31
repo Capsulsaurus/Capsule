@@ -690,3 +690,73 @@ async fn the_owner_operations_need_a_credential_and_the_guest_path_does_not() {
     )
     .await;
 }
+
+#[tokio::test]
+async fn drop_session_creation_is_rate_limited_per_link() {
+    // Invariant 31's per-link half. The caps bound how much a link can ever deposit; this
+    // bounds how fast it can be hammered, and the two are not substitutes — a link with a
+    // generous byte cap and no limiter is a free amplifier.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let id = opaque(1);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "max_file_count": 1000 })),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    let bytes = payload(b'g', 64);
+    for _ in 0..30 {
+        fixture
+            .client
+            .post(&format!("/d/{id}"))
+            .json(&json!({
+                "content_type": "image/jpeg",
+                "size": bytes.len(),
+                "ciphertext_hash": checksum(&bytes),
+                "kem_ct": BASE64.encode([9_u8; 64]),
+            }))
+            .send()
+            .await;
+    }
+
+    let problem = create_drop(&fixture, &id, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
+    assert_eq!(problem["code"], "error.drop.rate_limited");
+
+    // A second link has its own budget: one hammered link must not close every other.
+    let other = opaque(2);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&other, json!({})),
+        StatusCode::CREATED,
+    )
+    .await;
+    create_drop(&fixture, &other, &bytes, StatusCode::CREATED).await;
+}
+
+#[tokio::test]
+async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
+    // Charged before the link is resolved, so a caller walking the id space pays for it — the
+    // same discipline the share path applies, and for the same reason.
+    let fixture = Fixture::working();
+    let bytes = payload(b'g', 64);
+    let unknown = opaque(9);
+
+    for _ in 0..30 {
+        fixture
+            .client
+            .post(&format!("/d/{unknown}"))
+            .json(&json!({
+                "content_type": "image/jpeg",
+                "size": bytes.len(),
+                "ciphertext_hash": checksum(&bytes),
+                "kem_ct": BASE64.encode([9_u8; 64]),
+            }))
+            .send()
+            .await;
+    }
+    create_drop(&fixture, &unknown, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
+}

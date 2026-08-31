@@ -49,6 +49,7 @@ use uuid::Uuid;
 
 use crate::auth::AccessToken;
 use crate::blob::ContentAddress;
+use crate::counter::{CounterContext, CounterKey, budgets};
 use crate::drop::{Admission, DropContext, InboxEntry, LinkCaps, UploadLinkRecord, is_opaque_id};
 use crate::store::{BlobRole, OwnerId, UploadId, UploadSessionRecord, UploadSessionStatus, UserId};
 use crate::upload::body::ChunkBody;
@@ -395,6 +396,15 @@ pub enum DropRejection {
         code: &'static str,
     },
 
+    /// Too many drop-session creations against this link (invariant 31).
+    #[error("too many uploads through this link")]
+    #[problem(status = 429, title = "Too many requests")]
+    RateLimited {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
     /// A store could not answer.
     #[error("the drop could not be accepted")]
     #[problem(status = 500, title = "Internal server error")]
@@ -582,11 +592,32 @@ pub async fn revoke_link(
 pub async fn create_drop(
     Inject(drops): Inject<DropContext>,
     Inject(quota): Inject<crate::quota::QuotaContext>,
+    Inject(counters): Inject<CounterContext>,
     Path(path): Path<LinkPath>,
     Json(request): Json<CreateDropRequest>,
 ) -> Result<CreateDropReply, DropRejection> {
     if !is_opaque_id(&path.opaque_id) {
         return Err(DropRejection::NotFound);
+    }
+
+    // Invariant 31's per-link limiter, charged before the link is resolved so probing costs the
+    // prober whether or not the id exists (`S-C32`). The per-*source* half of the invariant is
+    // owed for the same reason the share path's is: there is no trusted client address on this
+    // port, and throttling by an untrusted header is throttling by a value the attacker picks.
+    let verdict = counters
+        .hit(
+            &CounterKey::DropLink(path.opaque_id.clone()),
+            budgets::DROP_LINK,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the drop limiter could not be reached");
+            DropRejection::unavailable()
+        })?;
+    if !verdict.admits() {
+        return Err(DropRejection::RateLimited {
+            code: error_codes::DROP_RATE_LIMITED,
+        });
     }
 
     // Invariant 30's shape, before the link is touched: a declaration that cannot be a drop

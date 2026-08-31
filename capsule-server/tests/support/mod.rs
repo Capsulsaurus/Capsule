@@ -42,6 +42,7 @@ use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
     QuarantineReason, QuarantinedBlob,
 };
+use capsule_server::counter::{CounterContext, InMemoryCounters};
 use capsule_server::directory::{
     DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory, PublishOutcome,
     PublishedDirectory,
@@ -1897,6 +1898,8 @@ pub(crate) struct Fixture {
     pub(crate) shares: Arc<SwitchableShares>,
     /// The upload links and the inbox behind them.
     pub(crate) dropstore: Arc<SwitchableDrops>,
+    /// The rate-limit counters.
+    pub(crate) counters: Arc<InMemoryCounters>,
 }
 
 impl Fixture {
@@ -1949,6 +1952,7 @@ impl Fixture {
         let moderation = Arc::new(SwitchableModeration::new());
         let shares = Arc::new(SwitchableShares::new());
         let dropstore = Arc::new(SwitchableDrops::new());
+        let counters = Arc::new(InMemoryCounters::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1995,6 +1999,7 @@ impl Fixture {
                 blobs.clone(),
                 clock.clone(),
             ),
+            counters: CounterContext::new(counters.clone(), clock.clone()),
         });
 
         Self {
@@ -2023,6 +2028,7 @@ impl Fixture {
             moderation,
             shares,
             dropstore,
+            counters,
         }
     }
 
@@ -2116,6 +2122,7 @@ impl Fixture {
                 blobs,
                 clock.clone(),
             ),
+            counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
         });
         (app, clock)
     }
