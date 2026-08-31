@@ -225,6 +225,15 @@
     <string name="error_quota_grace_locked">Your storage has been full past the grace period, so edits are paused until you free space.</string>
     <string name="error_quota_peer_budget_exceeded">This source has reached its caching limit on your account.</string>
     <string name="error_quota_unavailable">Capsule couldn\'t check your storage use. Please try again.</string>
+    <string name="error_request_failed">Something went wrong with that request.</string>
+    <string name="error_request_forbidden">That credential isn\'t enough for this action.</string>
+    <string name="error_request_malformed">Capsule couldn\'t read that request.</string>
+    <string name="error_request_method_not_allowed">Capsule couldn\'t handle that request.</string>
+    <string name="error_request_not_acceptable">Capsule couldn\'t produce that response format.</string>
+    <string name="error_request_too_large">That request was too large to accept.</string>
+    <string name="error_request_unauthenticated">Please sign in again.</string>
+    <string name="error_request_unprocessable">Some of that request didn\'t make sense.</string>
+    <string name="error_request_unsupported_media_type">Capsule couldn\'t read that content type.</string>
     <string name="error_share_malformed">That share link could not be created.</string>
     <string name="error_share_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_share_unavailable">Capsule couldn\'t reach that share. Please try again.</string>

@@ -212,6 +212,33 @@ pub mod error_codes {
     /// `error.quota.unavailable`
     pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
 
+    /// `error.request.failed`
+    pub const REQUEST_FAILED: &str = "error.request.failed";
+
+    /// `error.request.forbidden`
+    pub const REQUEST_FORBIDDEN: &str = "error.request.forbidden";
+
+    /// `error.request.malformed`
+    pub const REQUEST_MALFORMED: &str = "error.request.malformed";
+
+    /// `error.request.method_not_allowed`
+    pub const REQUEST_METHOD_NOT_ALLOWED: &str = "error.request.method_not_allowed";
+
+    /// `error.request.not_acceptable`
+    pub const REQUEST_NOT_ACCEPTABLE: &str = "error.request.not_acceptable";
+
+    /// `error.request.too_large`
+    pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
+
+    /// `error.request.unauthenticated`
+    pub const REQUEST_UNAUTHENTICATED: &str = "error.request.unauthenticated";
+
+    /// `error.request.unprocessable`
+    pub const REQUEST_UNPROCESSABLE: &str = "error.request.unprocessable";
+
+    /// `error.request.unsupported_media_type`
+    pub const REQUEST_UNSUPPORTED_MEDIA_TYPE: &str = "error.request.unsupported_media_type";
+
     /// `error.share.malformed`
     pub const SHARE_MALFORMED: &str = "error.share.malformed";
 

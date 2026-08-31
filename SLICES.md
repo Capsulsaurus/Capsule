@@ -242,9 +242,9 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C33 | Request-size limits — Kynos declares constraints it does not enforce | server | — | S | RETIRED | done\* | per-field constraints still undecided |
 | S-C34 | Nothing gates the Kynos OpenAPI document | server | — | S | RETIRED | done | two documents gated separately until parity |
 | S-C35 | The blob store port, sharded | server | S-C27 | L | RETIRED | done | wired by `S-C1`, which also found a missing operation |
-| S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | ready | breaks the i18n contract |
+| S-C36 | Kynos's framework rejections carry no `error.*` code | server | S-C33 | M | RETIRED | done | a Capsule interceptor fills the member in; the upstream seam is still the better fix |
 | S-C37 | The asset index port, one sequence instead of two | server | S-C27, S-C29 | L | RETIRED | done\* | Postgres adapter owed; absorbs `S-C21` and unblocks `S-C22` |
-| S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | ready | found by `S-C22`; a regression against the Salvo document |
+| S-C38 | Problem extensions are absent from the OpenAPI document | server | S-C34 | M | RETIRED | done\* | `code` is universal and derived; the sixteen other members ride a small table |
 | S-C39 | Blob fetch has no read authority, so its `403` is unwritable | server | S-C10 | M | RETIRED | part | the authority lands and owner-scopes the path; the `403` needs a membership fact → `S-C51` |
 | S-C40 | `awaiting-original` is not observable on the blob path | server | S-C10, S-C37 | M | RETIRED | done | the promise is the open upload session, so it needed no lifetime of its own |
 | S-C41 | The `deep` re-hash, with the limiter that makes it safe | server | S-C3, S-C32 | M | RETIRED | done\* | coalescing is deliberately absent, and the reason is in the note |
@@ -2227,232 +2227,46 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
 - **Contract:** [i18n](capsule-docs/src/content/docs/design/i18n.md) — every server rejection
   carries a stable code from the `error.*` namespace, which the client localizes while the English
   detail stays English.
-- **Gap** (found 2026-08-29 landing `S-C33`, and visible in the auth port before it): the `413` the
-  body-limit interceptor renders is a bare RFC 9457 Problem with **no `code` extension member**, and
-  the same is true of `AuthRejection`'s `401`/`403`. Capsule's whole i18n design is that a client
-  localizes a stable code **offline**, with no server-side catalogs — a rejection without one is a
-  response the client can only show in English.
-- **Why it was not fixed in place:** Kynos's own rejection types have no extension seam, and
-  emitting a parallel Capsule `401` beside the framework's would mean two `401` bodies for one
-  condition, one of them missing the `WWW-Authenticate` header the document declares as required.
-- **Deliverable:** a Capsule-owned interceptor that attaches the code to framework-generated
-  problems, or an upstream Kynos change adding the seam. Decide which; the second is better and
-  slower.
-- **Done when:** every response the document declares carries an `error.*` code, asserted by a test
-  over the emitted document rather than per-handler. **Tier:** Unit.
+- **Gap** (found 2026-08-29 landing `S-C33`): the `413` the body-limit interceptor renders is a
+  bare RFC 9457 Problem with **no `code` extension member**, and so are `AuthRejection`'s
+  `401`/`403` and the `Path`/`Json` extractors' `400`/`415`/`422`. Capsule's whole i18n design is
+  that a client localizes a stable code **offline**, with no server-side catalogs — a rejection
+  without one reaches a user as untranslatable English.
+- **Landed 2026-08-31.** `crate::problem::CodedProblems`, an interceptor mounted outermost on the
+  router.
 
-### S-C34 — nothing gates the Kynos OpenAPI document
+**Why an interceptor rather than any of the obvious alternatives.** Kynos's rejection types are
+foreign, with private shapes and no extension seam, so the member cannot be added where the
+rejection is built. Emitting Capsule's own `401` beside the framework's — the workaround the
+bearer scheme's docs had already rejected — would mean an operation with two different `401`
+bodies, one of which does not carry the `WWW-Authenticate` header the document declares as
+required. What *is* reachable is the response: `Continued::take_body`/`set_body` exist precisely so
+an interceptor can rewrite one, so this reads the problem the framework rendered and fills in the
+member it could not.
 
-- **Gap** (found 2026-08-29 while porting the auth surface): `mise run openapi-check` runs
-  `capsule-api`'s `gen_openapi --bin --check` against `capsule-sdk/openapi.json` — it verifies the
-  **Salvo** document. `capsule_server::openapi()` has **no gate at all**. Its correctness is
-  currently protected only by `capsule-server`'s own conformance tests, which assert that the
-  document matches the code but not that it matches anything committed.
-- **Why it matters now rather than later:** the whole point of the rebuild is that the document is
-  derived from types and cannot drift. That property is worth nothing to a *client* until the
-  document is committed and something fails when it changes — otherwise a surface can be ported,
-  the emitted document can change shape, and nothing anywhere notices.
-- **The trap:** the two documents must not both be committed as the contract at once, and the
-  changeover is not a config edit. `capsule-sdk/build.rs` generates from the committed file, four
-  operations are narrowed out of it because the Salvo document is structurally invalid, and those
-  narrowings should disappear rather than carry over — Kynos cannot express either defect.
-- **Deliverable:** re-point `openapi-check` at `capsule_server::openapi()` when the Kynos surface
-  reaches parity, committing its document as the contract and dropping the `OmitRule` narrowings.
-- **Done when:** changing a Kynos route's response set fails `openapi-check` until the committed
-  document is regenerated. **Tier:** gate.
-- **Landed 2026-08-29.** `capsule-server/openapi.json` is committed and `openapi-check-kynos` is in
-  `check-rust`. Verified to have teeth rather than assumed: deleting the `423` makes it exit 1
-  naming the file. The document declares 3.2.0 with 18 responses over four operations.
-  **Deliberately a second gate, not a replacement** — the SDK still generates from the Salvo
-  document, and committing both as *the* contract at once would leave a client no way to know which
-  to believe. The re-point at parity is the remaining half, and it drops the `OmitRule` narrowings
-  with it.
+**It is deliberately almost powerless**, and each restriction is a property rather than an
+omission: `Short = Infallible`, so it can never refuse a request, only edit a decision something
+else made; `Adds = ()`, so it changes no header and no status; it **never overwrites an existing
+`code`**, so a Capsule rejection's own catalog entry stays authoritative and a coarse code can
+never replace a specific diagnosis; and it checks the content type *before* taking the body, so a
+`206` of ciphertext is never buffered.
 
-### S-C29 — The two storage ports, and the generic blob store they replace
+**The codes are coarse on purpose.** A framework rejection knows a request could not be decoded,
+not which field or why it mattered here, so it gets one code per status in a new `error.request.*`
+namespace that no handler reuses. Seeing `error.request.unprocessable` in the wild means the
+framework refused before a handler ran. An unmapped status still gets `error.request.failed` and
+an `error!` log, because a codeless problem is the defect this closes and a silent hole the next
+time the surface grows a status is the same defect returning.
 
-- **Contract:** `legacy-review/server-salvo/REVIEW.md` ("`AuthStateStore` and `UploadSessionStore`
-  remain separate Capsule-owned contracts with Postgres, Valkey, and deterministic in-memory
-  adapters"), [Module Map — Planned Server Modules](capsule-docs/src/content/docs/design/module-map.md)
-  ("no generic CAS, transfer, or TTL library is planned"), AGENTS.md's Rust Architecture Decisions.
-- **Why it is the next foundational piece:** every remaining lane-C surface reads or writes one of
-  these two stores, so nothing else in the Kynos rebuild can start until their shape is fixed.
-- **Gap** (found 2026-08-22 while scoping the rebuild): the Salvo `SessionStorage` trait is not a
-  port, it is a grab-bag. It mixes session records, the per-user session index, MFA attempt
-  counters and rate-limit counters — and then adds `save_temp_data<T>` / `get_temp_data<T>` /
-  `delete_temp_data`, **a generic serialize-anything key-value store with a caller-supplied TTL**.
-  That is the abstraction the architecture decisions explicitly refuse, and it is load-bearing
-  today: it carries four unrelated typed things, namespaced only by hand-formatted string keys —
-  the revoke-all `ChallengeRecord` (`revocation.rs`), device enrollment's `EnrollmentRecord`,
-  `ChannelState` and its relay queue (`enrollment.rs`), and WebAuthn ceremony state under
-  `passkey_reg:{id}` / `passkey_auth:{id}` (`routes/passkey.rs`). Type safety is lost at the
-  boundary, key collisions are prevented by convention, and each record's lifetime is an argument
-  rather than a property of what it is.
-- **A correctness bug the shape causes, to be fixed by construction rather than patched:**
-  `revoke_session` deletes the session record but leaves its id in the per-user index, so
-  `revoke_all_for_user` counts index entries and over-reports "signed out N devices" by one per
-  prior refresh. The record and the index are one fact and must be written and removed together;
-  a port whose operations cannot express the split cannot reproduce the bug.
-- **Deliverable:** `AuthStateStore` and `UploadSessionStore` as two separate typed traits, plus
-  **typed ceremony stores** replacing the blob store — one per ceremony, each owning its own record
-  type and its own TTL as a property, not a parameter. Three adapters each: Postgres, Valkey
-  (`redis-rs`), and a deterministic in-memory one — but note that **three adapters are not three
-  deployment modes**. Valkey is
-  [required](capsule-docs/src/content/docs/design/filesystem/server.md) (settled 2026-08-29; the
-  server already refuses to boot without `VALKEY_URL`), and the in-memory adapter is a test double.
-  The rejected alternative was a Postgres fallback that removes Valkey, which would mean emulating
-  TTL and expiry in SQL — precisely the generic TTL abstraction the architecture decisions refuse,
-  and the thing this slice exists to delete. A single **conformance suite every adapter must
-  pass**, so "the in-memory adapter behaves like Valkey" is asserted rather than assumed — that
-  suite is what lets the rest of the rebuild be tested without a container, which is the
-  acceptance gap module-map.md sets for Kynos.
-- **Done when:** all three adapters pass one shared conformance suite; a revoke-all reports the
-  number of sessions actually removed; and no operation on either port takes an arbitrary
-  serializable payload. **Tier:** Unit (in-memory + conformance) + Smoke (Postgres/Valkey).
-- **Landed to the in-memory tier — 2026-08-29 (`done\*`).** The contract, the 30-case conformance
-  suite and the in-memory adapter are in `capsule-server/src/store/`; **the Valkey and Postgres
-  adapters are not written**, and nothing stubs them. The over-count is unrepresentable rather than
-  fixed, proved by mutation: reintroducing the Salvo behaviour fails
-  `closing_one_session_removes_it_from_the_user_listing`. Two of this slice's properties are
-  type-level — no `T: Serialize` exists and no method takes a TTL — so they are documented as
-  having no runtime case rather than faked into one.
-  **Owed:** the two live adapters, and the counters that left this slice's scope → `S-C32`.
+**The upstream fix is still the better one**, and it is now asked for by three slices: `S-C36`
+wants a Capsule status and code on a framework rejection, `S-C38` wants `#[problem(extension)]` to
+carry a schema, and `S-C48` wants a `503` an `Authenticator` can render. One seam.
 
-### S-C30 — Feed `manifest_cbor` carries the signed manifest
-
-- **Contract:** [Download & Sync](capsule-docs/src/content/docs/design/import/download-sync.md)
-  ("Each sync entry carries the asset's signed manifest as **opaque canonical CBOR** — never
-  re-modeled as proto fields, because re-encoding would detach it from its signatures");
-  [Clients — Validation Duties](capsule-docs/src/content/docs/design/clients.md)
-  ("Run `verify_asset` on every received asset manifest").
-- **Gap** (found 2026-08-22 by `S-P1`): the feed's `manifest_cbor` is **not the signed
-  manifest**. `capsule-api/upload`'s `prepare_feed_input` re-serializes the server-held
-  `ManifestEnvelope` projection into it (`upload.rs`, "the server holds only the envelope
-  projection"), and the envelope carries no `device_sig` and no `write_sig`. A receiving
-  client therefore cannot run `verify_asset` on a feed entry at all — the two signatures it
-  checks are simply absent from the bytes. The proto comment on `SyncEntry.manifest_cbor`
-  already states the contract the field does not meet, so the wire is honest and the
-  producer is not.
-- **Root cause, and why it is not a one-line fix:** the signed manifest never reaches the
-  server. `capsule_core::lifecycle::upload_bundle` puts the metadata blob, derivatives, and
-  original on the wire; `BlobRole::Provenance` exists but nothing ever uploads one.
-- **Settled 2026-08-29 — it rides as a provenance blob**, not as a field on `POST /upload`. The
-  client uploads the signed manifest as one more blob in the bundle the protocol already carries,
-  so there is **no new wire surface**; the server stores it verbatim at its content address like
-  any other blob, identical manifests dedupe, and the feed serves those exact bytes. The contract
-  is [Provenance — the signed bytes are the served bytes](capsule-docs/src/content/docs/design/cryptography/provenance.md)
-  with the wire shape in [Upload Protocol](capsule-docs/src/content/docs/design/import/upload-protocol.md).
-  This kills the `prepare_feed_input` re-serialization rather than correcting it.
-- **Open inside the decision:** whether finalization re-derives the JSON envelope projection from
-  the stored bytes or keeps cross-checking the declared projection against them. The decision fixes
-  only that the server never *produces* manifest bytes. Note the server does not parse the CBOR
-  today, so accepting a provenance blob it never decodes leaves nothing guaranteeing the blob
-  agrees with the projection it validated — including `created_by_device` (invariant 7). Whoever
-  closes this decides whether an unparsed provenance blob can satisfy the visibility gate.
-- **Deliverable:** the client uploads the signed manifest, the server stores it verbatim, and
-  the feed serves those exact bytes.
-- **Done when:** an entry pulled from the feed verifies through
-  [`Workspace::apply_remote_entry`](#s-p1--capsule_sdk-ffi-workspace-verbs) on a second
-  device — today it is `MalformedManifest`. **Tier:** Unit + Integration.
-- **Not blocking `S-P1`:** the SDK's sync-apply verb consumes the *contracted* shape and is
-  proven against it end to end; what is missing is a producer that emits it. It **does** block
-  a real second-device `S-P5` render, which is why this is indexed rather than noted.
-- **Server half landed 2026-08-30 (`done\*`).** The Kynos surface accepts a `provenance` blob,
-  stores it verbatim, and the feed reads those exact bytes back out of the blob store — proved
-  by `a_provenance_blob_is_stored_exactly_as_it_arrived` and
-  `the_feed_serves_the_uploaded_manifest_byte_for_byte`. Base64 is a transport encoding and not
-  a re-serialization: `decode(encode(b)) == b`, unlike re-encoding a parsed projection, which is
-  the distinction this slice exists to enforce. There is **no** `prepare_feed_input` on the
-  Kynos path; the re-serialization was not fixed, it was never written.
-- **The open question stays open, and is now stated in code.** The server gates publication on
-  the provenance blob's *presence*, never on its agreement with the validated envelope, because
-  a key-free server does not parse signed CBOR. That is detection after the fact, not
-  prevention — the normal position for this server, and recorded in
-  `capsule-server/src/upload/visibility.rs` rather than left implicit.
-- **Owed:** the producer. `capsule_core::lifecycle::upload_bundle` still emits no provenance
-  blob, so today only a test uploads one. That is `S-D1`'s to close.
-
-### S-C31 — Custody receipt attests a hash of server-invented bytes
-
-- **Contract:** [Storage Verification](capsule-docs/src/content/docs/design/import/storage-verification.md);
-  [Provenance](capsule-docs/src/content/docs/design/cryptography/provenance.md).
-- **Gap** (found 2026-08-29 while landing the `S-C30` design amendment): the custody receipt binds
-  to an `envelope_hash` computed by `prepare_receipt_input` — which sits immediately below
-  `prepare_feed_input` in the same file and inherits the same defect. The hash is taken over the
-  server's *own* re-serialization of the envelope projection, so the receipt attests to bytes no
-  client ever signed and no client can reproduce. A receipt is supposed to be the server's
-  admission that it holds what the client sent; this one attests that it holds what it made.
-- **Why it is separate from `S-C30` rather than folded in:** `S-C30` fixes what the *feed serves*.
-  A receipt is a signed artefact with its own verification story and its own consumers, and
-  changing what it binds to changes what an already-issued receipt means. Landing it under
-  `S-C30`'s "done when" would let a feed fix silently re-point an attestation.
-- **Deliverable:** `envelope_hash` becomes the provenance blob's content address — the same bytes
-  the client signed and the feed serves — so a receipt, a feed entry and a direct blob fetch all
-  name one object. Decide explicitly what happens to receipts issued under the old hash.
-- **Watch out:** `prior_provenance_hash` is fixed at SHA-256 while a blob's content address is
-  whatever `crypto_suite_id` selects. After this change both are digests of the same byte string
-  but are **not** interchangeable identifiers, and the chain-walk and blob-fetch paths need a
-  stated relation between them.
-- **Done when:** a receipt's `envelope_hash` resolves to a stored provenance blob and the client
-  recomputes it from the bytes it signed. **Tier:** Unit + Integration.
-
-### S-C32 — MFA-attempt and rate-limit counters have no port
-
-- **Contract:** AGENTS.md's Rust Architecture Decisions (no generic TTL/CAS abstraction);
-  [Threat Model — Validation Invariants](capsule-docs/src/content/docs/design/threat-model/validation.md).
-- **Gap** (found 2026-08-29 while landing `S-C29`): the Salvo `SessionStorage` grab-bag carried
-  four unrelated things. `S-C29` gave homes to three of them — session records, the per-user index,
-  and the four ceremony records — and deliberately left the fourth out. **MFA attempt counters and
-  rate-limit counters have no port and no owner.**
-- **Why they were excluded rather than folded in:** they are counters, not records, and their
-  contract is different in kind. A lost record is a lost ceremony the user retries; a lost
-  increment is a **security failure** — it is one more password guess or one more request than the
-  policy allows. Adding them to `AuthStateStore` would have rebuilt the grab-bag one field at a
-  time, which is the thing `S-C29` exists to delete.
-- **Deliverable:** a counter port whose operations are atomic increment-and-read against a
-  policy-owned window, with the same three-adapter treatment and the same shared conformance suite
-  `S-C29` established. The window is a property of what is being limited, never a caller argument —
-  the same rule that governs ceremony TTLs.
-- **Done when:** no counter reaches storage through `AuthStateStore`; a conformance case proves an
-  increment is never lost under concurrency; and the in-memory adapter is a test double rather than
-  a deployment mode. **Tier:** Unit + conformance.
-- **Landed 2026-08-31 (`done\*`).** `capsule-server/src/counter/` holds the port, and three
-  limiters that were owed by other slices now exist: enrollment redemption (`S-C7`), the share
-  serve path (`S-C4`), and drop-session creation (`S-C5`, invariant 31).
-- **`hit` returns a verdict, not a count**, and there is no operation that returns a number.
-  A caller that read a counter, compared it and then incremented would let every request in a
-  burst read the same under-limit value — which is the burst a limiter exists to stop, and the
-  reason read-then-write is a limiter in name only. Even `peek` answers a `Verdict`, because
-  handing back a number is handing back the read half of that mistake.
-- **The window belongs to the limit, never to the caller.** A `Budget` carries its own ceiling
-  and window and there is no per-call override, for the same reason the ceremony stores take no
-  TTL argument: a window two call sites can each supply is a window they eventually disagree
-  about, invisibly, until somebody is throttled at the wrong rate. Every budget is declared in
-  `counter::budgets` — including the two pairs the contracts explicitly call *the same two
-  limiters*, which would have drifted the first time one was tuned.
-- **The key is a closed enum, not a string.** The Salvo grab-bag namespaced counters by
-  hand-formatted keys, so two call sites that formatted differently silently kept two counters —
-  and the one that mattered was whichever the attacker did not hit.
-- **Every limiter fails closed.** A counter store that cannot answer is a refusal, never an
-  admission: a limiter an attacker turns off by loading the counter store is not a limiter.
-- **Charged before the subject is resolved.** Probing a share link or an upload link that does
-  not exist still costs the prober; a limiter that only ran for *real* ids would be a free
-  oracle for every id that is not one. Both paths have a test for exactly that.
-- **Fixed windows, and the trade is written down.** A window starts at its first hit and resets
-  when it passes, which admits up to twice the budget across a boundary. Sliding logs and token
-  buckets either store per-request state or need a background refill, both larger promises than
-  a v1 abuse gate needs; where the doubled burst would matter the budget is halved rather than
-  the algorithm changed.
-- **Owed: the per-source-address half** of `S-C4`'s and `S-C5`'s limiter pairs. This server has
-  no trusted client address — it is driven in-process by `TestClient` and sits behind a proxy in
-  production, where the address that matters is a header a deployment must be configured to
-  trust. Keying a limiter on an untrusted header is throttling by a value the attacker chooses,
-  which is worse than not throttling; `CounterKey::ShareSource` and `CounterKey::DropSource`
-  exist for when there is a trusted address to put in them.
-- **Owed: the login-attempt limiter.** `budgets::LOGIN_ATTEMPTS` is declared and unused: account
-  lockout is the `AccountDirectory` adapter's, which owns the failed-attempt bookkeeping that
-  makes `Authentication::Locked` eventually true, and the real adapter does not exist yet. The
-  budget is here so the policy is reviewable in one place when it does.
-- **Unblocks `S-C41`** (the deep re-hash), whose limiter is `budgets::DEEP_VERIFY`.
+- **Done when:** ✅ `the_frameworks_own_rejections_carry_a_code`,
+  `a_capsule_rejections_own_code_is_never_replaced`,
+  `coding_a_problem_does_not_disturb_anything_else_about_it` and
+  `a_body_that_is_not_a_problem_is_never_read` in `capsule-server/tests/problem.rs`, plus the
+  document-side assertion in `S-C38`. **Tier:** Unit.
 
 ### S-C37 — the asset index port, one sequence instead of two
 
@@ -2502,28 +2316,49 @@ Lane D while indexing it `server`; it is filed correctly here, in numeric order.
   [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) (the document is the
   contract, and the client is generated from it).
 - **Gap** (found 2026-08-30 landing `S-C22`): Kynos's `#[problem(extension)]` is a **runtime**
-  attachment — the derive expands it to `problem.with_extension(name, value)` and nothing feeds
-  it into the emitted schema. So `capsule-server/openapi.json` declares one generic `Problem`
-  with `additionalProperties: true` and **zero** occurrences of `code` or `existing_asset`,
-  while every rejection the server actually renders carries a `code` and the `409` carries
-  `existing_asset`.
-- **Why this is worse than it sounds:** it is a **regression against the surface being
-  retired**. The Salvo document describes `code` in six places. A generated client therefore
-  loses the i18n contract's client half — the field it is supposed to localize offline is not in
-  the contract it is generated from — and `S-C22`'s "the SDK merge path switches on the
-  structured field" is satisfiable only by reaching past the generated type.
-- **Same class as `S-C28`, in the opposite direction.** `S-C28` was statuses the code returns
-  and the schema omits, and Kynos makes that unrepresentable because status is part of the
-  return type. This is *members* the code returns and the schema omits, which Kynos does not yet
-  make unrepresentable — so the class the rebuild claimed to close is only half closed.
-- **Deliverable:** extension members reach the document. Upstream in Kynos is the better fix and
-  the slower one (`#[problem(extension)]` would have to carry a schema, as `S-C36` also wants a
-  seam it does not have); a Capsule-side per-response schema override is the faster one. Decide
-  which, and note that `S-C36` wants the same seam for framework-generated problems, so they
-  should be decided together.
-- **Done when:** a test over the emitted document asserts that every declared problem response
-  describes the extension members its variant renders — over the document, not per handler, for
-  the same reason `S-C34` gates the document rather than the handlers. **Tier:** Unit + gate.
+  attachment — the derive expands it to `problem.with_extension(name, value)` and nothing feeds it
+  into the emitted schema. So `capsule-server/openapi.json` declared one generic `Problem` with
+  `additionalProperties: true` and **zero** occurrences of `code` or `existing_asset`, while every
+  rejection the server renders carries a `code` and the `409` carries `existing_asset`. A
+  **regression against the surface being retired**: the Salvo document described `code` in six
+  places.
+- **Landed `done*` 2026-08-31**, as one change with `S-C36`.
+
+**`code` needed no table.** Every rejection this crate owns declares one, and since `S-C36` every
+rejection it does not own is given one — so "every problem response requires `code`" is a
+universal truth about the surface and is applied as one. The schemas are **derived from the
+emitted `Problem`** rather than restated beside it: the base is read out of the components Kynos
+just built, cloned and extended, so a change to what a Kynos problem contains reaches them without
+anyone editing Capsule.
+`the_capsule_problems_carry_everything_the_base_one_does` is what keeps that true.
+
+**The other sixteen members ride a nine-row table, and that is the asterisk.** A table is a second
+statement of a fact that lives in the type: a new non-`code` extension will not reach the document
+until somebody adds a row, and nothing fails when they forget. Three things bound it — the table
+is small, `every_row_names_a_response_that_exists` catches the *stale* direction so it cannot rot
+the other way, and `code` (104 of the 120 extension fields on this surface, and the only one the
+i18n contract turns on) needs no row at all. The real fix is upstream, and it is the same seam
+`S-C36` and `S-C48` want.
+
+**One asymmetry worth knowing.** Kynos exposes no way to edit a built service's document, so
+`assert_conformance` validates bodies against the *untransformed* schema. The direction is safe —
+this transform only adds properties and one required member, so anything conforming to the
+published schema conforms to the looser one — but the walk cannot catch a response that fails to
+carry `code`. `tests/problem.rs` asserts that directly instead, over the statuses the framework
+renders.
+
+**Members are optional, not required, wherever they are not universal.** A status carries one
+response in a description while an enum may reach it from several variants — `ChunkRejection`'s
+`409` is an offset mismatch *or* a plain conflict — so a member one variant renders is a member the
+response *may* carry. `chain_head` is additionally nullable, because the variant that renders it
+renders it absent sometimes.
+
+- **Done when:** ✅ `every_problem_response_declares_the_code_a_client_localizes`,
+  `the_structured_members_a_client_merges_on_are_described`,
+  `every_row_names_a_response_that_exists` and
+  `the_capsule_problems_carry_everything_the_base_one_does` in `capsule-server/src/openapi/tests.rs`
+  — over the emitted document, not per handler, for the same reason `S-C34` gates the document.
+  **Tier:** Unit + gate.
 
 ### S-C39 — blob fetch has no read authority, so its `403` is unwritable
 

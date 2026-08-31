@@ -92,6 +92,10 @@ base64 = { workspace = true }
 # back a span without a copy. Already in the lock file through `capsule-sdk` and `capsule-api`;
 # no new external dependency and no new domain, so no design/dependencies.md row.
 bytes = { workspace = true }
+# The coded-problem interceptor (`S-C36`) reads a rendered problem body back before putting it
+# down again, and `Body` is an `http_body::Body` with no inherent collector. Already in the lock
+# file through Kynos and hyper; see design/dependencies.md.
+http-body-util = { workspace = true }
 
 # `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
 # and this mirrors it deliberately: two committed documents, two identical drift guards, so the

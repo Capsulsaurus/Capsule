@@ -1350,6 +1350,7 @@ dependencies = [
  "capsule-wire",
  "clap",
  "color-eyre",
+ "http-body-util",
  "jiff",
  "jsonwebtoken",
  "kynos",

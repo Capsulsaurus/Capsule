@@ -57,6 +57,8 @@ pub mod gc;
 pub mod index;
 pub mod limits;
 pub mod moderation;
+mod openapi;
+pub mod problem;
 pub mod quota;
 pub mod routes;
 pub mod scrub;
@@ -86,6 +88,11 @@ pub use self::app::App;
 /// description is a property of the types, not of a running deployment.
 pub fn router() -> ServerRouter {
     Router::<App>::new()
+        // **Outermost.** Kynos runs a chain head-first, so this sees every problem the rest of
+        // the chain produces — the body-size `413` below it, an extractor's `400`/`415`/`422`,
+        // and the bearer scheme's `401`/`403` — and fills in the `error.*` code none of those
+        // framework-owned types has a seam to carry. See [`problem`], and `S-C36`.
+        .intercept(problem::CodedProblems::new())
         // Mounted on the whole router, not on the operations that happen to take a body today:
         // an oversized body is refused wherever it is sent, and the `413` that refusal produces
         // is declared on every operation it covers because Kynos derives the declaration from
@@ -168,7 +175,7 @@ pub fn router() -> ServerRouter {
 /// two interceptors answering with one status a compile error rather than a runtime surprise —
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
 /// server's middleware stack is written down.
-pub type ServerRouter = Router<App, Propagate, Cons<BodySize, ()>>;
+pub type ServerRouter = Router<App, Propagate, Cons<BodySize, Cons<problem::CodedProblems, ()>>>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
@@ -210,5 +217,11 @@ const SPEC_VERSION: kynos::openapi::SpecVersion = kynos::openapi::SpecVersion::V
 /// Returns an error if the router's types cannot be described, or if the API uses a construct
 /// [`SPEC_VERSION`] cannot express.
 pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
-    router().openapi_as(SPEC_VERSION)
+    let mut document = router().openapi_as(SPEC_VERSION)?;
+    // `S-C38`: Kynos attaches `#[problem(extension)]` members at run time and describes none of
+    // them, so every problem response would otherwise point at one generic `Problem` with
+    // `additionalProperties: true` — and a generated client would lose the `code` the i18n
+    // contract tells it to localize. See [`openapi`](crate::openapi) the module.
+    openapi::describe_problem_extensions(&mut document);
+    Ok(document)
 }

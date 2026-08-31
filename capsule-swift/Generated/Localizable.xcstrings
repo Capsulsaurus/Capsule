@@ -14607,6 +14607,96 @@
         }
       }
     },
+    "error.request.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Something went wrong with that request."
+          }
+        }
+      }
+    },
+    "error.request.forbidden": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That credential isn't enough for this action."
+          }
+        }
+      }
+    },
+    "error.request.malformed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read that request."
+          }
+        }
+      }
+    },
+    "error.request.method_not_allowed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't handle that request."
+          }
+        }
+      }
+    },
+    "error.request.not_acceptable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't produce that response format."
+          }
+        }
+      }
+    },
+    "error.request.too_large": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That request was too large to accept."
+          }
+        }
+      }
+    },
+    "error.request.unauthenticated": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Please sign in again."
+          }
+        }
+      }
+    },
+    "error.request.unprocessable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Some of that request didn't make sense."
+          }
+        }
+      }
+    },
+    "error.request.unsupported_media_type": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read that content type."
+          }
+        }
+      }
+    },
     "error.share.malformed": {
       "localizations": {
         "en": {

@@ -111,6 +111,42 @@
         "message": "Capsule couldn't check your storage use. Please try again.",
         "context": "HTTP 500 on GET /v1/quota (slice S-C6): the quota ledger could not answer, so no snapshot was produced. Read-only and retryable; it says nothing about how full the account is."
     },
+    "error.request.malformed": {
+        "message": "Capsule couldn't read that request.",
+        "context": "HTTP 400 (slice S-C36): a framework-level rejection — a path segment, query value or header the request line could not be decoded into the shape the operation declares. Attached by the server's coded-problem interceptor, because the framework's own rejection types carry no extension member."
+    },
+    "error.request.unauthenticated": {
+        "message": "Please sign in again.",
+        "context": "HTTP 401 (slice S-C36): no credential was presented, the credential did not verify, or the session it named is no longer open. One code for all three on purpose — which check failed is exactly what an attacker probing a token would like to be told."
+    },
+    "error.request.forbidden": {
+        "message": "That credential isn't enough for this action.",
+        "context": "HTTP 403 (slice S-C36): a valid credential that is insufficient — presenting a refresh token where an access token is required. Distinct from 401: re-presenting the same credential will not help."
+    },
+    "error.request.method_not_allowed": {
+        "message": "Capsule couldn't handle that request.",
+        "context": "HTTP 405 (slice S-C36): the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
+    },
+    "error.request.not_acceptable": {
+        "message": "Capsule couldn't produce that response format.",
+        "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
+    },
+    "error.request.too_large": {
+        "message": "That request was too large to accept.",
+        "context": "HTTP 413 (slice S-C36): the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."
+    },
+    "error.request.unsupported_media_type": {
+        "message": "Capsule couldn't read that content type.",
+        "context": "HTTP 415 (slice S-C36): the body's `Content-Type` is not one the operation accepts."
+    },
+    "error.request.unprocessable": {
+        "message": "Some of that request didn't make sense.",
+        "context": "HTTP 422 (slice S-C36): the body parsed as its media type but did not match the shape the operation declares — a field of the wrong type, or a required one missing."
+    },
+    "error.request.failed": {
+        "message": "Something went wrong with that request.",
+        "context": "The fallback the coded-problem interceptor (slice S-C36) attaches when a framework rejection renders a status the mapping does not name. Reaching it means the surface grew a status nobody localized, so it is deliberately vague and deliberately rare."
+    },
     "error.blob.pending_upload": {
         "message": "The original photo hasn't been uploaded from its device yet.",
         "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."
