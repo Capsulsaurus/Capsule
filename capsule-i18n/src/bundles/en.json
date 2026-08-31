@@ -203,6 +203,7 @@
   "error.federation.capability_revoked": "Access to this shared album has been revoked.",
   "error.federation.circuit_open": "This source is temporarily backed off after repeated errors.",
   "error.federation.rate_budget_exceeded": "This source has reached its request limit. Please wait and try again.",
+  "error.federation.revocations_unavailable": "Capsule couldn't read the revocation list. Please try again.",
   "error.federation.scope_insufficient": "This access grant does not cover the requested content.",
   "error.moderation.account_suspended": "Your account is suspended. You can't upload or share until it's reinstated.",
   "error.moderation.report_rate_limited": "Too many reports from this source. Please wait and try again.",

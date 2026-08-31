@@ -17,7 +17,7 @@ use crate::blob::{InMemoryBlobStore, QuarantineReason};
 use crate::index::memory::InMemoryAssetIndex;
 use crate::index::{BlobRecord, PendingAsset};
 use crate::store::memory::InMemoryUploadSessions;
-use crate::store::{AlbumId, Clock, OwnerId, SystemClock, UploadId};
+use crate::store::{AlbumId, OwnerId, SystemClock, UploadId};
 
 /// The three stores, assembled.
 struct Harness {

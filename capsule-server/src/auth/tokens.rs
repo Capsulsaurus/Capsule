@@ -185,6 +185,7 @@ pub enum TokenError {
 pub struct SessionTokens {
     signing: EncodingKey,
     verifying: DecodingKey,
+    public_key: Vec<u8>,
     validation: Validation,
     clock: Arc<dyn Clock>,
     access_ttl: SignedDuration,
@@ -203,9 +204,68 @@ impl fmt::Debug for SessionTokens {
     }
 }
 
+/// The server's signing key could not be loaded.
+///
+/// Separate from [`TokenError`], which is about a token: this is a startup failure, and a
+/// server that cannot load its key must refuse to start rather than mint credentials nobody
+/// can check.
+#[derive(Debug, thiserror::Error)]
+#[error("the server's Ed25519 signing key could not be read: {detail}")]
+pub struct SigningKeyError {
+    /// What went wrong parsing it.
+    pub detail: String,
+}
+
 impl SessionTokens {
-    /// A signer over an already-loaded key pair, reading `clock` for issuance and expiry.
-    pub fn new(signing: EncodingKey, verifying: DecodingKey, clock: Arc<dyn Clock>) -> Self {
+    /// A signer over the operator's PKCS#8 Ed25519 key, reading `clock` for issuance and expiry.
+    ///
+    /// The **only** constructor, and it takes the private key alone rather than a pair. The
+    /// public half is derived here, which is what lets
+    /// [`ServerInfo`](crate::discovery::ServerInfo) publish the key tokens actually verify
+    /// under instead of one an operator pasted beside it. A published key that is only usually
+    /// the signing key fails silently on this side and totally on the peer's — every token this
+    /// server ever minted becomes unverifiable at once, which from outside is indistinguishable
+    /// from a compromise.
+    ///
+    /// `from_pkcs8_maybe_unchecked` rather than `from_pkcs8`, so a v1 PKCS#8 key — what
+    /// `openssl genpkey` writes, and therefore what an operator following any general Ed25519
+    /// guide will have in `JWT_ED25519_DER` — loads rather than being rejected for lacking the
+    /// public half that is being derived from it anyway.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SigningKeyError`] if `pkcs8_der` is not a readable Ed25519 private key.
+    pub fn from_pkcs8(pkcs8_der: &[u8], clock: Arc<dyn Clock>) -> Result<Self, SigningKeyError> {
+        use ring::signature::KeyPair as _;
+
+        let pair = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(pkcs8_der).map_err(
+            |error| SigningKeyError {
+                detail: error.to_string(),
+            },
+        )?;
+        let public_key = pair.public_key().as_ref().to_vec();
+
+        Ok(Self::new(
+            EncodingKey::from_ed_der(pkcs8_der),
+            DecodingKey::from_ed_der(&public_key),
+            public_key,
+            clock,
+        ))
+    }
+
+    /// The raw Ed25519 public key these tokens verify under.
+    ///
+    /// Thirty-two bytes, no encoding. What `.well-known/capsule/server-info` publishes.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
+    fn new(
+        signing: EncodingKey,
+        verifying: DecodingKey,
+        public_key: Vec<u8>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         // `validate_exp` off: the deadline is compared against `clock` in `verify`, so a test
         // can walk over an expiry and the 60-second leeway `jsonwebtoken` would otherwise apply
         // does not silently widen the window. `exp` stays *required*, so a token without one is
@@ -220,6 +280,7 @@ impl SessionTokens {
         Self {
             signing,
             verifying,
+            public_key,
             validation,
             clock,
             access_ttl: ACCESS_TOKEN_TTL,
@@ -351,21 +412,10 @@ mod tests {
     /// repository is a key somebody eventually uses, and `ring` — already the workspace's
     /// key-generation crate, and here a dev-dependency only — mints one in microseconds.
     pub(crate) fn signer(clock: &ManualClock) -> SessionTokens {
-        let (signing, verifying) = key_pair();
-        SessionTokens::new(signing, verifying, Arc::new(clock.clone()))
-    }
-
-    fn key_pair() -> (EncodingKey, DecodingKey) {
-        use ring::signature::KeyPair as _;
-
         let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
             .expect("the platform can generate an Ed25519 key");
-        let pair = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(der.as_ref())
-            .expect("a key just generated parses");
-        (
-            EncodingKey::from_ed_der(der.as_ref()),
-            DecodingKey::from_ed_der(pair.public_key().as_ref()),
-        )
+        SessionTokens::from_pkcs8(der.as_ref(), Arc::new(clock.clone()))
+            .expect("a key just generated parses")
     }
 
     fn ids() -> (UserId, SessionId) {

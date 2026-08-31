@@ -211,6 +211,10 @@
         "message": "This source is temporarily backed off after repeated errors.",
         "context": "HTTP 429 on a federation pull (slice S-E2): the peer spent its per-peer error budget on malformed input, tripping a circuit breaker that backs it off exponentially (5 / 30 / 60 minutes). Requests are short-circuited until the back-off elapses, so a buggy peer cannot DoS the server."
     },
+    "error.federation.revocations_unavailable": {
+        "message": "Capsule couldn't read the revocation list. Please try again.",
+        "context": "HTTP 503 on GET /.well-known/capsule/revoked-jti (slice S-C18): this server's own revocation list could not be read, so it makes no claim about what is revoked. Deliberately not an empty list — an empty list is the strongest claim the record can make, and serving it on a storage failure would silently un-revoke every token a peer holds."
+    },
     "error.storage.invalid_request": {
         "message": "The storage-verification request was malformed.",
         "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."

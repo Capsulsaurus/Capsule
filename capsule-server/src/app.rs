@@ -32,6 +32,7 @@ use crate::album::AlbumContext;
 use crate::attestation::AttestationContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
+use crate::discovery::DiscoveryContext;
 use crate::quota::QuotaContext;
 use crate::serve::ServeContext;
 use crate::sync::SyncContext;
@@ -63,6 +64,8 @@ pub struct App {
     quota: QuotaContext,
     /// The custody-receipt module's collaborators.
     attestation: AttestationContext,
+    /// The public discovery record's collaborators.
+    discovery: DiscoveryContext,
 }
 
 /// The modules an [`App`] is assembled from.
@@ -92,6 +95,8 @@ pub struct Modules {
     pub quota: QuotaContext,
     /// The custody-receipt module's collaborators.
     pub attestation: AttestationContext,
+    /// The public discovery record's collaborators.
+    pub discovery: DiscoveryContext,
 }
 
 impl App {
@@ -107,6 +112,7 @@ impl App {
             albums,
             quota,
             attestation,
+            discovery,
         } = modules;
         Self {
             auth,
@@ -118,6 +124,7 @@ impl App {
             albums,
             quota,
             attestation,
+            discovery,
         }
     }
 }

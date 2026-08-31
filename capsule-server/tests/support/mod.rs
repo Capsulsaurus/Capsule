@@ -44,6 +44,10 @@ use capsule_server::directory::{
     DeviceDirectoryContext, DeviceDirectoryStore, InMemoryDeviceDirectory, PublishOutcome,
     PublishedDirectory,
 };
+use capsule_server::discovery::revocation::{
+    InMemoryRevocations, PublishedRevocations, RevocationList, RevokeFuture, RevokedToken,
+};
+use capsule_server::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
 use capsule_server::gc::memory::InMemoryCollection;
 use capsule_server::index::memory::InMemoryAssetIndex;
 use capsule_server::index::{
@@ -67,7 +71,6 @@ use capsule_server::upload::authority::{
 use capsule_server::upload::{UploadContext, UploadPolicy};
 use capsule_server::verify::VerifyContext;
 use jiff::{SignedDuration, Timestamp};
-use jsonwebtoken::{DecodingKey, EncodingKey};
 use kynos::test::{TestClient, TestRequest};
 use uuid::Uuid;
 
@@ -136,6 +139,13 @@ pub(crate) fn signed_directory(version: u64) -> Vec<u8> {
     .sign(&HybridSigningKey::generate());
     capsule_core::cbor::to_canonical_vec(&directory).expect("a directory serializes")
 }
+
+/// The origin the fixture's server calls itself.
+///
+/// One constant for the attestation key's `server_id` and the discovery record's, because a
+/// receipt binds to the origin that signed it and a test asserting the two agree has to be
+/// asserting about one fact rather than two matching literals.
+pub(crate) const SERVER_ORIGIN: &str = "capsule.test";
 
 /// The account [`Fixture::working`] seeds.
 pub(crate) const EMAIL: &str = "somebody@example.test";
@@ -908,6 +918,61 @@ impl AlbumStore for SwitchableAlbums {
     }
 }
 
+/// A revocation list that can be made to fail on demand.
+///
+/// Delegates to a real in-memory list, so the failing case and the working case differ in
+/// exactly one thing. It exists because `503` on the published record is a *claim*: the
+/// endpoint refuses to serve an empty list on a storage failure, since an empty list is the
+/// strongest statement the record can make and serving it during an outage would silently
+/// un-revoke every token a peer holds. A status nothing can reach is a status nothing proves.
+#[derive(Debug)]
+pub(crate) struct SwitchableRevocations {
+    inner: InMemoryRevocations,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableRevocations {
+    /// A working list reading `clock` for pruning.
+    pub(crate) fn new(clock: Arc<ManualClock>) -> Self {
+        Self {
+            inner: InMemoryRevocations::new(clock),
+            unavailable: AtomicBool::new(false),
+        }
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "revocations",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl RevocationList for SwitchableRevocations {
+    fn revoke(&self, token: RevokedToken) -> RevokeFuture<'_> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse().map_err(Into::into) });
+        }
+        self.inner.revoke(token)
+    }
+
+    fn published(&self) -> StoreFuture<'_, PublishedRevocations> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.published()
+    }
+}
+
 /// A device-directory store that can be made to fail on demand.
 ///
 /// Delegates to a real in-memory store, so the failing case and the working case differ in
@@ -1138,6 +1203,8 @@ pub(crate) struct Fixture {
     /// The attestation key the server signs receipts with — the *same* one, so a test can
     /// verify a fetched receipt the way a client would.
     pub(crate) attestation_key: Arc<LocalAttestationKey>,
+    /// The federation capability revocations this server publishes.
+    pub(crate) revocations: Arc<SwitchableRevocations>,
 }
 
 impl Fixture {
@@ -1178,9 +1245,10 @@ impl Fixture {
         // the design requires: a receipt that verified under the operational key would let
         // anything holding that key manufacture custody evidence.
         let attestation_key = Arc::new(LocalAttestationKey::new(
-            "capsule.test",
+            SERVER_ORIGIN,
             capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
         ));
+        let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1210,6 +1278,7 @@ impl Fixture {
                 attestation_key.clone(),
                 Timestamp::UNIX_EPOCH,
             ),
+            discovery: DiscoveryContext::new(Arc::new(server_info(&tokens)), revocations.clone()),
         });
 
         Self {
@@ -1229,6 +1298,7 @@ impl Fixture {
             marks,
             receipts,
             attestation_key,
+            revocations,
         }
     }
 
@@ -1248,11 +1318,12 @@ impl Fixture {
 
         let blobs = Arc::new(SwallowingBlobs::new());
         let index = Arc::new(SwitchableIndex::new());
+        let tokens = Arc::new(signer(clock.clone()));
         let app = App::new(Modules {
             auth: AuthContext::new(
                 Arc::new(SwitchableSessions::new(clock.clone())),
                 accounts,
-                Arc::new(signer(clock.clone())),
+                tokens.clone(),
                 clock.clone(),
             ),
             upload: UploadContext::new(
@@ -1292,10 +1363,14 @@ impl Fixture {
             attestation: AttestationContext::new(
                 Arc::new(InMemoryReceipts::new()),
                 Arc::new(LocalAttestationKey::new(
-                    "capsule.test",
+                    SERVER_ORIGIN,
                     capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
                 )),
                 Timestamp::UNIX_EPOCH,
+            ),
+            discovery: DiscoveryContext::new(
+                Arc::new(server_info(&tokens)),
+                Arc::new(SwitchableRevocations::new(clock.clone())),
             ),
         });
         (app, clock)
@@ -1484,17 +1559,26 @@ pub(crate) fn user() -> UserId {
 ///
 /// Generated rather than read from a checked-in PEM: a private key in the repository is a
 /// private key somebody eventually reuses.
-pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
-    use ring::signature::KeyPair as _;
+/// The public record this server serves, over the key its own tokens verify under.
+///
+/// The signing key is read out of the signer rather than passed alongside it, which is the
+/// invariant `ServerInfo` exists to hold: a published key that is only *usually* the signing
+/// key fails silently here and totally on the peer checking a capability token.
+pub(crate) fn server_info(tokens: &SessionTokens) -> ServerInfo {
+    ServerInfo::new(
+        SERVER_ORIGIN,
+        "https://capsule.test/v1",
+        ProtocolWindow {
+            min: PROTOCOL_VERSION.to_owned(),
+            max: PROTOCOL_VERSION.to_owned(),
+        },
+        tokens.public_key().to_vec(),
+    )
+}
 
+pub(crate) fn signer(clock: Arc<ManualClock>) -> SessionTokens {
     let der = ring::signature::Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
         .expect("the platform can generate an Ed25519 key");
-    let pair = ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(der.as_ref())
-        .expect("a key just generated parses");
 
-    SessionTokens::new(
-        EncodingKey::from_ed_der(der.as_ref()),
-        DecodingKey::from_ed_der(pair.public_key().as_ref()),
-        clock,
-    )
+    SessionTokens::from_pkcs8(der.as_ref(), clock).expect("a key just generated parses")
 }

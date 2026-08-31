@@ -112,6 +112,9 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/quota"),
         ("GET", "/v1/upload/anything/receipt"),
         ("GET", "/.well-known/capsule/attestation-keys"),
+        ("GET", "/.well-known/capsule/server-info"),
+        ("GET", "/.well-known/capsule/deprecation"),
+        ("GET", "/.well-known/capsule/revoked-jti"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1313,6 +1316,34 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::OK);
+
+    // ── The rest of the `.well-known/capsule` registry (`S-C18`) ───────────────────────────
+    // Public for the same reason, so again there is no 401 in any of these declared sets and
+    // again the absence is the assertion.
+    for path in [
+        "/.well-known/capsule/server-info",
+        "/.well-known/capsule/deprecation",
+        "/.well-known/capsule/revoked-jti",
+    ] {
+        client
+            .get(path)
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK);
+    }
+
+    // The revocation list's 503, which is a claim rather than a formality: the endpoint refuses
+    // to serve an empty list on a storage failure, because an empty list is the strongest
+    // statement it can make and a peer's fail-closed rule would believe it.
+    fixture.revocations.set_unavailable(true);
+    client
+        .get("/.well-known/capsule/revoked-jti")
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::SERVICE_UNAVAILABLE);
+    fixture.revocations.set_unavailable(false);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.

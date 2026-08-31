@@ -668,6 +668,82 @@
         }
       }
     },
+    "/.well-known/capsule/server-info": {
+      "get": {
+        "summary": "Serve this server's public, server-scoped facts.",
+        "description": "Unauthenticated by contract: a client deciding whether it can talk to this server at all has\nno credential yet, and a peer resolving the key that verifies a capability token must not\nneed one from the server whose claims it is checking.",
+        "operationId": "server_info",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServerInfoResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/.well-known/capsule/deprecation": {
+      "get": {
+        "summary": "Serve the announced deprecation cutoffs.",
+        "description": "The same announcements `server-info` carries, at their own path because that is the URL the\n`Warning:` header on a below-cutoff response points a human at, and because a client polling\nfor a cutoff should not have to refetch the whole discovery record to find one.",
+        "operationId": "deprecation_announcements",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeprecationsResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
+    "/.well-known/capsule/revoked-jti": {
+      "get": {
+        "summary": "Serve the federation capability revocation list.",
+        "description": "Bounded by at most 24 hours of revocations, because an entry past the token's own `exp` is\npruned and a capability token cannot be minted to live longer than that. Public: a peer\nchecking whether a token it holds is still good is, by construction, not yet authenticated\nhere, and the record names no user — only opaque `jti`s.\n\n# Errors\n\nReturns `503` if the revocation list cannot be read. Deliberately *not* an empty list: an\nempty list is the strongest possible claim this endpoint can make — nothing is revoked — and\nserving it on a storage failure would turn an outage into a silent un-revocation of every\ntoken, which is exactly what the peer-side fail-closed rule exists to prevent.",
+        "operationId": "revoked_jti",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokedJtiResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Revocation list unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
     "/v1/upload": {
       "post": {
         "summary": "Open an upload session for one blob of an asset bundle.",
@@ -2282,6 +2358,193 @@
           "keys"
         ],
         "description": "The `.well-known/capsule/attestation-keys` record."
+      },
+      "AuthEndpointsResponse": {
+        "properties": {
+          "login": {
+            "type": "string",
+            "description": "Where a session is opened."
+          },
+          "refresh": {
+            "type": "string",
+            "description": "Where an access token is rotated."
+          },
+          "logout": {
+            "type": "string",
+            "description": "Where a session is ended."
+          }
+        },
+        "type": "object",
+        "required": [
+          "login",
+          "refresh",
+          "logout"
+        ],
+        "description": "The auth ceremony's endpoints."
+      },
+      "ProtocolWindowResponse": {
+        "properties": {
+          "min": {
+            "type": "string",
+            "description": "The oldest version still accepted for writes."
+          },
+          "max": {
+            "type": "string",
+            "description": "The newest version this server speaks."
+          }
+        },
+        "type": "object",
+        "required": [
+          "min",
+          "max"
+        ],
+        "description": "The accepted `protocol_version` range."
+      },
+      "DeprecationResponse": {
+        "properties": {
+          "min_protocol_version": {
+            "type": "string",
+            "description": "The lowest `protocol_version` that remains accepted after the cutoff."
+          },
+          "announced_at": {
+            "type": "string",
+            "description": "When the announcement was first published, RFC 3339."
+          },
+          "cutoff": {
+            "type": "string",
+            "description": "When versions below `min_protocol_version` stop being accepted, RFC 3339."
+          },
+          "detail_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where a human reads what to do about it."
+          }
+        },
+        "type": "object",
+        "required": [
+          "min_protocol_version",
+          "announced_at",
+          "cutoff"
+        ],
+        "description": "One announced deprecation cutoff."
+      },
+      "ServerInfoResponse": {
+        "properties": {
+          "server_id": {
+            "type": "string",
+            "description": "This server's canonical origin."
+          },
+          "api_base_url": {
+            "type": "string",
+            "description": "Where the versioned API lives."
+          },
+          "auth": {
+            "$ref": "#/components/schemas/AuthEndpointsResponse",
+            "description": "Where a client performs the auth ceremony."
+          },
+          "federation_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where federated peers talk to this server. Absent when it does not federate."
+          },
+          "protocol_version": {
+            "$ref": "#/components/schemas/ProtocolWindowResponse",
+            "description": "The `protocol_version` range accepted for writes today, both ends inclusive."
+          },
+          "signing_key": {
+            "type": "string",
+            "description": "The raw Ed25519 public key this server's tokens verify under, base64."
+          },
+          "signing_algorithm": {
+            "type": "string",
+            "description": "The signature algorithm that key is used with."
+          },
+          "deprecations": {
+            "items": {
+              "$ref": "#/components/schemas/DeprecationResponse"
+            },
+            "type": "array",
+            "description": "Announced deprecation cutoffs, in announcement order. Empty when none is pending."
+          }
+        },
+        "type": "object",
+        "required": [
+          "server_id",
+          "api_base_url",
+          "auth",
+          "protocol_version",
+          "signing_key",
+          "signing_algorithm",
+          "deprecations"
+        ],
+        "description": "The `.well-known/capsule/server-info` record.\n\nServer-scoped facts only. The registry's rule — *never a user list* — is structural here:\nthis type holds no user-shaped field, so there is nothing for a future edit to leak through."
+      },
+      "DeprecationsResponse": {
+        "properties": {
+          "announcements": {
+            "items": {
+              "$ref": "#/components/schemas/DeprecationResponse"
+            },
+            "type": "array",
+            "description": "Every announced cutoff, in announcement order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "announcements"
+        ],
+        "description": "The `.well-known/capsule/deprecation` record."
+      },
+      "RevokedTokenResponse": {
+        "properties": {
+          "jti": {
+            "type": "string",
+            "description": "The token's `jti` claim."
+          },
+          "expires_at": {
+            "type": "string",
+            "description": "The token's own `exp`, RFC 3339. After this the entry is pruned."
+          }
+        },
+        "type": "object",
+        "required": [
+          "jti",
+          "expires_at"
+        ],
+        "description": "One revoked capability token."
+      },
+      "RevokedJtiResponse": {
+        "properties": {
+          "generated_at": {
+            "type": "string",
+            "description": "When this snapshot was taken, RFC 3339.\n\nPart of the record rather than left to an HTTP `Date`, because the staleness rule a peer\napplies is a property of the list's content — a verifier reasoning from a transport\nheader would be trusting a cache to be honest about its own age."
+          },
+          "max_staleness_seconds": {
+            "type": "integer",
+            "maximum": 4294967295.0,
+            "minimum": 0.0,
+            "format": "uint32",
+            "description": "How stale a cached copy of this list may be before it stops being usable, in seconds.\n\nPublished so the rule is discoverable rather than a constant every peer implementation\nhas to have read the same document to know."
+          },
+          "revoked": {
+            "items": {
+              "$ref": "#/components/schemas/RevokedTokenResponse"
+            },
+            "type": "array",
+            "description": "Every revoked `jti` not yet past its own expiry, soonest expiry first."
+          }
+        },
+        "type": "object",
+        "required": [
+          "generated_at",
+          "max_staleness_seconds",
+          "revoked"
+        ],
+        "description": "The `.well-known/capsule/revoked-jti` record."
       },
       "WireBlobRole": {
         "type": "string",

@@ -143,6 +143,9 @@ pub mod error_codes {
     /// `error.federation.rate_budget_exceeded`
     pub const FEDERATION_RATE_BUDGET_EXCEEDED: &str = "error.federation.rate_budget_exceeded";
 
+    /// `error.federation.revocations_unavailable`
+    pub const FEDERATION_REVOCATIONS_UNAVAILABLE: &str = "error.federation.revocations_unavailable";
+
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
 

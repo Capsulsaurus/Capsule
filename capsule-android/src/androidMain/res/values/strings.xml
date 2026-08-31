@@ -202,6 +202,7 @@
     <string name="error_federation_capability_revoked">Access to this shared album has been revoked.</string>
     <string name="error_federation_circuit_open">This source is temporarily backed off after repeated errors.</string>
     <string name="error_federation_rate_budget_exceeded">This source has reached its request limit. Please wait and try again.</string>
+    <string name="error_federation_revocations_unavailable">Capsule couldn\'t read the revocation list. Please try again.</string>
     <string name="error_federation_scope_insufficient">This access grant does not cover the requested content.</string>
     <string name="error_moderation_account_suspended">Your account is suspended. You can\'t upload or share until it\'s reinstated.</string>
     <string name="error_moderation_report_rate_limited">Too many reports from this source. Please wait and try again.</string>

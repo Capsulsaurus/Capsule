@@ -13657,6 +13657,16 @@
         }
       }
     },
+    "error.federation.revocations_unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't read the revocation list. Please try again."
+          }
+        }
+      }
+    },
     "error.federation.scope_insufficient": {
       "localizations": {
         "ar": {
