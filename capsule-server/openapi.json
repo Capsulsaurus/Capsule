@@ -1700,6 +1700,123 @@
           }
         ]
       }
+    },
+    "/v1/albums": {
+      "post": {
+        "summary": "Bind an album id to the authenticated caller.",
+        "description": "Idempotent: the same id from a second device, or after a recovery, is a success that writes\nnothing.",
+        "operationId": "provision_album",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisionAlbumRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The album was created and bound to the caller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "The album id was already provisioned to this account; nothing was written",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisionAlbumResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -2357,6 +2474,42 @@
           "replayed"
         ],
         "description": "What a lifecycle write did."
+      },
+      "ProvisionAlbumRequest": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The client-derived album id, as a canonical lowercase hyphenated UUID."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id"
+        ],
+        "description": "The provisioning request."
+      },
+      "ProvisionAlbumResponse": {
+        "properties": {
+          "album_id": {
+            "type": "string",
+            "description": "The album, echoed."
+          },
+          "protocol_version": {
+            "type": "string",
+            "description": "The protocol date the album is pinned to — the server's, fixed at creation."
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether this call created the album. Advisory; both answers mean the same thing."
+          }
+        },
+        "type": "object",
+        "required": [
+          "album_id",
+          "protocol_version",
+          "created"
+        ],
+        "description": "What provisioning did."
       }
     },
     "securitySchemes": {

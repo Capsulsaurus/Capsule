@@ -28,6 +28,7 @@
 use kynos::prelude::*;
 use kynos::security::Authenticates;
 
+use crate::album::AlbumContext;
 use crate::auth::{AccessToken, AuthContext};
 use crate::directory::DeviceDirectoryContext;
 use crate::serve::ServeContext;
@@ -54,6 +55,8 @@ pub struct App {
     verify: VerifyContext,
     /// The device-directory module's collaborators.
     directories: DeviceDirectoryContext,
+    /// The album-provisioning module's collaborators.
+    albums: AlbumContext,
 }
 
 impl App {
@@ -68,6 +71,7 @@ impl App {
         serve: ServeContext,
         verify: VerifyContext,
         directories: DeviceDirectoryContext,
+        albums: AlbumContext,
     ) -> Self {
         Self {
             auth,
@@ -76,6 +80,7 @@ impl App {
             serve,
             verify,
             directories,
+            albums,
         }
     }
 }

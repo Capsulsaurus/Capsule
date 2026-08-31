@@ -24,6 +24,7 @@
 //! upload-session state stay behind separate Capsule-owned ports with Postgres, Valkey and
 //! deterministic in-memory adapters; no generic CAS, transfer or TTL abstraction is planned.
 
+pub mod album;
 pub mod app;
 pub mod auth;
 pub mod blob;
@@ -77,6 +78,7 @@ pub fn router() -> ServerRouter {
             routes::directory::publish_device_directory,
             routes::directory::fetch_device_directory,
             routes::ops::apply_op,
+            routes::albums::provision_album,
         ])
 }
 

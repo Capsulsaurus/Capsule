@@ -38,6 +38,9 @@ pub mod error_codes {
     /// `error.album.not_available`
     pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
 
+    /// `error.album.unavailable`
+    pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
+
     /// `error.auth.account_locked`
     pub const AUTH_ACCOUNT_LOCKED: &str = "error.auth.account_locked";
 

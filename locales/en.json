@@ -51,6 +51,10 @@
         "message": "This album isn't available on your account.",
         "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
     },
+    "error.album.unavailable": {
+        "message": "Capsule couldn't set up that album. Please try again.",
+        "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
+    },
     "error.auth.user_already_exists": {
         "message": "An account with these details already exists.",
         "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."

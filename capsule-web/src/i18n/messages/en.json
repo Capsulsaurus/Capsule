@@ -168,6 +168,7 @@
   "drop.upload_only_badge": "Upload only",
   "error.album.invalid_id": "This album could not be registered because its identifier is malformed.",
   "error.album.not_available": "This album isn't available on your account.",
+  "error.album.unavailable": "Capsule couldn't set up that album. Please try again.",
   "error.auth.account_locked": "This account is locked after too many failed sign-in attempts.",
   "error.auth.invalid_credentials": "Invalid email or password.",
   "error.auth.rate_limited": "Too many attempts. Please wait and try again.",

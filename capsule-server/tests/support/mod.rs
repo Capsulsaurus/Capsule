@@ -28,6 +28,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use capsule_server::App;
+use capsule_server::album::{
+    AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
+};
 use capsule_server::auth::{
     AccountDirectory, AuthContext, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
 };
@@ -789,6 +792,52 @@ pub(crate) struct SwitchableIndex {
     unavailable: AtomicBool,
 }
 
+/// An album store that can be made to fail on demand.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableAlbums {
+    inner: InMemoryAlbums,
+    unavailable: AtomicBool,
+}
+
+impl SwitchableAlbums {
+    /// A working store.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    fn refuse<T>() -> Result<T, StoreError> {
+        Err(StoreError::Unavailable {
+            store: "albums",
+            detail: REFUSAL.to_owned(),
+        })
+    }
+
+    fn is_down(&self) -> bool {
+        self.unavailable.load(Ordering::SeqCst)
+    }
+}
+
+impl AlbumStore for SwitchableAlbums {
+    fn provision(&self, record: AlbumRecord) -> StoreFuture<'_, ProvisionOutcome> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.provision(record)
+    }
+
+    fn read<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, Option<AlbumRecord>> {
+        if self.is_down() {
+            return Box::pin(async { Self::refuse() });
+        }
+        self.inner.read(album)
+    }
+}
+
 /// A device-directory store that can be made to fail on demand.
 ///
 /// Delegates to a real in-memory store, so the failing case and the working case differ in
@@ -976,6 +1025,8 @@ pub(crate) struct Fixture {
     pub(crate) cursors: Arc<CursorCodec>,
     /// The published device directories the server reads and writes.
     pub(crate) directories: Arc<SwitchableDirectories>,
+    /// The albums the server has provisioned.
+    pub(crate) albums: Arc<SwitchableAlbums>,
 }
 
 impl Fixture {
@@ -1001,6 +1052,7 @@ impl Fixture {
         let index = Arc::new(SwitchableIndex::new());
         let cursors = Arc::new(CursorCodec::new(&CURSOR_KEY));
         let directories = Arc::new(SwitchableDirectories::new());
+        let albums = Arc::new(SwitchableAlbums::new());
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -1023,6 +1075,7 @@ impl Fixture {
             ServeContext::new(index.clone(), blobs.clone()),
             VerifyContext::new(index.clone(), blobs.clone(), clock.clone()),
             DeviceDirectoryContext::new(directories.clone(), clock.clone()),
+            AlbumContext::new(albums.clone(), clock.clone()),
         );
 
         Self {
@@ -1037,6 +1090,7 @@ impl Fixture {
             index,
             cursors,
             directories,
+            albums,
         }
     }
 
@@ -1079,6 +1133,7 @@ impl Fixture {
             ServeContext::new(index.clone(), blobs.clone()),
             VerifyContext::new(index, blobs, clock.clone()),
             DeviceDirectoryContext::new(Arc::new(SwitchableDirectories::new()), clock.clone()),
+            AlbumContext::new(Arc::new(SwitchableAlbums::new()), clock.clone()),
         );
         (app, clock)
     }

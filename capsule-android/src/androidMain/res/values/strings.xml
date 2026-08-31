@@ -167,6 +167,7 @@
     <string name="drop_upload_only_badge">Upload only</string>
     <string name="error_album_invalid_id">This album could not be registered because its identifier is malformed.</string>
     <string name="error_album_not_available">This album isn\'t available on your account.</string>
+    <string name="error_album_unavailable">Capsule couldn\'t set up that album. Please try again.</string>
     <string name="error_auth_account_locked">This account is locked after too many failed sign-in attempts.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>

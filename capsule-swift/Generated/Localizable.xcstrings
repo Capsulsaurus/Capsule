@@ -11219,6 +11219,16 @@
         }
       }
     },
+    "error.album.unavailable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule couldn't set up that album. Please try again."
+          }
+        }
+      }
+    },
     "error.auth.account_locked": {
       "localizations": {
         "en": {

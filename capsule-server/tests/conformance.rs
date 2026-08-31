@@ -108,6 +108,7 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/devices/directory"),
         ("GET", "/v1/auth/devices/directory/anyone"),
         ("POST", "/v1/albums/anything/ops"),
+        ("POST", "/v1/albums"),
     ] {
         let request = match method {
             "GET" => client.get(path),
@@ -1111,6 +1112,81 @@ async fn every_declared_response_is_exercised() {
         .send()
         .await
         .assert_status(StatusCode::CONFLICT);
+
+    // ── POST /v1/albums ────────────────────────────────────────────────────────────────────
+    const DERIVED: &str = "0198f3c2-9c4a-7b3d-8f21-4d7c9a1b2e35";
+
+    client
+        .post("/v1/albums")
+        .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+    client
+        .post("/v1/albums")
+        .header(
+            "authorization",
+            &format!("Bearer {}", rotated.refresh_token),
+        )
+        .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+
+    // 415 and 422 are the `Json` extractor's — the second reachable because the body is
+    // strict, so an album *name* is a refusal rather than a silently-dropped field.
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .json(&json!({ "album_id": DERIVED, "name": "Holidays" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // 400: not a canonical UUID.
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .json(&json!({ "album_id": "not-a-uuid" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 500: the store could not answer.
+    fixture.albums.set_unavailable(true);
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.albums.set_unavailable(false);
+
+    // 201 then 200: idempotent by contract.
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "album_id": DERIVED }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
 
     // Nothing escaped the description on the way through, and nothing the description promises
     // was left unproduced.
