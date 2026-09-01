@@ -26,7 +26,7 @@ Federation deliberately introduces **no new data protocol**. A remote server fet
 
 Rejection semantics are the HTTP status plus stable `error.*` body defined by [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).
 
-Everything else — notifications, presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
+Everything else — [hints](/design/notifications/#vocabulary), presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
 
 Because blobs are content-addressed by their [ciphertext content hash](/design/cryptography/primitives/), a peer *physically cannot* lie about what a hash contains: Capsule recomputes the hash on arrival and rejects a mismatch. This collapses most of the trust problem — Capsule never trusts a peer's *claim* about an object, it fetches and verifies.
 
@@ -34,7 +34,7 @@ ActivityPub and Nextcloud Federated Sharing were considered and rejected as the 
 
 ## Pull-Only Federation
 
-Peers **pull**; they never push into Capsule's database. A remote server fetches on Capsule's schedule, through Capsule's validation pipeline, and the result is written only after it verifies. The single thing a peer may push is a **notification** — "a new event exists in album A" — over the separate low-trust channel; Capsule then fetches and validates on its own terms. Push-based writes are where most federation exploits live, so the design simply does not have them.
+Peers **pull**; they never push into Capsule's database. A remote server fetches on Capsule's schedule, through Capsule's validation pipeline, and the result is written only after it verifies. The single thing a peer may push is a **hint** — "a new event exists in album A" — over the separate low-trust channel; Capsule then fetches and validates on its own terms. ("Hint" is the [server-to-server term](/design/notifications/#vocabulary); the client-edge analogue is a *wake*, and neither is a user-visible *alert*.) Push-based writes are where most federation exploits live, so the design simply does not have them.
 
 ## Album Ownership (v1: Single Home Server)
 
@@ -135,7 +135,7 @@ Each peer is its own blast-radius boundary — a bad peer cannot starve good one
 - **Quotas.** Per-peer budgets (deployment-tuned) on events/hour, bytes/hour, and CPU/hour. Exceeding a budget queues or drops further requests.
 - **Receiving-user storage budget.** The per-peer budgets above bound *transfer*; storage is bounded separately. Blobs a pull *caches* on the home server are charged to the **receiving user's** [quota](/design/quota/#accounting-model), deduped, under a per-`(receiving_user, source_peer)` cap — so a single user pulling from many peers cannot exhaust home storage even while staying within every individual peer's transfer budget.
 - **Error budget + circuit breaker.** Malformed input spends a per-peer error budget; enough failures trip a circuit breaker that backs the peer off exponentially (e.g. 5 / 30 / 60 minutes). A buggy peer cannot DoS Capsule.
-- **Quarantine for new peers.** First contact puts a server in a probationary tier: tighter quotas, stricter validation, no push notifications accepted. It graduates after a period of clean behavior. This cuts off the "spin up a fresh instance to attack" vector, mirroring email reputation systems.
+- **Quarantine for new peers.** First contact puts a server in a probationary tier: tighter quotas, stricter validation, no hints accepted. It graduates after a period of clean behavior. This cuts off the "spin up a fresh instance to attack" vector, mirroring email reputation systems.
 
 ## Stale-Revival Defense
 
