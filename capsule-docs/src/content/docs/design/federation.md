@@ -20,8 +20,8 @@ Federation deliberately introduces **no new data protocol**. A remote server fet
 
 | Operation                 | Transport                                      | Purpose                                                                                       |
 | ------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `GET /sync?album_id=…&cursor=…` | REST | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
-| `GET /blob/{hash}`        | REST (HTTP `Range`)                            | Fetch an opaque ciphertext blob by its content address.                                       |
+| `GET /v1/sync?album_id=…&cursor=…` | REST | A page of metadata-blob changes after a cursor, for an album the peer holds a capability for. |
+| `GET /v1/blob/{hash}`        | REST (HTTP `Range`)                            | Fetch an opaque ciphertext blob by its content address.                                       |
 | Capability presentation   | REST `Authorization: Bearer`                   | Present a [federation capability](#federation-capabilities) to establish or refresh access.   |
 
 Rejection semantics are the HTTP status plus stable `error.*` body defined by [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).

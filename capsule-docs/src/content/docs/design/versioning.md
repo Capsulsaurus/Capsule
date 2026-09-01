@@ -84,9 +84,9 @@ Four of the steps above are the server's, and each one is the server's **because
 
 | | |
 | --- | --- |
-| `POST /v1/albums/{id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
-| `GET /v1/albums/{id}/upgrade` | the phase, the expiry, and the **drain count** |
-| `DELETE /v1/albums/{id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
+| `POST /v1/albums/{album_id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
+| `GET /v1/albums/{album_id}/upgrade` | the phase, the expiry, and the **drain count** |
+| `DELETE /v1/albums/{album_id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
 
 - **The proposer is verified, against the account's [published device directory](/design/cryptography/keys/#device-directory).** Without that check anyone holding an access token could freeze an album by posting a struct, which is the opposite of a ceremony keyed to an admin device. What the server does **not** verify — and has no surface that could carry — is the `frozen_state_hash`: that is each member's independent statement about its own view, and a server that adjudicated it would be the single point the hostile-member defence exists to avoid.
 - **The window is `received_at + deadline` on the server's clock**, which is the whole reason the deadline is a duration. `received_at` is stamped when the proposal is accepted and never moves.

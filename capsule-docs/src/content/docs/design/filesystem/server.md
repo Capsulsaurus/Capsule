@@ -92,7 +92,7 @@ Operationally the rebuild is invoked when a PostgreSQL restore is incomplete or 
 
 ## Manifest Envelope Validation
 
-Every write — `POST /upload`, `PATCH /upload/{id}`, finalization, any lifecycle manifest, any federation pull — passes through structural validation of the manifest envelope **before** any state is persisted. The server holds no decryption key, so it cannot verify the cryptographic signatures; but it does enforce that every envelope field is present, structurally well-formed, within bounds, and consistent with the album the manifest claims to address.
+Every write — `POST /v1/upload`, `PATCH /v1/upload/{id}`, finalization, any lifecycle manifest, any federation pull — passes through structural validation of the manifest envelope **before** any state is persisted. The server holds no decryption key, so it cannot verify the cryptographic signatures; but it does enforce that every envelope field is present, structurally well-formed, within bounds, and consistent with the album the manifest claims to address.
 
 The complete refuse-by-default checklist is owned by [Threat Model — Server-Side Validation Invariants](/design/threat-model/validation/#server-side-validation-invariants). A rejection at any check returns the rejection code listed there and writes no state. This is what defeats the version-mismatched-client damage class without requiring the server to hold a key.
 

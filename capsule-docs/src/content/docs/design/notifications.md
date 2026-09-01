@@ -137,7 +137,7 @@ schedule would, and carries no authority.
 ### 1. A Wake Carries No Payload
 
 No album id, no actor, no asset id, no count, no timestamp beyond what the transport itself requires.
-The client's only correct response is to run the ordinary `GET /sync` (and `GET /quota`, `GET /drops`)
+The client's only correct response is to run the ordinary `GET /v1/sync` (and `GET /v1/quota`, `GET /v1/drops`)
 it would eventually have run anyway, then compose any resulting alert locally from Tier 0.
 
 This is not merely a privacy preference. A server that cannot read the library has nothing truthful

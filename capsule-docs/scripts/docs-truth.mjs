@@ -31,9 +31,10 @@
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crossLinksCheck } from './check-cross-links.mjs';
+import { endpointCensusCheck } from './check-endpoint-census.mjs';
 
 /** Registered checks, run in order. Adding one is a single entry here. */
-const CHECKS = [crossLinksCheck];
+const CHECKS = [crossLinksCheck, endpointCensusCheck];
 
 function main() {
     // scripts/ -> capsule-docs/ -> repo root

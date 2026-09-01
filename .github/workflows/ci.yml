@@ -68,16 +68,16 @@ jobs:
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             # Both sides this gate cross-references: the prose, and the things
-            # the prose links to. Today those are Markdown, the two root legal
-            # files, and `astro.config.mjs` (which supplies the published origin
-            # that site URLs are resolved against). It grows to the crate trees
-            # and `capsule-server/openapi.json` when the endpoint and module
-            # census checks land — not before, so the filter keeps describing
-            # what the gate actually reads.
+            # the prose names. The committed OpenAPI contract is in it because
+            # regenerating the server's surface can invalidate an endpoint a doc
+            # cites without that doc changing — which neither the `docs` nor the
+            # `rust` filter would catch.
             docs-truth:
               - 'capsule-docs/scripts/**'
               - 'capsule-docs/src/content/docs/**'
               - 'capsule-docs/astro.config.mjs'
+              - 'capsule-docs/endpoint-census-allowlist.txt'
+              - 'capsule-server/openapi.json'
               - '**/*.md'
               - '**/*.mdx'
               - 'LICENSE'

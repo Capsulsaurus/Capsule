@@ -37,7 +37,7 @@ A `delete` or `replace` is therefore authorized by the same proof as the origina
 
 ## The Lifecycle Write Surface
 
-Every non-upload lifecycle write — `delete`, `metadata-update`, `derivative-add`/`derivative-replace` when the manifest references already-stored blobs, and `trash-restore` — travels through **one generic REST endpoint**: `POST /albums/{album_id}/ops`. (`create` and `replace`, and any derivative action carrying new bytes, ride the [upload protocol](/design/import/upload-protocol/) instead — a write that moves blob bytes is an upload by definition.) The body is the signed manifest bundle: the opaque canonical-CBOR manifest plus the encrypted metadata blob when the action carries one.
+Every non-upload lifecycle write — `delete`, `metadata-update`, `derivative-add`/`derivative-replace` when the manifest references already-stored blobs, and `trash-restore` — travels through **one generic REST endpoint**: `POST /v1/albums/{album_id}/ops`. (`create` and `replace`, and any derivative action carrying new bytes, ride the [upload protocol](/design/import/upload-protocol/) instead — a write that moves blob bytes is an upload by definition.) The body is the signed manifest bundle: the opaque canonical-CBOR manifest plus the encrypted metadata blob when the action carries one.
 
 The endpoint is deliberately singular — one closed enum, one gate, one transaction shape:
 

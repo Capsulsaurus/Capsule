@@ -63,7 +63,7 @@ It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `to
 
 1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
 2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).
-3. Confirm the asset is durably stored with [`POST /storage/verify`](/design/import/storage-verification/#verify-before-destroy).
+3. Confirm the asset is durably stored with [`POST /v1/storage/verify`](/design/import/storage-verification/#verify-before-destroy).
 4. **Release** the local original (and delete the [Move-mode](#execute) source, if any) only after the `durable` verdict; the asset becomes an ordinary server-only, re-fetchable representation (see [Space Recovery](/design/filesystem/client/#space-recovery)).
 5. Advance the window to the next file.
 

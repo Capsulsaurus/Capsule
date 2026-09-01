@@ -62,7 +62,7 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 | Datetime | **none** — native `Intl` / `Date` | A date library is added only by adding a row here. |
 | LQIP decode | **none** — no JavaScript placeholder codec | The `thumbhash` package and the `lazy-image.tsx` decode path it fed are removed with the move to [Chromahash](/design/thumbnails/#lqip). The browser has no decrypted `lqip` to render today — the authenticated read path is a key-free projection of the sync feed ([API Surfaces](/design/api-surfaces/#surface--transport-map)) — and when it does, it decodes through the `capsule-wasm` module below over the same `capsule-core::lqip` code, not a second implementation in JS. |
 | i18n runtime | FormatJS over the generated catalogs | Contract owned by [Internationalization](/design/i18n/). |
-| Guest share crypto (WASM) | `capsule-wasm` module (built by `mise run build-wasm`) | The `/s/{opaque-id}` viewer's client-side share-link open path — the URL fragment secret and any passphrase never leave the browser (slice S-E1). Generated into the gitignored `src/generated/wasm/`; never committed. The Rust FFI crate + build tool are the [Rust — Browser FFI](#rust) row. |
+| Guest share crypto (WASM) | `capsule-wasm` module (built by `mise run build-wasm`) | The `/s/{opaque_id}` viewer's client-side share-link open path — the URL fragment secret and any passphrase never leave the browser (slice S-E1). Generated into the gitignored `src/generated/wasm/`; never committed. The Rust FFI crate + build tool are the [Rust — Browser FFI](#rust) row. |
 | Lint/format | Biome | — |
 | Runtime / package manager | bun | — |
 

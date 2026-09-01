@@ -19,14 +19,14 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 | Surface | Transport | Planned module | Owner doc |
 | --- | --- | --- | --- |
 | Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
-| Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
-| Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-server::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
-| Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
+| Resumable upload (`POST /v1/upload`, then `HEAD/PATCH /v1/upload/{id}`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
+| Lifecycle writes (`POST /v1/albums/{album_id}/ops`) | REST | `capsule-server::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Blob fetch (`GET /v1/blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
 | Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
 | Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
-| Share serving (`/s/{opaque-id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
-| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
-| Storage verification (`POST /storage/verify`) | REST | `capsule-server::blob` | [Storage Verification](/design/import/storage-verification/) |
+| Share serving (`/s/{opaque_id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
+| Guest drops (`POST /d/{opaque_id}`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
+| Storage verification (`POST /v1/storage/verify`) | REST | `capsule-server::blob` | [Storage Verification](/design/import/storage-verification/) |
 | Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-server::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
 | Version/handshake | REST | `capsule-server` | [Threat Model — Validation](/design/threat-model/validation/) |
 | Library queries (timeline, albums, search) | none — client-side over `library.sqlite` | `capsule-core::library` + `db` | [Organization](/design/organization/#system--smart-albums-views) |
@@ -68,7 +68,7 @@ The line is **parsing and serialization versus orchestration**, and with Spargen
 it now falls in exactly one place.
 
 *Generated from the contract*: every request and response body, every typed parameter, and the
-byte-serving endpoints. The blob-fetch and asset-serve tree — `GET /blob/{hash}` with `Range`, and
+byte-serving endpoints. The blob-fetch and asset-serve tree — `GET /v1/blob/{hash}` with `Range`, and
 the derivative reads beside it — is back in the generated client, because textual and binary
 response decoding and typed parameter serialization both work now. A hand-written byte path is no
 longer justified by a generator limitation, and adding one back would be a second parser for a
