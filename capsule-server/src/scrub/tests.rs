@@ -47,6 +47,38 @@ fn asset_id(name: &str) -> AssetId {
     AssetId::new(asset_uuid(name).to_string())
 }
 
+/// A signed manifest for `name`, chaining onto `prior` under `action` (`S-C52`).
+///
+/// The chain walk needs more than one manifest per asset, which is the state `S-C52` made
+/// possible: before it, a lifecycle write dropped the manifest it superseded and there was
+/// nothing to walk back to.
+fn chained_manifest_bytes(
+    name: &str,
+    metadata: &ContentAddress,
+    prior: Option<Hash32>,
+    seed: u8,
+) -> Vec<u8> {
+    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::provenance::action::Action;
+    use capsule_core::crypto::provenance::manifest::AssetManifest;
+
+    let mut core = decoded(&manifest_bytes(name, metadata)).core;
+    core.action = Action::MetadataUpdate;
+    core.prior_provenance_hash = prior;
+    // One field varied so successive links are different objects; content addressing would
+    // otherwise collapse them and there would be no chain to walk.
+    core.timestamp = format!("2026-01-0{seed}T00:00:00Z");
+    let device = HybridSigningKey::from_seed64(&[1; 64]);
+    let write_tier = HybridSigningKey::from_seed64(&[2; 64]);
+    let manifest: AssetManifest = core.sign(&device, &write_tier).expect("a manifest signs");
+    capsule_core::cbor::to_canonical_vec(&manifest).expect("a manifest encodes")
+}
+
+/// The manifest `bytes` decode to.
+fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::manifest::AssetManifest {
+    capsule_core::cbor::from_slice(bytes).expect("a manifest decodes")
+}
+
 /// A signed manifest whose facts are the ones `publish` writes into the index.
 ///
 /// Really signed, over freshly generated keys: the scrub never verifies the signatures — it
@@ -139,6 +171,40 @@ impl Harness {
         self.record(&id, BlobRole::Provenance, &provenance).await;
         self.record(&id, BlobRole::Metadata, &metadata).await;
         provenance
+    }
+
+    /// Supersede `name`'s manifest with a new link in its chain, and return the new head.
+    ///
+    /// Through `apply_op`, the way a lifecycle write really lands, so the retention this asserts
+    /// is the production path's rather than the fixture's.
+    async fn supersede(&self, name: &str, metadata: &ContentAddress, seed: u8) -> ContentAddress {
+        let id = asset_id(name);
+        let row = self
+            .index
+            .read(&id)
+            .await
+            .expect("read")
+            .expect("the row exists");
+        let bytes = chained_manifest_bytes(name, metadata, row.chain_head, seed);
+        let address = self.store(&bytes).await;
+        self.index
+            .apply_op(crate::index::LifecycleOp {
+                asset_id: id,
+                owner_id: OwnerId::new("scrub-owner"),
+                album_id: AlbumId::new(SCRUB_ALBUM),
+                action: crate::index::OpAction::MetadataUpdate,
+                manifest_hash: hash_bytes(&bytes),
+                prior_provenance_hash: row.chain_head,
+                amk_version: 0,
+                provenance: address.clone(),
+                metadata: None,
+                original: None,
+                retention_until: None,
+                at: Timestamp::UNIX_EPOCH,
+            })
+            .await
+            .expect("the index applies");
+        address
     }
 
     async fn record(&self, asset: &AssetId, role: BlobRole, address: &ContentAddress) {
@@ -467,5 +533,114 @@ async fn a_provenance_blob_that_is_not_a_manifest_is_reported_rather_than_assume
         0,
         "a blob that does not decode has no facts to disagree with, so it is one finding rather \
          than a cascade of them"
+    );
+}
+
+// ===========================================================================================
+// Check 4: the chain walks back (`S-C52`)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_retained_chain_walks_back_to_its_create() {
+    // The check the maintenance doc has always listed and no server could perform, because a
+    // lifecycle write dropped the manifest it superseded and the collector reclaimed it. There is
+    // a chain to walk now, so the walk is the assertion.
+    let h = Harness::new();
+    let first = h.publish("chained").await;
+    let metadata = h.store(b"chained-metadata").await;
+    let second = h.supersede("chained", &metadata, 1).await;
+    let third = h.supersede("chained", &metadata, 2).await;
+    assert_ne!(first, second);
+    assert_ne!(second, third);
+
+    let row = h
+        .index
+        .read(&asset_id("chained"))
+        .await
+        .expect("read")
+        .expect("the row exists");
+    assert_eq!(
+        row.superseded,
+        vec![first, second],
+        "every manifest the chain moved past is retained, oldest first, and the current one \
+         lives where it always did"
+    );
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert!(report.is_clean(), "{:?}", report.findings);
+}
+
+#[tokio::test]
+async fn a_superseded_manifest_is_not_an_orphan() {
+    // The retention, from the collector's side. Without it the server's own evidence about a
+    // write it accepted is reclaimed on the ordinary schedule — and reclaimed exactly when the
+    // chain has history worth disputing.
+    let h = Harness::new();
+    let first = h.publish("kept").await;
+    let metadata = h.store(b"kept-metadata").await;
+    h.supersede("kept", &metadata, 1).await;
+
+    assert_eq!(
+        h.index
+            .reference_count(&first)
+            .await
+            .expect("the index counts"),
+        1,
+        "a manifest the chain moved past is still referenced"
+    );
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(
+        report.count("orphan"),
+        0,
+        "and the scrub agrees: {:?}",
+        report.findings
+    );
+}
+
+#[tokio::test]
+async fn a_chain_whose_predecessor_is_gone_is_reported() {
+    let h = Harness::new();
+    let first = h.publish("broken").await;
+    let metadata = h.store(b"broken-metadata").await;
+    h.supersede("broken", &metadata, 1).await;
+
+    // Corruption seeded the only way it can happen once the retention holds: the object itself
+    // goes missing under a reference that still names it.
+    h.blobs.remove(&first).await.expect("the store removes");
+
+    let report = scrub(&h.context, Depth::Structural).await.expect("a pass");
+    assert_eq!(report.count("chain_broken"), 1, "{:?}", report.findings);
+    assert_eq!(
+        report.count("dangling_reference"),
+        1,
+        "and it is *also* a dangling reference, because the retained manifest is a reference — \
+         one fault, two true statements about it"
+    );
+}
+
+#[tokio::test]
+async fn purging_a_tombstone_takes_the_chain_with_it() {
+    // The retention has an end, and it is the one the user signed: a purge is the close of the
+    // retention window their own delete manifest fixed. There is nothing left to rebut with
+    // because there is nothing left to rebut about.
+    let h = Harness::new();
+    let first = h.publish("purged").await;
+    let metadata = h.store(b"purged-metadata").await;
+    h.supersede("purged", &metadata, 1).await;
+    let id = asset_id("purged");
+
+    h.index
+        .tombstone(&id, Timestamp::UNIX_EPOCH)
+        .await
+        .expect("the index tombstones");
+    h.index.purge(&id).await.expect("the index purges");
+
+    assert_eq!(
+        h.index
+            .reference_count(&first)
+            .await
+            .expect("the index counts"),
+        0,
+        "a purged asset's chain is collectable like the rest of its bytes"
     );
 }

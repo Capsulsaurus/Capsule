@@ -208,6 +208,28 @@ pub struct AssetRow {
     /// separate album table would be a second home for the same fact, and the two would
     /// eventually disagree about an album whose newest asset was rolled back.
     pub amk_version: u64,
+    /// Every manifest this asset's chain has moved past, oldest first (`S-C52`).
+    ///
+    /// The current manifest is **not** here — it is the [`BlobRole::Provenance`] entry in
+    /// [`Self::blobs`], and one fact has one home. Together they are the asset's provenance
+    /// chain as the server holds it.
+    ///
+    /// # Why the server holds it at all
+    ///
+    /// Two documented capabilities rest on it, and both were quietly lost while a lifecycle
+    /// write simply dropped the manifest it superseded:
+    ///
+    /// - the integrity scrub's *envelope chain ⇄ index agreement* check has something to walk
+    ///   (`S-C45` found it had nothing);
+    /// - and the takedown rebuttal is **evidentiary**. A server accused of losing an asset
+    ///   answers with the user's own signed `delete` manifest and its elapsed `retention_until`.
+    ///   A superseded manifest that has been collected is a rebuttal that is gone precisely when
+    ///   a chain has history worth disputing.
+    ///
+    /// These count as references for the collector, so a manifest an asset has moved past is
+    /// **not** an orphan. That is the whole retention: content addressing does the rest, and two
+    /// assets whose chains pass through the same manifest share one object.
+    pub superseded: Vec<ContentAddress>,
     /// The serving hold moderation has placed on the asset, if any (`S-C17`).
     ///
     /// `None` is the ordinary case. A held row keeps every one of its blobs and its place in

@@ -135,6 +135,20 @@ pub enum Finding {
         /// The address the row points at.
         address: ContentAddress,
     },
+    /// An asset's provenance chain does not walk back to a `create` (`S-C52`).
+    ///
+    /// Check 4. The manifest at `broken_at` names a `prior_provenance_hash` the server does not
+    /// hold, or the chain reaches a manifest that is not a `create` and has no predecessor at
+    /// all. Either is a fork or a gap in the record the server would answer a takedown claim
+    /// with — which is exactly the thing worth knowing before the claim arrives.
+    ChainBroken {
+        /// The asset.
+        asset: AssetId,
+        /// The manifest whose predecessor could not be resolved.
+        broken_at: ContentAddress,
+        /// The predecessor it named, or `None` when a non-`create` named none at all.
+        expected_prior: Option<String>,
+    },
     /// A fact Postgres mirrors out of the signed manifest disagrees with the manifest (`S-C45`).
     ///
     /// Check 5. Both sides' values, because a report saying "they disagree" tells an operator to
@@ -167,6 +181,7 @@ impl Finding {
             Self::ChainHeadUnresolvable { .. } => "chain_head_unresolvable",
             Self::ManifestUnreadable { .. } => "manifest_unreadable",
             Self::MirroredFactMismatch { .. } => "mirrored_fact_mismatch",
+            Self::ChainBroken { .. } => "chain_broken",
             Self::Debris { .. } => "debris",
             Self::Quarantined { .. } => "quarantined",
             Self::StaleStage { .. } => "stale_stage",
@@ -287,6 +302,24 @@ async fn rows_resolve_to_blobs(
             return Ok(());
         }
         for row in &rows {
+            // A superseded manifest is a reference like any other (`S-C52`), so a missing one is
+            // a dangling reference and not an absence to shrug at: it is the server's own
+            // evidence about a write it accepted.
+            for address in &row.superseded {
+                if context
+                    .blobs
+                    .stat(address)
+                    .await
+                    .map_err(blob_failure)?
+                    .is_none()
+                {
+                    report.findings.push(Finding::DanglingReference {
+                        asset: row.asset_id.clone(),
+                        role: BlobRole::Provenance,
+                        address: address.clone(),
+                    });
+                }
+            }
             for blob in &row.blobs {
                 let held = context
                     .blobs
@@ -414,9 +447,117 @@ async fn mirrored_facts_agree(
                 continue;
             };
             compare(row, &manifest.core, report);
+            chain_walks_back(context, row, &manifest.core, report).await?;
         }
         after = rows.last().map(|row| row.asset_id.clone());
     }
+}
+
+/// Check 4: the asset's chain walks back from its head to a `create` (`S-C52`).
+///
+/// # Why this is possible now and was not before
+///
+/// It asks the scrub to follow `prior_provenance_hash` from the head to the beginning, which
+/// needs the server to *hold* every manifest in the chain. Until `S-C52` it held one: a lifecycle
+/// write re-pointed the provenance role and left the manifest it superseded referenced by
+/// nothing, so the collector reclaimed it on its ordinary schedule. The chain the doc assumed was
+/// in the blob store was not there to walk, and `S-C45` could only report the weaker
+/// `chain_head_unresolvable`.
+///
+/// # What it reports and what it does not
+///
+/// A link whose predecessor the store does not hold, and a non-`create` link that names no
+/// predecessor at all. Both are one finding — the walk stops at the first break, because
+/// everything past a gap is unreachable rather than wrong, and reporting the remainder would be
+/// reporting consequences as causes.
+///
+/// It deliberately does **not** verify signatures. That is `verify_asset`'s, it is the client's,
+/// and it needs keys this server does not have; the scrub's question is whether the *record* is
+/// intact, not whether it is authentic.
+async fn chain_walks_back(
+    context: &ScrubContext,
+    row: &crate::index::AssetRow,
+    head: &capsule_core::crypto::provenance::manifest::ManifestCore,
+    report: &mut ScrubReport,
+) -> Result<(), StoreError> {
+    use capsule_core::crypto::provenance::manifest::AssetManifest;
+
+    let mut at = row
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("the caller resolved the head before calling");
+    let mut core = head.clone();
+    // A chain cannot be longer than the manifests the asset holds, so this terminates whatever
+    // the stored `prior_provenance_hash` values say — including a cycle, which is a corruption a
+    // walk written as `while let` would hang on.
+    for _ in 0..=row.superseded.len() {
+        if core.action.is_create() {
+            return Ok(());
+        }
+        let Some(prior) = core.prior_provenance_hash else {
+            report.findings.push(Finding::ChainBroken {
+                asset: row.asset_id.clone(),
+                broken_at: at,
+                expected_prior: None,
+            });
+            return Ok(());
+        };
+        let Ok(address) = ContentAddress::parse(&prior.to_hex()) else {
+            report.findings.push(Finding::ChainBroken {
+                asset: row.asset_id.clone(),
+                broken_at: at,
+                expected_prior: Some(prior.to_hex()),
+            });
+            return Ok(());
+        };
+        // The predecessor has to be one this asset retained, not merely one the store happens to
+        // hold: a manifest from another asset's chain resolving here would make a fork look
+        // intact.
+        let retained = row.superseded.contains(&address);
+        let bytes = if retained {
+            let stat = context.blobs.stat(&address).await.map_err(blob_failure)?;
+            match stat {
+                Some(stat) => context
+                    .blobs
+                    .read_at(
+                        &address,
+                        0,
+                        usize::try_from(stat.size).unwrap_or(usize::MAX),
+                    )
+                    .await
+                    .map_err(blob_failure)?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let Some(bytes) = bytes else {
+            report.findings.push(Finding::ChainBroken {
+                asset: row.asset_id.clone(),
+                broken_at: at,
+                expected_prior: Some(prior.to_hex()),
+            });
+            return Ok(());
+        };
+        let Ok(manifest) = capsule_core::cbor::from_slice::<AssetManifest>(&bytes) else {
+            report.findings.push(Finding::ManifestUnreadable {
+                asset: row.asset_id.clone(),
+                address,
+            });
+            return Ok(());
+        };
+        at = address;
+        core = manifest.core;
+    }
+
+    // More links than manifests: the chain loops. Reported at the head, because that is the one
+    // link an operator can reason from.
+    report.findings.push(Finding::ChainBroken {
+        asset: row.asset_id.clone(),
+        broken_at: at,
+        expected_prior: core.prior_provenance_hash.map(|hash| hash.to_hex()),
+    });
+    Ok(())
 }
 
 /// Every mirrored fact, compared field by field.

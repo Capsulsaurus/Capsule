@@ -1045,6 +1045,82 @@ pub async fn an_op_on_an_asset_that_is_not_the_callers_is_not_found(index: &dyn 
     let _ = asset;
 }
 
+/// A lifecycle write **retains** the manifest it supersedes (`S-C52`).
+///
+/// The provenance role moves; the manifest it moved off does not become an orphan. Two
+/// documented capabilities rest on that — the scrub's chain walk, and the takedown rebuttal,
+/// which answers an accusation with the user's own signed `delete` manifest — and both were
+/// quietly lost while a re-point simply dropped the address.
+pub async fn a_lifecycle_write_retains_the_manifest_it_supersedes(index: &dyn AssetIndex) {
+    let (asset, _) = publish(index, "op-keep", 1).await;
+    let first = ok(index.read(&asset).await, "read")
+        .expect("the row exists")
+        .address_for(BlobRole::Provenance)
+        .cloned()
+        .expect("publication landed a manifest");
+
+    let mut update = op(
+        "op-keep",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &asset).await,
+        manifest(31),
+    );
+    // Each link is its own object. `op` reuses one provenance address, and content addressing
+    // means two identical manifests *are* one blob — so a case about a chain has to vary it, or
+    // it is asserting about a single link twice.
+    update.provenance = address("op-keep-prov-2");
+    ok(index.apply_op(update).await, "apply");
+
+    let row = ok(index.read(&asset).await, "read").expect("the row exists");
+    assert_ne!(
+        row.address_for(BlobRole::Provenance),
+        Some(&first),
+        "the current manifest moved"
+    );
+    assert_eq!(
+        row.superseded,
+        vec![first.clone()],
+        "and the one it moved off is retained, not dropped"
+    );
+    assert_eq!(
+        ok(index.reference_count(&first).await, "count"),
+        1,
+        "a retained manifest is a reference, which is what keeps the collector off it"
+    );
+
+    // A second write extends the record rather than replacing it: the chain is the whole point.
+    let mut again = op(
+        "op-keep",
+        1,
+        OpAction::MetadataUpdate,
+        head_of(index, &asset).await,
+        manifest(32),
+    );
+    again.provenance = address("op-keep-prov-3");
+    ok(index.apply_op(again).await, "apply");
+    assert_eq!(
+        ok(index.read(&asset).await, "read")
+            .expect("the row exists")
+            .superseded
+            .len(),
+        2,
+        "oldest first, and every link kept"
+    );
+
+    // And the retention ends where the user's own signed delete said it would.
+    ok(
+        index.tombstone(&asset, Timestamp::UNIX_EPOCH).await,
+        "tombstone",
+    );
+    ok(index.purge(&asset).await, "purge");
+    assert_eq!(
+        ok(index.reference_count(&first).await, "count after a purge"),
+        0,
+        "a purge is the close of the retention window, so the chain goes with the bytes"
+    );
+}
+
 /// A `replace` re-points the **original**, which is the role `record_blob` refuses to move
 /// (`S-C43`).
 ///
@@ -1425,6 +1501,7 @@ pub async fn run_all(index: &dyn AssetIndex) {
     an_op_on_an_asset_that_is_not_the_callers_is_not_found(index).await;
     a_lifecycle_write_repoints_the_provenance_blob(index).await;
     a_replace_repoints_the_original_the_upload_path_may_not_move(index).await;
+    a_lifecycle_write_retains_the_manifest_it_supersedes(index).await;
     references_are_counted_from_the_rows_that_name_them(index).await;
     purging_drops_the_references_and_keeps_the_tombstone(index).await;
     a_restore_clears_the_retention_floor(index).await;

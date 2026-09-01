@@ -251,14 +251,14 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C42 | Nothing verifies the device directory's own signature | server | S-C9 | M | RETIRED | done | trust-on-first-publish anchor; unblocks `S-C23` |
 | S-C43 | `replace` rides the upload protocol and has no producer | server | S-C1, S-C37 | M | RETIRED | done | the manifest is the act, and the projection's `ciphertext_hash` conflation is why |
 | S-C44 | A swept blob's bytes are never credited back | server | S-C6, S-C11 | S | RETIRED | done | the credit is the sweep's, and the ledger names the account |
-| S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | done\* | the scrub may decode; check 4 is unperformable for a structural reason → `S-C52` |
+| S-C45 | Two scrub checks need the server to read signed CBOR | server | S-C14, S-C30 | M | RETIRED | done | check 5 here, check 4 with `S-C52`'s retention |
 | S-C46 | The custody-receipt type is `native`-gated, so the server cannot share it | core | — | M | ACTIVE | done | unblocks `S-C15`; `BlobRole` unified with it |
 | S-C47 | Does a legal hold outlive the user's own signed delete? | server | S-C11, S-C17 | S | RETIRED | blocked | found by `S-C17`; a legal question, not an engineering one |
 | S-C48 | The bearer scheme never reads the session ledger | server | S-C23, S-C29 | M | RETIRED | done\* | fails closed as `401`; the honest `503` needs the seam `S-C36` wants |
 | S-C49 | Moderation's federated halves have no federation to hang on | server | S-C8, S-C32 | M | RETIRED | blocked | found by `S-C8`; report intake and the blocklist both need the federation layer |
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
-| S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | ready | found by `S-C45`; a lifecycle write orphans the manifest it supersedes |
+| S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -2927,31 +2927,50 @@ been putting rotten bytes at an address the asset's manifest never committed to.
   check 4 (*"the chain walks forward from `create`"*), and
   [Storage Verification — no authorized purge](capsule-docs/src/content/docs/design/import/storage-verification.md)
   — *"the server's legitimate rebuttal is the asset's own provenance chain **it already holds**"*.
-- **Gap** (found 2026-08-31 landing `S-C45`): it does not hold it. An asset row points at **one**
-  provenance blob, and every lifecycle write re-points that role through `set_singular` — which
-  leaves the manifest it superseded referenced by nothing, and therefore collectable by the
-  refcount GC on its ordinary schedule.
-- **Why this is worse than a missing scrub check.** Two documented capabilities rest on the
-  retention, not one:
-  - the scrub's check 4 has nothing to walk, so an implementation bug that forked an asset's chain
-    would be undetectable server-side;
-  - and the takedown rebuttal is *evidentiary*. A server accused of losing an asset answers with
-    the user's own signed `delete` manifest and its elapsed `retention_until`. If that manifest
-    was superseded by a later write and collected, the rebuttal is gone — and it is gone exactly
-    in the case where it is most likely to be needed, because a chain that has moved on is a chain
-    with history worth disputing.
-- **The design question it needs first.** Whether the server retains every manifest is a **cost**
-  decision, not an oversight to code around: manifests are small (signed CBOR carrying hashes) and
-  unbounded in count. Retaining them means an asset's provenance blobs are never orphaned, which
-  changes what the GC may sweep and what a rebuild reads. The alternative — retain nothing and
-  strike both claims from the docs — is coherent and loses the rebuttal, so it should be decided
-  rather than defaulted into by a `set_singular` call nobody re-read.
-- **Watch out:** whatever lands has to survive `S-C43`. A replace re-points the original *and* the
-  manifest, so a naive "keep the provenance blob referenced" fix has to keep it referenced by
-  something that is not the singular role, or the next replace will conflict on it.
-- **Done when:** an asset with three lifecycle writes behind it has all three manifests resolvable
-  from the server, the scrub's check 4 walks them, and a superseded manifest survives a GC pass —
-  or the two documents no longer claim any of that. **Tier:** Unit + Smoke.
+- **Gap** (found 2026-08-31 landing `S-C45`): it did not hold it. An asset row pointed at **one**
+  provenance blob, and every lifecycle write re-pointed that role through `set_singular` — which
+  left the manifest it superseded referenced by nothing, and therefore collectable by the refcount
+  GC on its ordinary schedule.
+- **Landed 2026-08-31, retention decided *for*.**
+
+**The decision, and why it was not close.** The row filed this as a cost question — retaining
+every manifest forever is unbounded growth, and unbounded growth is a decision rather than a
+default. The evidence settles it in one direction: two documented capabilities rest on the
+retention, and the second is *evidentiary*. A server accused of losing an asset answers with the
+user's own signed `delete` manifest and its elapsed `retention_until`. A superseded manifest that
+has been collected is a rebuttal that is gone precisely when a chain has history worth disputing —
+which is to say, gone in the case it exists for. Against that: a manifest is signed CBOR carrying
+hashes, so a heavily-edited asset retains kilobytes, and content addressing already collapses
+identical links.
+
+**The retention has an end, and it is one the user chose.** A purge is the close of the window
+their own signed delete fixed, so it takes the chain with the bytes. Nothing else drops a link.
+
+**One fact, one home.** `AssetRow::superseded` holds the manifests the chain has moved *past*; the
+current one stays where it always was, the `Provenance` entry in `blobs`. The alternative — a
+`chain` vector whose last element is also the provenance ref — is two places for one address, and
+they drift.
+
+**And check 4 lands with it**, which is the point of the ordering. The scrub walks back from the
+head to a `create`, resolving each `prior_provenance_hash` against a manifest **the asset
+retains** — not merely one the store happens to hold, because a manifest from another asset's
+chain resolving there would make a fork look intact. It reports the first break and stops:
+everything past a gap is a consequence, and reporting consequences as causes is what makes a
+report unreadable. It is bounded by the retained count, so a chain that loops terminates and is
+reported rather than hanging the scrub. Signatures are not verified — that is `verify_asset`'s,
+it is the client's, and it needs keys this server does not have; the scrub asks whether the
+*record* is intact, not whether it is authentic.
+
+**A dangling retained manifest is two true statements about one fault**, and both are reported: a
+`dangling_reference` because a retained manifest is a reference, and a `chain_broken` because the
+walk could not pass it. Neither is a duplicate of the other — one is about the store, one is about
+the record — and the scrub adjudicates neither.
+
+- **Done when:** ✅ `a_retained_chain_walks_back_to_its_create`,
+  `a_superseded_manifest_is_not_an_orphan`, `a_chain_whose_predecessor_is_gone_is_reported` and
+  `purging_a_tombstone_takes_the_chain_with_it` in `capsule-server/src/scrub/tests.rs`, plus
+  `a_lifecycle_write_retains_the_manifest_it_supersedes` in the index conformance suite so every
+  adapter owes it. **Tier:** Unit.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

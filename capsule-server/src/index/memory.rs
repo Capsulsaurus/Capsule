@@ -49,6 +49,16 @@ fn is_singular(role: BlobRole) -> bool {
 /// verifies against the old ones; a lifecycle op is the *authorized* form of the same change,
 /// and it arrives with a manifest chaining onto the one it supersedes.
 fn set_singular(row: &mut AssetRow, role: BlobRole, address: &ContentAddress) {
+    // `S-C52`: a superseded *manifest* is kept referenced rather than dropped. Only the
+    // provenance role — the other singular roles are ciphertext, and the old bytes of a replaced
+    // original are exactly what the collector is for.
+    if role == BlobRole::Provenance
+        && let Some(previous) = row.address_for(BlobRole::Provenance).cloned()
+        && &previous != address
+        && !row.superseded.contains(&previous)
+    {
+        row.superseded.push(previous);
+    }
     row.blobs.retain(|blob| blob.role != role);
     row.blobs.push(BlobRef {
         role,
@@ -145,6 +155,7 @@ impl AssetIndex for InMemoryAssetIndex {
                 blobs: Vec::new(),
                 first_seq: None,
                 sync_seq: None,
+                superseded: Vec::new(),
                 chain_head: None,
                 amk_version: 0,
                 // A newly reserved asset is under no moderation hold. A hold is placed by an
@@ -476,7 +487,12 @@ impl AssetIndex for InMemoryAssetIndex {
             Ok(lock(&self.inner)
                 .rows
                 .values()
-                .filter(|row| row.blobs.iter().any(|blob| &blob.address == address))
+                .filter(|row| {
+                    row.blobs.iter().any(|blob| &blob.address == address)
+                        // A manifest the chain has moved past is still referenced (`S-C52`).
+                        // Without this the collector reclaims the server's own evidence.
+                        || row.superseded.contains(address)
+                })
                 .count() as u64)
         })
     }
@@ -532,6 +548,10 @@ impl AssetIndex for InMemoryAssetIndex {
                 return Ok(None);
             };
             row.blobs.clear();
+            // The chain goes with the bytes it describes. A purge is the end of the retention
+            // window the user's own signed delete fixed, so there is nothing left to rebut with
+            // and nothing left to rebut about (`S-C52`).
+            row.superseded.clear();
             let row = row.clone();
             tracing::info!(%asset, "purged a tombstoned asset's blob references");
             Ok(Some(row))
