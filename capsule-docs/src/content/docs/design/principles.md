@@ -104,7 +104,7 @@ The repo-root `SLICES.md` (a plain repository file, not part of this site) is th
 
 ### Review Status
 
-Separately from per-surface implementation status, every design doc carries a `status` frontmatter field tracking **human design review**, validated by the site schema:
+Separately from per-surface implementation status, every page on this site carries a `status` frontmatter field tracking **human review**, required by the site schema and therefore by the docs build:
 
 - `draft` — the doc's current content has not passed a human re-review since the last substantive design change.
 - `stable` — a human reviewed the doc as written and signed off; substantive edits flip it back to `draft`.

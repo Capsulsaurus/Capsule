@@ -1,6 +1,7 @@
 ---
 title: Smart Albums
 description: Automatically generated albums
+status: draft
 ---
 
 Given standard and AI-generated metadata, there are custom, live-updated albums generated:

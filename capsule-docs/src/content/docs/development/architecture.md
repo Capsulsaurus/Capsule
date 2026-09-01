@@ -1,6 +1,7 @@
 ---
 title: Server Architecture
 description: The planned Kynos REST/OpenAPI server and generated client architecture
+status: draft
 ---
 
 Capsule exposes one REST/OpenAPI contract. GraphQL and gRPC were removed because they duplicated

@@ -1,6 +1,7 @@
 ---
 title: API Practices
 description: Contract and layering rules for the Kynos REST/OpenAPI server
+status: draft
 ---
 
 The previous server implementation is quarantined. New server code must follow this contract before
