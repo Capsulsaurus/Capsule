@@ -1,29 +1,25 @@
 ---
 title: Capsule
-description: Photo sharing for all
+description: An end-to-end-encrypted, self-hosted photo and video library
 status: draft
 template: splash
 hero:
-  tagline: A self-hosted photo and video library built for professionals and creatives with terabytes of visual assets.
+  tagline: An end-to-end-encrypted, self-hosted photo and video library for people with terabytes of visual assets. In active development — no release has been cut yet.
   image:
     file: ../../assets/houston.webp # TODO: Replace with a proper logo once available
   actions:
-    - text: Get Started
-      link: /guides/getting-started/
+    - text: Read the design
+      link: /design/
       icon: right-arrow
-    - text: Try Demo
-      link: https://demo.capsule.app
+    - text: Getting started
+      link: /guides/getting-started/
       icon: external
       variant: minimal
 ---
 
-{/* TODO: Finish this */}
-
 import { Card, CardGrid } from '@astrojs/starlight/components';
 import GradientBackground from '../../components/GradientBackground.astro';
 import GitHubStars from '../../components/GitHubStars.astro';
-import AppScreenshot from '../../components/AppScreenshot.astro';
-import TryNowSection from '../../components/TryNowSection.astro';
 import SimpleFooter from '../../components/SimpleFooter.astro';
 
 <GradientBackground />
@@ -32,38 +28,46 @@ import SimpleFooter from '../../components/SimpleFooter.astro';
   <GitHubStars />
 </div>
 
-<AppScreenshot />
+:::caution[Not yet usable]
+Capsule has not published a client binary or a deployable server, and there is no
+hosted instance. What exists today is the design — specified in detail — and the
+code implementing it. If you are evaluating Capsule, evaluate the
+[design docs](/design/); if you want to build it, start at
+[Local Development](/development/local-development/).
+:::
 
-## Features
+## What Capsule is
 
 <CardGrid stagger>
-	<Card title="Lightning Fast" icon="rocket">
-		Optimized for speed with intelligent caching and lazy loading of your photos.
+	<Card title="End-to-end encrypted" icon="approve-check">
+		The server stores opaque ciphertext and never holds a key. It cannot read an
+		album title, a caption, or a photo — which is also why search and organization
+		run on your device rather than on it.
 	</Card>
-	<Card title="Self-Hosted" icon="laptop">
-		Own your data and keep full control of your privacy with an easy self-hosting setup.
+	<Card title="Self-hosted" icon="laptop">
+		Your server, your disks. Federation between servers is designed so sharing does
+		not require anyone to centralize.
 	</Card>
-	<Card title="Advanced Organization" icon="open-book">
-		Powerful tagging, albums, and AI-powered object recognition to organize your media.
+	<Card title="Recoverable by construction" icon="seti:db">
+		Every asset is paired with a signed metadata sidecar, so a library is readable
+		without a database and reconstructible from partial corruption.
 	</Card>
-	<Card title="Multi-Device Sync" icon="setting">
-		Access your photos from any device with automatic synchronization.
+	<Card title="Built for originals" icon="seti:image">
+		RAW and video are first-class. Nothing is silently recompressed, and derivatives
+		are signed so a corrupted thumbnail cannot pass for a good one.
 	</Card>
 </CardGrid>
 
-## Why Capsule?
+## Why it is built this way
 
-Capsule is designed for photographers, videographers, and visual artists who need more than just cloud storage. With powerful organization tools, blazing-fast performance, and complete privacy control, Capsule is the photo management solution you've been searching for.
+Most photo services ask you to choose between the features that come from a server
+reading your library and the privacy that comes from it not being able to. Capsule
+takes the second and rebuilds the features on the client: tagging, search, and
+grouping run against a local index over data only your devices can decrypt.
 
-### Key benefits:
-
-- **No data limits**: Store unlimited photos and videos
-- **Full privacy**: Your data stays on your servers
-- **AI-powered**: Intelligent tagging and face recognition
-- **RAW support**: Full management of professional file formats
-- **Modern UI**: Beautiful, responsive interface
-- **Open source**: Community-driven development
-
-<TryNowSection />
+That choice has costs, and the design docs state them rather than hiding them — what
+a key-free server [can and cannot tell you](/design/notifications/), what happens
+[when a key is lost](/design/cryptography/failure-modes/), and what a faulty or
+hostile client [is prevented from doing](/design/threat-model/).
 
 <SimpleFooter />
