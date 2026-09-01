@@ -63,4 +63,27 @@ public actor ManagedLibrary {
         CapsuleLog.managedStore.info("managed library catalog opened")
         return catalog
     }
+
+    /// Remove an asset's bytes — its media file and paired sidecar — from the store.
+    ///
+    /// Addressed by *stem* rather than by an exact path because the catalog does
+    /// not record a file extension: ``ImportService`` derives one from the source
+    /// filename, so `{uuid}.*` inside the capture-date partition is the only thing
+    /// both sides agree on. That also sweeps the `.cbor` sidecar without naming it.
+    ///
+    /// A missing file is not an error. A purge that runs twice, or after a partial
+    /// import, must still converge on "the bytes are gone".
+    ///
+    /// - Parameter captureDate: the asset's capture instant, which is what decides
+    ///   its `media/{YYYY}/{YYYY-MM}` partition. Read it from the catalog row
+    ///   *before* deleting that row, or the directory is no longer derivable.
+    public func removeAssetFiles(uuid: String, captureDate: Date) async throws {
+        let directory = layout.mediaDirectory(forCaptureDate: captureDate)
+        guard await fileStore.fileExists(at: directory) else { return }
+        for entry in try await fileStore.contentsOfDirectory(at: directory)
+            where entry.deletingPathExtension().lastPathComponent == uuid {
+            try await fileStore.removeItem(at: entry)
+            CapsuleLog.managedStore.debug("purged \(entry.lastPathComponent, privacy: .public)")
+        }
+    }
 }
