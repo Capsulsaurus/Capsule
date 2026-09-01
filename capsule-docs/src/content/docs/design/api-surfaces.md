@@ -16,18 +16,18 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 
 ## Surface ↔ Transport Map
 
-| Surface | Transport | Planned module | Owner doc |
+| Surface | Transport | Module | Owner doc |
 | --- | --- | --- | --- |
 | Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
 | Resumable upload (`POST /v1/upload`, then `HEAD/PATCH /v1/upload/{id}`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
-| Lifecycle writes (`POST /v1/albums/{album_id}/ops`) | REST | `capsule-server::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Lifecycle writes (`POST /v1/albums/{album_id}/ops`) | REST | `capsule-server::routes::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
 | Blob fetch (`GET /v1/blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
 | Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
 | Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
 | Share serving (`/s/{opaque_id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
 | Guest drops (`POST /d/{opaque_id}`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
-| Storage verification (`POST /v1/storage/verify`) | REST | `capsule-server::blob` | [Storage Verification](/design/import/storage-verification/) |
-| Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-server::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
+| Storage verification (`POST /v1/storage/verify`) | REST | `capsule-server::verify` | [Storage Verification](/design/import/storage-verification/) |
+| Device enrollment (`/v1/auth/devices/enroll`) | REST | `capsule-server::enrollment` | [Device Enrollment](/design/device-enrollment/) |
 | Version/handshake | REST | `capsule-server` | [Threat Model — Validation](/design/threat-model/validation/) |
 | Library queries (timeline, albums, search) | none — client-side over `library.sqlite` | `capsule-core::library` + `db` | [Organization](/design/organization/#system--smart-albums-views) |
 

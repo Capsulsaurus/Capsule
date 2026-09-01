@@ -68,16 +68,19 @@ jobs:
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
             # Both sides this gate cross-references: the prose, and the things
-            # the prose names. The committed OpenAPI contract is in it because
-            # regenerating the server's surface can invalidate an endpoint a doc
-            # cites without that doc changing — which neither the `docs` nor the
-            # `rust` filter would catch.
+            # the prose names — the committed OpenAPI contract and the crate
+            # source trees. Renaming a module or regenerating the server surface
+            # can invalidate a citation without the citing doc changing, and
+            # neither the `docs` nor the `rust` filter would catch that. The
+            # job installs nothing, so a broad filter is cheap here.
             docs-truth:
               - 'capsule-docs/scripts/**'
               - 'capsule-docs/src/content/docs/**'
               - 'capsule-docs/astro.config.mjs'
               - 'capsule-docs/endpoint-census-allowlist.txt'
+              - 'capsule-docs/planned-modules.txt'
               - 'capsule-server/openapi.json'
+              - 'capsule-*/src/**'
               - '**/*.md'
               - '**/*.mdx'
               - 'LICENSE'

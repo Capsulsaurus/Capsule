@@ -46,7 +46,7 @@ The endpoint is deliberately singular — one closed enum, one gate, one transac
 - The accepted op appends the provenance record and mints the per-album `sync_seq` in **one transaction**, the same finalization rule the [sync feed](/design/import/download-sync/) relies on — an op is visible on the feed exactly when it is durable.
 - Rejections carry an [`error.*` code](/design/i18n/#server-error-codes) and write nothing; the rejection itself is logged.
 
-The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-server::upload::ops` (slice `S-C16`, reusing the upload server's envelope gate).
+The transport row lives in [API Surfaces](/design/api-surfaces/#surface--transport-map). Implementation is planned in `capsule-server::routes::ops` (slice `S-C16`, reusing the upload server's envelope gate).
 
 ## The Server Executes But Never Authorizes
 
