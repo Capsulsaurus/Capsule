@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ApiError, updateProfile } from '@/lib/api';
+import { ApiError, changePassword, updateProfile } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 export const Route = createLazyFileRoute('/settings')({
@@ -25,8 +25,7 @@ function Settings() {
     const { user } = useAuth();
     const queryClient = useQueryClient();
 
-    const [username, setUsername] = useState('');
-    const [email, setEmail] = useState('');
+    const [displayName, setDisplayName] = useState('');
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -36,8 +35,7 @@ function Settings() {
 
     useEffect(() => {
         if (user) {
-            setUsername(user.username);
-            setEmail(user.email);
+            setDisplayName(user.display_name ?? '');
         }
     }, [user]);
 
@@ -47,7 +45,12 @@ function Settings() {
         setSuccess(null);
         setLoading(true);
         try {
-            const updated = await updateProfile({ username, email });
+            // A blank field is a request to clear the name, which is an explicit `null` on the
+            // wire — an absent key would mean "leave it alone" and the form would be unable to
+            // remove a name it just showed.
+            const updated = await updateProfile({
+                display_name: displayName.trim() === '' ? null : displayName,
+            });
             queryClient.setQueryData(['auth', 'profile'], updated);
             setSuccess(intl.formatMessage({ id: 'settings.profile_updated' }));
         } catch (err) {
@@ -71,16 +74,16 @@ function Settings() {
             setError(intl.formatMessage({ id: 'settings.password_mismatch' }));
             return;
         }
-        if (newPassword.length < 8) {
+        if (newPassword.length < 12) {
             setError(intl.formatMessage({ id: 'common.password_min' }));
             return;
         }
         setLoading(true);
         try {
-            await updateProfile({
-                current_password: currentPassword,
-                new_password: newPassword,
-            });
+            // Its own operation, not a profile edit: it ends every *other* session of the
+            // account and re-opens this one, so it is a credential rotation rather than a field
+            // change (`S-C54`).
+            await changePassword(currentPassword, newPassword);
             setSuccess(intl.formatMessage({ id: 'settings.password_updated' }));
             setCurrentPassword('');
             setNewPassword('');
@@ -130,13 +133,13 @@ function Settings() {
                             <p className="text-sm text-green-600">{success}</p>
                         )}
                         <div className="grid gap-2">
-                            <Label htmlFor="username">
-                                <FormattedMessage id="common.username" />
+                            <Label htmlFor="display_name">
+                                <FormattedMessage id="common.display_name" />
                             </Label>
                             <Input
-                                id="username"
-                                value={username}
-                                onChange={(e) => setUsername(e.target.value)}
+                                id="display_name"
+                                value={displayName}
+                                onChange={(e) => setDisplayName(e.target.value)}
                                 disabled={loading}
                             />
                         </div>
@@ -144,12 +147,16 @@ function Settings() {
                             <Label htmlFor="email">
                                 <FormattedMessage id="common.email" />
                             </Label>
+                            {/* Read-only. Changing a login address needs proof the caller
+                                controls the new one, and this deployment has no way to obtain
+                                it — so the server has no field for it rather than a field it
+                                refuses (`S-C54`). */}
                             <Input
                                 id="email"
                                 type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                disabled={loading}
+                                value={user?.email ?? ''}
+                                readOnly
+                                disabled
                             />
                         </div>
                         <Button type="submit" disabled={loading}>

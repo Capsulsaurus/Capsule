@@ -274,6 +274,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C59 | The Salvo tree leaves the workspace | server | S-C54, S-C55, S-C56, S-C57, S-C58 | L | RETIRED | done | parity reached, `capsule-api/**` and `capsule_core::media` quarantined, `architecture-check` becomes a gate |
 | S-C60 | The browser still speaks a transport nothing serves | sdk/clients | S-C2, S-C59 | M | RETIRED | done | 410 lines of hand-rolled Protobuf replaced by one `GET`; the store's rules are untouched |
 | S-C61 | The drop passphrase is provisioned and never checked | server | S-C5, S-C60 | S | RETIRED | done | a gated link admitted anyone holding the opaque id; the web client was posting to paths that no longer exist |
+| S-C62 | The web auth client speaks a surface that is gone | sdk/clients | S-C54, S-C55, S-C56, S-C60 | M | RETIRED | done | passkey and password-reset screens removed, login reads `202`, profile is the four fields the server keeps |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3467,6 +3468,63 @@ out of space"; the order is inverted and
   `a_proof_presented_to_an_ungated_link_is_ignored`,
   `a_gated_link_that_does_not_exist_is_still_indistinguishable`, and the seven web cases in
   `drop-upload.test.ts`. **Tier:** Unit.
+
+### S-C62 — the web auth client speaks a surface that is gone
+
+- **Contract:** the served `capsule-server/openapi.json`, and
+  [Authentication](capsule-docs/src/content/docs/design/authentication.md).
+- **Gap:** `capsule-web/src/lib/api.ts` is hand-written — the browser holds no Rust, so
+  `capsule-sdk`'s generated client is unreachable from it — which makes it the one place the web
+  app can drift from the served contract in silence. After `S-C54`–`S-C56` it had drifted in five
+  places at once, and every one of them is a screen that 404s.
+
+| What the browser sent | What the server serves |
+| --- | --- |
+| `POST /v1/auth/passkey/{login,register}/{start,finish}`, `GET`/`DELETE /passkey/credentials` | **nothing** — passkeys are not in v1 (`S-C56`) |
+| `POST /v1/auth/password-reset{,-request}` | **nothing** — there is no reset on an E2EE account (`S-C54`) |
+| `POST /v1/auth/profile` with `{username, email, current_password, new_password}` | `PATCH /v1/auth/profile` with `{display_name}`, and `POST /v1/auth/password` |
+| a login answer discriminated by a body flag `mfa_required` | `202 Accepted` with a challenge, `200` with a pair (`S-C55`) |
+| `register` with `{username, name, email, password}` | an address and a password, and the body is strict (`S-C53`) |
+
+**The login discriminator moves from the body to the status, where it belongs.** The server never
+sent `mfa_required`; it distinguishes the two outcomes by status because that is what a status is
+for. `needsSecondFactor()` sets the flag client-side from the `202`, so there is one place the two
+can disagree instead of two.
+
+**Two screens are deleted rather than repaired**, and both deletions are the honest form of a
+decision already taken:
+
+- The passkey card in `settings/security` and the passkey button on `/login`. A screen for a
+  feature whose six operations could never authenticate is worse than no screen.
+- `/forgot-password` and `/reset-password`. On an end-to-end-encrypted account a reset returns an
+  account whose library is unreadable, so the link promised something the system cannot do.
+  Recovery is the escrow blob, and it needs a screen of its own rather than a link pointed at the
+  wrong mechanism — which is why this slice does not quietly re-point it.
+
+**The profile form loses two fields and gains a read-only one.** `username` is gone with the
+server column; `email` stays visible and **read-only**, because changing a login address needs
+proof the caller controls the new one and the deployment has no way to obtain it. The password
+change moves to its own submit path, since it is a credential rotation that ends every other
+session rather than a field edit.
+
+**`ApiError` learns the `code`.** Every rejection is now an RFC 9457 problem whose `detail` is the
+English half and whose `code` is the stable catalog key. The class carried only a status and a
+message, so a client could not act on the distinction the server went to the trouble of making.
+
+**Thirty catalog keys go with the screens.** `common.username`, the four `auth.passkey.*` /
+`security.passkeys.*` / `mfa.passkey.*` groups, the nine `auth.reset.*`, `auth.forgot_password_link`
+and `auth.or` — 390 entries across thirteen locales — had no call site left outside the generated
+catalogs. `i18n-guard` catches hardcoded literals, not orphaned keys, so nothing would have failed;
+what removing them buys is that a translator is not asked to translate a button that does not
+exist. The passkey keys go too rather than being held for the rebuild: that slice brings its own
+strings, and twenty keys describing a deleted screen are a liability in the meantime.
+
+- **Owed:** the browser sends no `cohort_hash` on `POST /v1/auth/login/verify-totp`, so a web
+  session appears in the devices view without a cohort. Honest rather than wrong — the browser has
+  no stable device identity to derive one from — and recorded here rather than left to be noticed.
+- **Done when:** ✅ `mise run check-web` green; no `passkey`, `password-reset` or `mfa_required`
+  reference left in `capsule-web/src`, and `lib/webauthn.ts` gone with its last consumer.
+  **Tier:** Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

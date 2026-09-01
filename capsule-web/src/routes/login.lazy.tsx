@@ -1,5 +1,5 @@
 import { createLazyFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { KeyRoundIcon, MountainIcon } from 'lucide-react';
+import { MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useState } from 'react';
 import { FormattedMessage, useIntl } from 'react-intl';
@@ -14,16 +14,9 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    ApiError,
-    login,
-    passkeyLoginFinish,
-    passkeyLoginStart,
-    verifyTotpLogin,
-} from '@/lib/api';
+import { ApiError, login, needsSecondFactor, verifyTotpLogin } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { APP_NAME } from '@/lib/constant';
-import { authenticateWithPasskey } from '@/lib/webauthn';
 
 export const Route = createLazyFileRoute('/login')({
     component: Login,
@@ -57,7 +50,9 @@ function Login() {
         setLoading(true);
         try {
             const result = await login({ email, password });
-            if ('mfa_required' in result && result.mfa_required) {
+            // `202 Accepted` — the password verified and the sign-in is not finished. No session
+            // exists yet, which is why there is nothing to store here.
+            if (needsSecondFactor(result)) {
                 setMfaToken(result.mfa_token);
                 setStep('totp');
             } else {
@@ -89,28 +84,6 @@ function Login() {
                     ? err.message
                     : intl.formatMessage({ id: 'auth.error.unexpected' }),
             );
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    async function handlePasskeyLogin() {
-        setError(null);
-        setLoading(true);
-        try {
-            const options = await passkeyLoginStart(email || undefined);
-            const credential = await authenticateWithPasskey(options);
-            const tokens = await passkeyLoginFinish(credential);
-            setTokens(tokens);
-            navigate({ to: '/photos' });
-        } catch (err) {
-            if (err instanceof ApiError) {
-                setError(err.message);
-            } else if (err instanceof Error && err.name === 'NotAllowedError') {
-                setError(intl.formatMessage({ id: 'auth.passkey.cancelled' }));
-            } else {
-                setError(intl.formatMessage({ id: 'auth.passkey.failed' }));
-            }
         } finally {
             setLoading(false);
         }
@@ -186,38 +159,17 @@ function Login() {
                                     <FormattedMessage id="common.sign_in" />
                                 )}
                             </Button>
-                            <div className="relative w-full">
-                                <div className="absolute inset-0 flex items-center">
-                                    <span className="w-full border-t" />
-                                </div>
-                                <div className="relative flex justify-center text-xs uppercase">
-                                    <span className="bg-card px-2 text-muted-foreground">
-                                        <FormattedMessage id="auth.or" />
-                                    </span>
-                                </div>
-                            </div>
-                            <Button
-                                variant="outline"
-                                className="w-full"
-                                type="button"
-                                disabled={loading}
-                                onClick={handlePasskeyLogin}
-                            >
-                                <KeyRoundIcon className="mr-2 h-4 w-4" />
-                                <FormattedMessage id="auth.sign_in_passkey" />
-                            </Button>
+                            {/* No passkey button: passkeys are not in v1 (`S-C56`), and the
+                                six operations behind this one could never authenticate. No
+                                "forgot password" link either: on an end-to-end-encrypted
+                                account there is no reset, because the server cannot re-wrap a
+                                master key it has never seen (`S-C54`). Recovery is the escrow
+                                blob, and it needs a screen of its own rather than a link that
+                                promises the wrong thing. */}
                             <p className="text-xs text-muted-foreground text-center">
                                 <FormattedMessage id="auth.no_account" />{' '}
                                 <Link to="/register" className="underline">
                                     <FormattedMessage id="auth.sign_up" />
-                                </Link>
-                            </p>
-                            <p className="text-xs text-muted-foreground text-center">
-                                <Link
-                                    to="/forgot-password"
-                                    className="underline"
-                                >
-                                    <FormattedMessage id="auth.forgot_password_link" />
                                 </Link>
                             </p>
                         </CardFooter>

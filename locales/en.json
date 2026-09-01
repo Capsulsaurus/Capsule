@@ -1019,9 +1019,9 @@
         "message": "Password",
         "context": "Form label for the password field on login."
     },
-    "common.username": {
-        "message": "Username",
-        "context": "Form label for the username field in profile settings."
+    "common.display_name": {
+        "message": "Display name",
+        "context": "Form label for the optional display name in profile settings (slice S-C54). It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
     },
     "common.sign_in": {
         "message": "Sign in",
@@ -1295,14 +1295,6 @@
         "message": "An unexpected error occurred.",
         "context": "Login fallback error for non-API failures."
     },
-    "auth.passkey.cancelled": {
-        "message": "Passkey authentication was cancelled.",
-        "context": "Login error when the user cancels the passkey prompt."
-    },
-    "auth.passkey.failed": {
-        "message": "Passkey authentication failed.",
-        "context": "Login error when passkey authentication fails."
-    },
     "auth.login.title": {
         "message": "Login",
         "context": "Login card title."
@@ -1315,14 +1307,6 @@
         "message": "Signing in…",
         "context": "Login submit button label while signing in."
     },
-    "auth.or": {
-        "message": "or",
-        "context": "Divider text between password login and passkey login."
-    },
-    "auth.sign_in_passkey": {
-        "message": "Sign in with Passkey",
-        "context": "Login button to authenticate with a passkey."
-    },
     "auth.no_account": {
         "message": "Don't have an account?",
         "context": "Login prompt preceding the sign-up link."
@@ -1330,10 +1314,6 @@
     "auth.sign_up": {
         "message": "Sign up",
         "context": "Login link to the registration page."
-    },
-    "auth.forgot_password_link": {
-        "message": "Forgot password?",
-        "context": "Login link to the forgot-password page."
     },
     "auth.totp.title": {
         "message": "Two-Factor Auth",
@@ -1383,34 +1363,6 @@
         "message": "If an account with that email exists, you'll receive a reset link shortly.",
         "context": "Forgot-password confirmation message."
     },
-    "auth.reset.mismatch": {
-        "message": "Passwords do not match.",
-        "context": "Reset-password validation error."
-    },
-    "auth.reset.invalid_title": {
-        "message": "Invalid Link",
-        "context": "Reset-password card title when the token is missing/invalid."
-    },
-    "auth.reset.invalid_body": {
-        "message": "This password reset link is invalid or has expired.",
-        "context": "Reset-password invalid-link description."
-    },
-    "auth.reset.request_new": {
-        "message": "Request a new reset link",
-        "context": "Reset-password link to request a new reset link."
-    },
-    "auth.reset.title": {
-        "message": "Reset Password",
-        "context": "Reset-password card title."
-    },
-    "auth.reset.success_desc": {
-        "message": "Your password has been reset.",
-        "context": "Reset-password description after success."
-    },
-    "auth.reset.description": {
-        "message": "Enter your new password.",
-        "context": "Reset-password card description."
-    },
     "auth.new_password": {
         "message": "New Password",
         "context": "Label for the new-password input (reset-password and settings)."
@@ -1418,14 +1370,6 @@
     "auth.confirm_password": {
         "message": "Confirm Password",
         "context": "Reset-password confirm-password input label."
-    },
-    "auth.reset.resetting": {
-        "message": "Resetting…",
-        "context": "Reset-password submit button while resetting."
-    },
-    "auth.reset.submit": {
-        "message": "Reset password",
-        "context": "Reset-password submit button label."
     },
     "settings.profile_updated": {
         "message": "Profile updated.",
@@ -1498,14 +1442,6 @@
     "security.last_active": {
         "message": "Last active: {date}",
         "context": "Device last-active timestamp line."
-    },
-    "security.delete_passkey_confirm": {
-        "message": "Delete passkey \"{name}\"?",
-        "context": "Confirm dialog before deleting a passkey."
-    },
-    "security.delete_passkey_failed": {
-        "message": "Failed to delete passkey.",
-        "context": "Error when deleting a passkey fails."
     },
     "security.added": {
         "message": "Added: {date}",
@@ -1582,58 +1518,6 @@
     "security.totp.disable_button": {
         "message": "Disable TOTP",
         "context": "TOTP disable button label."
-    },
-    "security.passkeys.title": {
-        "message": "Passkeys",
-        "context": "Security card title for passkeys."
-    },
-    "security.passkeys.description": {
-        "message": "Sign in using your device's biometrics or PIN.",
-        "context": "Passkeys card description."
-    },
-    "security.passkeys.loading": {
-        "message": "Loading passkeys…",
-        "context": "Loading state for the passkeys list."
-    },
-    "security.passkeys.empty": {
-        "message": "No passkeys registered.",
-        "context": "Empty state for the passkeys list."
-    },
-    "security.passkeys.add_button": {
-        "message": "Add passkey",
-        "context": "Button to start registering a new passkey."
-    },
-    "mfa.passkey.reg_cancelled": {
-        "message": "Passkey registration was cancelled.",
-        "context": "Error when the user cancels passkey registration."
-    },
-    "mfa.passkey.already_registered": {
-        "message": "A passkey for this device is already registered.",
-        "context": "Error when a passkey already exists for the device."
-    },
-    "mfa.passkey.reg_failed": {
-        "message": "Passkey registration failed.",
-        "context": "Generic passkey registration failure."
-    },
-    "mfa.passkey.description": {
-        "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
-        "context": "Passkey registration form description."
-    },
-    "mfa.passkey.name_label": {
-        "message": "Passkey Name (optional)",
-        "context": "Passkey name input label."
-    },
-    "mfa.passkey.name_placeholder": {
-        "message": "My MacBook",
-        "context": "Example passkey name hint text."
-    },
-    "mfa.passkey.registering": {
-        "message": "Registering…",
-        "context": "Passkey create button while registering."
-    },
-    "mfa.passkey.create": {
-        "message": "Create Passkey",
-        "context": "Passkey registration submit button label."
     },
     "mfa.totp.start_failed": {
         "message": "Failed to start enrollment.",

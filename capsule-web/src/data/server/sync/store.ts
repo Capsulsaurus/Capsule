@@ -93,7 +93,6 @@ export interface AlbumSummary {
 interface PersistedBlobRef {
     hash: string;
     role: string;
-    format: string;
     size: string;
 }
 
@@ -294,7 +293,6 @@ function persistRef(ref: StoredBlobRef): PersistedBlobRef {
     return {
         hash: ref.hash,
         role: ref.role,
-        format: ref.format,
         size: ref.size.toString(),
     };
 }
@@ -303,7 +301,6 @@ function restoreRef(ref: PersistedBlobRef): StoredBlobRef {
     return {
         hash: ref.hash,
         role: ref.role,
-        format: ref.format,
         size: BigInt(ref.size),
     };
 }

@@ -657,9 +657,9 @@
         "message": "Password",
         "context": "Machine-translated seed pending human review."
     },
-    "common.username": {
-        "message": "Username",
-        "context": "Machine-translated seed pending human review."
+    "common.display_name": {
+        "message": "Display name",
+        "context": "Form label for the optional display name in profile settings (slice S-C54). It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
     },
     "common.sign_in": {
         "message": "Sign in",
@@ -933,14 +933,6 @@
         "message": "An unexpected error occurred.",
         "context": "Machine-translated seed pending human review."
     },
-    "auth.passkey.cancelled": {
-        "message": "Passkey authentication was cancelled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.passkey.failed": {
-        "message": "Passkey authentication failed.",
-        "context": "Machine-translated seed pending human review."
-    },
     "auth.login.title": {
         "message": "Login",
         "context": "Machine-translated seed pending human review."
@@ -953,24 +945,12 @@
         "message": "Signing in…",
         "context": "Machine-translated seed pending human review."
     },
-    "auth.or": {
-        "message": "or",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.sign_in_passkey": {
-        "message": "Sign in with Passkey",
-        "context": "Machine-translated seed pending human review."
-    },
     "auth.no_account": {
         "message": "Don't have an account?",
         "context": "Machine-translated seed pending human review."
     },
     "auth.sign_up": {
         "message": "Sign up",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.forgot_password_link": {
-        "message": "Forgot password?",
         "context": "Machine-translated seed pending human review."
     },
     "auth.totp.title": {
@@ -1021,48 +1001,12 @@
         "message": "If an account with that email exists, you'll receive a reset link shortly.",
         "context": "Machine-translated seed pending human review."
     },
-    "auth.reset.mismatch": {
-        "message": "Passwords do not match.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.invalid_title": {
-        "message": "Invalid Link",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.invalid_body": {
-        "message": "This password reset link is invalid or has expired.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.request_new": {
-        "message": "Request a new reset link",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.title": {
-        "message": "Reset Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.success_desc": {
-        "message": "Your password has been reset.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.description": {
-        "message": "Enter your new password.",
-        "context": "Machine-translated seed pending human review."
-    },
     "auth.new_password": {
         "message": "New Password",
         "context": "Machine-translated seed pending human review."
     },
     "auth.confirm_password": {
         "message": "Confirm Password",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.resetting": {
-        "message": "Resetting…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "auth.reset.submit": {
-        "message": "Reset password",
         "context": "Machine-translated seed pending human review."
     },
     "settings.profile_updated": {
@@ -1135,14 +1079,6 @@
     },
     "security.last_active": {
         "message": "Last active: {date}",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.delete_passkey_confirm": {
-        "message": "Delete passkey \"{name}\"?",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.delete_passkey_failed": {
-        "message": "Failed to delete passkey.",
         "context": "Machine-translated seed pending human review."
     },
     "security.added": {
@@ -1219,58 +1155,6 @@
     },
     "security.totp.disable_button": {
         "message": "Disable TOTP",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.title": {
-        "message": "Passkeys",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.description": {
-        "message": "Sign in using your device's biometrics or PIN.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.loading": {
-        "message": "Loading passkeys…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.empty": {
-        "message": "No passkeys registered.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "security.passkeys.add_button": {
-        "message": "Add passkey",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.reg_cancelled": {
-        "message": "Passkey registration was cancelled.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.already_registered": {
-        "message": "A passkey for this device is already registered.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.reg_failed": {
-        "message": "Passkey registration failed.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.description": {
-        "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.name_label": {
-        "message": "Passkey Name (optional)",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.name_placeholder": {
-        "message": "My MacBook",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.registering": {
-        "message": "Registering…",
-        "context": "Machine-translated seed pending human review."
-    },
-    "mfa.passkey.create": {
-        "message": "Create Passkey",
         "context": "Machine-translated seed pending human review."
     },
     "mfa.totp.start_failed": {

@@ -1,9 +1,8 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import type React from 'react';
 import { useState } from 'react';
 import { FormattedMessage, useIntl } from 'react-intl';
-import { PasskeyRegister } from '@/components/mfa/passkey-register';
 import { TotpEnroll } from '@/components/mfa/totp-enroll';
 import { Button } from '@/components/ui/button';
 import {
@@ -15,22 +14,15 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    ApiError,
-    type Device,
-    deletePasskey,
-    getDevices,
-    listPasskeys,
-    type PasskeyCredential,
-    totpDisable,
-} from '@/lib/api';
+import { ApiError, type Device, getDevices, totpDisable } from '@/lib/api';
 
 export const Route = createLazyFileRoute('/settings/security')({
     component: SecuritySettings,
 });
 
-function formatDate(unixSecs: number) {
-    return new Date(unixSecs * 1000).toLocaleDateString(undefined, {
+/** Render an RFC 3339 instant, which is what every timestamp on the auth surface is. */
+function formatDate(rfc3339: string) {
+    return new Date(rfc3339).toLocaleDateString(undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -47,7 +39,7 @@ function DeviceCard({ device }: { device: Device }) {
                 <div className="font-medium">
                     {device.user_agent ??
                         intl.formatMessage({ id: 'security.unknown_device' })}
-                    {device.is_current && (
+                    {device.current && (
                         <span className="ml-2 text-xs text-green-600 font-normal">
                             <FormattedMessage id="security.this_device" />
                         </span>
@@ -69,91 +61,15 @@ function DeviceCard({ device }: { device: Device }) {
     );
 }
 
-function PasskeyRow({
-    passkey,
-    onDeleted,
-}: {
-    passkey: PasskeyCredential;
-    onDeleted: () => void;
-}) {
-    const intl = useIntl();
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    async function handleDelete() {
-        if (
-            !confirm(
-                intl.formatMessage(
-                    { id: 'security.delete_passkey_confirm' },
-                    { name: passkey.name },
-                ),
-            )
-        )
-            return;
-        setLoading(true);
-        setError(null);
-        try {
-            await deletePasskey(passkey.id);
-            onDeleted();
-        } catch (err) {
-            setError(
-                err instanceof ApiError
-                    ? err.message
-                    : intl.formatMessage({
-                          id: 'security.delete_passkey_failed',
-                      }),
-            );
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    return (
-        <div className="flex items-center justify-between p-3 rounded-md border">
-            <div className="space-y-1 text-sm">
-                <div className="font-medium">{passkey.name}</div>
-                <div className="text-muted-foreground text-xs">
-                    <FormattedMessage
-                        id="security.added"
-                        values={{ date: formatDate(passkey.created_at) }}
-                    />
-                </div>
-                {error && (
-                    <div className="text-xs text-destructive">{error}</div>
-                )}
-            </div>
-            <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleDelete}
-                disabled={loading}
-            >
-                {loading ? (
-                    <FormattedMessage id="security.deleting" />
-                ) : (
-                    <FormattedMessage id="common.remove" />
-                )}
-            </Button>
-        </div>
-    );
-}
-
 function SecuritySettings() {
     const intl = useIntl();
-    const queryClient = useQueryClient();
 
     const { data: devices, isLoading: devicesLoading } = useQuery({
         queryKey: ['auth', 'devices'],
         queryFn: getDevices,
     });
 
-    const { data: passkeys, isLoading: passkeysLoading } = useQuery({
-        queryKey: ['auth', 'passkeys'],
-        queryFn: listPasskeys,
-    });
-
     const [showTotpEnroll, setShowTotpEnroll] = useState(false);
-    const [showPasskeyRegister, setShowPasskeyRegister] = useState(false);
     const [totpDisableCode, setTotpDisableCode] = useState('');
     const [totpDisableError, setTotpDisableError] = useState<string | null>(
         null,
@@ -215,14 +131,15 @@ function SecuritySettings() {
                             <FormattedMessage id="security.sessions.loading" />
                         </p>
                     )}
-                    {devices?.map((device) => (
-                        <DeviceCard key={device.id} device={device} />
+                    {devices?.sessions.map((device) => (
+                        <DeviceCard key={device.session_id} device={device} />
                     ))}
-                    {!devicesLoading && (!devices || devices.length === 0) && (
-                        <p className="text-sm text-muted-foreground">
-                            <FormattedMessage id="security.sessions.empty" />
-                        </p>
-                    )}
+                    {!devicesLoading &&
+                        (!devices || devices.sessions.length === 0) && (
+                            <p className="text-sm text-muted-foreground">
+                                <FormattedMessage id="security.sessions.empty" />
+                            </p>
+                        )}
                 </CardContent>
             </Card>
 
@@ -320,59 +237,11 @@ function SecuritySettings() {
                 </CardContent>
             </Card>
 
-            {/* Passkeys */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>
-                        <FormattedMessage id="security.passkeys.title" />
-                    </CardTitle>
-                    <CardDescription>
-                        <FormattedMessage id="security.passkeys.description" />
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    {passkeysLoading && (
-                        <p className="text-sm text-muted-foreground">
-                            <FormattedMessage id="security.passkeys.loading" />
-                        </p>
-                    )}
-                    {passkeys?.map((passkey) => (
-                        <PasskeyRow
-                            key={passkey.id}
-                            passkey={passkey}
-                            onDeleted={() =>
-                                queryClient.invalidateQueries({
-                                    queryKey: ['auth', 'passkeys'],
-                                })
-                            }
-                        />
-                    ))}
-                    {!passkeysLoading &&
-                        (!passkeys || passkeys.length === 0) && (
-                            <p className="text-sm text-muted-foreground">
-                                <FormattedMessage id="security.passkeys.empty" />
-                            </p>
-                        )}
-                    {showPasskeyRegister ? (
-                        <PasskeyRegister
-                            onSuccess={() => {
-                                setShowPasskeyRegister(false);
-                                queryClient.invalidateQueries({
-                                    queryKey: ['auth', 'passkeys'],
-                                });
-                            }}
-                            onCancel={() => setShowPasskeyRegister(false)}
-                        />
-                    ) : (
-                        <Button
-                            variant="outline"
-                            onClick={() => setShowPasskeyRegister(true)}
-                        >
-                            <FormattedMessage id="security.passkeys.add_button" />
-                        </Button>
-                    )}
-                </CardContent>
-            </Card>
+            {/* No passkeys card. Passkeys are not in v1 (`S-C56`): the six operations
+                behind this screen were in no OpenAPI document and could never authenticate —
+                the ceremony was started with an empty allow-list, so `webauthn-rs` answered
+                `CredentialNotFound` to every assertion. A screen for a feature that cannot
+                work is worse than no screen. */}
         </div>
     );
 }

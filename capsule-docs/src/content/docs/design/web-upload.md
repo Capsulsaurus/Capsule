@@ -40,7 +40,7 @@ Out of scope for v1 (deliberate non-goals):
 
 These are **normative** — the security-relevant decisions are committed; only UX presentation remains open.
 
-- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
+- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}` — the *page* a guest opens, which is `capsule-web`'s route; the API endpoints it posts to are `/d/{opaque-id}` (see below). `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
 - **Drops never enter the library.** A drop is written only to the provisioning user's **inbox**; it is never an album asset, never appears in any album member's [sync feed](/design/import/download-sync/#discovering-what-changed), and is served only to the provisioning user's own authenticated devices. A drop carries **no `AssetManifest`** — no `device_sig`, no `write_sig`, no `album_id`, no provenance — and therefore never flows through [`verify_asset`](/design/cryptography/keys/#write-authorization). Library state is reachable only through adoption by a trusted client.
 - **Per-link caps are enforced server-side at the no-key layer.** Expiry, cumulative-byte cap, file-count cap, and per-file size cap are checked on every drop-session creation; an over-cap or expired/revoked link is refused. These bound a leaked link to *wasted quota and inbox space*, never to library corruption.
 - **Quota is charged to the provisioning user at drop-session creation.** A drop debits the link owner's quota at session creation — the single hard [enforcement point](/design/quota/#enforcement-points) — using the [`upload_user_id = owner_id` attribution](/design/quota/#accounting-model). A link cannot be used to push the owner past their hard limit.
@@ -130,12 +130,15 @@ trait DropAdopter {
 fn seal_drop(plaintext: impl Read, drop_pubkey: KemPublicKey, crypto_suite_id: u16) -> Result<SealedDrop, Error>;
 
 // in capsule-server::drop
-//   POST   /u/{opaque-id}/drop            → open a drop session (link-capability auth; quota + caps checked here)
-//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (upload-protocol chunk rules verbatim:
+//   POST   /d/{opaque-id}                 → open a drop session (link-capability auth; passphrase
+//                                            proof, quota and caps all checked here)
+//   PATCH  /d/{opaque-id}/{upload-id}     → append a chunk (upload-protocol chunk rules verbatim:
 //                                            required X-Capsule-Checksum, application/octet-stream, alignment)
-//   GET    /drops                         → provisioning user's inbox (session-token auth)
-//   POST   /drops/{id}/adopt              → create-manifest write referencing the inbox blob; atomic promotion
-//   DELETE /drops/{id}                    → discard a pending drop
+//   POST   /v1/drops/links                → provision an upload link (session-token auth)
+//   DELETE /v1/drops/links/{opaque-id}    → revoke one
+//   GET    /v1/drops                      → provisioning user's inbox (session-token auth)
+//   POST   /v1/drops/{id}/adopt           → create-manifest write referencing the inbox blob; atomic promotion
+//   DELETE /v1/drops/{id}                 → discard a pending drop
 ```
 
 Concrete error variants are an implementation detail; the opaque-id entropy, fragment-delivered Drop Key, per-link caps, quota-at-creation, rate-limit, and no-library-injection policies are fixed by the [Security Contract](#security-contract).
