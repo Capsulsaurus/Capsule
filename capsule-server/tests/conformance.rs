@@ -134,6 +134,10 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/auth/profile"),
         ("PATCH", "/v1/auth/profile"),
         ("POST", "/v1/auth/password"),
+        ("POST", "/v1/auth/totp/enroll"),
+        ("POST", "/v1/auth/totp/verify-enrollment"),
+        ("POST", "/v1/auth/totp/disable"),
+        ("POST", "/v1/auth/login/verify-totp"),
         ("GET", "/v1/auth/devices"),
         ("DELETE", "/v1/auth/devices/anything"),
         ("POST", "/v1/auth/reauthenticate"),
@@ -2279,6 +2283,9 @@ async fn every_declared_response_is_exercised() {
     // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
     profile_block(client, &fixture).await;
 
+    // ── The second factor (`S-C55`) ────────────────────────────────────────────────────────
+    totp_block(client, &fixture).await;
+
     // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The
     // directory block above anchored the account to `account_ik`, which is the key the proof
@@ -2485,6 +2492,283 @@ fn the_document_declares_openapi_32() {
         version.starts_with("3.2"),
         "expected an OpenAPI 3.2 document, got {version:?} — check the `openapi32` feature"
     );
+}
+
+/// The second factor's whole walk (`S-C55`).
+///
+/// On an account of its own, for the reason [`profile_block`] uses one: switching a second
+/// factor on for the fixture's shared account would make every later `POST /v1/auth/login` in the
+/// walk answer `202`.
+async fn totp_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+    const OWN_EMAIL: &str = "totp-walk@example.test";
+    const OWN_PASSWORD: &str = "correct horse battery staple";
+
+    let tokens: serde_json::Value = client
+        .post("/v1/auth/register")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let bearer = format!(
+        "Bearer {}",
+        tokens["access_token"].as_str().expect("an access token")
+    );
+    let user = capsule_server::store::UserId::new(
+        client
+            .get("/v1/auth/profile")
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(StatusCode::OK)
+            .json::<serde_json::Value>()["user_id"]
+            .as_str()
+            .expect("an account id"),
+    );
+
+    // 401 and 403 on the credential itself, on all three authenticated operations.
+    for path in [
+        "/v1/auth/totp/enroll",
+        "/v1/auth/totp/verify-enrollment",
+        "/v1/auth/totp/disable",
+    ] {
+        client
+            .post(path)
+            .json(&json!({ "totp_code": "000000" }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .post(path)
+            .header(
+                "authorization",
+                &format!(
+                    "Bearer {}",
+                    tokens["refresh_token"].as_str().expect("a refresh token")
+                ),
+            )
+            .json(&json!({ "totp_code": "000000" }))
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+
+    // 409 before anything is enrolled: nothing pending to confirm, nothing active to remove.
+    client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+    client
+        .post("/v1/auth/totp/disable")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // 400, 415 and 422 are all the `Json` extractor's, and they are three different faults: a
+    // body that is not JSON at all, a body under the wrong media type, and a body that parses
+    // and does not fit the schema.
+    for path in [
+        "/v1/auth/totp/verify-enrollment",
+        "/v1/auth/totp/disable",
+        "/v1/auth/login/verify-totp",
+    ] {
+        client
+            .post(path)
+            .header("authorization", &bearer)
+            .body("application/json", "this is not json")
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        client
+            .post(path)
+            .header("authorization", &bearer)
+            .body("text/plain", "{}")
+            .send()
+            .await
+            .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        client
+            .post(path)
+            .header("authorization", &bearer)
+            .json(&json!({ "totp_code": 42 }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    // 200: an enrollment starts. Then 403 for a wrong confirming code, and 204 for the right one.
+    client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .json(&json!({ "totp_code": support::totp_code(fixture, &user) }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    // 409: enrolling over a confirmed factor.
+    client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
+
+    // 202: the sign-in that is now half-finished.
+    let challenge: serde_json::Value = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED)
+        .json();
+    let mfa_token = challenge["mfa_token"].as_str().expect("a challenge token");
+
+    // The completing request's own refusals: an unreadable challenge, a wrong code, and the
+    // budget. 415 and 422 first, from the extractor.
+    client
+        .post("/v1/auth/login/verify-totp")
+        .header("accept", "application/json")
+        .json(&json!({ "mfa_token": "not a token", "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+
+    // Five wrong codes exhaust this challenge's budget; the sixth is the 429.
+    for _ in 0..5 {
+        client
+            .post("/v1/auth/login/verify-totp")
+            .header("accept", "application/json")
+            .json(&json!({ "mfa_token": mfa_token, "totp_code": "000000" }))
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+    }
+    client
+        .post("/v1/auth/login/verify-totp")
+        .header("accept", "application/json")
+        .json(&json!({ "mfa_token": mfa_token, "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::TOO_MANY_REQUESTS);
+
+    // A fresh challenge, a step later so the confirming code is spent and gone, and the 200.
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        i64::try_from(capsule_server::auth::totp::STEP_SECONDS).expect("in range"),
+    ));
+    let challenge: serde_json::Value = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED)
+        .json();
+    client
+        .post("/v1/auth/login/verify-totp")
+        .header("accept", "application/json")
+        .json(&json!({
+            "mfa_token": challenge["mfa_token"],
+            "totp_code": support::totp_code(fixture, &user),
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 500 on all four, from the one collaborator all four reach.
+    fixture.totp.set_unavailable(true);
+    client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    for path in ["/v1/auth/totp/verify-enrollment", "/v1/auth/totp/disable"] {
+        client
+            .post(path)
+            .header("authorization", &bearer)
+            .header("accept", "application/json")
+            .json(&json!({ "totp_code": "000000" }))
+            .send()
+            .await
+            .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    }
+    let outage_challenge: serde_json::Value = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+        .json();
+    assert_eq!(outage_challenge["code"], "error.auth.unavailable");
+    fixture.totp.set_unavailable(false);
+
+    // A challenge minted while the store worked, redeemed while it does not: the 500 on the
+    // completing request.
+    let live: serde_json::Value = client
+        .post("/v1/auth/login")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED)
+        .json();
+    fixture.totp.set_unavailable(true);
+    client
+        .post("/v1/auth/login/verify-totp")
+        .header("accept", "application/json")
+        .json(&json!({ "mfa_token": live["mfa_token"], "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.totp.set_unavailable(false);
+
+    // 403 on a disable with the wrong code, then 204 with the right one — which leaves the walk's
+    // shared fixture with no second factor switched on anywhere.
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        i64::try_from(capsule_server::auth::totp::STEP_SECONDS).expect("in range"),
+    ));
+    client
+        .post("/v1/auth/totp/disable")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "totp_code": "000000" }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    client
+        .post("/v1/auth/totp/disable")
+        .header("authorization", &bearer)
+        .json(&json!({ "totp_code": support::totp_code(fixture, &user) }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }
 
 /// The profile surface's whole walk (`S-C54`).

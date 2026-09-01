@@ -74,6 +74,14 @@ pub enum TokenKind {
     Access,
     /// Presented in the body of a refresh, and nowhere else.
     Refresh,
+    /// Carries a **half-finished** sign-in: the password verified and a second factor has not
+    /// (`S-C55`).
+    ///
+    /// It authenticates nothing. Its `sid` names a [`ChallengeId`] rather than a session,
+    /// because no session exists until the second factor lands — which is exactly why it is a
+    /// third kind rather than a short-lived access token: an access token that only *meant*
+    /// half-authenticated would be honoured by every operation that takes one.
+    SecondFactor,
 }
 
 impl TokenKind {
@@ -82,6 +90,7 @@ impl TokenKind {
         match self {
             Self::Access => "access",
             Self::Refresh => "refresh",
+            Self::SecondFactor => "second_factor",
         }
     }
 }
@@ -177,6 +186,73 @@ pub enum TokenError {
         /// The signer's own description of the failure.
         detail: String,
     },
+}
+
+/// The identifier a second-factor challenge travels under (`S-C55`).
+///
+/// A fresh UUIDv7 per sign-in that reaches the second factor, carried in the `sid` slot of a
+/// [`TokenKind::SecondFactor`] token. It is what the attempt limiter keys on, which is why it is
+/// per *ceremony* rather than per account: keying on the account would let a stream of
+/// first-factor sign-ins from an attacker exhaust the budget of the person whose password they do
+/// not have.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ChallengeId(String);
+
+impl ChallengeId {
+    /// Wrap an existing identifier.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// A fresh one.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(uuid::Uuid::now_v7().to_string())
+    }
+
+    /// The identifier as text.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for ChallengeId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// A freshly minted second-factor challenge.
+///
+/// `Debug` is hand-written for the reason [`IssuedTokens`]'s is: this is a credential, and half
+/// a sign-in is still half of one.
+#[derive(Clone, PartialEq, Eq)]
+pub struct IssuedChallenge {
+    /// The token the client presents alongside its code.
+    pub token: String,
+    /// The challenge this token names, for the attempt limiter.
+    pub challenge: ChallengeId,
+    /// When it stops being honoured.
+    pub expires_at: Timestamp,
+}
+
+impl fmt::Debug for IssuedChallenge {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IssuedChallenge")
+            .field("token", &"<redacted>")
+            .field("challenge", &self.challenge)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+/// What a verified second-factor token names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedChallenge {
+    /// The account whose password already verified.
+    pub user: UserId,
+    /// The ceremony, for the attempt limiter.
+    pub challenge: ChallengeId,
 }
 
 /// Mints and reads Capsule's session tokens.
@@ -332,6 +408,74 @@ impl SessionTokens {
         })
     }
 
+    /// Mint a token carrying a half-finished sign-in (`S-C55`).
+    ///
+    /// It is deliberately *not* a token pair. There is nothing to refresh — the ceremony either
+    /// completes inside [`crate::auth::totp::CHALLENGE_TTL`] or is started again from the
+    /// password — and issuing a refresh token here would hand out a long-lived credential for an
+    /// authentication that has not happened.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError::Unissuable`] if the claims cannot be signed.
+    pub fn issue_second_factor(
+        &self,
+        user: &UserId,
+        challenge: &ChallengeId,
+        ttl: SignedDuration,
+    ) -> Result<IssuedChallenge, TokenError> {
+        let now = self.clock.now();
+        let expires_at = crate::store::deadline(now, ttl);
+        let token = self.sign_claims(
+            user.as_str(),
+            challenge.as_str(),
+            TokenKind::SecondFactor,
+            now,
+            expires_at,
+        )?;
+
+        tracing::debug!(
+            user_id = %user,
+            challenge_id = %challenge,
+            %expires_at,
+            "issued a second-factor challenge"
+        );
+
+        Ok(IssuedChallenge {
+            token,
+            challenge: challenge.clone(),
+            expires_at,
+        })
+    }
+
+    /// Read a second-factor challenge token.
+    ///
+    /// A separate method rather than a `TokenKind` argument to [`Self::verify`], because what
+    /// comes back is a *challenge* and not a session — and a caller that got a
+    /// [`VerifiedToken`] here would hold a `SessionId` naming nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TokenError`] if the token does not verify, has expired, or is another kind.
+    pub fn verify_second_factor(&self, presented: &str) -> Result<VerifiedChallenge, TokenError> {
+        let claims = self.read(presented)?;
+        if claims.kind != TokenKind::SecondFactor {
+            tracing::warn!(
+                expected = %TokenKind::SecondFactor,
+                found = %claims.kind,
+                "a token of the wrong kind was presented to the second factor"
+            );
+            return Err(TokenError::WrongKind {
+                expected: TokenKind::SecondFactor,
+                found: claims.kind,
+            });
+        }
+        Ok(VerifiedChallenge {
+            user: UserId::new(claims.sub),
+            challenge: ChallengeId::new(claims.sid),
+        })
+    }
+
     /// Read `presented`, requiring it to be a token of kind `expected`.
     ///
     /// # Errors
@@ -342,20 +486,7 @@ impl SessionTokens {
         presented: &str,
         expected: TokenKind,
     ) -> Result<VerifiedToken, TokenError> {
-        let claims = jsonwebtoken::decode::<Claims>(presented, &self.verifying, &self.validation)
-            .map_err(|error| {
-                // The error *kind* is safe to log — it names which check failed, never any part
-                // of the credential — and it is the only thing that makes a support report
-                // about "it says my token is bad" actionable.
-                tracing::debug!(reason = ?error.kind(), "a presented token did not verify");
-                TokenError::Unreadable
-            })?
-            .claims;
-
-        if claims.exp <= self.clock.now().as_second() {
-            tracing::debug!(session_id = %claims.sid, "a presented token has expired");
-            return Err(TokenError::Expired);
-        }
+        let claims = self.read(presented)?;
 
         if claims.kind != expected {
             tracing::warn!(
@@ -376,6 +507,29 @@ impl SessionTokens {
         })
     }
 
+    /// Decode and expiry-check a token, whatever kind it is.
+    ///
+    /// Extracted so the two readers cannot drift: the deadline is compared against the injected
+    /// clock in exactly one place, which is what keeps `jsonwebtoken`'s sixty seconds of leeway
+    /// out of both.
+    fn read(&self, presented: &str) -> Result<Claims, TokenError> {
+        let claims = jsonwebtoken::decode::<Claims>(presented, &self.verifying, &self.validation)
+            .map_err(|error| {
+                // The error *kind* is safe to log — it names which check failed, never any part
+                // of the credential — and it is the only thing that makes a support report
+                // about "it says my token is bad" actionable.
+                tracing::debug!(reason = ?error.kind(), "a presented token did not verify");
+                TokenError::Unreadable
+            })?
+            .claims;
+
+        if claims.exp <= self.clock.now().as_second() {
+            tracing::debug!(session_id = %claims.sid, "a presented token has expired");
+            return Err(TokenError::Expired);
+        }
+        Ok(claims)
+    }
+
     fn sign(
         &self,
         user: &UserId,
@@ -384,9 +538,25 @@ impl SessionTokens {
         issued_at: Timestamp,
         expires_at: Timestamp,
     ) -> Result<String, TokenError> {
+        self.sign_claims(user.as_str(), session.as_str(), kind, issued_at, expires_at)
+    }
+
+    /// The one place a Capsule token is signed.
+    ///
+    /// Takes the `sid` slot as text rather than a [`SessionId`], because a second-factor
+    /// challenge puts a [`ChallengeId`] there — the claim is "what this token is scoped to",
+    /// and for a half-finished sign-in that is a ceremony rather than a session.
+    fn sign_claims(
+        &self,
+        subject: &str,
+        scope: &str,
+        kind: TokenKind,
+        issued_at: Timestamp,
+        expires_at: Timestamp,
+    ) -> Result<String, TokenError> {
         let claims = Claims {
-            sub: user.to_string(),
-            sid: session.to_string(),
+            sub: subject.to_owned(),
+            sid: scope.to_owned(),
             kind,
             iss: ISSUER.to_owned(),
             iat: issued_at.as_second(),

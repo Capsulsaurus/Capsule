@@ -17,6 +17,7 @@
 //! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
 //! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
 //! | login `200` | kept — [`TokenResponse`] |
+//! | login `202` | **added** (`S-C55`). The account has a confirmed second factor, so the credentials were accepted and the sign-in is not finished. Salvo had the TOTP operations and never issued a challenge |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
 //! | login `401` | kept — [`LoginRejection::InvalidCredentials`], now carrying `error.auth.invalid_credentials` |
 //! | login `423` | **kept and now documented.** Reachable: lockout is account state the directory owns, not a counter, so it ports. Carries the new `error.auth.account_locked` |
@@ -286,6 +287,30 @@ impl From<IssuedTokens> for TokenResponse {
     }
 }
 
+/// What a sign-in can answer with.
+///
+/// Two statuses, so a `Reply` and not a bare body. Neither is a failure — a second factor being
+/// required is the system working — which is why this is not an `ApiError`.
+#[derive(Reply)]
+pub enum LoginReply {
+    /// The account has no second factor, and this is its session.
+    #[reply(
+        status = 200,
+        description = "A session was opened; here is its token pair."
+    )]
+    Signed(TokenResponse),
+
+    /// The password verified and a code is still needed (`S-C55`).
+    ///
+    /// `202 Accepted`, which is what it is: understood, and not complete. A client that cannot
+    /// tell it from `200` gets a body with no `access_token` and fails loudly.
+    #[reply(
+        status = 202,
+        description = "The password verified; a second factor is required to finish."
+    )]
+    SecondFactorRequired(crate::routes::totp::SecondFactorChallenge),
+}
+
 // ===========================================================================================
 // Rejections
 // ===========================================================================================
@@ -517,20 +542,29 @@ pub async fn register_user(
     Ok(Json(TokenResponse::from(issued)))
 }
 
-/// Exchange an email and password for a session.
+/// Exchange an email and password for a session — or for a second-factor challenge.
 ///
-/// Opens a session in the state store and returns the pair of tokens it is worked through. The
-/// two advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded on
-/// the session for the devices listing and gate nothing; an unusable one is dropped rather than
-/// refused.
+/// The two advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded
+/// on the session for the devices listing and gate nothing; an unusable one is dropped rather
+/// than refused.
+///
+/// # Two statuses, because there are two outcomes
+///
+/// An account with a confirmed second factor (`S-C55`) gets **`202`** and a short-lived
+/// challenge: the credentials were accepted and the request is not complete. No session is
+/// opened, no cohort is recorded and no refresh token is minted, because none of those may exist
+/// for an authentication that has not finished — and the client's advisory identifiers ride the
+/// *completing* request instead, since that is what creates the session they describe.
+///
+/// The retired surface got this wrong in the most consequential way available: it had all four
+/// TOTP operations and its login never issued a challenge, so a confirmed second factor gated
+/// nothing at all.
 #[kynos::post("/v1/auth/login", operation_id = "login_user", tag = AuthTag)]
 pub async fn login_user(
     Inject(auth): Inject<AuthContext>,
+    Inject(totp): Inject<crate::auth::TotpContext>,
     Json(request): Json<LoginRequest>,
-) -> Result<Json<TokenResponse>, LoginRejection> {
-    let cohort_hash = normalize_cohort_hash(request.cohort_hash.as_deref());
-    let device_id = normalize_device_id(request.device_id.as_deref());
-
+) -> Result<LoginReply, LoginRejection> {
     // The password crosses this line once and never comes back: `authenticate` borrows it, and
     // what returns is a decision.
     let outcome = auth
@@ -556,30 +590,95 @@ pub async fn login_user(
         }
     };
 
+    // Read **after** the password, never before: an enrollment lookup that ran first would
+    // answer for an account whose password has not verified, and the difference in timing would
+    // say whether the address exists.
+    let second_factor = totp
+        .enrollments()
+        .read(&user)
+        .await
+        .map_err(|error: DirectoryError| {
+            // Fail closed. A sign-in that proceeded because the second-factor store was
+            // unreachable is a second factor an attacker turns off by loading that store.
+            tracing::error!(%error, user_id = %user, "the second-factor store could not answer");
+            LoginRejection::unavailable()
+        })?
+        .is_some_and(|held| held.state == crate::auth::EnrollmentState::Active);
+
+    if second_factor {
+        let challenge = crate::auth::ChallengeId::generate();
+        let issued = auth
+            .tokens()
+            .issue_second_factor(&user, &challenge, crate::auth::CHALLENGE_TTL)
+            .map_err(|error| {
+                tracing::error!(%error, "a second-factor challenge could not be signed");
+                LoginRejection::unavailable()
+            })?;
+        tracing::info!(user_id = %user, challenge_id = %challenge, "a sign-in needs a second factor");
+        return Ok(LoginReply::SecondFactorRequired(
+            crate::routes::totp::SecondFactorChallenge {
+                mfa_token: issued.token,
+                expires_by: u64::try_from(issued.expires_at.as_second()).unwrap_or(0),
+            },
+        ));
+    }
+
     let now = auth.clock().now();
+    let issued = open_session_for(
+        &auth,
+        &user,
+        request.cohort_hash.as_deref(),
+        request.device_id.as_deref(),
+        now,
+    )
+    .await
+    .map_err(|error| {
+        store_unavailable(&error, "open a session");
+        LoginRejection::unavailable()
+    })?;
+
+    Ok(LoginReply::Signed(TokenResponse::from(issued)))
+}
+
+/// Open a session for `user` and mint its pair.
+///
+/// Shared by the password-only sign-in above and by the second factor's completing request
+/// (`S-C55`), which is the point: a session opened down one path and not the other is how a TOTP
+/// sign-in ends up in the devices view as an unknown, ungrouped device.
+///
+/// # Errors
+///
+/// Returns the store's own error if the session could not be opened, or a
+/// [`StoreError::Unavailable`] carrying the signer's complaint if the pair could not be signed —
+/// one error type, because both are "the sign-in did not happen and it was not the caller's
+/// fault" and every caller answers them identically.
+pub(super) async fn open_session_for(
+    auth: &AuthContext,
+    user: &UserId,
+    cohort_hash: Option<&str>,
+    device_id: Option<&str>,
+    now: jiff::Timestamp,
+) -> Result<IssuedTokens, StoreError> {
+    let cohort_hash = normalize_cohort_hash(cohort_hash);
+    let device_id = normalize_device_id(device_id);
     let session_id = new_session_id();
-    let record = SessionRecord {
-        session_id: session_id.clone(),
-        user_id: user.clone(),
-        created_at: now,
-        // A sign-in *is* a credential presentation, so this is the moment a freshness gate
-        // measures from. A refresh will carry it forward untouched.
-        authenticated_at: now,
-        last_active_at: now,
-        // Both always `None` here, as in Salvo. See the module docs.
-        user_agent: None,
-        ip_address: None,
-        cohort_hash: cohort_hash.clone(),
-        device_id,
-    };
 
     auth.sessions()
-        .open_session(record)
-        .await
-        .map_err(|error| {
-            store_unavailable(&error, "open a session");
-            LoginRejection::unavailable()
-        })?;
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: user.clone(),
+            created_at: now,
+            // A sign-in *is* a credential presentation, so this is the moment a freshness gate
+            // measures from. A refresh will carry it forward untouched.
+            authenticated_at: now,
+            last_active_at: now,
+            // Both always `None` here, as in Salvo. See the module docs.
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: cohort_hash.clone(),
+            device_id,
+        })
+        .await?;
 
     // The durable cohort map (`S-C13`), written **after** the session and **never** allowed to
     // fail the sign-in. A cohort is legibility metadata: it groups a physical device's
@@ -588,7 +687,7 @@ pub async fn login_user(
     // operation an account cannot do without — which is the same reason a malformed cohort is
     // dropped rather than rejected.
     if let Some(cohort_hash) = cohort_hash.as_deref()
-        && let Err(error) = auth.cohorts().observe(&user, cohort_hash, now).await
+        && let Err(error) = auth.cohorts().observe(user, cohort_hash, now).await
     {
         tracing::warn!(
             %error,
@@ -602,14 +701,14 @@ pub async fn login_user(
     // a refresh token that outlives its session record verifies and then fails.
     let issued = auth
         .tokens()
-        .issue(&user, &session_id, auth.sessions().ttl())
-        .map_err(|error| {
-            tracing::error!(%error, "a token pair could not be signed");
-            LoginRejection::unavailable()
+        .issue(user, &session_id, auth.sessions().ttl())
+        .map_err(|error| StoreError::Unavailable {
+            store: "session tokens",
+            detail: error.to_string(),
         })?;
 
     tracing::info!(user_id = %user, session_id = %session_id, "opened a session");
-    Ok(Json(TokenResponse::from(issued)))
+    Ok(issued)
 }
 
 /// Exchange a refresh token for a new pair, rotating the session.

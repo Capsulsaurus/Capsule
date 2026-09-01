@@ -61,6 +61,16 @@ repository = "https://github.com/Capsulsaurus/Capsule"
 
 [workspace.dependencies]
 argon2 = "0.5.3"
+# RFC 6238 time-based one-time passwords — the second factor of the local auth path
+# (design/authentication.md, slice `S-C55`). `otpauth` emits the `otpauth://` provisioning URI
+# every authenticator app scans; `gen_secret` generates the shared secret. Promoted to a
+# workspace dependency here so the rebuilt server and the retiring `capsule-api/auth` cannot
+# drift to two versions of the same algorithm during the changeover.
+totp-rs = { version = "5.7.1", features = ["gen_secret", "otpauth"] }
+# Constant-time equality. Already in the tree under `aes-gcm`; promoted to a direct dependency
+# so the one place this codebase compares a secret-derived value byte for byte — the second
+# factor's code check — does not hand-roll the fold the optimizer is free to short-circuit.
+subtle = "2.6.1"
 # Kynos — the REST/OpenAPI server framework the `capsule-api` rebuild targets. Consumed from
 # crates.io: it published 0.1.0 on 2026-08-29, which discharges the repin-on-publish exit the
 # dependencies doc recorded while it was a git dependency. `openapi32` is a strict, purely

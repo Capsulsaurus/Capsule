@@ -111,6 +111,26 @@
         "message": "That is not your current password.",
         "context": "HTTP 403 on POST /v1/auth/password (slice S-C54): the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
     },
+    "error.auth.totp_already_active": {
+        "message": "Two-factor authentication is already switched on.",
+        "context": "HTTP 409 on POST /v1/auth/totp/enroll (slice S-C55): the account already has a confirmed second factor. Refused rather than silently replaced — an enroll that overwrote an active secret would let a stolen session swap the factor for one the attacker holds, without ever presenting a code."
+    },
+    "error.auth.totp_not_pending": {
+        "message": "There is no two-factor setup waiting to be confirmed.",
+        "context": "HTTP 409 on POST /v1/auth/totp/verify-enrollment (slice S-C55): nothing is pending for this account — either enrolment was never started, or it was already confirmed."
+    },
+    "error.auth.totp_not_enrolled": {
+        "message": "Two-factor authentication is not switched on for this account.",
+        "context": "HTTP 409 on POST /v1/auth/totp/disable (slice S-C55): there is no confirmed second factor to remove."
+    },
+    "error.auth.totp_invalid_code": {
+        "message": "That code is not right. Check your authenticator app and try again.",
+        "context": "HTTP 403 on the authenticated TOTP operations and 401 on POST /v1/auth/login/verify-totp (slice S-C55): the six-digit code did not verify, or it verified and had already been used. One answer for both — telling a caller that a code was correct but replayed would confirm they had the right code."
+    },
+    "error.auth.totp_challenge_invalid": {
+        "message": "That sign-in has expired. Enter your password again.",
+        "context": "HTTP 401 on POST /v1/auth/login/verify-totp (slice S-C55): the half-finished sign-in token did not verify, had expired, or was another kind of token. One answer for all three — a client can act on none of the distinctions and every one of them means starting the sign-in again."
+    },
     "error.protocol.version_unsupported": {
         "message": "This version of Capsule is no longer supported. Please update the app.",
         "context": "HTTP 426 from the universal protocol handshake (invariant 1): the client's X-Capsule-Protocol date falls outside the server's accepted window."

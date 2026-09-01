@@ -261,6 +261,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
 | S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done | registration lands; the unported operations are decided one by one on `S-C54`–`S-C58` |
 | S-C54 | The profile surface, and a password change that is not a reset | server | S-C53 | M | RETIRED | done | three operations where Salvo had one; the address becomes immutable and `/validate` and password reset are deleted rather than owed |
+| S-C55 | A confirmed second factor gated nothing | server | S-C13, S-C32, S-C53 | L | RETIRED | done | Salvo's login never issued an MFA challenge; login gains a `202`, and a code is accepted at most once |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3101,6 +3102,73 @@ measuring from anything earlier would be measuring from the wrong moment.
   `a_locked_account_cannot_change_its_password`,
   `a_live_session_naming_a_deleted_account_reads_404_and_not_500` and the sixteen cases beside
   them, plus the conformance walk's `profile_block`. **Tier:** Unit + Smoke.
+
+### S-C55 — a confirmed second factor gated nothing
+
+- **Contract:** [Authentication — The Second Factor](capsule-docs/src/content/docs/design/authentication.md);
+  RFC 6238, and the limiter contract in `S-C32`.
+- **Gap** (found 2026-09-01 porting `S-C53`'s deferrals): the retired Salvo tree had all four
+  TOTP operations and **no caller ever issued an MFA challenge**. `AuthService::generate_mfa_token`
+  exists and is referenced from three integration tests and nothing else; the login handler calls
+  `authenticate_user`, which returns a token pair unconditionally. So an account could enroll a
+  second factor, confirm it, and still be signed into with a password alone.
+
+  That is worse than not offering MFA. A control that reports success and does nothing moves a
+  user from "I have one factor and know it" to "I have two and do not", which is the state every
+  phishing campaign is written for. `S-C53` deferred these four operations on the grounds that
+  "MFA is not in v1's slice list" — that reasoning is **reversed here**:
+  design/authentication.md names password + TOTP as a *first-class* local auth path in three
+  separate places, so the choice was never whether to ship MFA but whether to keep shipping a
+  broken one.
+
+**Login grows a second status, and it is `202`.** Kynos makes an operation's statuses part of its
+return type, so the two outcomes are a `#[derive(Reply)]` enum: `200` with a token pair, `202` with
+a short-lived challenge. `202 Accepted` is the honest reading — understood, and not complete — and
+a client that cannot tell it from `200` receives a body with no `access_token` and fails loudly.
+The alternative shapes were considered and rejected: a single `200` carrying a tagged union makes
+every client parse a discriminator to find out whether it is signed in, and a `401` would make a
+*correct* password read as a wrong one.
+
+**No session exists until the code lands.** Nothing is opened, no cohort is recorded, no refresh
+token is minted at `202` — a half-finished authentication must not leave a session behind. That is
+also why the advisory `cohort_hash` and `device_id` moved to the completing request: they describe
+a session, and the session is created there. Without the move a TOTP sign-in would appear in the
+devices view as an unknown, ungrouped device, which is the defect `S-N3` exists to prevent.
+
+**A third `TokenKind`, not a short-lived access token.** The challenge authenticates nothing, and
+an access token that merely *meant* half-authenticated would be honoured by every operation that
+takes one. Its `sid` slot carries a `ChallengeId` rather than a session id, which is also what the
+attempt limiter keys on — per ceremony, so a stream of first-factor sign-ins from an attacker
+cannot exhaust the budget of the person whose password they do not have.
+
+**Replay is a store operation.** A code is valid for ninety seconds with drift, so "somebody read
+the six digits over your shoulder" is an attack verification cannot see. `TotpStore::consume` is a
+compare-and-set on the highest step used, not a read followed by a write, because two sign-ins
+racing on one code is precisely what a read-then-write loses. The **confirming** code is spent by
+`activate` in the same operation, so the newest code in an account's history is not left usable.
+
+**The algorithm is a concrete type, the enrollment is a port.** Same split as
+`SessionTokens`: verifying a code is a pure function of a secret and a clock. Behind the port it
+would live in whichever adapter is loaded, and the only adapter this crate has is a test double —
+so RFC 6238 would live in the suite. The suite instead rebuilds an authenticator from the
+published constants, which checks the interop contract every app assumes rather than trusting one
+function to agree with itself.
+
+**A store outage fails the sign-in closed**, and disabling needs a live code rather than only a
+session. Both are the same principle: a second factor an attacker can switch off — by loading the
+store, or by holding a stolen token — is not one.
+
+- **Owed:** nothing on this surface. `POST /v1/auth/reauthenticate` still takes a password alone,
+  which is recorded in `routes::totp`'s module docs as a decision rather than an oversight.
+- **Done when:** ✅ `a_confirmed_factor_makes_a_password_alone_insufficient`,
+  `a_code_is_good_once_even_inside_its_own_window`,
+  `the_confirming_code_cannot_also_complete_a_sign_in`,
+  `disabling_needs_a_live_code_and_not_just_a_session`,
+  `five_wrong_codes_exhaust_one_challenge_and_not_the_account`,
+  `a_second_factor_store_outage_fails_the_sign_in_closed`,
+  `the_advisory_identifiers_ride_the_completing_request` and the thirteen cases beside them,
+  seven unit tests on the codes themselves, plus the conformance walk's `totp_block`.
+  **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

@@ -36,9 +36,10 @@ use capsule_server::album::{
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
 use capsule_server::auth::{
-    AccountDirectory, AccountProfiles, AuthCollaborators, AuthContext, Authentication,
-    DirectoryError, DirectoryFuture, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
-    SessionTokens,
+    AccountDirectory, AccountProfiles, ActivateOutcome, AuthCollaborators, AuthContext,
+    Authentication, BeginOutcome, ConsumeOutcome, DirectoryError, DirectoryFuture, EnrollmentState,
+    PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate, SessionTokens, TotpCodes,
+    TotpContext, TotpEnrollment, TotpSecret, TotpStore,
 };
 use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
@@ -480,6 +481,138 @@ fn profile_of(email: &str, held: &Account) -> ProfileRecord {
         email: email.to_owned(),
         display_name: held.display_name.clone(),
         created_at: held.created_at,
+    }
+}
+
+// ===========================================================================================
+// Second-factor double
+// ===========================================================================================
+
+/// The second-factor enrollments (`S-C55`), with the switch every other double here carries.
+///
+/// A real implementation of the port's contract rather than a stub: the check-and-write in
+/// `begin`, the pending-only `activate` and the compare-and-set in `consume` are the three
+/// properties the port exists to promise, and a double that fudged them would let the routes
+/// pass while a Postgres adapter written to the same contract failed.
+#[derive(Debug, Default)]
+pub(crate) struct InMemoryTotp {
+    held: Mutex<BTreeMap<UserId, TotpEnrollment>>,
+    unavailable: AtomicBool,
+}
+
+impl InMemoryTotp {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Make every subsequent operation fail, or stop.
+    pub(crate) fn set_unavailable(&self, unavailable: bool) {
+        self.unavailable.store(unavailable, Ordering::SeqCst);
+    }
+
+    /// The secret held for `user`, so a case can compute the code an app would show.
+    pub(crate) fn secret_of(&self, user: &UserId) -> Option<TotpSecret> {
+        self.enrollments().get(user).map(|held| held.secret.clone())
+    }
+
+    /// Whether `user` has a confirmed second factor.
+    pub(crate) fn is_active(&self, user: &UserId) -> bool {
+        self.enrollments()
+            .get(user)
+            .is_some_and(|held| held.state == EnrollmentState::Active)
+    }
+
+    fn enrollments(&self) -> MutexGuard<'_, BTreeMap<UserId, TotpEnrollment>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn refuse<T>(&self) -> Option<Result<T, DirectoryError>> {
+        self.unavailable.load(Ordering::SeqCst).then(|| {
+            Err(DirectoryError::Unavailable {
+                detail: REFUSAL.to_owned(),
+            })
+        })
+    }
+}
+
+impl TotpStore for InMemoryTotp {
+    fn begin(&self, record: TotpEnrollment) -> DirectoryFuture<'_, BeginOutcome> {
+        Box::pin(async move {
+            if let Some(refusal) = self.refuse() {
+                return refusal;
+            }
+            // One critical section, as the port requires: a caller that read, saw no active
+            // enrollment and then wrote has a window in which a confirmation lands.
+            let mut held = self.enrollments();
+            if held
+                .get(&record.user_id)
+                .is_some_and(|existing| existing.state == EnrollmentState::Active)
+            {
+                return Ok(BeginOutcome::AlreadyActive);
+            }
+            held.insert(record.user_id.clone(), record);
+            Ok(BeginOutcome::Started)
+        })
+    }
+
+    fn read<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, Option<TotpEnrollment>> {
+        Box::pin(async move {
+            if let Some(refusal) = self.refuse() {
+                return refusal;
+            }
+            Ok(self.enrollments().get(user).cloned())
+        })
+    }
+
+    fn activate<'a>(
+        &'a self,
+        user: &'a UserId,
+        step: u64,
+        at: Timestamp,
+    ) -> DirectoryFuture<'a, ActivateOutcome> {
+        Box::pin(async move {
+            if let Some(refusal) = self.refuse() {
+                return refusal;
+            }
+            let mut held = self.enrollments();
+            let Some(record) = held.get_mut(user) else {
+                return Ok(ActivateOutcome::NotPending);
+            };
+            if record.state != EnrollmentState::Pending {
+                return Ok(ActivateOutcome::NotPending);
+            }
+            record.state = EnrollmentState::Active;
+            record.activated_at = Some(at);
+            // The confirming code is spent, so it cannot also complete a sign-in.
+            record.last_step = Some(step);
+            Ok(ActivateOutcome::Activated)
+        })
+    }
+
+    fn consume<'a>(&'a self, user: &'a UserId, step: u64) -> DirectoryFuture<'a, ConsumeOutcome> {
+        Box::pin(async move {
+            if let Some(refusal) = self.refuse() {
+                return refusal;
+            }
+            let mut held = self.enrollments();
+            let Some(record) = held.get_mut(user) else {
+                return Ok(ConsumeOutcome::NotEnrolled);
+            };
+            if record.last_step.is_some_and(|last| step <= last) {
+                return Ok(ConsumeOutcome::Replayed);
+            }
+            record.last_step = Some(step);
+            Ok(ConsumeOutcome::Fresh)
+        })
+    }
+
+    fn disable<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, bool> {
+        Box::pin(async move {
+            if let Some(refusal) = self.refuse() {
+                return refusal;
+            }
+            Ok(self.enrollments().remove(user).is_some())
+        })
     }
 }
 
@@ -2178,6 +2311,11 @@ pub(crate) struct Fixture {
     pub(crate) dropstore: Arc<SwitchableDrops>,
     /// The rate-limit counters.
     pub(crate) counters: Arc<InMemoryCounters>,
+    /// The second-factor enrollments (`S-C55`).
+    pub(crate) totp: Arc<InMemoryTotp>,
+    /// The code generator the server verifies with — the *same* one, so a case can compute the
+    /// code an authenticator app would be showing rather than guessing at one.
+    pub(crate) codes: Arc<TotpCodes>,
 }
 
 impl Fixture {
@@ -2231,6 +2369,8 @@ impl Fixture {
         let shares = Arc::new(SwitchableShares::new());
         let dropstore = Arc::new(SwitchableDrops::new());
         let counters = Arc::new(InMemoryCounters::new());
+        let totp = Arc::new(InMemoryTotp::new());
+        let codes = Arc::new(TotpCodes::new("Capsule"));
 
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
@@ -2287,6 +2427,7 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(counters.clone(), clock.clone()),
+            totp: TotpContext::new(totp.clone(), codes.clone()),
         });
 
         Self {
@@ -2319,6 +2460,8 @@ impl Fixture {
             shares,
             dropstore,
             counters,
+            totp,
+            codes,
         }
     }
 
@@ -2429,6 +2572,10 @@ impl Fixture {
                 clock.clone(),
             ),
             counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+            totp: TotpContext::new(
+                Arc::new(InMemoryTotp::new()),
+                Arc::new(TotpCodes::new("Capsule")),
+            ),
         });
         (app, clock)
     }
@@ -2560,6 +2707,33 @@ pub(crate) fn owner() -> OwnerId {
 /// The device [`Fixture::working`] seeds in the directory.
 pub(crate) fn device() -> Uuid {
     Uuid::parse_str("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f").expect("the literal is a uuid")
+}
+
+/// The code an authenticator app would be showing for `user` at the fixture's current time.
+///
+/// Built from the constants `capsule_server::auth::totp` publishes rather than through a helper
+/// on `TotpCodes`, which is deliberate twice over: a server has no business generating codes, and
+/// reconstructing SHA-1 / six digits / thirty seconds here checks the interop contract every
+/// authenticator app assumes instead of trusting one function to agree with itself.
+pub(crate) fn totp_code(fixture: &Fixture, user: &UserId) -> String {
+    let secret = fixture
+        .totp
+        .secret_of(user)
+        .expect("the account has an enrollment");
+    let bytes = totp_rs::Secret::Encoded(secret.expose_base32().to_owned())
+        .to_bytes()
+        .expect("the fixture's secret is base32");
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        capsule_server::auth::totp::DIGITS,
+        0,
+        capsule_server::auth::totp::STEP_SECONDS,
+        bytes,
+        Some("Capsule".to_owned()),
+        String::new(),
+    )
+    .expect("a usable secret")
+    .generate(u64::try_from(fixture.clock.now().as_second()).expect("a post-epoch instant"))
 }
 
 // ===========================================================================================

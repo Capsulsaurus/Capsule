@@ -31,6 +31,22 @@ Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validat
 
 **Deliberately not ported from the retired surface:** `POST /v1/auth/validate` — a token-introspection endpoint is what a server *without* a session ledger needs, and [`S-C48`](#explicit-revocation) put the ledger on every request, so validation **is** the request — and password reset, which on an end-to-end-encrypted account is not a password reset at all: the server cannot re-wrap a master key it has never seen, and the real recovery path is the [escrow blob](/design/backup-recovery/). Both are gone rather than owed.
 
+### The Second Factor
+
+Slice `S-C55`. Password + TOTP is a first-class local auth path, and on the retired surface it did not work: all four TOTP operations existed, and **login never issued a challenge**. An account could enroll a second factor, see it confirmed, and still be signed into with a password alone — a control that reported success and gated nothing.
+
+- **`POST /v1/auth/login` answers `202 Accepted`** when the account has a confirmed second factor. That is what it is: the credentials were accepted and the request is not complete. No session is opened, no cohort is recorded and no refresh token is minted, because none of those may exist for an authentication that has not finished.
+- **`POST /v1/auth/login/verify-totp`** takes the challenge and a code, and *that* is where the session is opened — so the advisory `cohort_hash` and `device_id` ride this request rather than the first one. Five attempts per challenge, keyed on the **challenge** and not the account: a per-account budget would let anyone who knows an address lock its owner out with sign-ins they cannot complete.
+- **`POST /v1/auth/totp/enroll`** issues a secret and the `otpauth://` URI an app scans. Nothing is gated until a code confirms it — a mis-scanned QR code must not lock somebody out of their own account. Enrolling over a **confirmed** factor is refused; enrolling over a pending one replaces it, because nothing is protecting an unconfirmed secret.
+- **`POST /v1/auth/totp/verify-enrollment`** confirms it, and the confirming code is **spent**: its step goes into the replay ledger so it cannot also complete a sign-in a moment later.
+- **`POST /v1/auth/totp/disable`** needs a live code, not just a session. The whole point of the factor is that a stolen access token is insufficient, and a disable that took only a token would let the token switch off the control that makes it so.
+
+**A code is accepted at most once** (RFC 6238 §5.2). It stays valid for ninety seconds with drift, so "somebody read the six digits over your shoulder" is a real attack that verification alone cannot see; the defence is a compare-and-set on the highest step the account has used. The parameters are fixed and published — SHA-1, six digits, a thirty-second step, one step of drift — because every authenticator app assumes all four.
+
+**A store outage fails a sign-in closed.** A login that proceeded because the enrollment store was unreachable would be a second factor an attacker turns off by loading that store.
+
+**`POST /v1/auth/reauthenticate` still takes a password alone.** The second factor guards *becoming* a session; re-authentication is performed by a session that already exists, and demanding a code there would protect nothing an attacker holding that session has not already got past.
+
 ### The Profile Surface
 
 Slice `S-C54`. Three operations, where the retired surface had one handler that branched on which fields a body happened to carry.

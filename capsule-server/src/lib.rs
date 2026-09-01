@@ -120,11 +120,15 @@ pub fn router() -> ServerRouter {
             routes::escrow::fetch_escrow,
             routes::auth::reauthenticate,
         ])
-        // What an account knows about itself, and the credential it opens sessions with.
+        // What an account knows about itself, and the credentials it opens sessions with.
         .mount(kynos::routes![
             routes::profile::get_profile,
             routes::profile::update_profile,
             routes::profile::change_password,
+            routes::totp::totp_enroll,
+            routes::totp::totp_verify_enrollment,
+            routes::totp::totp_disable,
+            routes::totp::totp_verify_login,
         ])
         // The cross-device add: one code, one channel, and the two devices' mailboxes.
         .mount(kynos::routes![

@@ -132,6 +132,11 @@
     <string name="error_auth_profile_invalid">That display name cannot be used.</string>
     <string name="error_auth_profile_not_found">That account no longer exists.</string>
     <string name="error_auth_rate_limited">嘗試次數過多。請稍候再試。</string>
+    <string name="error_auth_totp_already_active">Two-factor authentication is already switched on.</string>
+    <string name="error_auth_totp_challenge_invalid">That sign-in has expired. Enter your password again.</string>
+    <string name="error_auth_totp_invalid_code">That code is not right. Check your authenticator app and try again.</string>
+    <string name="error_auth_totp_not_enrolled">Two-factor authentication is not switched on for this account.</string>
+    <string name="error_auth_totp_not_pending">There is no two-factor setup waiting to be confirmed.</string>
     <string name="error_auth_user_already_exists">已有使用這些資料的帳戶。</string>
     <string name="error_blob_gone">該相片檔案已無法使用。</string>
     <string name="error_blob_not_found">伺服器上沒有該相片檔案。</string>

@@ -51,6 +51,15 @@ pub const DROP_LINK: Budget = Budget::new(30, SignedDuration::from_hours(1));
 /// Drop-session creations from one source address (invariant 31).
 pub const DROP_SOURCE: Budget = Budget::new(60, SignedDuration::from_hours(1));
 
+/// Code attempts against one second-factor challenge.
+///
+/// Five in five minutes, which is the challenge's whole lifetime — so the budget is really
+/// "five attempts per sign-in". Six digits is a million codes and five guesses is a one-in-two-
+/// hundred-thousand chance per ceremony, while a person mistyping twice and getting it right on
+/// the third go is unaffected. The retired surface allowed three; five is chosen over three
+/// because a code that expires mid-typing costs an attempt through no fault of the user.
+pub const SECOND_FACTOR: Budget = Budget::new(5, SignedDuration::from_mins(5));
+
 /// Deep storage verifications per account.
 ///
 /// Four an hour. The contract calls the limiter *half of the feature*: a deep verify reads and

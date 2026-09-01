@@ -22,6 +22,7 @@ pub mod receipts;
 pub mod share;
 pub mod storage;
 pub mod sync;
+pub mod totp;
 pub mod upgrade;
 pub mod upload;
 pub mod version;

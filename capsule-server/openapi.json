@@ -111,8 +111,8 @@
     },
     "/v1/auth/login": {
       "post": {
-        "summary": "Exchange an email and password for a session.",
-        "description": "Opens a session in the state store and returns the pair of tokens it is worked through. The\ntwo advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded on\nthe session for the devices listing and gate nothing; an unusable one is dropped rather than\nrefused.",
+        "summary": "Exchange an email and password for a session — or for a second-factor challenge.",
+        "description": "The two advisory identifiers a client may send — `cohort_hash` and `device_id` — are recorded\non the session for the devices listing and gate nothing; an unusable one is dropped rather\nthan refused.\n\n# Two statuses, because there are two outcomes\n\nAn account with a confirmed second factor (`S-C55`) gets **`202`** and a short-lived\nchallenge: the credentials were accepted and the request is not complete. No session is\nopened, no cohort is recorded and no refresh token is minted, because none of those may exist\nfor an authentication that has not finished — and the client's advisory identifiers ride the\n*completing* request instead, since that is what creates the session they describe.\n\nThe retired surface got this wrong in the most consequential way available: it had all four\nTOTP operations and its login never issued a challenge, so a confirmed second factor gated\nnothing at all.",
         "operationId": "login_user",
         "requestBody": {
           "content": {
@@ -156,11 +156,21 @@
             }
           },
           "200": {
-            "description": "OK",
+            "description": "A session was opened; here is its token pair.",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "The password verified; a second factor is required to finish.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecondFactorChallenge"
                 }
               }
             }
@@ -1472,6 +1482,395 @@
             "bearer": []
           }
         ]
+      }
+    },
+    "/v1/auth/totp/enroll": {
+      "post": {
+        "summary": "Start enrolling an authenticator.",
+        "description": "Answers the `otpauth://` URI the app scans. Nothing is gated yet: until a code confirms the\nsecret, sign-in is unchanged — which is what stops a mis-scanned QR code from locking\nsomebody out of their own account.",
+        "operationId": "totp_enroll",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already active",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/totp/verify-enrollment": {
+      "post": {
+        "summary": "Confirm an enrollment with a live code.",
+        "description": "The confirming code is **spent**: its step goes straight into the replay ledger, so it cannot\nalso complete a sign-in a moment later. That is the one place the ledger's first entry comes\nfrom, and skipping it would leave the newest code in the account's history unused.",
+        "operationId": "totp_verify_enrollment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "409": {
+            "description": "Nothing pending",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/totp/disable": {
+      "post": {
+        "summary": "Remove the second factor, on presentation of a live code.",
+        "description": "**A session is not enough.** The whole point of the factor is that a stolen access token is\ninsufficient, and a disable that took only a token would let the token turn off the control\nthat makes it insufficient.",
+        "operationId": "totp_disable",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CodeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "409": {
+            "description": "Not enrolled",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/login/verify-totp": {
+      "post": {
+        "summary": "Complete a sign-in with a code.",
+        "description": "This is where the session is opened — not `POST /v1/auth/login`, which for an account with a\nsecond factor opens nothing. The advisory `cohort_hash` and `device_id` ride *this* request\nfor the same reason: the session they describe is created here.",
+        "operationId": "totp_verify_login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Challenge expired",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many attempts",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
       }
     },
     "/v1/auth/devices/enroll": {
@@ -5318,6 +5717,26 @@
         ],
         "description": "Credentials, plus the two advisory identifiers a client may volunteer.\n\n`Debug` is hand-written. A derived one would print the password into any log line, panic\nmessage or `tracing` field that formatted the request — which is the single worst thing this\nfile could do, and is one `#[derive(Debug)]` away at all times.\nNo `#[schema(min_length = ...)]` on either credential, deliberately. Kynos 0.1.0 publishes a\nstring constraint into the document but does not enforce it on the request path — an empty\npassword reaches the handler — so declaring one would put a promise in the contract that the\nserver does not keep, which is the exact class of drift this rebuild exists to remove. Length\nis a body-size concern and belongs to a limits middleware; it is recorded as owed rather than\nasserted here."
       },
+      "SecondFactorChallenge": {
+        "properties": {
+          "mfa_token": {
+            "type": "string",
+            "description": "The token to present alongside the code."
+          },
+          "expires_by": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The **absolute** Unix-seconds instant the challenge stops being honoured.\n\nAbsolute rather than a duration, matching `TokenResponse::expires_by`, so a client has\none convention rather than two."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mfa_token",
+          "expires_by"
+        ],
+        "description": "A half-finished sign-in.\n\n`Debug` is hand-written: the token is a credential, even though it authenticates nothing on\nits own."
+      },
       "RefreshRequest": {
         "properties": {
           "refresh_token": {
@@ -5609,6 +6028,64 @@
           "new_password"
         ],
         "description": "The two passwords a rotation needs.\n\n`Debug` is hand-written for the reason `routes::auth`'s bodies are: a derived one would print\nboth credentials into any log line that formatted the request."
+      },
+      "EnrollmentResponse": {
+        "properties": {
+          "provisioning_uri": {
+            "type": "string",
+            "description": "The `otpauth://` URI an authenticator app scans.\n\nIt carries the shared secret, so it is a credential: served once, over the authenticated\nchannel, and never fetchable again. Losing it before confirming means enrolling again,\nwhich is why a *pending* enrollment is replaceable without ceremony."
+          }
+        },
+        "type": "object",
+        "required": [
+          "provisioning_uri"
+        ],
+        "description": "A freshly issued, unconfirmed enrollment."
+      },
+      "CodeRequest": {
+        "properties": {
+          "totp_code": {
+            "type": "string",
+            "description": "The code the authenticator app is showing."
+          }
+        },
+        "type": "object",
+        "required": [
+          "totp_code"
+        ],
+        "description": "A six-digit code, and nothing else."
+      },
+      "VerifyLoginRequest": {
+        "properties": {
+          "mfa_token": {
+            "type": "string",
+            "description": "The challenge issued by `POST /v1/auth/login`."
+          },
+          "totp_code": {
+            "type": "string",
+            "description": "The code the authenticator app is showing."
+          },
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments (`S-C13`)."
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory device the client claims to be (`S-N3`), as a UUID."
+          }
+        },
+        "type": "object",
+        "required": [
+          "mfa_token",
+          "totp_code"
+        ],
+        "description": "Completing a sign-in with a second factor.\n\nIt carries the same two advisory identifiers `LoginRequest` does, because *this* is the\nrequest that opens the session: without them a TOTP sign-in would land in the devices view as\nan unknown, ungrouped device (`S-N3`)."
       },
       "EnrollmentCodeResponse": {
         "properties": {

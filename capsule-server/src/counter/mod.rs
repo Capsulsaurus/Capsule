@@ -67,6 +67,14 @@ pub enum CounterKey {
     DropSource(String),
     /// Deep storage verifications for one account (`S-C41`).
     DeepVerify(UserId),
+    /// Code attempts against one second-factor challenge (`S-C55`).
+    ///
+    /// Keyed on the **challenge** and not the account, deliberately. A per-account key would let
+    /// anyone who knows an address exhaust its budget with first-factor sign-ins they cannot
+    /// complete, locking the owner out of an account whose password the attacker does not have.
+    /// The challenge id is minted per ceremony and lives five minutes, so the budget it carries
+    /// bounds exactly the thing being guessed: six digits, against one half-finished sign-in.
+    SecondFactor(String),
     /// Account registrations from one source address (`S-C53`).
     ///
     /// Declared and consumed nowhere, like its two siblings above, and for the same reason: the
@@ -88,6 +96,7 @@ impl CounterKey {
             Self::DropLink(_) => "drop_link",
             Self::DropSource(_) => "drop_source",
             Self::DeepVerify(_) => "deep_verify",
+            Self::SecondFactor(_) => "second_factor",
             Self::RegistrationSource(_) => "registration_source",
         }
     }

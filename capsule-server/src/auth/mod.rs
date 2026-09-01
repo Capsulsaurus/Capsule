@@ -41,6 +41,7 @@ pub mod profile;
 pub mod registry;
 pub mod scheme;
 pub mod tokens;
+pub mod totp;
 
 use std::sync::Arc;
 
@@ -52,7 +53,12 @@ pub use self::profile::{
 pub use self::registry::{AccountRegistry, MIN_PASSWORD_LENGTH, Registration, new_user_id};
 pub use self::scheme::{AccessToken, AuthenticatedSession, TOUCH_INTERVAL};
 pub use self::tokens::{
-    ACCESS_TOKEN_TTL, ISSUER, IssuedTokens, SessionTokens, TokenError, TokenKind, VerifiedToken,
+    ACCESS_TOKEN_TTL, ChallengeId, ISSUER, IssuedChallenge, IssuedTokens, SessionTokens,
+    TokenError, TokenKind, VerifiedChallenge, VerifiedToken,
+};
+pub use self::totp::{
+    ActivateOutcome, BeginOutcome, CHALLENGE_TTL, ConsumeOutcome, EnrollmentState, TotpCodes,
+    TotpContext, TotpEnrollment, TotpSecret, TotpStore, UnusableSecret,
 };
 use crate::store::{AuthStateStore, Clock};
 

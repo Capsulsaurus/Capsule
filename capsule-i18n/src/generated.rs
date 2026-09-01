@@ -89,6 +89,21 @@ pub mod error_codes {
     /// `error.auth.session_not_found`
     pub const AUTH_SESSION_NOT_FOUND: &str = "error.auth.session_not_found";
 
+    /// `error.auth.totp_already_active`
+    pub const AUTH_TOTP_ALREADY_ACTIVE: &str = "error.auth.totp_already_active";
+
+    /// `error.auth.totp_challenge_invalid`
+    pub const AUTH_TOTP_CHALLENGE_INVALID: &str = "error.auth.totp_challenge_invalid";
+
+    /// `error.auth.totp_invalid_code`
+    pub const AUTH_TOTP_INVALID_CODE: &str = "error.auth.totp_invalid_code";
+
+    /// `error.auth.totp_not_enrolled`
+    pub const AUTH_TOTP_NOT_ENROLLED: &str = "error.auth.totp_not_enrolled";
+
+    /// `error.auth.totp_not_pending`
+    pub const AUTH_TOTP_NOT_PENDING: &str = "error.auth.totp_not_pending";
+
     /// `error.auth.unavailable`
     pub const AUTH_UNAVAILABLE: &str = "error.auth.unavailable";
 
