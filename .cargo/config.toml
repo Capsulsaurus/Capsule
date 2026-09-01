@@ -1,0 +1,10 @@
+# Repo Cargo config. Scoped strictly to the `wasm32-unknown-unknown` target so host and
+# mobile builds are unaffected.
+#
+# capsule-core's guest web-upload sealing path (`drop::seal_drop`) draws randomness from
+# `getrandom`, which on `wasm32-unknown-unknown` has no default backend. Select the browser
+# Web Crypto backend (paired with capsule-core's `getrandom` `wasm_js` feature for that
+# target). Build the sealing surface with:
+#   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
+[target.wasm32-unknown-unknown]
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

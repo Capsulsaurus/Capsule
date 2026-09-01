@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router';
+import { FormattedMessage } from 'react-intl';
 import { Card, CardContent } from '@/components/ui/card';
 import { useAlbums } from '@/data/hooks';
 
@@ -12,7 +13,9 @@ const Albums = () => {
 
     return (
         <div className="p-4 md:p-8">
-            <h1 className="text-2xl font-bold mb-6">Albums</h1>
+            <h1 className="text-2xl font-bold mb-6">
+                <FormattedMessage id="nav.albums" />
+            </h1>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                 {albums.map((album) => (
                     <Link
@@ -34,7 +37,10 @@ const Albums = () => {
                                     {album.title}
                                 </h3>
                                 <p className="text-xs text-muted-foreground">
-                                    {album.assetCount} items
+                                    <FormattedMessage
+                                        id="common.item_count"
+                                        values={{ count: album.assetCount }}
+                                    />
                                 </p>
                             </CardContent>
                         </Card>

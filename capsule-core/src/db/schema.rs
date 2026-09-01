@@ -1,9 +1,27 @@
-/// SQLite catalog schema version.
+/// SQLite catalog schema version, stamped into the database's `PRAGMA user_version`.
+///
+/// This DDL is the shape of a **fresh** catalog only. An existing catalog is brought here by
+/// the forward-only stepwise migrator in [`crate::db::migrate`], which also carries the
+/// authoritative version-by-version history (reconstructed from git; the list below is a
+/// summary and the migrator's table is the SSoT where they disagree).
 ///
 /// v2: `assets.hash_blake3` renamed to `hash_sha256` — the project moved from
 ///     BLAKE3 to SHA-256 (hardware-accelerated on Apple and modern CPUs).
 ///     Added the client-side `albums` table for user-defined album metadata.
-pub const SCHEMA_VERSION: u32 = 2;
+///     (The rename actually shipped *inside* v1 and `albums` arrived from a branch that had
+///     independently stamped 2 — see [`crate::db::migrate`]; both steps are conditional
+///     because of it.)
+/// v3: added the `embeddings` provenance companion table (S-H1) — the per-task
+///     `sqlite-vec` `vec0` tables are created at runtime from the model registry
+///     (their vector dimension is registry-declared), so they are not in this DDL.
+/// v4: added `assets.is_hidden` (S-D19) — the index projection of the sidecar `hidden`
+///     LWW register. Hidden assets are excluded from every default view and are reachable
+///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
+///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.
+///
+/// **Bumping this constant requires appending a step to [`crate::db::migrate::STEPS`]** —
+/// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
+pub const SCHEMA_VERSION: u32 = 4;
 
 pub const DDL: &str = r"
 PRAGMA journal_mode = WAL;
@@ -26,7 +44,10 @@ CREATE TABLE IF NOT EXISTS assets (
     album_id          TEXT,
     rating            INTEGER NOT NULL DEFAULT 0,
     is_deleted        INTEGER NOT NULL DEFAULT 0,
-    deleted_at        INTEGER
+    deleted_at        INTEGER,
+    -- Projection of the sidecar `hidden` LWW register: excluded from default views,
+    -- served only by the gated Hidden view. Not `is_stack_hidden` (stack suppression).
+    is_hidden         INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS asset_stacks (
@@ -70,7 +91,8 @@ CREATE INDEX IF NOT EXISTS idx_assets_deleted    ON assets(is_deleted);
 CREATE INDEX IF NOT EXISTS idx_assets_album      ON assets(album_id);
 CREATE INDEX IF NOT EXISTS idx_assets_stack      ON assets(stack_id);
 CREATE INDEX IF NOT EXISTS idx_assets_type       ON assets(asset_type);
-CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, capture_utc, capture_timestamp);
+CREATE INDEX IF NOT EXISTS idx_assets_hidden     ON assets(is_hidden);
+CREATE INDEX IF NOT EXISTS idx_assets_timeline   ON assets(is_deleted, is_stack_hidden, is_hidden, capture_utc, capture_timestamp);
 CREATE INDEX IF NOT EXISTS idx_stacks_type       ON asset_stacks(stack_type);
 CREATE INDEX IF NOT EXISTS idx_stacks_primary    ON asset_stacks(primary_asset_id);
 CREATE INDEX IF NOT EXISTS idx_stack_members_stack  ON stack_members(stack_id);
@@ -97,4 +119,26 @@ CREATE TABLE IF NOT EXISTS cached_representations (
 
 CREATE INDEX IF NOT EXISTS idx_cache_evict
     ON cached_representations(pinned, is_owned_original, last_accessed_at);
+
+-- Provenance companion to the per-task `sqlite-vec` vec0 tables (created at runtime from the
+-- model registry, since their vector dimension is registry-declared). One row per
+-- (asset, task, platform): the embedding-provenance tuple (model_id, model_version), the
+-- platform partition discriminator, and the vec0 rowid the actual vector lives at. Lets the
+-- index find/replace/delete an asset's embedding and surface which entries are stale (their
+-- model_version trails the canonical row) without scanning the vector store. Derived state:
+-- rebuilt by re-running inference over the originals, never restored from backup.
+-- SSoT: design/ai § Embedding Provenance.
+CREATE TABLE IF NOT EXISTS embeddings (
+    asset_id      TEXT    NOT NULL,
+    task          TEXT    NOT NULL,
+    platform      TEXT    NOT NULL,
+    model_id      TEXT    NOT NULL,
+    model_version TEXT    NOT NULL,
+    vec_rowid     INTEGER NOT NULL,
+    created_at    INTEGER NOT NULL,
+    PRIMARY KEY (asset_id, task, platform)
+);
+
+CREATE INDEX IF NOT EXISTS idx_embeddings_asset ON embeddings(asset_id);
+CREATE INDEX IF NOT EXISTS idx_embeddings_task  ON embeddings(task, platform, model_version);
 ";

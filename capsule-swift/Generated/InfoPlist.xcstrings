@@ -1,0 +1,170 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSFaceIDUsageDescription": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos."
+          }
+        }
+      }
+    },
+    "NSPhotoLibraryUsageDescription": {
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule shows and organizes the photos and videos in your library."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

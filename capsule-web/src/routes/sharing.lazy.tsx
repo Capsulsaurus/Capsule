@@ -1,6 +1,7 @@
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { Link as LinkIcon, Share2, Users } from 'lucide-react';
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
@@ -26,10 +27,11 @@ function Sharing() {
             <div className="bg-muted/50 p-6 rounded-full mb-6">
                 <Share2 className="w-12 h-12 text-muted-foreground" />
             </div>
-            <h1 className="text-2xl font-bold mb-2">Sharing</h1>
+            <h1 className="text-2xl font-bold mb-2">
+                <FormattedMessage id="nav.sharing" />
+            </h1>
             <p className="text-muted-foreground max-w-md mb-8">
-                Share your photos and albums with friends and family. Shared
-                content will appear here.
+                <FormattedMessage id="sharing.description" />
             </p>
             <CreateSharedAlbumDialog />
         </div>
@@ -37,6 +39,7 @@ function Sharing() {
 }
 
 function CreateSharedAlbumDialog() {
+    const intl = useIntl();
     const [open, setOpen] = useState(false);
     const [title, setTitle] = useState('');
     const [linkSharing, setLinkSharing] = useState(true);
@@ -44,7 +47,7 @@ function CreateSharedAlbumDialog() {
 
     const handleCreate = () => {
         // Logic to create album would go here
-        toast.success(`Shared album "${title}" created!`);
+        toast.success(intl.formatMessage({ id: 'sharing.created' }, { title }));
         setOpen(false);
         setTitle('');
     };
@@ -52,21 +55,29 @@ function CreateSharedAlbumDialog() {
     return (
         <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-                <Button>Create Shared Album</Button>
+                <Button>
+                    <FormattedMessage id="sharing.create_button" />
+                </Button>
             </DialogTrigger>
             <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
-                    <DialogTitle>Create Shared Album</DialogTitle>
+                    <DialogTitle>
+                        <FormattedMessage id="sharing.create_button" />
+                    </DialogTitle>
                     <DialogDescription>
-                        Create a new album to share with friends and family.
+                        <FormattedMessage id="sharing.dialog_description" />
                     </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-6 py-4">
                     <div className="grid gap-2">
-                        <Label htmlFor="title">Album Title</Label>
+                        <Label htmlFor="title">
+                            <FormattedMessage id="sharing.album_title" />
+                        </Label>
                         <Input
                             id="title"
-                            placeholder="e.g., Summer Vacation 2024"
+                            placeholder={intl.formatMessage({
+                                id: 'sharing.album_title_placeholder',
+                            })}
                             value={title}
                             onChange={(e) => setTitle(e.target.value)}
                         />
@@ -78,10 +89,11 @@ function CreateSharedAlbumDialog() {
                                 htmlFor="link-sharing"
                                 className="flex items-center gap-2"
                             >
-                                <LinkIcon className="w-4 h-4" /> Link Sharing
+                                <LinkIcon className="w-4 h-4" />{' '}
+                                <FormattedMessage id="sharing.link_sharing" />
                             </Label>
                             <span className="text-xs text-muted-foreground">
-                                Anyone with the link can view
+                                <FormattedMessage id="sharing.link_sharing_hint" />
                             </span>
                         </div>
                         <Switch
@@ -97,10 +109,11 @@ function CreateSharedAlbumDialog() {
                                 htmlFor="collaborative"
                                 className="flex items-center gap-2"
                             >
-                                <Users className="w-4 h-4" /> Collaborative
+                                <Users className="w-4 h-4" />{' '}
+                                <FormattedMessage id="sharing.collaborative" />
                             </Label>
                             <span className="text-xs text-muted-foreground">
-                                Allow others to add photos
+                                <FormattedMessage id="sharing.collaborative_hint" />
                             </span>
                         </div>
                         <Switch
@@ -112,10 +125,10 @@ function CreateSharedAlbumDialog() {
                 </div>
                 <DialogFooter>
                     <Button variant="outline" onClick={() => setOpen(false)}>
-                        Cancel
+                        <FormattedMessage id="common.cancel" />
                     </Button>
                     <Button onClick={handleCreate} disabled={!title.trim()}>
-                        Create Album
+                        <FormattedMessage id="sharing.create_album" />
                     </Button>
                 </DialogFooter>
             </DialogContent>

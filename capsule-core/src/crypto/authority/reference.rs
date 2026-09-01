@@ -39,7 +39,7 @@ struct Entry {
 /// The portable, admin-signed epoch ledger: every attested `(epoch, write_tier_pub)` with its
 /// admin signature. `amk_present` is **local-only** state and deliberately is *not* part of this
 /// signed artifact — on reload it is restored from the epochs a device actually holds AMKs for.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignedEpochLedger {
     /// Album this ledger speaks for.
     pub album_id: Uuid,
@@ -52,7 +52,7 @@ pub struct SignedEpochLedger {
 }
 
 /// One epoch's signed attestation within a [`SignedEpochLedger`].
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LedgerEntry {
     /// Epoch number (`amk_version`).
     pub epoch: u32,

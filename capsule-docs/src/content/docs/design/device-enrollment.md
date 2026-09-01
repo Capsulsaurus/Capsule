@@ -11,7 +11,7 @@ A Capsule account has one or more devices, each holding a hardware-bound DSK + D
 
 These are distinct from **[cross-device recovery](/design/backup-recovery/#default-mechanisms)** (which is also a way to bring up a new device, but in the recovery context — the user has lost their other devices and is using the recovery passphrase + master-key escrow to restore).
 
-Key generation and wrapping live in `capsule-core::crypto::keys`; the device directory and enrollment authentication surface are planned in `capsule-api::auth::devices`. The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are blocked upstream — see the [MLS status note](/design/cryptography/mls/).
+Key generation and wrapping live in `capsule-core::crypto::keys`; the device directory and enrollment authentication surface are planned in `capsule-server::auth::devices`. The ceremony glue lives in per-platform native client code (QR scan, biometric prompt). The MLS group joins these ceremonies invoke are pending the MLS implementation — see the [MLS status note](/design/cryptography/mls/).
 
 ## First-Device Enrollment
 
@@ -30,6 +30,10 @@ Two design points:
 - **Multi-device-from-start.** Enrolling a second device right after signup uses the ordinary [cross-device add](#cross-device-add) ceremony — there is no separate "freshly-created" path. One device is signed in and healthy, which is exactly cross-device add's precondition.
 
 ## Cross-Device Add
+
+**Status note.** The server surface (code issue/redeem, relay channel, directory update) is **served today** by the Kynos surface, with slice `S-C7`; the native add **UI** (QR display/scan, safety-code screens) is post-v1 (decision 2026-07-12) — v1's second-device path is the CLI, and the iOS app ships [first-device enrollment](#first-device-enrollment) only.
+
+**What the server can enforce about step 1, exactly.** A server cannot verify a biometric. What it verifies is that the account holder **proved a credential recently** — a five-minute window against the session's `authenticated_at`, which is set at sign-in and deliberately *not* reset by a token refresh, so an attacker holding only a stolen token cannot reopen it by refreshing. The local-authorization half stays the client's, unverifiable and asserted. Because the window is short and a refresh does not reopen it, a signed-in user adding a device is asked for their password again through `POST /v1/auth/reauthenticate`, which proves a credential on the session that already exists rather than opening a second one.
 
 When an existing signed-in device adds a new device to the same account:
 
@@ -61,7 +65,7 @@ The two ceremonies may share underlying code (channel-establishment, key-transfe
 // in capsule-core::crypto::keys
 fn first_device_setup(passphrase: &str) -> Result<EnrollmentResult, EnrollmentError>;
 
-// planned in capsule-api::auth::devices
+// planned in capsule-server::auth::devices
 fn issue_enrollment_code() -> EnrollmentCode;       // server stores a short-lived record
 fn redeem_enrollment_code(code: EnrollmentCode) -> Result<ChannelHandle, EnrollmentError>;
 

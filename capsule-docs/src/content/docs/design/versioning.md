@@ -6,7 +6,7 @@ status: draft
 
 Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.
 
-The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-api` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI (blocked with MLS — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-api` (planned).
+The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-server` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI (planned with the MLS layer — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-server` (planned).
 
 ## Versioned Surfaces
 
@@ -15,7 +15,8 @@ Versioning happens on multiple layers, each owned by the doc that defines it:
 - **Metadata CBOR schema** — `sidecar_schema` field 0 of every sidecar (see [Metadata — Schema Versioning Rules](/design/metadata/#schema-versioning-rules)).
 - **Cryptographic primitive bundle** — `crypto_suite_id` on every manifest and metadata blob (see [Cryptography — Versioning Identifiers](/design/cryptography/primitives/#versioning-identifiers)).
 - **Wire protocol** — `protocol_version` (date-based, `YYYY-MM-DD`) on every API request and album pin. See [Threat Model — Protocol Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) for the universal handshake.
-- **Client cache** — internal and rebuildable; cache schema changes drop and rebuild rather than migrate.
+- **Client derived cache** — thumbnails, previews, transcodes: purely derived, so a format or layout change drops and regenerates rather than migrates.
+- **Client catalog** — `index/library.sqlite`, versioned by the database's own `PRAGMA user_version` and migrated forward stepwise, never dropped (see [Client Catalog Migration](#client-catalog-migration)).
 - **Server data structures** — PostgreSQL schema migrations forward-only. Volatile session state in Valkey is not a versioned API surface (see [Filesystem — Server: Required Services](/design/filesystem/server/#required-services)).
 
 ## Negotiation Headers
@@ -27,6 +28,20 @@ The negotiation-header set — `X-Capsule-Protocol`, `X-Capsule-Crypto-Suite`, `
 Initial startups of a client and server always strictly check for version compatibility and **crash early** rather than soft-degrade. The single handshake in [Threat Model — Protocol and Capability Negotiation](/design/threat-model/validation/#protocol-and-capability-negotiation) is the only point at which compatibility is determined; once an operation is past the handshake, both sides know they agree on `protocol_version`, `crypto_suite_id`, and `sidecar_schema`.
 
 Capsule does **not** support backwards migrations or version downgrades. Server-side schema migrations are forward-only; if a migration fails, the server refuses to start and the operator restores from backup. There is no "rollback then continue" — that path is what corrupts data.
+
+## Client Catalog Migration
+
+"Backward-compatible reads forever" is not a server-only promise. The client catalog — `index/library.sqlite` in the [client library layout](/design/filesystem/client/#desktop-library-layout) — **is** the user's library as they experience it, so it carries the same obligation as the server schema and is given the same mechanism: a **forward-only stepwise migrator keyed on `PRAGMA user_version`**, the client-side analogue of the server's forward-only migrations above. Each schema version has exactly one step to the next; opening a catalog stamped below the current version walks it up, in order, to the current one. There is no downgrade step, for the same reason the server has none — "rollback then continue" is what corrupts data, on a laptop as much as on a server.
+
+The objection this displaces is that the catalog is *derived*, so a schema change could simply drop it and rebuild from the sidecars. That reasoning is what the drop-and-rebuild rule rested on, and it does not hold. Slice `S-D21` found that a rebuild read the **unsigned** sidecar shape rather than the signed one the write path emits — and because the two are disjoint on the wire, it did not merely lose the [hidden](/design/organization/#hidden-assets) and [stack-membership](/design/organization/#asset-stacking) registers, it reconstructed **nothing at all** from a signed library. That is fixed, and rebuild now projects those registers and replays trash state from the provenance chain. What survives the fix is the limit that matters here: rebuild can only return what was written to disk, so an importer-formed stack placement (`S-B15`) is unrecoverable from a lost index, and any future column not carried by a sidecar would be too. Even once that is repaired, rebuild is the *repair* path ([Maintenance](/design/filesystem/maintenance/#repair)), reached when the index is already known-inconsistent; spending it on every shipped column would re-derive the whole library on each release and re-lose whatever the sidecars do not yet carry. The migrator is the durability mechanism; rebuild stays the recovery path it was.
+
+### Catalogs newer than the binary
+
+Forward-only settles the direction of migration, not what happens when a catalog is stamped *above* the running build's `SCHEMA_VERSION` — the case a user reaches the first time they install an older app build, or open a library synced from a device that updated first. That catalog is **refused, not opened and not downgraded**: the open fails with an error naming both versions and telling the user to update Capsule, and the catalog is left byte-for-byte untouched — no stamp rewrite, no DDL, no drop.
+
+Opening it read-write is the unsafe option, not the accommodating one. The older binary cannot know which invariants the newer schema added, so its writes are the divergence: it fills a column it does not know is authoritative, or omits a register the newer build treats as present, and the damage is only visible after the user goes back to the build that could read the library correctly. Refusal costs the user an app update, which is always available. There is no recovery from silent divergent writes, which is why this is the same call as having no downgrade step at all.
+
+Implementation is slice `S-D23`.
 
 ## Album Protocol Version Pinning
 
@@ -63,6 +78,25 @@ A version-pinned album is upgraded by a **tombstone-plus-fork** ceremony: the ol
 7. **Resumption (partial-failure recovery).** A client that crashes between step 2 and step 6 reads its local `upgrade_pending_to` on restart, queries the server for the upgrade's current phase via the album row, and resumes from there. The `intent_id` is the idempotency key — the same `UpgradeIntent` never produces two forks, and a duplicate `AlbumTombstone` commit is a no-op at the MLS layer.
 8. **Atomicity guarantee.** The cutover is the single MLS commit in step 4. Until that commit is applied by a member's client, the client is operating in v_old; after, in v_new. There is no in-between state visible to one client. Cross-member, the cutover is observed as each member processes the commit; until the slowest member processes it, that member is still in v_old (and its `pending_until_upgrade` writes remain queued locally, never lost).
 
+### The Server's Halves
+
+Four of the steps above are the server's, and each one is the server's **because the clients cannot do it themselves** (slice `S-C24`). They are exposed as three operations on the album:
+
+| | |
+| --- | --- |
+| `POST /v1/albums/{id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
+| `GET /v1/albums/{id}/upgrade` | the phase, the expiry, and the **drain count** |
+| `DELETE /v1/albums/{id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
+
+- **The proposer is verified, against the account's [published device directory](/design/cryptography/keys/#device-directory).** Without that check anyone holding an access token could freeze an album by posting a struct, which is the opposite of a ceremony keyed to an admin device. What the server does **not** verify — and has no surface that could carry — is the `frozen_state_hash`: that is each member's independent statement about its own view, and a server that adjudicated it would be the single point the hostile-member defence exists to avoid.
+- **The window is `received_at + deadline` on the server's clock**, which is the whole reason the deadline is a duration. `received_at` is stamped when the proposal is accepted and never moves.
+- **Expiry is not a job.** An expired quiescence is treated *everywhere* as absent — by the write gate, by the phase, and by a fresh proposal, which replaces it rather than conflicting with it. Step 3's *"on deadline expiry the upgrade aborts cleanly"* is implemented as an absence of state rather than as a worker, which is what stops a proposer who vanished from freezing an album forever.
+- **Only one ceremony per album**, and the same `intent_id` twice is idempotent — a proposer that lost an acknowledgement re-POSTs the same bytes. A *different* id while one is live is `409 error.album.upgrade_in_flight`, carrying the live id.
+- **A write that does not name the live `intent_id` is `409 error.upload.album_quiescing`**, carrying it, so a client that *is* participating can tell "wrong ticket" from "somebody else's upgrade". The ceremony's own writes go through, which is what makes quiescence a filter rather than a freeze: in-flight uploads reach a terminal state instead of being abandoned.
+- **`in_flight` is a count, not a listing.** The proposer needs to know *whether* to wait and has no business seeing other members' upload identifiers to find out. It counts every non-terminal session against the album, `Pending` included: a session opened with no bytes sent is exactly as much in flight as one mid-transfer.
+
+**Lineage rides the signed manifest, and only the signed manifest.** `upgraded_from` is a field of the [asset manifest's](/design/cryptography/provenance/#asset-manifest) signed core, wire-absent when there is none. It is deliberately **not** mirrored into the `manifest_envelope` projection: that projection exists so a key-free server can validate a write without the manifest bytes, and lineage gates nothing the server decides — a projected field the server never reads is a field that can disagree with the manifest without anything noticing. A joining device reads the manifest itself, which the feed serves byte-for-byte.
+
 ### What This Defends Against
 
 - **Version-mismatched-client damage.** A v_old client cannot write into a v_new album because every write carries `protocol_version`, which is rejected by the [protocol handshake](/design/threat-model/validation/#protocol-and-capability-negotiation) and the [server-side validation invariants](/design/threat-model/validation/#server-side-validation-invariants).
@@ -88,5 +122,6 @@ The interaction with album pinning:
 - **Upgrade ceremony idempotency (smoke).** Run the 8-step ceremony against a multi-member testcontainer setup. Inject a crash after step 4 (the tombstone commit); resume; assert the same `intent_id` produces no second fork. Inject a divergent member state before step 4; assert the abort path triggers cleanly.
 - **Stranded write queue (smoke).** During quiescence, a member writes; the write is queued locally; the upgrade completes; the queued write is re-encoded against v_new and replayed. Assert no write is lost.
 - **Deprecation cutoff (unit).** Mock the cutoff date past; assert a request from a now-deprecated client returns `426` and the well-known announcement is served.
+- **Client catalog migration (unit).** Open a fixture library created at each historical `user_version`; assert it migrates stepwise to the current version with every column present, and that both default and gated projections answer correctly afterwards.
 
 The cross-module case — full upgrade ceremony exercised through a real client UI + server + MLS group — is one bounded E2E test in [Module Map](/design/module-map/#e2e-test-surface).

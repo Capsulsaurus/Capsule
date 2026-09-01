@@ -4,8 +4,43 @@ use salvo::http::cookie::{Cookie, SameSite};
 use salvo::prelude::*;
 
 use crate::models::responses::*;
+use crate::session::SessionContext;
 use crate::state::AppState;
 use crate::utils::headers::validate_user_from_headers;
+
+/// The passkey-assertion body, split into the ceremony's client-asserted session provenance
+/// and the WebAuthn credential itself (slice `S-N3`).
+///
+/// A passkey login is a login ceremony like any other, so it carries the same optional
+/// `cohort_hash`/`device_id` password login does — without them a passkey session lands in
+/// the devices view as an unknown, ungrouped device. Both are pulled out *beside* the
+/// credential (the credential's own fields are flattened through untouched), so an older
+/// client that posts a bare credential keeps working unchanged.
+#[derive(serde::Deserialize)]
+struct FinishAuthBody {
+    /// Advisory device-cohort hash (slice `S-C13`); grouping only, never authorization.
+    #[serde(default)]
+    cohort_hash: Option<String>,
+    /// The asserted directory `device_id`; surfaced on the session listing only.
+    #[serde(default)]
+    device_id: Option<String>,
+    /// The WebAuthn assertion, untouched.
+    #[serde(flatten)]
+    credential: serde_json::Value,
+}
+
+impl FinishAuthBody {
+    /// Split the parsed body into the WebAuthn credential and the session provenance to
+    /// attach to the session this ceremony opens.
+    fn split(
+        self,
+    ) -> Result<(webauthn_rs::prelude::PublicKeyCredential, SessionContext), serde_json::Error>
+    {
+        let context = SessionContext::new(self.cohort_hash, self.device_id);
+        let credential = serde_json::from_value(self.credential)?;
+        Ok((credential, context))
+    }
+}
 
 #[handler]
 pub async fn start_registration(
@@ -203,13 +238,14 @@ pub async fn finish_authentication(
         .map(|c| c.value().to_string())
         .ok_or(PasskeyAuthFinishResponses::InvalidCredential)?;
 
-    // Parse body manually
+    // Parse body manually: the credential plus the ceremony's optional session provenance.
     let body = req
-        .parse_json::<serde_json::Value>()
+        .parse_json::<FinishAuthBody>()
         .await
         .map_err(|_| PasskeyAuthFinishResponses::InvalidCredential)?;
-    let cred: webauthn_rs::prelude::PublicKeyCredential =
-        serde_json::from_value(body).map_err(|_| PasskeyAuthFinishResponses::InvalidCredential)?;
+    let (cred, context) = body
+        .split()
+        .map_err(|_| PasskeyAuthFinishResponses::InvalidCredential)?;
 
     // Retrieve state
     let auth_state: webauthn_rs::prelude::PasskeyAuthentication = state
@@ -230,10 +266,11 @@ pub async fn finish_authentication(
         .finish_authentication(auth_state, cred)
         .await?;
 
-    // Issue new tokens (Renamed from generate_tokens to generate_token_pair)
+    // Issue new tokens, carrying the ceremony's asserted cohort/device so a passkey login
+    // groups in the devices view exactly as a password login does (slice `S-N3`).
     let tokens = state
         .auth_service
-        .generate_token_pair(&user_id, &state.session_manager)
+        .generate_token_pair(&user_id, &state.session_manager, context)
         .await
         .map_err(PasskeyAuthFinishResponses::InternalServerError)?;
 
@@ -283,4 +320,71 @@ pub async fn delete_credential(
         .await?;
 
     Ok(PasskeyManageResponses::Success)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The shape of a WebAuthn assertion body, minus the (opaque, base64) crypto material —
+    /// enough to prove the `#[serde(flatten)]` split does not disturb the credential.
+    fn assertion_fields() -> serde_json::Value {
+        serde_json::json!({
+            "id": "Y3JlZC1pZA",
+            "rawId": "Y3JlZC1pZA",
+            "type": "public-key",
+            "response": { "clientDataJSON": "e30", "authenticatorData": "AA", "signature": "AA" },
+        })
+    }
+
+    #[test]
+    fn assertion_body_splits_provenance_from_the_credential() {
+        let mut body = assertion_fields();
+        body["cohort_hash"] = serde_json::Value::String("a".repeat(64));
+        body["device_id"] = serde_json::json!("1F2E3D4C-5B6A-4978-8899-AABBCCDDEEFF");
+
+        let parsed: FinishAuthBody = serde_json::from_value(body).expect("body parses");
+        assert_eq!(parsed.cohort_hash, Some("a".repeat(64)));
+        assert_eq!(
+            parsed.device_id.as_deref(),
+            Some("1F2E3D4C-5B6A-4978-8899-AABBCCDDEEFF")
+        );
+
+        // The credential half keeps every WebAuthn field and gains neither of ours — the
+        // assertion must reach `webauthn-rs` byte-identical to what the client sent.
+        let credential = parsed.credential.as_object().expect("credential object");
+        for field in ["id", "rawId", "type", "response"] {
+            assert!(credential.contains_key(field), "{field} survived the split");
+        }
+        assert!(!credential.contains_key("cohort_hash"));
+        assert!(!credential.contains_key("device_id"));
+    }
+
+    #[test]
+    fn assertion_body_without_provenance_still_parses() {
+        // An older client posts a bare credential: the ceremony still runs, the session just
+        // carries no grouping metadata.
+        let parsed: FinishAuthBody =
+            serde_json::from_value(assertion_fields()).expect("bare credential parses");
+        assert_eq!(parsed.cohort_hash, None);
+        assert_eq!(parsed.device_id, None);
+
+        let context = SessionContext::new(parsed.cohort_hash, parsed.device_id);
+        assert_eq!(context, SessionContext::default());
+    }
+
+    #[test]
+    fn assertion_body_normalizes_provenance_like_every_other_ceremony() {
+        let mut body = assertion_fields();
+        body["cohort_hash"] = serde_json::json!("   ");
+        body["device_id"] = serde_json::json!("not-a-uuid");
+
+        let parsed: FinishAuthBody = serde_json::from_value(body).expect("body parses");
+        let context = SessionContext::new(parsed.cohort_hash, parsed.device_id).normalized();
+        assert_eq!(
+            context,
+            SessionContext::default(),
+            "garbage provenance is indistinguishable from none"
+        );
+    }
 }

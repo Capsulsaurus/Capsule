@@ -1,59 +1,110 @@
 use salvo::prelude::*;
 
+use crate::drop_state::DropState;
+use crate::share_state::ShareState;
 use crate::state::AppState;
 
-mod assets;
+mod blob;
 mod drops;
-mod exports;
+mod receipts;
 mod share;
 mod verify;
+mod well_known;
 
-pub fn get_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state.clone()))
-        // Asset media endpoints
-        .push(
-            Router::with_path("<asset_id>")
-                .get(assets::get_original)
-                .push(Router::with_path("thumbnail").get(assets::get_thumbnail))
-                .push(Router::with_path("preview").get(assets::get_preview))
-                .push(Router::with_path("download").get(assets::get_download))
-                .push(Router::with_path("stream").get(assets::get_stream)),
-        )
-        // Batch operations
-        .push(Router::with_path("batch-download").post(assets::batch_download))
+/// Key-free ranged blob-serving router (mounted at `/blob`; slice `S-C10`). `GET /blob/{hash}`
+/// serves opaque ciphertext by content address with HTTP `Range` at the ciphertext stride;
+/// access-token auth is enforced per handler.
+pub fn get_blob_router(state: AppState) -> Router {
+    blob_tree().hoop(affix_state::inject(state))
 }
 
-/// Separate router for public share access (mounted at /s)
-pub fn get_share_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("<token>").get(share::get_shared_content))
+fn blob_tree() -> Router {
+    Router::new().push(Router::with_path("{hash}").get(blob::get_blob))
 }
 
-/// Storage-verification router (mounted at /storage). Skeleton — slice `S-C3`.
+/// Public share-link serve router (mounted at `/s`; slice `S-C4`). All three endpoints are
+/// key-free and unauthenticated; the serve engine enforces rate limits, the fail-closed
+/// revocation cache, the mandatory privacy strip, and the home-server gate.
+pub fn get_share_router(state: ShareState) -> Router {
+    Router::new().hoop(affix_state::inject(state)).push(
+        Router::with_path("{opaque_id}")
+            .get(share::get_share_metadata)
+            .push(Router::with_path("wrapped-secret").get(share::get_wrapped_secret))
+            .push(
+                Router::with_path("blob")
+                    .push(Router::with_path("{hash}").get(share::get_share_blob)),
+            ),
+    )
+}
+
+/// Storage-verification router (mounted at /storage). Slice `S-C3` (+ signed attestation,
+/// slice `S-C15`).
 pub fn get_storage_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("verify").post(verify::storage_verify))
+    storage_tree().hoop(affix_state::inject(state))
 }
 
-/// Guest drop-session router (mounted at /u; link-capability auth). Skeleton — `S-C5`.
-/// Drop chunks reuse the upload protocol's `PATCH` mechanics under the session this
-/// opens.
-pub fn get_drop_link_router(state: AppState) -> Router {
-    Router::new()
-        .hoop(affix_state::inject(state))
-        .push(Router::with_path("<opaque_id>/drop").post(drops::create_drop_session))
+fn storage_tree() -> Router {
+    Router::new().push(Router::with_path("verify").post(verify::storage_verify))
 }
 
-/// Owner-facing drop inbox router (mounted at /drops; session auth). Skeleton — `S-C5`.
-pub fn get_drops_router(state: AppState) -> Router {
+/// Durable custody-receipt router (mounted at /assets; slice `S-C15`).
+pub fn get_receipts_router(state: AppState) -> Router {
+    receipts_tree().hoop(affix_state::inject(state))
+}
+
+fn receipts_tree() -> Router {
+    Router::new().push(Router::with_path("{asset_id}/receipts").get(receipts::get_asset_receipts))
+}
+
+/// The media crate's route trees that belong in the generated REST client's OpenAPI schema
+/// (slice `S-D8`), pre-nested under the same sub-paths the live server mounts them at
+/// ([`crate::get_router`] and friends in [`crate`]), with no injected state — for the
+/// deterministic schema dump.
+///
+/// Deliberately narrowed to a clean, generatable subset: the share / drop / well-known routers
+/// are bare `#[handler]`s that salvo-oapi does not describe, so they are absent from the schema
+/// by construction anyway. (The plaintext-era per-id asset-serve tree that used to be carved
+/// out here was deleted with slice `S-C17`.)
+///
+/// The blob (`/blob/{hash}`), storage-verify (`/storage/verify`), and custody-receipt
+/// (`/assets/{asset_id}/receipts`) reads stay in — plain, typed request/response surfaces.
+pub fn schema_router() -> Router {
+    Router::new()
+        .push(Router::with_path("blob").push(blob_tree()))
+        .push(Router::with_path("storage").push(storage_tree()))
+        .push(Router::with_path("assets").push(receipts_tree()))
+}
+
+/// The `.well-known/capsule/*` registry router (mounted at /.well-known/capsule; slices
+/// `S-C15`, `S-C18`). Every record is public and unauthenticated — clients pin the attestation
+/// keys (TOFU) to verify receipts, and peers poll `revoked-jti` to keep their fail-closed
+/// revocation caches fresh. `moved/{user}` is post-v1 and deliberately absent.
+pub fn get_well_known_router(state: AppState) -> Router {
+    Router::new()
+        .hoop(affix_state::inject(state))
+        .push(Router::with_path("attestation-keys").get(well_known::attestation_keys))
+        .push(Router::with_path("server-info").get(well_known::server_info))
+        .push(Router::with_path("revoked-jti").get(well_known::revoked_jti))
+        .push(Router::with_path("deprecation").get(well_known::deprecation))
+}
+
+/// Guest drop-session router (mounted at /u; link-capability auth). `POST` opens a session and
+/// `PATCH` appends a chunk, reusing the S-C1 upload chunk mechanics (slice `S-C5`).
+pub fn get_drop_link_router(state: DropState) -> Router {
+    Router::new().hoop(affix_state::inject(state)).push(
+        Router::with_path("{opaque_id}/drop")
+            .post(drops::create_drop_session)
+            .push(Router::with_path("{drop_id}").patch(drops::append_drop_chunk)),
+    )
+}
+
+/// Owner-facing drop inbox router (mounted at /drops; session auth). Slice `S-C5`.
+pub fn get_drops_router(state: DropState) -> Router {
     Router::new()
         .hoop(affix_state::inject(state))
         .get(drops::list_drop_inbox)
         .push(
-            Router::with_path("<drop_id>")
+            Router::with_path("{drop_id}")
                 .delete(drops::discard_drop)
                 .push(Router::with_path("adopt").post(drops::adopt_drop)),
         )

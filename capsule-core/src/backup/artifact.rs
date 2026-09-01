@@ -66,6 +66,10 @@ pub struct BackupAsset {
     pub metadata_blob: Vec<u8>,
     /// The asset's provenance chain (oldest first).
     pub provenance: Vec<ProvenanceRecord>,
+    /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty = none). Evidence,
+    /// not a cache — a server destroying the record of its own liability is the adversary — so
+    /// it rides the artifact verbatim (S-D4).
+    pub receipts: Vec<u8>,
 }
 
 impl BackupAsset {
@@ -132,7 +136,8 @@ fn blob_role_order(role: &str) -> u8 {
         "blobs" => 0,
         "meta" => 1,
         "provenance" => 2,
-        _ => 3,
+        "receipts" => 3,
+        _ => 4,
     }
 }
 
@@ -288,17 +293,22 @@ pub fn export_with_salt(
         let prov_bytes = cbor::to_canonical_vec(&a.provenance).expect("provenance serializes");
         let prov_path = format!("provenance/{}", a.asset_id);
 
-        for (path, data) in [
-            (ct_path, &a.ciphertext),
-            (meta_path, &a.metadata_blob),
-            (prov_path, &prov_bytes),
-        ] {
+        let mut asset_entries = vec![
+            (ct_path, a.ciphertext.clone()),
+            (meta_path, a.metadata_blob.clone()),
+            (prov_path, prov_bytes),
+        ];
+        // The custody-receipt log rides the artifact only when present (absent = no key).
+        if !a.receipts.is_empty() {
+            asset_entries.push((format!("receipts/{}", a.asset_id), a.receipts.clone()));
+        }
+        for (path, data) in asset_entries {
             entries.push(EntryRef {
                 path: path.clone(),
-                hash: hash::hash_bytes(data),
+                hash: hash::hash_bytes(&data),
                 size: data.len() as u64,
             });
-            payloads.push((path, data.clone()));
+            payloads.push((path, data));
         }
         let head_rec = a
             .provenance
@@ -397,6 +407,9 @@ pub struct RestoredAsset {
     pub metadata_blob: Vec<u8>,
     /// The provenance chain.
     pub provenance: Vec<ProvenanceRecord>,
+    /// The asset's custody-receipt log (`{uuid}.receipts.cbor` bytes; empty if the artifact
+    /// carried none) — written back beside the provenance chain on commit (S-D4).
+    pub receipts: Vec<u8>,
 }
 
 /// The outcome of a restore (chain-reconciliation; newer local state always wins).
@@ -557,7 +570,7 @@ impl BackupArtifact {
                 ))
             })?;
         let amk = Amk::from_bytes(*amk_bytes);
-        let file_key = amk.derive_file_key(&head.core.file_id);
+        let file_key = amk.derive_file_key(&head.core.file_id, &head.core.nonce_prefix);
         let plaintext = stream::decrypt_asset_vec(&file_key, &head.core.nonce_prefix, ct)
             .map_err(|_| BackupError::Auth("asset decryption failed"))?;
 
@@ -567,18 +580,75 @@ impl BackupArtifact {
             .cloned()
             .unwrap_or_default();
 
+        // The custody-receipt log rides the artifact when the exporter held one (S-D4).
+        let receipts = self
+            .files
+            .get(&format!("receipts/{asset_id}"))
+            .cloned()
+            .unwrap_or_default();
+
         Ok(RestoredAsset {
             album_id: head.core.album_id,
             asset_id: *asset_id,
             plaintext,
             metadata_blob,
             provenance,
+            receipts,
         })
+    }
+
+    /// The escrowed AMK rows this artifact carries: `(album_id, epoch, amk)`.
+    ///
+    /// The same row shape the durable album keystore holds
+    /// ([`AmkRow`](crate::crypto::keys::AmkRow)), so folding a restore's recovered keys into a
+    /// library's keystore is a `map`, not a translation table. This is the path by which a
+    /// library that lost its album keys becomes able to read its photos again — the backup path
+    /// is deliberately independent of the MLS ratchet (SSoT: [Keys]).
+    ///
+    /// Note what is *not* here: the write-tier and admin signing keys, and the admin-signed epoch
+    /// ledger. Those are MLS-distributed capabilities, not escrowed secrets, so an album restored
+    /// into a library that never held it is readable but not writable.
+    ///
+    /// [Keys]: https://docs/design/cryptography/keys/#album-master-keys-amks
+    pub fn amk_rows(&self) -> Vec<(Uuid, u32, [u8; 32])> {
+        self.ledger
+            .iter()
+            .map(|((album, epoch), amk)| (*album, *epoch, *amk))
+            .collect()
     }
 
     /// The exporter device id recorded in the manifest (provenance: who exported).
     pub fn exporter_device(&self) -> Uuid {
         self.core.exporter_device
+    }
+
+    /// The `(asset_id, head_hash)` provenance heads the artifact carries — the same list
+    /// [`restore`](Self::restore) reconciles against local state. Exposed so a chain-aware
+    /// consumer (LAN peering, slice `S-E3`) can decide *forward-update vs. stale* per asset
+    /// before restoring, rather than treating every differing head as an opaque conflict.
+    pub fn provenance_heads(&self) -> &[(Uuid, Hash32)] {
+        &self.core.provenance_heads
+    }
+
+    /// The full provenance chain (oldest first) the artifact carries for `asset_id`, decoded
+    /// from its `provenance/{asset_id}` entry. `None` when the artifact carries no such asset.
+    ///
+    /// Peering walks this chain to distinguish a **forward** artifact (whose chain contains the
+    /// receiver's current head as an ancestor — safe to adopt) from a **stale** one (whose head
+    /// the receiver has already superseded — quarantined, never applied). The per-entry content
+    /// hashes were already verified by [`open`](Self::open), so the bytes here are authentic.
+    pub fn provenance_chain(
+        &self,
+        asset_id: &Uuid,
+    ) -> Result<Option<Vec<ProvenanceRecord>>, BackupError> {
+        match self.files.get(&format!("provenance/{asset_id}")) {
+            Some(bytes) => {
+                let chain: Vec<ProvenanceRecord> =
+                    cbor::from_slice(bytes).map_err(|e| BackupError::Format(e.to_string()))?;
+                Ok(Some(chain))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -613,8 +683,10 @@ mod tests {
         fn asset(&self, asset_id: u128, plaintext: &[u8]) -> BackupAsset {
             let amk = Amk::from_bytes(self.amk);
             let file_id = Uuid::from_u128(asset_id);
-            let file_key = amk.derive_file_key(&file_id);
-            let (enc, ct) = stream::encrypt_asset_vec_full(&file_key, plaintext);
+            // First write: draw the nonce and derive the folded file key together.
+            let (enc, ct, _file_key) =
+                crate::crypto::encryption::encrypt_asset_rekey(&amk, &file_id, plaintext, None)
+                    .unwrap();
 
             let core = MCore {
                 version: ASSET_MANIFEST_VERSION.into(),
@@ -636,6 +708,7 @@ mod tests {
                 timestamp: "2026-05-31T00:00:00Z".into(),
                 action: Action::Create,
                 prior_provenance_hash: None,
+                upgraded_from: None,
                 retention_until: None,
             };
             let manifest = core.sign(&self.device, &self.write).unwrap();
@@ -648,11 +721,16 @@ mod tests {
                 album_id: Uuid::from_u128(ALBUM),
                 asset_id: file_id,
                 ciphertext: ct,
-                metadata_blob: crate::crypto::encryption::seal_blob(
-                    &amk.derive_blob_key(&file_id),
+                metadata_blob: crate::crypto::encryption::seal_metadata_blob(
+                    &amk,
+                    &file_id,
                     b"{sidecar}",
-                ),
+                    None,
+                )
+                .unwrap()
+                .0,
                 provenance: vec![record],
+                receipts: Vec::new(),
             }
         }
 
@@ -702,6 +780,33 @@ mod tests {
             plaintexts,
             vec![b"hello world".to_vec(), b"second asset".to_vec()]
         );
+    }
+
+    #[test]
+    fn custody_receipts_ride_the_artifact_and_restore_verbatim() {
+        // S-D4: the custody-receipt log is evidence, so it is included in the backup artifact
+        // verbatim and comes back byte-identical on restore.
+        let f = Fix::new();
+        let mut with_receipts = f.asset(1, b"has receipts");
+        with_receipts.receipts = b"receipt-log-cbor-bytes".to_vec();
+        let plain = f.asset(2, b"no receipts"); // absent = no entry emitted
+        let input = f.input(vec![with_receipts, plain]);
+        let bytes = export(&input, b"pw", &f.device).unwrap();
+
+        let art = BackupArtifact::open(&bytes, b"pw", &f.device.verifying_key()).unwrap();
+        let report = art.restore(RestoreMode::Commit, &BTreeMap::new()).unwrap();
+        let a1 = report
+            .applied
+            .iter()
+            .find(|a| a.asset_id == Uuid::from_u128(1))
+            .unwrap();
+        assert_eq!(a1.receipts, b"receipt-log-cbor-bytes");
+        let a2 = report
+            .applied
+            .iter()
+            .find(|a| a.asset_id == Uuid::from_u128(2))
+            .unwrap();
+        assert!(a2.receipts.is_empty(), "no receipt log → no entry");
     }
 
     #[test]

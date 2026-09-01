@@ -1,52 +1,65 @@
-use std::fs::File;
-use std::io::Write;
+//! Deterministic OpenAPI **3.1** schema dump (slice `S-D8`).
+//!
+//! Serializes the server's salvo-oapi document to `capsule-sdk/openapi.json` — the committed
+//! source-of-truth the SDK's `spargen` build step generates the typed REST client from. It
+//! builds [`capsule_api::openapi_router`], the state-free mirror of the live router, so the
+//! dump needs **no** database, Valkey, key material, disk, or network and is byte-stable
+//! across runs. That is what lets `--check` run in the Rust check gate (`openapi-check`) as a
+//! drift guard, exactly mirroring `i18n` / `i18n-check`.
+//!
+//! Usage:
+//! - `gen_openapi [FILE]` writes the schema (default `capsule-sdk/openapi.json`).
+//! - `gen_openapi --check [FILE]` fails if the committed schema is stale, writing nothing.
+
 use std::path::PathBuf;
 
-use capsule_api::{create_openapi_spec, create_router};
+use capsule_api::{create_openapi_spec, openapi_router};
 use clap::Parser;
-use environment::Environment;
-use eyre::Result;
-use sea_orm::Database;
+use color_eyre::eyre::{Context, Result, bail};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Optional output path for the OpenAPI spec
-    #[arg(value_name = "FILE")]
-    output: Option<PathBuf>,
+    /// Output path for the OpenAPI 3.1 schema (relative to the repo root).
+    #[arg(value_name = "FILE", default_value = "capsule-sdk/openapi.json")]
+    output: PathBuf,
+
+    /// Verify the committed schema is up to date instead of writing it (CI drift gate).
+    #[arg(long)]
+    check: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let cli = Cli::parse();
+fn main() -> Result<()> {
     color_eyre::install()?;
+    let cli = Cli::parse();
 
-    // Load environment settings
-    let env = Environment::load()
-        .map_err(|e| eyre::eyre!("Failed to load environment settings: {:?}", e))?;
+    // Merge the state-free route tree into the base document. No I/O, no live services.
+    let doc = create_openapi_spec().merge_router(&openapi_router());
+    let mut json =
+        serde_json::to_string_pretty(&doc).wrap_err("serializing the OpenAPI document to JSON")?;
+    json.push('\n');
 
-    // Initialize database connection
-    // Note: This requires a running database. For SDK generation in CI/CD,
-    // we might need to mock this or ensure DB is present.
-    let conn = Database::connect(env.database.url.clone()).await?;
-
-    // Create the app router
-    let router = create_router(conn, &env).await?;
-
-    // Build OpenAPI spec by merging with router
-    let api = create_openapi_spec().merge_router(&router);
-
-    // Serialize to JSON
-    let json = serde_json::to_string_pretty(&api)?;
-
-    // Write to file
-    let path = cli.output.unwrap_or_else(|| PathBuf::from("openapi.json"));
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    if cli.check {
+        let committed = std::fs::read_to_string(&cli.output).wrap_err_with(|| {
+            format!("cannot read committed schema at {}", cli.output.display())
+        })?;
+        if committed != json {
+            bail!(
+                "OpenAPI schema at {} is out of sync with the server; run `mise run openapi` and \
+                 commit the result",
+                cli.output.display()
+            );
+        }
+        println!("OpenAPI schema is up to date: {}", cli.output.display());
+    } else {
+        if let Some(parent) = cli.output.parent() {
+            std::fs::create_dir_all(parent)
+                .wrap_err_with(|| format!("creating {}", parent.display()))?;
+        }
+        std::fs::write(&cli.output, &json)
+            .wrap_err_with(|| format!("writing {}", cli.output.display()))?;
+        println!("Wrote OpenAPI 3.1 schema: {}", cli.output.display());
     }
-    let mut file = File::create(&path)?;
-    file.write_all(json.as_bytes())?;
 
-    println!("Generated JSON at: {}", path.display());
     Ok(())
 }

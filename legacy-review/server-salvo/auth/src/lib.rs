@@ -8,10 +8,14 @@ use state::AppState;
 pub mod claims;
 pub mod config;
 pub mod constants;
+#[cfg(feature = "server")]
+pub mod enrollment;
 pub mod errors;
 #[cfg(feature = "server")]
 pub mod models;
 pub mod oidc;
+#[cfg(feature = "server")]
+pub mod revocation;
 pub mod roles;
 #[cfg(feature = "server")]
 mod routes;
@@ -28,6 +32,16 @@ pub mod validation;
 #[cfg(feature = "server")]
 pub fn get_router_with_state(state: AppState) -> Router {
     routes::get_router(state)
+}
+
+/// The auth route tree with no injected state, for OpenAPI schema extraction only
+/// (slice `S-D8`). Reuses [`routes::route_tree`] — the exact `#[endpoint]` set the live
+/// [`get_router`] mounts — so the deterministic schema dump can never drift from the
+/// served routes, while needing no database, Valkey, or key material to build. The
+/// injected [`AppState`] is a serving-time concern that carries no schema information.
+#[cfg(feature = "server")]
+pub fn openapi_router() -> Router {
+    routes::route_tree()
 }
 
 #[cfg(feature = "server")]

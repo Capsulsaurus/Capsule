@@ -1,8 +1,8 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import type React from 'react';
 import { useState } from 'react';
-import { PasskeyRegister } from '@/components/mfa/passkey-register';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { TotpEnroll } from '@/components/mfa/totp-enroll';
 import { Button } from '@/components/ui/button';
 import {
@@ -14,22 +14,15 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    ApiError,
-    type Device,
-    deletePasskey,
-    getDevices,
-    listPasskeys,
-    type PasskeyCredential,
-    totpDisable,
-} from '@/lib/api';
+import { ApiError, type Device, getDevices, totpDisable } from '@/lib/api';
 
 export const Route = createLazyFileRoute('/settings/security')({
     component: SecuritySettings,
 });
 
-function formatDate(unixSecs: number) {
-    return new Date(unixSecs * 1000).toLocaleDateString(undefined, {
+/** Render an RFC 3339 instant, which is what every timestamp on the auth surface is. */
+function formatDate(rfc3339: string) {
+    return new Date(rfc3339).toLocaleDateString(undefined, {
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -39,14 +32,16 @@ function formatDate(unixSecs: number) {
 }
 
 function DeviceCard({ device }: { device: Device }) {
+    const intl = useIntl();
     return (
         <div className="flex items-start justify-between p-3 rounded-md border">
             <div className="space-y-1 text-sm">
                 <div className="font-medium">
-                    {device.user_agent ?? 'Unknown device'}
-                    {device.is_current && (
+                    {device.user_agent ??
+                        intl.formatMessage({ id: 'security.unknown_device' })}
+                    {device.current && (
                         <span className="ml-2 text-xs text-green-600 font-normal">
-                            (This device)
+                            <FormattedMessage id="security.this_device" />
                         </span>
                     )}
                 </div>
@@ -56,79 +51,25 @@ function DeviceCard({ device }: { device: Device }) {
                     </div>
                 )}
                 <div className="text-muted-foreground text-xs">
-                    Last active: {formatDate(device.last_active_at)}
+                    <FormattedMessage
+                        id="security.last_active"
+                        values={{ date: formatDate(device.last_active_at) }}
+                    />
                 </div>
             </div>
-        </div>
-    );
-}
-
-function PasskeyRow({
-    passkey,
-    onDeleted,
-}: {
-    passkey: PasskeyCredential;
-    onDeleted: () => void;
-}) {
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    async function handleDelete() {
-        if (!confirm(`Delete passkey "${passkey.name}"?`)) return;
-        setLoading(true);
-        setError(null);
-        try {
-            await deletePasskey(passkey.id);
-            onDeleted();
-        } catch (err) {
-            setError(
-                err instanceof ApiError
-                    ? err.message
-                    : 'Failed to delete passkey.',
-            );
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    return (
-        <div className="flex items-center justify-between p-3 rounded-md border">
-            <div className="space-y-1 text-sm">
-                <div className="font-medium">{passkey.name}</div>
-                <div className="text-muted-foreground text-xs">
-                    Added: {formatDate(passkey.created_at)}
-                </div>
-                {error && (
-                    <div className="text-xs text-destructive">{error}</div>
-                )}
-            </div>
-            <Button
-                variant="destructive"
-                size="sm"
-                onClick={handleDelete}
-                disabled={loading}
-            >
-                {loading ? 'Deleting…' : 'Remove'}
-            </Button>
         </div>
     );
 }
 
 function SecuritySettings() {
-    const queryClient = useQueryClient();
+    const intl = useIntl();
 
     const { data: devices, isLoading: devicesLoading } = useQuery({
         queryKey: ['auth', 'devices'],
         queryFn: getDevices,
     });
 
-    const { data: passkeys, isLoading: passkeysLoading } = useQuery({
-        queryKey: ['auth', 'passkeys'],
-        queryFn: listPasskeys,
-    });
-
     const [showTotpEnroll, setShowTotpEnroll] = useState(false);
-    const [showPasskeyRegister, setShowPasskeyRegister] = useState(false);
     const [totpDisableCode, setTotpDisableCode] = useState('');
     const [totpDisableError, setTotpDisableError] = useState<string | null>(
         null,
@@ -142,14 +83,18 @@ function SecuritySettings() {
         setTotpDisableLoading(true);
         try {
             await totpDisable(totpDisableCode);
-            setTotpSuccess('TOTP disabled.');
+            setTotpSuccess(
+                intl.formatMessage({ id: 'security.totp_disabled' }),
+            );
             setTotpDisableCode('');
             setShowTotpEnroll(false);
         } catch (err) {
             setTotpDisableError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to disable TOTP.',
+                    : intl.formatMessage({
+                          id: 'security.totp_disable_failed',
+                      }),
             );
         } finally {
             setTotpDisableLoading(false);
@@ -159,47 +104,53 @@ function SecuritySettings() {
     return (
         <div className="max-w-2xl mx-auto p-6 space-y-8">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold">Security Settings</h1>
+                <h1 className="text-2xl font-bold">
+                    <FormattedMessage id="security.title" />
+                </h1>
                 <Link
                     to="/settings"
                     className="text-sm underline text-muted-foreground"
                 >
-                    ← Profile settings
+                    <FormattedMessage id="security.profile_link" />
                 </Link>
             </div>
 
             {/* Active Sessions */}
             <Card>
                 <CardHeader>
-                    <CardTitle>Active Sessions</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="security.sessions.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Devices currently logged in to your account.
+                        <FormattedMessage id="security.sessions.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-2">
                     {devicesLoading && (
                         <p className="text-sm text-muted-foreground">
-                            Loading sessions…
+                            <FormattedMessage id="security.sessions.loading" />
                         </p>
                     )}
-                    {devices?.map((device) => (
-                        <DeviceCard key={device.id} device={device} />
+                    {devices?.sessions.map((device) => (
+                        <DeviceCard key={device.session_id} device={device} />
                     ))}
-                    {!devicesLoading && (!devices || devices.length === 0) && (
-                        <p className="text-sm text-muted-foreground">
-                            No active sessions found.
-                        </p>
-                    )}
+                    {!devicesLoading &&
+                        (!devices || devices.sessions.length === 0) && (
+                            <p className="text-sm text-muted-foreground">
+                                <FormattedMessage id="security.sessions.empty" />
+                            </p>
+                        )}
                 </CardContent>
             </Card>
 
             {/* TOTP */}
             <Card>
                 <CardHeader>
-                    <CardTitle>Authenticator App (TOTP)</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="security.totp.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Use an authenticator app to generate one-time codes for
-                        login.
+                        <FormattedMessage id="security.totp.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -210,7 +161,11 @@ function SecuritySettings() {
                         <TotpEnroll
                             onSuccess={() => {
                                 setShowTotpEnroll(false);
-                                setTotpSuccess('Authenticator app enabled.');
+                                setTotpSuccess(
+                                    intl.formatMessage({
+                                        id: 'security.totp.enabled',
+                                    }),
+                                );
                             }}
                             onCancel={() => setShowTotpEnroll(false)}
                         />
@@ -222,12 +177,11 @@ function SecuritySettings() {
                                     setShowTotpEnroll(true);
                                 }}
                             >
-                                Set up authenticator app
+                                <FormattedMessage id="security.totp.setup_button" />
                             </Button>
                             <div className="border-t pt-4">
                                 <p className="text-sm text-muted-foreground mb-2">
-                                    If TOTP is currently enabled, enter a code
-                                    to disable it:
+                                    <FormattedMessage id="security.totp.disable_prompt" />
                                 </p>
                                 <form
                                     onSubmit={handleTotpDisable}
@@ -238,13 +192,15 @@ function SecuritySettings() {
                                             htmlFor="totp-disable-code"
                                             className="sr-only"
                                         >
-                                            TOTP Code
+                                            <FormattedMessage id="security.totp.code_label" />
                                         </Label>
                                         <Input
                                             id="totp-disable-code"
                                             type="text"
                                             inputMode="numeric"
-                                            placeholder="6-digit code"
+                                            placeholder={intl.formatMessage({
+                                                id: 'security.totp.code_placeholder',
+                                            })}
                                             maxLength={6}
                                             value={totpDisableCode}
                                             onChange={(e) =>
@@ -263,9 +219,11 @@ function SecuritySettings() {
                                             !totpDisableCode
                                         }
                                     >
-                                        {totpDisableLoading
-                                            ? 'Disabling…'
-                                            : 'Disable TOTP'}
+                                        {totpDisableLoading ? (
+                                            <FormattedMessage id="security.totp.disabling" />
+                                        ) : (
+                                            <FormattedMessage id="security.totp.disable_button" />
+                                        )}
                                     </Button>
                                 </form>
                                 {totpDisableError && (
@@ -279,57 +237,11 @@ function SecuritySettings() {
                 </CardContent>
             </Card>
 
-            {/* Passkeys */}
-            <Card>
-                <CardHeader>
-                    <CardTitle>Passkeys</CardTitle>
-                    <CardDescription>
-                        Sign in using your device's biometrics or PIN.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-3">
-                    {passkeysLoading && (
-                        <p className="text-sm text-muted-foreground">
-                            Loading passkeys…
-                        </p>
-                    )}
-                    {passkeys?.map((passkey) => (
-                        <PasskeyRow
-                            key={passkey.id}
-                            passkey={passkey}
-                            onDeleted={() =>
-                                queryClient.invalidateQueries({
-                                    queryKey: ['auth', 'passkeys'],
-                                })
-                            }
-                        />
-                    ))}
-                    {!passkeysLoading &&
-                        (!passkeys || passkeys.length === 0) && (
-                            <p className="text-sm text-muted-foreground">
-                                No passkeys registered.
-                            </p>
-                        )}
-                    {showPasskeyRegister ? (
-                        <PasskeyRegister
-                            onSuccess={() => {
-                                setShowPasskeyRegister(false);
-                                queryClient.invalidateQueries({
-                                    queryKey: ['auth', 'passkeys'],
-                                });
-                            }}
-                            onCancel={() => setShowPasskeyRegister(false)}
-                        />
-                    ) : (
-                        <Button
-                            variant="outline"
-                            onClick={() => setShowPasskeyRegister(true)}
-                        >
-                            Add passkey
-                        </Button>
-                    )}
-                </CardContent>
-            </Card>
+            {/* No passkeys card. Passkeys are not in v1 (`S-C56`): the six operations
+                behind this screen were in no OpenAPI document and could never authenticate —
+                the ceremony was started with an empty allow-list, so `webauthn-rs` answered
+                `CredentialNotFound` to every assertion. A screen for a feature that cannot
+                work is worse than no screen. */}
         </div>
     );
 }

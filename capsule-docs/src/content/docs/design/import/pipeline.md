@@ -51,7 +51,7 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
-**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The standalone `import::executor` still writes the legacy **unsigned** `AssetSidecar`; unifying it onto the signed path waits on derivative generation (step 3, planned with [Thumbnails](/design/thumbnails/)).
+**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The `import::executor` drives imports entirely onto this signed path (`S-B2`), and the legacy **unsigned** `AssetSidecar` write path has been removed (`S-G4`). The unsigned sidecar survives only as a *read* model: the recovery-first index rebuild (`capsule-core::library::rebuild`) still ingests unsigned `.cbor` sidecars left by pre-signed-path libraries. The executor's media half is being rebuilt over Rawshift (with Capsule calling Chromahash directly after its v1 release); the old plaintext decode/extract path is review-only under `legacy-review/core-import-media/`.
 
 ## Import-Upload Streaming Mode
 
@@ -85,6 +85,25 @@ The committed adapters:
 
 - **Google Takeout (`S-B6`, v1).** Walks a Takeout archive; pairs each media file with its JSON sidecar (photo-taken time, GPS, description, favorites, album JSONs); folds per the precedence rule. Takeout's known quirks — truncated filenames, `(1)` duplicates, edited/original pairs, JSON files split across archive parts — are adapter concerns with fixture coverage, never planner special cases.
 - **iCloud Photos export (`S-B7`, post-v1).** The iCloud export layout (originals + CSV metadata).
+
+Four of Takeout's fields have no direct counterpart in Capsule's model, so the mapping is fixed here
+rather than left to each importer to re-decide (settled with `S-B10`):
+
+| Exporter field | Written as | Why not the obvious alternative |
+| --- | --- | --- |
+| Favourite | `rating = 5` | Capsule models no favourite. `cull` is a **review-pass** state ([Organization — Culling](/design/organization/#culling)) and is deliberately orthogonal to stars, so writing a `pick` would fabricate a review decision the user never made. A non-favourite writes nothing at all, leaving the register at its default. |
+| Album membership | `tags_user` entries, titles verbatim | An asset lives in exactly one container album, and [Organization — The Default Album](/design/organization/#the-default-album) forbids an automated import inventing destinations — so creating a container album per Takeout album is refused. `tags_user` is the sidecar's only multi-valued user-content set and is already projected into the searchable index, so the album survives as something a smart album can reconstruct as a view. |
+| GPS fix from the exporter JSON | `GpsSource::Manual` | `Exif` would be false inside a **signed** record: those image bytes did not carry the fix. Note the adapter collapses Takeout's `geoData` (user-editable) and `geoDataExif` (the service's copy of the EXIF fix) into one point, so a `geoDataExif`-sourced fix cannot be distinguished and also records `Manual`. |
+| Description longer than the caption bound | Truncated on a char boundary, with a warning | [Metadata](/design/metadata/) caps the caption register but says nothing about an importer reaching it. Dropping the description loses more than truncating it, and the exporter JSON remains the untruncated record. |
+
+The **precedence rule resolves twice**, and the second resolution is not redundant. The adapter folds
+at extraction — embedded EXIF wins for capture time and GPS, the exporter wins for description,
+favourite and albums — and the write site then prefers the file's own EXIF instant, else the
+adapter's *folded* value, else the import clock. The fallback must be the folded value rather than
+the raw exporter value: [timezone resolution](/design/metadata/) yields no instant for a floating
+`DateTimeOriginal` with no offset, which is the common case, and consulting the exporter at that
+point would let it beat real EXIF in exactly the situation the precedence rule exists to govern.
+
 - **Immich (`S-B8`, post-v1).** Immich's export/API surface; format fixed when the slice starts.
 
 Tethered cameras plug into this same adapter seam — see [Import — Camera Import](/design/import/camera-import/). User-facing migration guides (per-provider export walkthroughs, verification checklists, robustness disclaimers) live in the docs site outside `design/` and ship gated on each importer stabilizing (slice `S-Z2`).
@@ -107,15 +126,15 @@ What the rest of the system depends on this module for:
 
 - `ImportPlan` — the deterministic output of the planner; rendered to the UI for confirmation. Schema fields: `added` (each entry carrying its resolved destination `album_id`), `skipped`, `conflicts`, `total_size`, `import_id` (UUIDv7), and `streaming_recommended` (set at confirmation from the [free-space probe](#plan--confirm), not by the pure planner).
 - `available_bytes() → u64` — the library volume's free space (a thin `statvfs` / `GetDiskFreeSpaceEx` wrapper in `capsule-core::library`); the input that decides `streaming_recommended`.
-- Planned `execute(plan, cancel_token) → ImportExecutionReport` — a replacement executor built over Rawshift plus Capsule's direct Chromahash integration, privacy mapping, encryption, signing, and commit boundaries. The old plaintext executor is review-only under `legacy-review/core-import-media/`.
-- A planned stable progress event stream so the UI can report per-asset state (queued / processing / encrypting / uploading / done / failed).
+- `execute(plan, cancel_token) → ImportExecutionReport` — the executor entry-point, on the signed path (`S-B2`). Honors the cancel token at every file boundary. Returns per-file status. In [streaming mode](#import-upload-streaming-mode) it drives the per-asset import→upload→verify→release window instead of executing-then-uploading in bulk. Its media half is a planned rebuild over Rawshift plus Capsule's direct Chromahash integration, keeping the privacy mapping, encryption, signing, and commit boundaries Capsule-owned; the old plaintext executor is review-only under `legacy-review/core-import-media/`.
+- A stable progress event stream so the UI can report per-asset state (queued / processing / encrypting / uploading / done / failed).
 
 ## Validation
 
 - **Planner determinism (unit).** Table-driven tests over `(scan_input, library_state) → expected_plan`. Every conflict-resolution and dedup-detection path is its own row. Default-album resolution is part of the input snapshot, so a given `(context, pointer/overrides)` yields a deterministic destination `album_id`.
 - **Scanner format-rejection (unit).** Every unsupported extension and every malformed-header case produces a structured rejection, never a panic.
-- **Executor cancellation (planned smoke).** Run the replacement executor against a temp library, cancel mid-flight, assert no partial bundle is left on disk and a re-run produces the same plan minus already-completed files.
-- **Resume after interruption (planned smoke).** Plan → execute partially → kill the process → re-run. The deterministic planner re-derives the same plan; already-completed assets are skipped.
+- **Executor cancellation (smoke).** Run the executor against a temp library, cancel mid-flight, assert no partial bundle is left on disk and a re-run produces the same plan minus already-completed files.
+- **Resume after interruption (smoke).** Plan → execute partially → kill the process → re-run. The deterministic planner re-derives the same plan; already-completed assets are skipped.
 - **Streaming auto-detect (unit).** With `available_bytes()` mocked below and above `total_size + headroom`, assert `streaming_recommended` is set in the constrained case and clear otherwise.
 - **Streaming release gating (smoke).** Run a streaming import with `/storage/verify` mocked: assert each local original (and Move-mode source) is released *only* after its `durable` verdict, and that a non-`durable` verdict leaves the local copy in place.
 - **Streaming halt-on-disconnect (smoke).** Drop the server connection mid-stream; assert the pipeline stops admitting new source files into the library (no unbounded local growth) and resumes uploading via `HEAD` on reconnect without re-importing completed assets.

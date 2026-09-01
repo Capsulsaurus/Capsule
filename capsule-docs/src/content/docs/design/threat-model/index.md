@@ -10,7 +10,7 @@ A faulty, malicious, or version-mismatched client must not be able to cause **ir
 
 The threat model is not a primitives doc. Every primitive Capsule uses is declared in its [owner doc](/design/principles/#single-source-of-truth); this doc references those declarations rather than re-stating them. Where a specific invariant lives, the relevant owner doc enforces it; where a *defense* spans multiple docs, the canonical statement lives in one of the sub-docs below.
 
-The cross-cutting invariants here are enforced by code that lives across many crates: `capsule-core::crypto::verify_asset` (client-side validation chokepoint), `capsule-api` (server-side envelope checks at every write path), and the [validation](/design/threat-model/validation/) sub-doc's invariants directly map to acceptance tests in the corresponding API crates.
+The cross-cutting invariants here are enforced by code that lives across many crates: `capsule-core::crypto::verify_asset` (client-side validation chokepoint), `capsule-server` (server-side envelope checks at every write path), and the [validation](/design/threat-model/validation/) sub-doc's invariants directly map to acceptance tests in the corresponding API crates.
 
 ## Sub-docs
 

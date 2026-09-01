@@ -34,12 +34,12 @@ public struct SearchRootView: View {
     public var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Search")
+                .navigationTitle("ios.tab.search")
                 .navigationBarTitleDisplayMode(.inline)
                 .searchable(
                     text: $model.query,
                     placement: .navigationBarDrawer(displayMode: .always),
-                    prompt: "Photos, Videos, Moments"
+                    prompt: "ios.search.prompt"
                 )
                 .searchSuggestions { suggestionList }
         }
@@ -71,17 +71,17 @@ public struct SearchRootView: View {
     private var browseView: some View {
         List {
             if !model.recentSearches.isEmpty {
-                Section("Recent") {
+                Section("ios.search.section.recent") {
                     ForEach(model.recentSearches, id: \.self) { term in
                         Button { model.applyRecent(term) } label: {
                             Label(term, systemImage: "clock.arrow.circlepath")
                         }
                     }
-                    Button("Clear", role: .destructive) { model.clearRecents() }
+                    Button("ios.search.clear_recents", role: .destructive) { model.clearRecents() }
                         .font(.footnote)
                 }
             }
-            Section("Categories") {
+            Section("ios.search.section.categories") {
                 ForEach(model.allSuggestions) { suggestion in
                     Button { model.apply(suggestion) } label: {
                         Label(suggestion.title, systemImage: suggestion.systemImage)
@@ -108,9 +108,9 @@ public struct SearchRootView: View {
             Divider()
             if model.results.isEmpty {
                 ContentUnavailableView(
-                    "No Matches",
+                    "ios.search.empty.title",
                     systemImage: "magnifyingglass",
-                    description: Text("No photos match these filters.")
+                    description: Text("ios.search.empty.description")
                 )
             } else {
                 PhotoGridView(
@@ -146,7 +146,10 @@ public struct SearchRootView: View {
             Button(action: onClear) {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
             }
-            .accessibilityLabel("Clear \(title)")
+            .accessibilityLabel(String(
+                localized: "ios.search.clear_facet",
+                defaultValue: "Clear \(title)"
+            ))
         }
         .padding(.horizontal, CapsuleTheme.Spacing.medium)
         .padding(.vertical, CapsuleTheme.Spacing.xSmall)

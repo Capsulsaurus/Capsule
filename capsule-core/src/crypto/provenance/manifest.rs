@@ -140,6 +140,20 @@ pub struct ManifestCore {
     pub prior_provenance_hash: Option<Hash32>,
     /// Server-visible retention deadline (RFC3339); set only for `action = delete`.
     pub retention_until: Option<String>,
+    /// The album this asset's album was **forked from**, when it is a fork (slice `S-C24`).
+    ///
+    /// The normative link between an upgraded album and its predecessor — never the MLS group
+    /// name, which is an internal detail. A device that joins the fork reads this and can walk
+    /// back to the album the asset came from; without it, a fork looks like an unrelated album
+    /// full of assets that appeared from nowhere.
+    ///
+    /// **Wire-absent when there is none**, never present-`null`. This is inside the signed core,
+    /// so a present-`null` would change [`signing_bytes`](Self::signing_bytes) and silently break
+    /// re-verification of every manifest written before the field existed — the same trap
+    /// `S-A11` carries for `dek_public`, and the reason
+    /// `an_absent_lineage_is_wire_absent_and_does_not_move_the_signature` exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upgraded_from: Option<crate::crypto::upgrade::UpgradeLineage>,
 }
 
 /// A signed asset manifest: a [`ManifestCore`] plus its two hybrid signatures.
@@ -185,14 +199,29 @@ impl AssetManifest {
 
     /// Structural well-formedness independent of any key:
     /// - `prior_provenance_hash` is null **iff** the action is `create`;
-    /// - `retention_until` is set only for `delete`.
+    /// - `retention_until` is set only for `delete`;
+    /// - `wrapped_file_key` is present **iff** `key_mode = wrapped`;
+    /// - `metadata_blob_hash` is present **iff** the action binds a metadata blob
+    ///   ([`Action::binds_metadata_blob`] — `create | replace | metadata-update`).
     ///
-    /// These are enforced both here (client `verify_asset`) and by the server envelope.
+    /// The first two are mirrored by the server envelope; the wrapped-key rule is the
+    /// signature-visible presence rule for an adopted web-upload drop, enforced here at
+    /// `verify_asset`. The `metadata_blob_hash` presence-by-action rule closes the deferral
+    /// noted at S-A1 ("field enforcement lands together"): now that the `Workspace` populates
+    /// the field per the [sealing order], `verify_asset` can require its presence exactly on the
+    /// metadata-bearing actions and its absence on the other four. The server mirrors the
+    /// *value* half key-free at [invariant 25]
+    /// ([`check_metadata_blob_envelope`](crate::validation::check_metadata_blob_envelope)).
+    ///
+    /// [sealing order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
+    /// [invariant 25]: https://docs/design/threat-model/validation/#server-side-validation-invariants
     pub fn structural_ok(&self) -> bool {
-        let prior_rule = self.core.prior_provenance_hash.is_none() == self.core.action.is_create();
-        let retention_rule =
-            self.core.retention_until.is_none() || self.core.action == Action::Delete;
-        prior_rule && retention_rule
+        let core = &self.core;
+        let prior_rule = core.prior_provenance_hash.is_none() == core.action.is_create();
+        let retention_rule = core.retention_until.is_none() || core.action == Action::Delete;
+        let wrapped_rule = core.wrapped_file_key.is_some() == (core.key_mode == KeyMode::Wrapped);
+        let blob_hash_rule = core.metadata_blob_hash.is_some() == core.action.binds_metadata_blob();
+        prior_rule && retention_rule && wrapped_rule && blob_hash_rule
     }
 }
 
@@ -295,6 +324,7 @@ mod tests {
             action,
             prior_provenance_hash: prior,
             retention_until: None,
+            upgraded_from: None,
         }
     }
 
@@ -320,44 +350,114 @@ mod tests {
         assert_eq!(back.signing_bytes(), m.signing_bytes());
     }
 
+    /// A wrapped-file-key length (`structural_ok` is length-agnostic; the real length is
+    /// pinned by `crate::crypto::encryption::WRAPPED_FILE_KEY_LEN`).
+    const WRAPPED_LEN: usize = crate::crypto::encryption::WRAPPED_FILE_KEY_LEN;
+
+    /// A structurally-valid core for `action` (correct prior placement + `metadata_blob_hash`
+    /// present exactly on the metadata-bearing actions), so tests can perturb exactly one field.
+    fn valid_core(action: Action) -> ManifestCore {
+        let prior = (!action.is_create()).then(|| Hash32([1; 32]));
+        let mut c = core(action, prior);
+        c.metadata_blob_hash = action.binds_metadata_blob().then(|| Hash32([0x4D; 32]));
+        c
+    }
+
     #[test]
     fn structural_rules_prior_hash_and_retention() {
         // create + null prior: ok.
         assert!(
-            core(Action::Create, None)
+            valid_core(Action::Create)
                 .sign(&dev(), &wt())
                 .unwrap()
                 .structural_ok()
         );
         // create + non-null prior: violation.
-        assert!(
-            !core(Action::Create, Some(Hash32([1; 32])))
-                .sign(&dev(), &wt())
-                .unwrap()
-                .structural_ok()
-        );
+        let mut c = valid_core(Action::Create);
+        c.prior_provenance_hash = Some(Hash32([1; 32]));
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
         // non-create + null prior: violation.
-        assert!(
-            !core(Action::Replace, None)
-                .sign(&dev(), &wt())
-                .unwrap()
-                .structural_ok()
-        );
+        let mut c = valid_core(Action::Replace);
+        c.prior_provenance_hash = None;
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
         // non-create + non-null prior: ok.
         assert!(
-            core(Action::Replace, Some(Hash32([1; 32])))
+            valid_core(Action::Replace)
                 .sign(&dev(), &wt())
                 .unwrap()
                 .structural_ok()
         );
 
         // retention only on delete.
-        let mut c = core(Action::MetadataUpdate, Some(Hash32([1; 32])));
+        let mut c = valid_core(Action::MetadataUpdate);
         c.retention_until = Some("2026-07-01T00:00:00Z".into());
         assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
-        let mut d = core(Action::Delete, Some(Hash32([1; 32])));
+        let mut d = valid_core(Action::Delete);
         d.retention_until = Some("2026-07-01T00:00:00Z".into());
         assert!(d.sign(&dev(), &wt()).unwrap().structural_ok());
+    }
+
+    #[test]
+    fn structural_rule_wrapped_file_key_present_iff_wrapped() {
+        // derived (default) + absent: ok.
+        assert!(
+            valid_core(Action::Create)
+                .sign(&dev(), &wt())
+                .unwrap()
+                .structural_ok()
+        );
+        // wrapped + present: ok.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; WRAPPED_LEN]));
+        assert!(c.sign(&dev(), &wt()).unwrap().structural_ok());
+        // wrapped + absent: violation.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = None;
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
+        // derived + present: violation.
+        let mut c = valid_core(Action::Create);
+        c.key_mode = KeyMode::Derived;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; WRAPPED_LEN]));
+        assert!(!c.sign(&dev(), &wt()).unwrap().structural_ok());
+    }
+
+    /// The `metadata_blob_hash` presence-by-action rule (the S-A1 deferral, now enforced with
+    /// S-A3): present exactly on `create | replace | metadata-update`, absent on the other four.
+    #[test]
+    fn structural_rule_metadata_blob_hash_present_iff_action_binds() {
+        for action in [
+            Action::Create,
+            Action::Replace,
+            Action::Delete,
+            Action::MetadataUpdate,
+            Action::DerivativeAdd,
+            Action::DerivativeReplace,
+            Action::TrashRestore,
+        ] {
+            let binds = action.binds_metadata_blob();
+            // The action's canonical presence is well-formed.
+            assert!(
+                valid_core(action)
+                    .sign(&dev(), &wt())
+                    .unwrap()
+                    .structural_ok(),
+                "{action:?} canonical presence must be structurally ok"
+            );
+            // Flip the presence: a metadata-bearing action missing the hash, or a non-bearing
+            // action carrying one, is a structural violation.
+            let mut c = valid_core(action);
+            c.metadata_blob_hash = if binds {
+                None
+            } else {
+                Some(Hash32([0x4D; 32]))
+            };
+            assert!(
+                !c.sign(&dev(), &wt()).unwrap().structural_ok(),
+                "{action:?} with flipped metadata_blob_hash presence must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -440,5 +540,57 @@ mod tests {
             wrapped.is_bytes(),
             "wrapped_file_key must encode as a CBOR byte string"
         );
+        // A populated `metadata_blob_hash` (create binds a blob) likewise encodes as a byte
+        // string, not an array of integers — the byte-identity vector for the present state.
+        let blob_hash = map
+            .iter()
+            .find(|(k, _)| k.as_text() == Some("metadata_blob_hash"))
+            .map(|(_, v)| v)
+            .expect("metadata_blob_hash present on a create manifest");
+        assert!(
+            blob_hash.is_bytes(),
+            "metadata_blob_hash must encode as a CBOR byte string"
+        );
+    }
+    /// An absent lineage is **wire-absent**, and adding the field moved no signature.
+    ///
+    /// The `S-A11` discipline, applied to `upgraded_from` (`S-C24`). A present-`null` inside a
+    /// signed core changes `signing_bytes` and silently breaks re-verification of every manifest
+    /// written before the field existed — a failure that shows up as "the signature is wrong"
+    /// long after the commit that caused it.
+    #[test]
+    fn an_absent_lineage_is_wire_absent_and_does_not_move_the_signature() {
+        let core = core(Action::Create, None);
+        let encoded = core.signing_bytes();
+        let decoded: ciborium::Value =
+            ciborium::from_reader(encoded.as_slice()).expect("canonical CBOR decodes");
+        let ciborium::Value::Map(entries) = decoded else {
+            panic!("a manifest core encodes as a map")
+        };
+        assert!(
+            !entries.iter().any(|(key, _)| {
+                matches!(key, ciborium::Value::Text(name) if name == "upgraded_from")
+            }),
+            "the key must be absent, not present-null"
+        );
+
+        // And a lineage that *is* present round-trips, so absence is a choice rather than the
+        // only thing the encoding can express.
+        let mut forked = core;
+        forked.upgraded_from = Some(crate::crypto::upgrade::UpgradeLineage {
+            old_album_id: Uuid::from_u128(0xA0),
+            intent_id: Uuid::from_u128(0x1),
+            frozen_state_hash: Hash32([0xEE; 32]),
+            from_suite_id: 1,
+            to_suite_id: 1,
+        });
+        let present = forked.signing_bytes();
+        assert_ne!(
+            present, encoded,
+            "a lineage is signed over, so it has to change what the signature covers"
+        );
+        let back: ManifestCore =
+            crate::cbor::from_slice(&present).expect("a core with a lineage decodes");
+        assert_eq!(back.upgraded_from, forked.upgraded_from);
     }
 }

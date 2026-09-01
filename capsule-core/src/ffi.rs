@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
-use crate::crypto::keys::{HardwareBackedSigner, HardwareSigner, HybridVerifyingKey};
+use crate::crypto::keys::{
+    HardwareBackedSigner, HardwareKeyAgreement, HardwareSigner, HybridVerifyingKey, P256HybridDek,
+    P256HybridSigningKey, encapsulate_to_p256_public,
+};
 use crate::crypto::primitives::DeviceTier;
 use crate::crypto::{CryptoError, VerifyOutcome};
 use crate::lifecycle::{LifecycleError, Workspace};
@@ -56,6 +59,18 @@ impl From<VerifyOutcome> for FfiVerifyOutcome {
     }
 }
 
+/// A foreign client's self-reported build identity (S-D15): its product id and own semver. The
+/// git commit + dirty flag come from the core this app links, together composing the
+/// `client_id/semver+commit` [`client_version`](crate::client_build) every manifest carries — so
+/// a defect in a shipped app build is traceable across the assets it produced.
+#[derive(uniffi::Record)]
+pub struct FfiClientBuild {
+    /// The app's product id, e.g. `capsule-ios`.
+    pub client_id: String,
+    /// The app's own semantic version, e.g. `1.4.2`.
+    pub semver: String,
+}
+
 /// An offline Capsule workspace, callable from Kotlin/Swift.
 #[derive(uniffi::Object)]
 pub struct FfiWorkspace {
@@ -78,9 +93,19 @@ impl FfiWorkspace {
     /// Create a brand-new workspace rooted at `root`, guarded by `passphrase` at the Argon2id
     /// cost for `tier`. (Re-opening an existing workspace is a separate core capability still
     /// pending; see `SLICES.md`.)
+    ///
+    /// `client` is the foreign app's own build identity ([`FfiClientBuild`]): every manifest this
+    /// workspace authors then reports `client_id/semver+commit` (S-D15) rather than the bare
+    /// `capsule-core` default. The commit + dirty flag are the ones this core was built from.
     #[uniffi::constructor]
-    pub fn create(root: String, passphrase: Vec<u8>, tier: DeviceTier) -> FfiResult<Arc<Self>> {
-        let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?;
+    pub fn create(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: DeviceTier,
+        client: FfiClientBuild,
+    ) -> FfiResult<Arc<Self>> {
+        let ws = Workspace::create(&PathBuf::from(root), &passphrase, tier)?
+            .with_client_id(&client.client_id, &client.semver);
         Ok(Arc::new(Self {
             inner: Mutex::new(ws),
         }))
@@ -99,6 +124,7 @@ impl FfiWorkspace {
         hardware: Arc<dyn HardwareSigner>,
         key_alias: String,
         ml_seed: Vec<u8>,
+        client: FfiClientBuild,
     ) -> FfiResult<Arc<Self>> {
         let seed: [u8; 32] = ml_seed
             .as_slice()
@@ -110,7 +136,47 @@ impl FfiWorkspace {
             &passphrase,
             tier.params(),
             Box::new(signer),
-        )?;
+        )?
+        .with_client_id(&client.client_id, &client.semver);
+        Ok(Arc::new(Self {
+            inner: Mutex::new(ws),
+        }))
+    }
+
+    /// Create a workspace whose device signing key is **hardware-bound over ECDSA-P256** — the
+    /// composition shipping secure elements actually provide (Secure Enclave, StrongBox, TPM 2.0),
+    /// none of which do Ed25519. The classical half is produced by `hardware` (a native
+    /// [`HardwareSigner`]) under `key_alias`: `enroll`/`classical_public_key` return the element's
+    /// P-256 public key (SEC1 — compressed, uncompressed/x9.63, or bare `x‖y`) and `sign_classical`
+    /// returns a **DER-encoded ECDSA** signature over `SHA-256(msg)`. The ML-DSA-65 `ξ` half is the
+    /// software-sealed `ml_seed` (32 bytes). The published device key is the P-256-tagged hybrid,
+    /// and `verify_asset` dispatches on that tag — the Ed25519
+    /// [`create_with_hardware_signer`](Self::create_with_hardware_signer) path is byte-for-byte
+    /// unchanged. This is the constructor the Secure Enclave / StrongBox adapters compose through
+    /// (slice `S-F2`).
+    #[uniffi::constructor]
+    pub fn create_with_p256_hardware_signer(
+        root: String,
+        passphrase: Vec<u8>,
+        tier: DeviceTier,
+        hardware: Arc<dyn HardwareSigner>,
+        key_alias: String,
+        ml_seed: Vec<u8>,
+        client: FfiClientBuild,
+    ) -> FfiResult<Arc<Self>> {
+        let seed: [u8; 32] = ml_seed
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::Malformed("ml_seed must be 32 bytes"))?;
+        let signer = P256HybridSigningKey::enroll(hardware, key_alias, &seed)
+            .map_err(|_| CryptoError::Key("hardware P-256 key enrollment failed"))?;
+        let ws = Workspace::create_with_hardware_signer(
+            &PathBuf::from(root),
+            &passphrase,
+            tier.params(),
+            Box::new(signer),
+        )?
+        .with_client_id(&client.client_id, &client.semver);
         Ok(Arc::new(Self {
             inner: Mutex::new(ws),
         }))
@@ -128,7 +194,7 @@ impl FfiWorkspace {
 
     /// Create an album, returning its id (UUID string).
     pub fn create_album(&self, name: String) -> FfiResult<String> {
-        self.with(|ws| Ok(ws.create_album(&name).to_string()))
+        self.with(|ws| Ok(ws.create_album(&name)?.to_string()))
     }
 
     /// Rotate an album to a fresh epoch; returns the new epoch.
@@ -203,6 +269,32 @@ impl FfiWorkspace {
             Ok(n as u64)
         })
     }
+}
+
+/// Smoke the **hardware-bound P-256 device encryption key** (slice `S-F5`) across the FFI seam:
+/// enroll a P-256 key-agreement key in `hardware` (a native Secure Enclave / StrongBox / TPM
+/// [`HardwareKeyAgreement`]) under `key_alias`, publish the hybrid public key, encapsulate a fresh
+/// shared secret to it **in software** (the sender side), then **decapsulate through the hardware
+/// ECDH**. Returns `true` iff the sender's and the hardware-decapsulated secrets match — proving
+/// the element's ECDH composes into the hybrid KEM without the private scalar ever leaving hardware.
+/// `ml_seed` (32 bytes) is the software-sealed ML-KEM-768 half. This is the DEK analogue of the DSK
+/// `create_with_p256_hardware_signer` composition; the DEK is not yet wired into full workspace
+/// creation, so this focused round-trip is the composition's smoke.
+#[uniffi::export]
+pub fn p256_hardware_dek_round_trip(
+    hardware: Arc<dyn HardwareKeyAgreement>,
+    key_alias: String,
+    ml_seed: Vec<u8>,
+) -> FfiResult<bool> {
+    let seed: [u8; 32] = ml_seed
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed("ml_seed must be 32 bytes"))?;
+    let dek = P256HybridDek::enroll(hardware, key_alias, &seed)
+        .map_err(|_| CryptoError::Key("hardware P-256 DEK enrollment failed"))?;
+    let (ciphertext, sender_secret) = encapsulate_to_p256_public(&dek.public_bytes())?;
+    let receiver_secret = dek.decapsulate(&ciphertext)?;
+    Ok(sender_secret == receiver_secret)
 }
 
 #[cfg(test)]
@@ -306,5 +398,86 @@ mod tests {
             ws.verify(asset).unwrap(),
             FfiVerifyOutcome::Accept
         ));
+    }
+
+    /// S-F2 acceptance at the FFI seam: a foreign `HardwareSigner` that emits **P-256** material
+    /// (the shape Secure Enclave / StrongBox actually produce — SEC1 public key, DER ECDSA
+    /// signature) composes through `P256HybridSigningKey` into a real workspace, and an imported
+    /// asset verifies through the `verify_asset` chokepoint — i.e. every manifest is signed by the
+    /// hardware-composed P-256 hybrid and dispatches on its declared classical algorithm. This is
+    /// the Rust-side proof the Swift SE / Kotlin StrongBox smoke mirrors natively.
+    #[test]
+    fn ffi_p256_hardware_backed_workspace_round_trips() {
+        use crate::crypto::keys::Signer;
+        use crate::crypto::keys::p256::MockP256Element;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("photo.jpg");
+        std::fs::write(&img, b"\xFF\xD8\xFF p256 hw ffi bytes").unwrap();
+
+        // A software P-256 secure element (the reference the real Secure Enclave / StrongBox
+        // replaces) enrolled through the P-256 hybrid composition, non-exportable.
+        let element = Arc::new(MockP256Element::new([7; 32], false));
+        let signer = P256HybridSigningKey::enroll(element, "device-dsk".into(), &[9; 32]).unwrap();
+        // The published device key carries the P-256 tag — the composition selected the right half.
+        assert_eq!(
+            signer.verifying_key().classical_algorithm(),
+            crate::crypto::keys::ClassicalAlgorithm::EcdsaP256
+        );
+
+        let ws = FfiWorkspace {
+            inner: Mutex::new(
+                Workspace::create_with_hardware_signer(
+                    lib.path(),
+                    b"pw",
+                    Argon2Params {
+                        mem_kib: 64,
+                        t_cost: 1,
+                        p_cost: 1,
+                    },
+                    Box::new(signer),
+                )
+                .unwrap(),
+            ),
+        };
+
+        let album = ws.create_album("Trip".into()).unwrap();
+        let asset = ws
+            .import_asset(album, img.to_string_lossy().into_owned())
+            .unwrap();
+        // The manifest, signed by the P-256 hybrid, verifies through the chokepoint.
+        assert!(matches!(
+            ws.verify(asset.clone()).unwrap(),
+            FfiVerifyOutcome::Accept
+        ));
+        assert_eq!(
+            ws.read_plaintext(asset).unwrap(),
+            b"\xFF\xD8\xFF p256 hw ffi bytes"
+        );
+    }
+
+    /// S-F5 acceptance at the FFI seam: a foreign `HardwareKeyAgreement` element that ECDHs P-256
+    /// (the shape Secure Enclave `P256.KeyAgreement` / StrongBox ECDH produce) composes through the
+    /// hybrid DEK, and a secret encapsulated to the published hybrid public key is recovered by
+    /// decapsulating through the element's ECDH. This is the Rust-side proof the Swift SE smoke
+    /// mirrors natively.
+    #[test]
+    fn ffi_p256_hardware_dek_round_trips() {
+        use crate::crypto::keys::kem_p256::MockP256KeyAgreement;
+
+        let element = Arc::new(MockP256KeyAgreement::new([7; 32], false));
+        assert!(
+            super::p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 32])
+                .unwrap(),
+            "the hardware-composed P-256 hybrid DEK must round-trip a shared secret"
+        );
+
+        // A wrong-length ml_seed is a clean error, not a panic across the boundary.
+        let element = Arc::new(MockP256KeyAgreement::new([7; 32], false));
+        assert!(
+            super::p256_hardware_dek_round_trip(element, "device-dek".into(), vec![9u8; 16])
+                .is_err()
+        );
     }
 }

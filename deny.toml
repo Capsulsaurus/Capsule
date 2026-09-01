@@ -1,0 +1,73 @@
+# cargo-deny — the machine check for Capsule's dependency-licence policy.
+#
+# The policy, and the reasoning behind every decision encoded here, lives in
+# capsule-docs/src/content/docs/design/licensing.md. This file is the enforcement;
+# that doc is the contract. Run it with `mise run license-check` (part of `check-rust`).
+#
+# Only the licence check is wired up. `cargo deny check advisories` needs a network
+# fetch of the RustSec database, which would make the gate non-deterministic and break
+# the offline build; vulnerability scanning is a separate concern from licensing.
+
+[graph]
+# Check every target Capsule ships for, not just the host. `tzf-rel` reaches the wasm
+# bundle and `r-efi` only appears on UEFI/wasm targets, so a host-only graph would
+# silently miss both.
+all-features = true
+
+[licenses]
+# ALLOWLIST SEMANTICS: anything not listed here fails the build. GPL-*, LGPL-* and
+# AGPL-* are therefore denied by omission, and that is deliberate rather than
+# incidental — see "Forbidden" in the licensing doc. Capsule is itself AGPL, so a
+# copyleft dependency is licence-*compatible* today; it is refused because a
+# statically-linked copyleft component would forfeit app-store distribution, and no
+# dependency bump should be able to make that decision on the copyright holder's
+# behalf.
+#
+# Adding a licence here is a policy change: update the licensing doc first.
+allow = [
+    # Attribution-only. Obligations discharged by the root NOTICE.
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    # File-level copyleft. MPL-2.0 S3.3 expressly permits distributing a larger work
+    # under other terms; the obligation attaches to the MPL files themselves and is
+    # discharged by linking them unmodified. Modifying one in-tree changes this.
+    "MPL-2.0",
+    # Apache-2.0 with the LLVM exception (rustix, wasi, the wit-bindgen family).
+    # Strictly more permissive than bare Apache-2.0.
+    "Apache-2.0 WITH LLVM-exception",
+]
+
+# Capsule's own crates are AGPL-3.0-only, which is correctly absent from the allowlist
+# above — that entry governs what Capsule may *consume*. First-party crates are all
+# `publish = false` and are skipped here so the outbound licence is never mistaken for
+# an inbound one.
+private = { ignore = true }
+
+# Per-crate exceptions: a licence carrying an obligation beyond attribution, admitted
+# because the obligation is bounded and Capsule discharges it in the root NOTICE.
+# Each entry needs a matching NOTICE section. See "Permitted only as a named
+# exception" in the licensing doc.
+[[licenses.exceptions]]
+# ODbL-1.0 is share-alike on the *database*, not on code that queries it. Capsule
+# embeds the Timezone Boundary Builder shapefile unmodified via tzf-rs and creates no
+# Derivative Database, so the obligation is attribution plus a pointer upstream.
+# It is not feature-gated, so it reaches the CLI, the server, iOS, Android and wasm.
+name = "tzf-rel"
+allow = ["ODbL-1.0"]
+
+[[licenses.exceptions]]
+# `(MIT OR Apache-2.0) AND IJG`. Capsule elects MIT for the disjunctive part, but the
+# IJG arm is conjunctive and cannot be elected away. It requires only a fixed notice.
+name = "jpeg-encoder"
+allow = ["IJG"]

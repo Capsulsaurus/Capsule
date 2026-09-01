@@ -10,15 +10,19 @@ use thiserror::Error;
 use tracing::level_filters::LevelFilter;
 use wrapper::SecretKeyWrapper;
 
+#[cfg(feature = "upload")]
+use crate::constants::MAX_CACHE_SIZE;
+#[cfg(any(feature = "upload", feature = "media"))]
+use crate::constants::MAX_FILE_SIZE;
 #[cfg(feature = "auth")]
 use crate::constants::{ACCESS_TOKEN_EXPIRY, REFRESH_TOKEN_EXPIRY, TOTP_ISSUER};
-#[cfg(feature = "upload")]
-use crate::constants::{MAX_CACHE_SIZE, MAX_FILE_SIZE};
 use crate::jwt::convert_ed25519_der_to_jwt_keys;
 
 pub mod constants;
 mod jwt;
 pub mod wrapper;
+
+pub use crate::jwt::generate_signing_key_der;
 
 #[derive(Debug, Error)]
 pub enum EnvironmentError {
@@ -60,10 +64,10 @@ pub struct ServerConfig {
     /// TOTP issuer string shown in authenticator apps
     pub totp_issuer: String,
 
-    #[cfg(any(feature = "upload", feature = "media"))]
+    #[cfg(any(feature = "upload", feature = "media", feature = "sync"))]
     /// Upload directory
     pub upload_dir: PathBuf,
-    #[cfg(feature = "upload")]
+    #[cfg(any(feature = "upload", feature = "media"))]
     /// Maximum file size in bytes
     pub max_file_size: usize,
     #[cfg(feature = "upload")]
@@ -73,13 +77,33 @@ pub struct ServerConfig {
     /// Sled database directory
     pub sled_db_dir: PathBuf,
 
-    #[cfg(any(feature = "auth", feature = "upload"))]
+    #[cfg(any(feature = "auth", feature = "upload", feature = "media"))]
     /// Valkey URL (e.g. "redis://127.0.0.1:6379")
     pub valkey_url: String,
 
     #[cfg(any(feature = "auth", feature = "upload"))]
     /// Allowed CORS origins. Use `["*"]` to allow all origins (development only).
     pub allowed_origins: Vec<String>,
+
+    #[cfg(feature = "sync")]
+    /// Server-only HMAC key for the opaque sync cursor (threat-model invariant 22).
+    /// Read from `SYNC_CURSOR_MAC_KEY` (base64, 32 bytes) or, absent that, derived from the
+    /// signing-key DER via HKDF so it is stable across restarts and never leaves the server.
+    pub sync_cursor_mac_key: SecretKeyWrapper<[u8; 32]>,
+
+    #[cfg(any(feature = "upload", feature = "media"))]
+    /// The long-lived server **attestation** signing key's 64-byte seed (Ed25519 secret ‖
+    /// ML-DSA-65 ξ) — the hybrid keypair that signs custody receipts and storage attestations
+    /// (slice `S-C15`), distinct from the classical operational/JWT key. Read from
+    /// `ATTESTATION_KEY_SEED` (base64, 32 or 64 bytes) or, absent that, derived from the
+    /// signing-key DER via HKDF so it is stable across restarts and never leaves the server.
+    pub attestation_key_seed: SecretKeyWrapper<[u8; 64]>,
+    #[cfg(any(feature = "upload", feature = "media"))]
+    /// The operator-supplied append-only attestation-key history (base64 of the well-known
+    /// document's `keys` array JSON), retaining retired public keys so pre-rotation receipts
+    /// still verify. `None` = no rotation yet; the active key alone verifies everything it
+    /// signs. Read from `ATTESTATION_KEY_HISTORY`.
+    pub attestation_key_history: Option<String>,
 }
 // TODO: Separate out these configs into environment variables struct ^^
 
@@ -119,26 +143,19 @@ impl Environment {
             })
         };
 
-        let load_jwt_ed25519_keys = |key: &str| {
-            load_env(key).and_then(|s| {
-                let der = BASE64.decode(s).map_err(|e| {
-                    EnvironmentError::ParseError(
-                        key.to_string(),
-                        format!("Unable to decode base64: {e}"),
-                    )
-                })?;
-
-                convert_ed25519_der_to_jwt_keys(&der).map_err(|e| {
-                    EnvironmentError::ParseError(
-                        key.to_string(),
-                        format!("Unable to convert DER to JWT keys: {e}"),
-                    )
-                })
-            })
-        };
-
+        let jwt_ed25519_der = BASE64.decode(load_env("JWT_ED25519_DER")?).map_err(|e| {
+            EnvironmentError::ParseError(
+                "JWT_ED25519_DER".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
         let (jwt_eddsa_encoding_key, jwt_eddsa_decoding_key) =
-            load_jwt_ed25519_keys("JWT_ED25519_DER")?;
+            convert_ed25519_der_to_jwt_keys(&jwt_ed25519_der).map_err(|e| {
+                EnvironmentError::ParseError(
+                    "JWT_ED25519_DER".to_string(),
+                    format!("Unable to convert DER to JWT keys: {e}"),
+                )
+            })?;
 
         let load_log_level = |key: &str| {
             load_env(key).and_then(|s| {
@@ -170,11 +187,11 @@ impl Environment {
                 .unwrap_or(ACCESS_TOKEN_EXPIRY),
                 #[cfg(feature = "auth")]
                 totp_issuer: load_env("TOTP_ISSUER").unwrap_or(TOTP_ISSUER.to_string()),
-                #[cfg(any(feature = "upload", feature = "media"))]
+                #[cfg(any(feature = "upload", feature = "media", feature = "sync"))]
                 upload_dir: load_env("UPLOAD_DIR")
                     .unwrap_or(String::from("./uploads"))
                     .into(),
-                #[cfg(feature = "upload")]
+                #[cfg(any(feature = "upload", feature = "media"))]
                 max_file_size: load_env_usize("MAX_FILE_SIZE").unwrap_or(MAX_FILE_SIZE),
                 #[cfg(feature = "upload")]
                 max_cache_size: load_env_usize("MAX_CACHE_SIZE").unwrap_or(MAX_CACHE_SIZE),
@@ -182,7 +199,7 @@ impl Environment {
                 sled_db_dir: load_env("SLED_DB_DIR")
                     .unwrap_or(String::from("./.metadata"))
                     .into(), // TODO: If this is still used
-                #[cfg(any(feature = "auth", feature = "upload"))]
+                #[cfg(any(feature = "auth", feature = "upload", feature = "media"))]
                 valkey_url: load_env("VALKEY_URL")?,
                 #[cfg(any(feature = "auth", feature = "upload"))]
                 allowed_origins: load_env("ALLOWED_ORIGINS").map_or_else(
@@ -200,6 +217,16 @@ impl Environment {
                             .collect()
                     },
                 ),
+                #[cfg(feature = "sync")]
+                sync_cursor_mac_key: SecretKeyWrapper::from(load_sync_cursor_mac_key(
+                    &jwt_ed25519_der,
+                )?),
+                #[cfg(any(feature = "upload", feature = "media"))]
+                attestation_key_seed: SecretKeyWrapper::from(load_attestation_key_seed(
+                    &jwt_ed25519_der,
+                )?),
+                #[cfg(any(feature = "upload", feature = "media"))]
+                attestation_key_history: env::var("ATTESTATION_KEY_HISTORY").ok(),
             },
             log_level: load_log_level("LOG_LEVEL").unwrap_or(if cfg!(debug_assertions) {
                 LevelFilter::TRACE
@@ -208,4 +235,95 @@ impl Environment {
             }),
         })
     }
+}
+
+/// Resolve the server-only sync-cursor MAC key: the `SYNC_CURSOR_MAC_KEY` override (base64,
+/// exactly 32 bytes) if set, else derived from the signing-key DER (invariant 22).
+#[cfg(feature = "sync")]
+fn load_sync_cursor_mac_key(jwt_der: &[u8]) -> Result<[u8; 32], EnvironmentError> {
+    if let Ok(b64) = env::var("SYNC_CURSOR_MAC_KEY") {
+        let bytes = BASE64.decode(&b64).map_err(|e| {
+            EnvironmentError::ParseError(
+                "SYNC_CURSOR_MAC_KEY".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
+        return <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+            EnvironmentError::ParseError(
+                "SYNC_CURSOR_MAC_KEY".to_string(),
+                "must decode to exactly 32 bytes".to_string(),
+            )
+        });
+    }
+    Ok(derive_sync_cursor_mac_key(jwt_der))
+}
+
+/// Derive a stable 32-byte HMAC key from the server's signing-key DER via HKDF-SHA256.
+/// The DER is a server-only secret, so the cursor key never leaves the server and survives
+/// restarts (outstanding cursors stay valid).
+#[cfg(feature = "sync")]
+fn derive_sync_cursor_mac_key(ikm: &[u8]) -> [u8; 32] {
+    use ring::hkdf::{HKDF_SHA256, Salt};
+
+    let salt = Salt::new(HKDF_SHA256, b"capsule/sync-cursor-mac/v1");
+    let prk = salt.extract(ikm);
+    let okm = prk
+        .expand(&[b"cursor-mac-key"], HKDF_SHA256)
+        .expect("HKDF expand of a fixed-length key never fails");
+    let mut out = [0u8; 32];
+    okm.fill(&mut out)
+        .expect("HKDF fill of 32 bytes never fails");
+    out
+}
+
+/// Resolve the server attestation signing-key seed: the `ATTESTATION_KEY_SEED` override
+/// (base64, 32 or 64 bytes) if set, else derived from the signing-key DER via HKDF (slice
+/// `S-C15`). A 32-byte override is expanded to the 64-byte hybrid seed (Ed25519 ‖ ML-DSA)
+/// via the same derivation, so operators can supply either width.
+#[cfg(any(feature = "upload", feature = "media"))]
+fn load_attestation_key_seed(jwt_der: &[u8]) -> Result<[u8; 64], EnvironmentError> {
+    if let Ok(b64) = env::var("ATTESTATION_KEY_SEED") {
+        let bytes = BASE64.decode(&b64).map_err(|e| {
+            EnvironmentError::ParseError(
+                "ATTESTATION_KEY_SEED".to_string(),
+                format!("Unable to decode base64: {e}"),
+            )
+        })?;
+        return match bytes.len() {
+            64 => Ok(<[u8; 64]>::try_from(bytes.as_slice()).expect("64-byte seed")),
+            // A 32-byte root is stretched to the full hybrid seed deterministically.
+            32 => Ok(derive_attestation_key_seed(&bytes)),
+            _ => Err(EnvironmentError::ParseError(
+                "ATTESTATION_KEY_SEED".to_string(),
+                "must decode to exactly 32 or 64 bytes".to_string(),
+            )),
+        };
+    }
+    Ok(derive_attestation_key_seed(jwt_der))
+}
+
+/// Derive the 64-byte hybrid attestation seed (Ed25519 secret ‖ ML-DSA-65 ξ) from `ikm` via
+/// HKDF-SHA256. A distinct salt/info from the sync-cursor and JWT derivations keeps the
+/// attestation key cryptographically separated from the operational key.
+#[cfg(any(feature = "upload", feature = "media"))]
+fn derive_attestation_key_seed(ikm: &[u8]) -> [u8; 64] {
+    use ring::hkdf::{HKDF_SHA256, KeyType, Salt};
+
+    /// A 64-byte HKDF output length.
+    struct L64;
+    impl KeyType for L64 {
+        fn len(&self) -> usize {
+            64
+        }
+    }
+
+    let salt = Salt::new(HKDF_SHA256, b"capsule/attestation-key/v1");
+    let prk = salt.extract(ikm);
+    let okm = prk
+        .expand(&[b"attestation-seed"], L64)
+        .expect("HKDF expand of a fixed-length key never fails");
+    let mut out = [0u8; 64];
+    okm.fill(&mut out)
+        .expect("HKDF fill of 64 bytes never fails");
+    out
 }

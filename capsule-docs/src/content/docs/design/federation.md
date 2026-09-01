@@ -6,7 +6,7 @@ status: draft
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).
 
-Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-api::federation`.
+Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-server::federation`.
 
 ## Threat Model
 
@@ -26,7 +26,7 @@ Federation deliberately introduces **no new data protocol**. A remote server fet
 
 Rejection semantics are the HTTP status plus stable `error.*` body defined by [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping).
 
-Everything else — notifications, presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
+Everything else — [hints](/design/notifications/#vocabulary), presence — rides a separate, lower-trust channel and never feeds the validation pipeline directly.
 
 Because blobs are content-addressed by their [ciphertext content hash](/design/cryptography/primitives/), a peer *physically cannot* lie about what a hash contains: Capsule recomputes the hash on arrival and rejects a mismatch. This collapses most of the trust problem — Capsule never trusts a peer's *claim* about an object, it fetches and verifies.
 
@@ -34,7 +34,7 @@ ActivityPub and Nextcloud Federated Sharing were considered and rejected as the 
 
 ## Pull-Only Federation
 
-Peers **pull**; they never push into Capsule's database. A remote server fetches on Capsule's schedule, through Capsule's validation pipeline, and the result is written only after it verifies. The single thing a peer may push is a **notification** — "a new event exists in album A" — over the separate low-trust channel; Capsule then fetches and validates on its own terms. Push-based writes are where most federation exploits live, so the design simply does not have them.
+Peers **pull**; they never push into Capsule's database. A remote server fetches on Capsule's schedule, through Capsule's validation pipeline, and the result is written only after it verifies. The single thing a peer may push is a **hint** — "a new event exists in album A" — over the separate low-trust channel; Capsule then fetches and validates on its own terms. ("Hint" is the [server-to-server term](/design/notifications/#vocabulary); the client-edge analogue is a *wake*, and neither is a user-visible *alert*.) Push-based writes are where most federation exploits live, so the design simply does not have them.
 
 ## Album Ownership (v1: Single Home Server)
 
@@ -69,7 +69,7 @@ There is deliberately **no shared mutable group object** — that would be exact
 
 - **Everyone writes their own, reads the others.** A participant contributes by writing to their own constituent (ordinary album writes on their home server) and reads the other constituents via ordinary per-album invites — same-server membership or [federation capabilities](#federation-capabilities) — with blobs pulled from each origin.
 - **Inclusion is injection-proof by construction.** A constituent appears in the local aggregate only if the local user is a *member* of that album (holds its AMK) **and** it asserts the `group_id`. A stranger's album cannot inject itself into anyone's view: without an invite, its assertion is never even decryptable. `member_hint` only tells the client where to *ask*; membership does the admitting.
-- **The aggregate is a computed view.** Merged ordering is `capture_timestamp` with `asset_id` as the tiebreak — computed at render, nothing stored, so it is idempotent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) by definition. It holds no keys and is no access-control boundary, exactly like every [view album](/design/organization/#system--smart-albums-views). Group name converges by LWW across assertions; the cover is a per-viewer preference in the library-settings document (falling back to newest asset) — deliberately not shared state.
+- **The aggregate is a computed view.** Merged ordering is `capture_timestamp` with `asset_id` as the tiebreak — computed at render, nothing stored, so it is idempotent under the [grouping-convergence requirement](/design/metadata/#grouping-convergence-requirement) by definition. It holds no keys and is no access-control boundary, exactly like every [view album](/design/organization/#system--smart-albums-views). Group name converges by LWW across assertions; the cover is a per-viewer preference in the [library-settings document](/design/metadata/#the-library-settings-document)'s `aggregated_album_covers` section (falling back to newest asset) — deliberately not shared state.
 - **Partial views degrade visibly.** One origin unreachable → that constituent's entries render from the local index with the existing per-origin [degraded state](#robustness-against-connectivity-loss) ("photos from `other.tld` currently unavailable"); nothing is removed. [Search](#federated-breadcrumb-index) spans constituents through the breadcrumb index unchanged.
 
 ### Leaving, Revocation, and Moderation
@@ -135,7 +135,7 @@ Each peer is its own blast-radius boundary — a bad peer cannot starve good one
 - **Quotas.** Per-peer budgets (deployment-tuned) on events/hour, bytes/hour, and CPU/hour. Exceeding a budget queues or drops further requests.
 - **Receiving-user storage budget.** The per-peer budgets above bound *transfer*; storage is bounded separately. Blobs a pull *caches* on the home server are charged to the **receiving user's** [quota](/design/quota/#accounting-model), deduped, under a per-`(receiving_user, source_peer)` cap — so a single user pulling from many peers cannot exhaust home storage even while staying within every individual peer's transfer budget.
 - **Error budget + circuit breaker.** Malformed input spends a per-peer error budget; enough failures trip a circuit breaker that backs the peer off exponentially (e.g. 5 / 30 / 60 minutes). A buggy peer cannot DoS Capsule.
-- **Quarantine for new peers.** First contact puts a server in a probationary tier: tighter quotas, stricter validation, no push notifications accepted. It graduates after a period of clean behavior. This cuts off the "spin up a fresh instance to attack" vector, mirroring email reputation systems.
+- **Quarantine for new peers.** First contact puts a server in a probationary tier: tighter quotas, stricter validation, no hints accepted. It graduates after a period of clean behavior. This cuts off the "spin up a fresh instance to attack" vector, mirroring email reputation systems.
 
 ## Stale-Revival Defense
 

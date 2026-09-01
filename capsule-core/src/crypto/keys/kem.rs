@@ -19,7 +19,7 @@
 //! [Primitives § KEM]: https://docs/design/cryptography/primitives/#kem
 
 use ml_kem::kem::Decapsulate;
-use ml_kem::{B32, DecapsulationKey, KeyExport, MlKem768, Seed};
+use ml_kem::{B32, DecapsulationKey, EncapsulationKey, Key, KeyExport, MlKem768, Seed};
 use sha3::digest::{ExtendableOutput, Update, XofReader};
 use sha3::{Digest, Sha3_256, Shake256};
 use x25519_dalek::{X25519_BASEPOINT_BYTES, x25519};
@@ -35,8 +35,10 @@ pub const DEK_PUBLIC_LEN: usize = 1184 + 32;
 /// X-Wing ciphertext length: `ct_M (1088) ‖ ct_X (32)`.
 pub const DEK_CIPHERTEXT_LEN: usize = 1088 + 32;
 /// Length of the X-Wing encapsulation seed: ML-KEM coins `m` (32) and the X25519 ephemeral (32).
-const ESEED_LEN: usize = 64;
+pub(crate) const ESEED_LEN: usize = 64;
 const MLKEM_CT_LEN: usize = 1088;
+/// ML-KEM-768 encapsulation-key length (the `pk_M` prefix of an X-Wing public key).
+const MLKEM_PK_LEN: usize = 1184;
 
 /// The X-Wing combiner label: the 6-byte ASCII art `\.//^\` (`5c2e2f2f5e5c`).
 const XWING_LABEL: [u8; 6] = [0x5c, 0x2e, 0x2f, 0x2f, 0x5e, 0x5c];
@@ -163,6 +165,56 @@ impl DekKeypair {
     }
 }
 
+/// Encapsulate a fresh shared secret to a **foreign** X-Wing public key `pk_M ‖ pk_X` —
+/// the sender side when you hold only the recipient's public half (e.g. a web-upload guest
+/// sealing an asset key to the link's Drop Key, which travels in the URL fragment). Returns
+/// the X-Wing ciphertext `ct_M ‖ ct_X` ([`DEK_CIPHERTEXT_LEN`] bytes) and the 32-byte
+/// combined shared secret. Draws the encapsulation randomness from the OS CSPRNG.
+///
+/// A wrong-length `public_bytes`, or one whose ML-KEM half fails decoding, is rejected
+/// ([`CryptoError::Malformed`] / [`CryptoError::Key`]).
+pub fn encapsulate_to_public(public_bytes: &[u8]) -> Result<(Vec<u8>, [u8; 32]), CryptoError> {
+    encapsulate_to_public_derand(public_bytes, &rng::random_array::<ESEED_LEN>())
+}
+
+/// Derandomized [`encapsulate_to_public`] (X-Wing `EncapsDerand` to a foreign key): `eseed`
+/// is the ML-KEM coin `m` (`[0:32]`) and the X25519 ephemeral scalar (`[32:64]`). Exposed
+/// within the crate for known-answer/round-trip testing; the public path draws `eseed`
+/// from the OS CSPRNG.
+pub(crate) fn encapsulate_to_public_derand(
+    public_bytes: &[u8],
+    eseed: &[u8; ESEED_LEN],
+) -> Result<(Vec<u8>, [u8; 32]), CryptoError> {
+    if public_bytes.len() != DEK_PUBLIC_LEN {
+        return Err(CryptoError::Malformed("X-Wing public key wrong length"));
+    }
+    let (pk_m_bytes, pk_x_bytes) = public_bytes.split_at(MLKEM_PK_LEN);
+
+    // Reconstruct the recipient's ML-KEM-768 encapsulation key from its serialized form.
+    let ek_encoded = Key::<EncapsulationKey<MlKem768>>::try_from(pk_m_bytes)
+        .map_err(|_| CryptoError::Malformed("ML-KEM public key wrong length"))?;
+    let ek = EncapsulationKey::<MlKem768>::new(&ek_encoded)
+        .map_err(|_| CryptoError::Key("invalid ML-KEM public key"))?;
+
+    let pk_x = shared_to_32(pk_x_bytes);
+
+    // ML-KEM-768 half: derandomized encapsulation to the recipient's encapsulation key.
+    let m = B32::try_from(&eseed[..32]).expect("32-byte m");
+    let (ct_m, ss_m) = ek.encapsulate_deterministic(&m);
+
+    // X25519 half: ephemeral scalar from eseed[32:64]; ct_X is its public key; the shared
+    // secret is against the recipient's static X25519 public key `pk_X`.
+    let eph = shared_to_32(&eseed[32..64]);
+    let ct_x = x25519(eph, X25519_BASEPOINT_BYTES);
+    let ss_x = x25519(eph, pk_x);
+
+    let ss = combiner(ss_m.as_slice(), &ss_x, &ct_x, &pk_x);
+    let mut ct = Vec::with_capacity(DEK_CIPHERTEXT_LEN);
+    ct.extend_from_slice(ct_m.as_slice());
+    ct.extend_from_slice(&ct_x);
+    Ok((ct, ss))
+}
+
 impl Clone for DekKeypair {
     fn clone(&self) -> Self {
         Self::from_seed(&self.to_seed_bytes())
@@ -239,6 +291,39 @@ mod tests {
         let last = ct.len() - 1;
         ct[last] ^= 0x01;
         assert_ne!(dek.decapsulate(&ct).unwrap(), k);
+    }
+
+    #[test]
+    fn encapsulate_to_public_matches_self_and_decapsulates() {
+        // A sender holding only the recipient's public bytes encapsulates; the recipient
+        // decapsulates with its private half and recovers the identical shared secret.
+        let recipient = DekKeypair::generate();
+        let (ct, k_send) = encapsulate_to_public(&recipient.public_bytes()).unwrap();
+        assert_eq!(ct.len(), DEK_CIPHERTEXT_LEN, "ct_M ‖ ct_X");
+        assert_eq!(recipient.decapsulate(&ct).unwrap(), k_send);
+    }
+
+    #[test]
+    fn encapsulate_to_public_derand_agrees_with_self_derand() {
+        // Encapsulating to a keypair's own public bytes with a fixed eseed must produce the
+        // same ciphertext + secret as the keypair's own derandomized self-encapsulation.
+        let dek = DekKeypair::generate();
+        let eseed = [0x5Cu8; ESEED_LEN];
+        let (ct_pub, ss_pub) = encapsulate_to_public_derand(&dek.public_bytes(), &eseed).unwrap();
+        let (ct_self, ss_self) = dek.encapsulate_to_self_derand(&eseed);
+        assert_eq!(ct_pub, ct_self);
+        assert_eq!(ss_pub, ss_self);
+    }
+
+    #[test]
+    fn encapsulate_to_public_rejects_malformed_key() {
+        assert!(matches!(
+            encapsulate_to_public(b"too short"),
+            Err(CryptoError::Malformed(_))
+        ));
+        // Right length but a garbage ML-KEM half fails decoding.
+        let garbage = vec![0xFFu8; DEK_PUBLIC_LEN];
+        assert!(encapsulate_to_public(&garbage).is_err());
     }
 
     #[test]

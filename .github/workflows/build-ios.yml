@@ -8,10 +8,14 @@ on:
       - "capsule-swift/**"
       - "capsule-core/**"
       - "capsule-core-ffi/**"
+      # The umbrella staticlib carries capsule-sdk's uniffi surface (S-F3/S-D9).
+      - "capsule-sdk/**"
       - "Cargo.toml"
       - "Cargo.lock"
       - "rust-toolchain.toml"
       - ".github/workflows/build-ios.yml"
+  # Manual trigger for the hardware-backed Secure Enclave lane (self-hosted; see below).
+  workflow_dispatch:
 
 concurrency:
   group: build-ios-${{ github.ref }}
@@ -70,3 +74,43 @@ jobs:
             -configuration Debug \
             -destination "id=$sim_id" \
             CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify
+
+  # On-device Secure Enclave lane. The Secure Enclave is real hardware — the iOS
+  # Simulator has no SE, so the hardware-signer / hardware-DEK paths (S-F2 / S-F5) can
+  # only run on a physical device, which needs code signing + a provisioning profile.
+  # This lane is therefore manual + self-hosted: add a macOS runner with an attached,
+  # provisioned device carrying the `secure-enclave` label to activate it. Until then it
+  # is inert — matching the repo convention of gating hardware runs behind a label rather
+  # than faking them on a hosted runner. (The Secure Enclave path itself already RAN on
+  # the author's host per SLICES.md S-F2; this lane is its reproducible CI home.)
+  device:
+    name: Secure Enclave on device (self-hosted)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macos, secure-enclave]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up mise
+        uses: jdx/mise-action@v2
+        with:
+          working_directory: capsule-swift
+          install_args: tuist xcbeautify
+
+      - name: Build Rust FFI xcframework
+        run: bash capsule-swift/Scripts/build-rust-ffi.sh
+
+      - name: Generate Xcode project
+        working-directory: capsule-swift
+        run: mise exec -- tuist generate --no-open
+
+      # A generic iOS device destination; signing is supplied by the self-hosted runner's
+      # keychain + provisioning profile (configured out-of-band, not in this workflow).
+      - name: Build & test on device
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -workspace capsule-swift/Capsule.xcworkspace \
+            -scheme Capsule \
+            -configuration Debug \
+            -destination "generic/platform=iOS" | mise -C capsule-swift exec -- xcbeautify

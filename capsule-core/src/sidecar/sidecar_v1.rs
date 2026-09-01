@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::cbor;
 use crate::crypto::hash::Hash32;
 use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
-use crate::domain::StackType;
+use crate::domain::{GpsDatum, StackType};
 use crate::metadata::crdt::{Lww, OrSet};
 
 /// The current sidecar schema version.
@@ -65,15 +65,26 @@ pub enum GpsSource {
     Derived,
 }
 
-/// WGS-84 geolocation.
+/// Geolocation, stored **verbatim in the datum the source supplied** (SSoT:
+/// [Metadata — Geolocation]). Never converted at rest; datum-tagged by [`datum`](Gps::datum).
+///
+/// [Metadata — Geolocation]: https://docs/design/metadata/#geolocation
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Gps {
-    /// Latitude (WGS-84).
+    /// Latitude, in [`datum`](Gps::datum).
     pub lat: f64,
-    /// Longitude (WGS-84).
+    /// Longitude, in [`datum`](Gps::datum).
     pub lon: f64,
     /// Provenance of the fix.
     pub source: GpsSource,
+    /// The coordinate datum `lat`/`lon` are expressed in. **Wire-absent when
+    /// [`Wgs84`](GpsDatum::Wgs84)** (the default): a `Wgs84` fix omits this key so every
+    /// pre-`datum` sidecar and known-answer vector stays byte-identical, and a `gps` value
+    /// with no `datum` key decodes back to `Wgs84`. Additive optional key within sidecar
+    /// schema v1 — no `sidecar_schema` bump. `datum` travels with `lat`/`lon` in one
+    /// atomic `gps` write, so no CRDT merge rule changes.
+    #[serde(default, skip_serializing_if = "GpsDatum::is_wgs84")]
+    pub datum: GpsDatum,
 }
 
 /// An AI-suggested tag (kept in a structurally separate OR-set from user tags).
@@ -175,8 +186,15 @@ pub struct SidecarV1 {
     pub session_id: Uuid,
     /// Geolocation (export-rounded).
     pub gps: Option<Gps>,
-    /// Hash of the latest provenance record for this asset.
-    pub provenance_chain_hash: Hash32,
+    /// The **prior** provenance head — the record *preceding* the write that seals this sidecar,
+    /// always equal to that write's manifest `prior_provenance_hash` (SSoT:
+    /// [Metadata — Provenance Binding and Sealing Order]). Referencing the prior head (not the
+    /// sealing write's own record) keeps the binding well-founded — the manifest commits to this
+    /// sidecar's `metadata_blob_hash`, so a sidecar referencing that manifest would be a cycle.
+    /// Wire-absent (`None`) exactly on the initial `create`.
+    ///
+    /// [Metadata — Provenance Binding and Sealing Order]: https://docs/design/metadata/#provenance-binding-and-sealing-order
+    pub provenance_chain_hash: Option<Hash32>,
     /// Unknown CBOR keys preserved verbatim (re-sorted canonically; covered by signature).
     pub unknown: BTreeMap<String, Value>,
     /// Hybrid signature over every byte above (the canonical map minus this field).
@@ -246,7 +264,8 @@ impl SidecarV1 {
         put!("device_id", self.device_id);
         put!("session_id", self.session_id);
         put_opt!("gps", self.gps);
-        put!("provenance_chain_hash", self.provenance_chain_hash);
+        // Wire-absent on the initial create (no prior head); present on every later write.
+        put_opt!("provenance_chain_hash", self.provenance_chain_hash);
 
         // Merge preserved unknown fields (canonical encode re-sorts everything).
         for (k, v) in &self.unknown {
@@ -354,7 +373,7 @@ impl SidecarV1 {
         let device_id = req!("device_id", Uuid);
         let session_id = req!("session_id", Uuid);
         let gps = opt!("gps", Gps);
-        let provenance_chain_hash = req!("provenance_chain_hash", Hash32);
+        let provenance_chain_hash = opt!("provenance_chain_hash", Hash32);
         let signature = opt!("signature", HybridSignature);
 
         Ok(SidecarV1 {
@@ -421,8 +440,9 @@ mod tests {
                 lat: 40.7128,
                 lon: -74.0060,
                 source: GpsSource::Exif,
+                datum: GpsDatum::Wgs84,
             }),
-            provenance_chain_hash: Hash32([0xCC; 32]),
+            provenance_chain_hash: Some(Hash32([0xCC; 32])),
             unknown: BTreeMap::new(),
             signature: None,
         }
@@ -453,6 +473,31 @@ mod tests {
         let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
         assert_eq!(back, s);
         assert!(back.verify(&ik.verifying_key()));
+    }
+
+    /// S-B1: the generated LQIP (chromahash + version + dominant_color) lands in the sidecar,
+    /// is covered by the signature, and survives a canonical round-trip byte-identically.
+    #[test]
+    fn lqip_lands_in_signed_sidecar_and_round_trips() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.lqip = Some(Lqip {
+            chromahash: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            format_version: 1,
+            dominant_color: [10, 20, 30],
+        });
+        s.sign(&ik);
+        assert!(s.verify(&ik.verifying_key()));
+
+        let bytes = s.to_canonical_vec();
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.lqip, s.lqip);
+        assert!(back.verify(&ik.verifying_key()));
+
+        // Dropping the LQIP after signing invalidates the signature (it was covered).
+        let mut stripped = back.clone();
+        stripped.lqip = None;
+        assert!(!stripped.verify(&ik.verifying_key()));
     }
 
     #[test]
@@ -501,6 +546,34 @@ mod tests {
     fn canonical_encoding_is_deterministic() {
         let s = minimal();
         assert_eq!(s.to_canonical_vec(), s.to_canonical_vec());
+    }
+
+    #[test]
+    fn create_sidecar_provenance_chain_hash_is_wire_absent() {
+        // A create sidecar references no prior head (sealing order step 2, `H = None`), so
+        // `provenance_chain_hash` encodes as an absent map key and round-trips back to `None`.
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        s.provenance_chain_hash = None;
+        s.sign(&ik);
+        let bytes = s.to_canonical_vec();
+        let needle = b"provenance_chain_hash";
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "an absent prior head must not appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back.provenance_chain_hash, None);
+        assert_eq!(back, s);
+        assert!(back.verify(&ik.verifying_key()));
+        // A post-create sidecar (minimal carries `Some`) keeps the key present.
+        assert!(
+            minimal()
+                .to_canonical_vec()
+                .windows(needle.len())
+                .any(|w| w == needle),
+            "a present prior head must appear as a byte string on the wire"
+        );
     }
 
     #[test]
@@ -626,5 +699,156 @@ mod tests {
         ba.merge(&a);
         assert_eq!(ab.get(), ba.get());
         assert_eq!(ab.get(), Some(&CullFlag::Reject));
+    }
+
+    /// S-A7 datum-verbatim-storage (WGS-84 arm): a `Wgs84` fix omits the `datum` key, so
+    /// the encoded `gps` value is byte-identical to the pre-`datum` known-answer shape
+    /// (`{lat, lon, source}`), and the whole sidecar carries no `datum` byte on the wire.
+    #[test]
+    fn wgs84_datum_is_wire_absent_and_byte_identical() {
+        // The pre-`datum` known-answer wire shape of a fix: exactly `{lat, lon, source}`.
+        #[derive(Serialize)]
+        struct LegacyGps {
+            lat: f64,
+            lon: f64,
+            source: GpsSource,
+        }
+        let legacy = LegacyGps {
+            lat: 40.7128,
+            lon: -74.0060,
+            source: GpsSource::Exif,
+        };
+        let current = Gps {
+            lat: 40.7128,
+            lon: -74.0060,
+            source: GpsSource::Exif,
+            datum: GpsDatum::Wgs84,
+        };
+        let mut legacy_bytes = Vec::new();
+        ciborium::ser::into_writer(&legacy, &mut legacy_bytes).unwrap();
+        let mut current_bytes = Vec::new();
+        ciborium::ser::into_writer(&current, &mut current_bytes).unwrap();
+        assert_eq!(
+            legacy_bytes, current_bytes,
+            "a wgs84 datum must be wire-absent → byte-identical to the pre-datum vector"
+        );
+
+        // Whole-sidecar: the `datum` key never appears, and the fix decodes back to wgs84.
+        let s = minimal();
+        let bytes = s.to_canonical_vec();
+        let needle = b"datum";
+        assert!(
+            !bytes.windows(needle.len()).any(|w| w == needle),
+            "an absent (wgs84) datum must not appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        assert_eq!(back.gps.as_ref().unwrap().datum, GpsDatum::Wgs84);
+    }
+
+    /// S-A7 datum-verbatim-storage (GCJ-02 arm): a populated-`datum` vector. A `gcj02` fix
+    /// round-trips **unconverted** (lat/lon byte-for-byte unchanged), carries the `datum`
+    /// key on the wire, and survives signing.
+    #[test]
+    fn gcj02_datum_round_trips_unconverted_and_survives_signing() {
+        let ik = HybridSigningKey::from_seed_bytes(&[1; 32], &[2; 32]);
+        let mut s = minimal();
+        // A user-entered coordinate that arrived already in China's GCJ-02 datum.
+        s.gps = Some(Gps {
+            lat: 39.90869,
+            lon: 116.39745,
+            source: GpsSource::Manual,
+            datum: GpsDatum::Gcj02,
+        });
+        s.sign(&ik);
+        assert!(s.verify(&ik.verifying_key()));
+
+        let bytes = s.to_canonical_vec();
+        // Populated datum is present on the wire.
+        let needle = b"datum";
+        assert!(
+            bytes.windows(needle.len()).any(|w| w == needle),
+            "a gcj02 datum must appear on the wire"
+        );
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        assert_eq!(back, s);
+        let gps = back.gps.as_ref().unwrap();
+        // Stored verbatim — never converted at rest.
+        assert_eq!(gps.datum, GpsDatum::Gcj02);
+        assert_eq!(gps.lat, 39.90869);
+        assert_eq!(gps.lon, 116.39745);
+        assert!(back.verify(&ik.verifying_key()));
+    }
+
+    /// S-A8 datum-verbatim-storage (BD-09 arm): BD-09 is **never a storable datum**. A
+    /// BD-09 input is folded at the edge and enters the sidecar as `datum = gcj02`, within
+    /// the documented sub-metre bound and deterministically — the same input yields a
+    /// byte-identical sidecar every time.
+    ///
+    /// The known-answer pair is the GCJ-02 anchor from the arm above pushed through the
+    /// closed-form *forward* GCJ-02 → BD-09 transform; folding it must land back on the
+    /// anchor.
+    #[test]
+    fn bd09_input_is_folded_to_gcj02_within_bound_and_deterministically() {
+        use crate::domain::{BD09_FOLD_BOUND_METRES, Bd09Coord, fold_bd09_to_gcj02};
+
+        /// The GCJ-02 point the BD-09 input below is the forward image of.
+        const GCJ02_TRUTH: (f64, f64) = (39.90869, 116.39745);
+        const BD09_INPUT: Bd09Coord = Bd09Coord {
+            lat: 39.915_033_233_576_175,
+            lon: 116.403_823_024_761_45,
+        };
+        /// Metres per degree of latitude, for expressing the residual as a distance.
+        const METRES_PER_DEGREE: f64 = 111_320.0;
+
+        let (lat, lon) = fold_bd09_to_gcj02(BD09_INPUT).unwrap();
+
+        // Within the documented sub-metre bound of the true GCJ-02 point.
+        let d_lat = (lat - GCJ02_TRUTH.0) * METRES_PER_DEGREE;
+        let d_lon = (lon - GCJ02_TRUTH.1) * METRES_PER_DEGREE * lat.to_radians().cos();
+        let error_metres = d_lat.hypot(d_lon);
+        assert!(
+            error_metres < BD09_FOLD_BOUND_METRES,
+            "BD-09 fold must land within {BD09_FOLD_BOUND_METRES} m, got {error_metres} m"
+        );
+
+        // BD-09 never reaches the wire: what is stored is the folded GCJ-02 pair.
+        let stored = |lat: f64, lon: f64| {
+            let mut s = minimal();
+            s.gps = Some(Gps {
+                lat,
+                lon,
+                source: GpsSource::Manual,
+                datum: GpsDatum::Gcj02,
+            });
+            s
+        };
+        let s = stored(lat, lon);
+        let bytes = s.to_canonical_vec();
+        let back = SidecarV1::from_canonical_slice(&bytes, SIDECAR_SCHEMA_V1).unwrap();
+        let gps = back.gps.as_ref().unwrap();
+        assert_eq!(
+            gps.datum,
+            GpsDatum::Gcj02,
+            "a folded BD-09 input stores as gcj02"
+        );
+        assert_ne!(
+            gps.lat.to_bits(),
+            BD09_INPUT.lat.to_bits(),
+            "BD-09 must never be stored verbatim"
+        );
+        assert_ne!(
+            gps.lon.to_bits(),
+            BD09_INPUT.lon.to_bits(),
+            "BD-09 must never be stored verbatim"
+        );
+
+        // Deterministic: an independent fold of the same input encodes byte-identically.
+        let (again_lat, again_lon) = fold_bd09_to_gcj02(BD09_INPUT).unwrap();
+        assert_eq!(
+            bytes,
+            stored(again_lat, again_lon).to_canonical_vec(),
+            "same BD-09 input must yield a byte-identical sidecar"
+        );
     }
 }

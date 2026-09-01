@@ -1,36 +1,72 @@
+use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use rusqlite::{Connection, params};
 
+use crate::db::migrate::{self, MigrationError};
 use crate::db::rows::{AlbumRow, AssetRow, AssetStackRow, CachedRepresentationRow, StackMemberRow};
-use crate::db::schema;
+use crate::domain::model_identity::TaskKind;
 
 pub struct DatabaseDriver {
-    conn: Connection,
+    pub(in crate::db) conn: Connection,
+    /// Tasks whose `vec0` partition table this driver has already created. The DDL is idempotent,
+    /// so this is purely a hot-path memo — see [`crate::db::vector::VectorTableSpec`] for why the
+    /// tables are created by their writer rather than at open time.
+    pub(in crate::db) vector_tables: RefCell<BTreeSet<TaskKind>>,
 }
 
 impl DatabaseDriver {
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
-        let driver = Self { conn };
+        let driver = Self::new(conn);
         driver.init_schema()?;
         Ok(driver)
     }
 
     pub fn open_in_memory() -> Result<Self, rusqlite::Error> {
+        crate::db::vector::ensure_vec_extension();
         let conn = Connection::open_in_memory()?;
-        let driver = Self { conn };
+        let driver = Self::new(conn);
         driver.init_schema()?;
         Ok(driver)
     }
 
+    fn new(conn: Connection) -> Self {
+        Self {
+            conn,
+            vector_tables: RefCell::new(BTreeSet::new()),
+        }
+    }
+
+    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], creating it if the database is empty
+    /// and otherwise migrating it forward (see [`crate::db::migrate`]).
+    ///
+    /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here because
+    /// this signature is consumed by `capsule-core-ffi` and `library::open`; callers that want
+    /// the typed error (and the list of steps applied) call [`Self::migrate`] instead.
     pub fn init_schema(&self) -> Result<(), rusqlite::Error> {
-        self.conn.execute_batch(schema::DDL)?;
-        self.conn.execute_batch(&format!(
-            "PRAGMA user_version = {};",
-            schema::SCHEMA_VERSION
-        ))?;
+        // The per-task `vec0` tables are deliberately NOT created here: their column width and
+        // metric come from the model that writes them, which this layer knows nothing about.
+        // Each is created on first insert/query from the spec its writer declares, or eagerly via
+        // [`DatabaseDriver::create_vector_tables`].
+        self.migrate()?;
         Ok(())
+    }
+
+    /// Bring the catalog to [`crate::db::schema::SCHEMA_VERSION`], reporting exactly what ran.
+    ///
+    /// Refuses (without writing anything) a catalog stamped newer than this build supports —
+    /// see [`MigrationError::CatalogTooNew`].
+    pub fn migrate(&self) -> Result<migrate::Outcome, MigrationError> {
+        migrate::migrate(&self.conn)
+    }
+
+    /// The underlying connection, for schema-level assertions inside `crate::db`'s tests.
+    #[cfg(test)]
+    pub(in crate::db) fn connection(&self) -> &Connection {
+        &self.conn
     }
 
     pub fn schema_version(&self) -> Result<u32, rusqlite::Error> {
@@ -44,14 +80,15 @@ impl DatabaseDriver {
         self.conn.execute(
             "INSERT INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
                 row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
+                row.is_hidden as i64,
             ],
         )?;
         Ok(())
@@ -61,14 +98,15 @@ impl DatabaseDriver {
         self.conn.execute(
             "INSERT OR REPLACE INTO assets (uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)",
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
             params![
                 row.uuid, row.asset_type, row.capture_timestamp, row.capture_utc,
                 row.capture_tz_source, row.import_timestamp, row.hash_sha256,
                 row.width, row.height, row.duration_ms, row.stack_id,
                 row.is_stack_hidden as i64, row.chromahash, row.dominant_color,
                 row.album_id, row.rating, row.is_deleted as i64, row.deleted_at,
+                row.is_hidden as i64,
             ],
         )?;
         Ok(())
@@ -78,7 +116,7 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets WHERE uuid = ?1 LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![uuid], map_asset_row)?;
@@ -92,7 +130,7 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets WHERE hash_sha256 = ?1 LIMIT 1",
         )?;
         let mut rows = stmt.query_map(params![hash], map_asset_row)?;
@@ -110,9 +148,9 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets
-             WHERE is_deleted = 0 AND is_stack_hidden = 0
+             WHERE is_deleted = 0 AND is_stack_hidden = 0 AND is_hidden = 0
              ORDER BY COALESCE(capture_utc, capture_timestamp) DESC
              LIMIT ?1 OFFSET ?2",
         )?;
@@ -135,9 +173,9 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets
-             WHERE is_deleted = 0 AND is_stack_hidden = 0
+             WHERE is_deleted = 0 AND is_stack_hidden = 0 AND is_hidden = 0
                AND (?1 IS NULL OR asset_type = ?1)
                AND (?2 IS NULL OR COALESCE(capture_utc, capture_timestamp) >= ?2)
                AND (?3 IS NULL OR COALESCE(capture_utc, capture_timestamp) <= ?3)
@@ -263,7 +301,7 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets WHERE is_deleted = 1 AND deleted_at IS NOT NULL AND deleted_at < ?1",
         )?;
         let rows = stmt.query_map(params![threshold], map_asset_row)?;
@@ -280,13 +318,50 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets WHERE is_deleted = 1
              ORDER BY deleted_at DESC
              LIMIT ?1 OFFSET ?2",
         )?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], map_asset_row)?;
         rows.collect()
+    }
+
+    /// All user-hidden, non-deleted assets — the **Hidden** listing, newest first.
+    ///
+    /// Hidden assets are excluded from every default projection (timeline, album), so this
+    /// is the only view that surfaces them; it is reached exclusively through
+    /// [`GateKeeper::query_hidden`](crate::library::GateKeeper::query_hidden), which holds
+    /// it behind the same fresh-local-auth gate as Recently Deleted (SSoT:
+    /// design/organization § Hidden Assets, design/local-gallery SR1).
+    ///
+    /// Soft-deleted assets are excluded even when hidden: a trashed asset belongs to
+    /// Recently Deleted, so the two gated views never show the same row.
+    pub fn query_hidden(
+        &self,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<AssetRow>, rusqlite::Error> {
+        let mut stmt = self.conn.prepare(
+            "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
+             import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
+             FROM assets WHERE is_hidden = 1 AND is_deleted = 0
+             ORDER BY COALESCE(capture_utc, capture_timestamp) DESC
+             LIMIT ?1 OFFSET ?2",
+        )?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], map_asset_row)?;
+        rows.collect()
+    }
+
+    /// Set the index projection of an asset's sidecar `hidden` register. Hiding is
+    /// view-layer only — the asset keeps its album, its stack, and its sync state.
+    pub fn update_asset_hidden(&self, uuid: &str, hidden: bool) -> Result<(), rusqlite::Error> {
+        self.conn.execute(
+            "UPDATE assets SET is_hidden = ?1 WHERE uuid = ?2",
+            params![hidden as i64, uuid],
+        )?;
+        Ok(())
     }
 
     /// Permanently remove an asset row. The on-disk file is the caller's concern.
@@ -376,9 +451,10 @@ impl DatabaseDriver {
         let mut stmt = self.conn.prepare(
             "SELECT uuid, asset_type, capture_timestamp, capture_utc, capture_tz_source,
              import_timestamp, hash_sha256, width, height, duration_ms, stack_id, is_stack_hidden,
-             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at
+             chromahash, dominant_color, album_id, rating, is_deleted, deleted_at, is_hidden
              FROM assets
-             WHERE is_deleted = 0 AND is_stack_hidden = 0 AND album_id = ?1
+             WHERE is_deleted = 0 AND is_stack_hidden = 0 AND is_hidden = 0
+               AND album_id = ?1
              ORDER BY COALESCE(capture_utc, capture_timestamp) DESC
              LIMIT ?2 OFFSET ?3",
         )?;
@@ -528,6 +604,7 @@ fn map_asset_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetRow> {
         rating: row.get(15)?,
         is_deleted: row.get::<_, i64>(16)? != 0,
         deleted_at: row.get(17)?,
+        is_hidden: row.get::<_, i64>(18)? != 0,
     })
 }
 
@@ -583,6 +660,7 @@ mod tests {
             rating: 0,
             is_deleted: false,
             deleted_at: None,
+            is_hidden: false,
         }
     }
 
@@ -590,7 +668,7 @@ mod tests {
     fn test_init_schema_idempotent() {
         let db = DatabaseDriver::open_in_memory().unwrap();
         db.init_schema().unwrap(); // second call — should not fail
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 4);
     }
 
     #[test]
@@ -624,6 +702,86 @@ mod tests {
         let timeline = db.query_timeline(0, 100).unwrap();
         assert_eq!(timeline.len(), 1);
         assert_eq!(timeline[0].uuid, "uuid-1");
+    }
+
+    /// S-D19: a user-hidden asset is excluded from **every** default projection — timeline,
+    /// filtered timeline, and album — and surfaces only in `query_hidden`. Hiding is
+    /// view-layer only, so it keeps its album membership and stays directly reachable by
+    /// uuid and by hash (SSoT: design/organization § Hidden Assets).
+    #[test]
+    fn hidden_assets_are_excluded_from_default_projections_and_served_by_query_hidden() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let mut visible = make_asset("uuid-visible", &"a".repeat(64));
+        visible.album_id = Some("album-1".to_string());
+        let mut hidden = make_asset("uuid-hidden", &"b".repeat(64));
+        hidden.album_id = Some("album-1".to_string());
+        hidden.is_hidden = true;
+        db.insert_asset(&visible).unwrap();
+        db.insert_asset(&hidden).unwrap();
+
+        // Default views: the hidden asset is gone.
+        let timeline = db.query_timeline(0, 100).unwrap();
+        assert_eq!(timeline.len(), 1);
+        assert_eq!(timeline[0].uuid, "uuid-visible");
+
+        let filtered = db
+            .query_timeline_filtered(Some("photo"), None, None, 0, 100)
+            .unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].uuid, "uuid-visible");
+
+        let album = db.query_album_assets("album-1", 0, 100).unwrap();
+        assert_eq!(album.len(), 1, "hidden assets leave the album projection");
+        assert_eq!(album[0].uuid, "uuid-visible");
+
+        // The Hidden view is where it lives.
+        let hidden_view = db.query_hidden(0, 100).unwrap();
+        assert_eq!(hidden_view.len(), 1);
+        assert_eq!(hidden_view[0].uuid, "uuid-hidden");
+        assert!(hidden_view[0].is_hidden);
+
+        // Hiding is view-layer only: album membership and direct reachability survive.
+        let direct = db.find_by_uuid("uuid-hidden").unwrap().unwrap();
+        assert_eq!(direct.album_id.as_deref(), Some("album-1"));
+        assert!(direct.is_hidden);
+        assert!(db.find_by_hash(&"b".repeat(64)).unwrap().is_some());
+    }
+
+    /// `is_hidden` is a projection, so it is settable, round-trips through the row mapper,
+    /// and moves the asset between the default and Hidden views both ways.
+    #[test]
+    fn update_asset_hidden_moves_the_asset_between_views() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        db.insert_asset(&make_asset("uuid-1", &"a".repeat(64)))
+            .unwrap();
+        assert_eq!(db.query_timeline(0, 100).unwrap().len(), 1);
+        assert!(db.query_hidden(0, 100).unwrap().is_empty());
+
+        db.update_asset_hidden("uuid-1", true).unwrap();
+        assert!(db.query_timeline(0, 100).unwrap().is_empty());
+        assert_eq!(db.query_hidden(0, 100).unwrap().len(), 1);
+
+        db.update_asset_hidden("uuid-1", false).unwrap();
+        assert_eq!(db.query_timeline(0, 100).unwrap().len(), 1);
+        assert!(db.query_hidden(0, 100).unwrap().is_empty());
+    }
+
+    /// A hidden asset that is also soft-deleted belongs to Recently Deleted, not Hidden —
+    /// the two gated views never show the same row.
+    #[test]
+    fn hidden_and_deleted_asset_appears_only_in_trash() {
+        let db = DatabaseDriver::open_in_memory().unwrap();
+        let mut row = make_asset("uuid-1", &"a".repeat(64));
+        row.is_hidden = true;
+        row.is_deleted = true;
+        row.deleted_at = Some(1_720_000_100);
+        db.insert_asset(&row).unwrap();
+
+        assert!(db.query_hidden(0, 100).unwrap().is_empty());
+        assert!(db.query_timeline(0, 100).unwrap().is_empty());
+        let trash = db.query_trash(0, 100).unwrap();
+        assert_eq!(trash.len(), 1);
+        assert_eq!(trash[0].uuid, "uuid-1");
     }
 
     #[test]

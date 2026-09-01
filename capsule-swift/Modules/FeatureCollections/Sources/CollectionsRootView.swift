@@ -55,24 +55,24 @@ public struct CollectionsRootView: View {
                             .padding(.top, 48)
                     } else {
                         if !albums.userAlbums.isEmpty {
-                            albumSection("My Albums", albums.userAlbums)
+                            albumSection("ios.albums.section.my_albums", albums.userAlbums)
                         }
                         if !albums.smartAlbums.isEmpty {
-                            albumSection("Media Types", albums.smartAlbums)
+                            albumSection("ios.collections.section.media_types", albums.smartAlbums)
                         }
-                        linkGroup("Utilities", rows: UtilityCategory.allCases.map(AnyCollectionLink.init))
-                        linkGroup("More", rows: CollectionCategory.allCases.map(AnyCollectionLink.init))
+                        linkGroup("ios.collections.section.utilities", rows: UtilityCategory.allCases.map(AnyCollectionLink.init))
+                        linkGroup("ios.collections.section.more", rows: CollectionCategory.allCases.map(AnyCollectionLink.init))
                     }
                 }
                 .padding()
             }
-            .navigationTitle("Collections")
+            .navigationTitle("ios.tab.collections")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { isCreatingAlbum = true } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("New Album")
+                    .accessibilityLabel("ios.albums.new_album.title")
                 }
             }
             .navigationDestination(for: AlbumSummary.self) { album in
@@ -128,16 +128,16 @@ public struct CollectionsRootView: View {
             }
         }
         .task { await albums.load() }
-        .alert("New Album", isPresented: $isCreatingAlbum) {
-            TextField("Album Name", text: $newAlbumName)
-            Button("Cancel", role: .cancel) { newAlbumName = "" }
-            Button("Create") {
+        .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
+            TextField("ios.albums.new_album.name_field", text: $newAlbumName)
+            Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
+            Button("ios.common.create") {
                 let name = newAlbumName
                 newAlbumName = ""
                 Task { await albums.createAlbum(named: name) }
             }
         } message: {
-            Text("Name your new Capsule album.")
+            Text("ios.albums.new_album.message")
         }
     }
 }
@@ -145,7 +145,7 @@ public struct CollectionsRootView: View {
 // MARK: - Sections
 
 private extension CollectionsRootView {
-    func albumSection(_ title: String, _ summaries: [AlbumSummary]) -> some View {
+    func albumSection(_ title: LocalizedStringKey, _ summaries: [AlbumSummary]) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             Text(title).font(.title2.bold())
             LazyVGrid(columns: gridColumns, spacing: CapsuleTheme.Spacing.large) {
@@ -164,7 +164,7 @@ private extension CollectionsRootView {
         }
     }
 
-    func linkGroup(_ title: String, rows: [AnyCollectionLink]) -> some View {
+    func linkGroup(_ title: LocalizedStringKey, rows: [AnyCollectionLink]) -> some View {
         VStack(alignment: .leading, spacing: CapsuleTheme.Spacing.medium) {
             Text(title).font(.title2.bold())
             VStack(spacing: 0) {
@@ -196,9 +196,9 @@ enum CollectionCategory: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .places: "Places"
-        case .people: "People & Pets"
-        case .memories: "Memories"
+        case .places: String(localized: "ios.places.title")
+        case .people: String(localized: "ios.collections.people.title")
+        case .memories: String(localized: "ios.collections.memories.title")
         }
     }
 
@@ -210,11 +210,14 @@ enum CollectionCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The placeholder body. ``places`` has a real screen, so its arm is
+    /// unreachable and borrows the Places empty state rather than carrying a
+    /// dead string through thirteen translations.
     var comingSoonMessage: String {
         switch self {
-        case .places: "See where your photos were taken on a map."
-        case .people: "People & Pets grouping is coming soon."
-        case .memories: "Auto-curated Memories are coming soon."
+        case .places: String(localized: "ios.places.empty.description")
+        case .people: String(localized: "ios.collections.people.coming_soon")
+        case .memories: String(localized: "ios.collections.memories.coming_soon")
         }
     }
 }
@@ -231,10 +234,10 @@ enum UtilityCategory: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .recentlyDeleted: "Recently Deleted"
-        case .hidden: "Hidden"
-        case .imports: "Imports"
-        case .duplicates: "Duplicates"
+        case .recentlyDeleted: String(localized: "ios.recently_deleted.title")
+        case .hidden: String(localized: "ios.hidden.title")
+        case .imports: String(localized: "ios.imports.title")
+        case .duplicates: String(localized: "ios.collections.duplicates.title")
         }
     }
 
@@ -247,12 +250,15 @@ enum UtilityCategory: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The placeholder body. Only ``duplicates`` still reaches a placeholder —
+    /// the other three have real screens, so their arms borrow those screens'
+    /// empty states rather than carrying dead strings through the catalogs.
     var comingSoonMessage: String {
         switch self {
-        case .recentlyDeleted: "Restore or permanently remove deleted photos. Coming soon."
-        case .hidden: "Photos you've hidden, behind Face ID. Coming soon."
-        case .imports: "Photos recently imported into Capsule. Coming soon."
-        case .duplicates: "Find and merge duplicate photos. Coming soon."
+        case .recentlyDeleted: String(localized: "ios.recently_deleted.empty.description")
+        case .hidden: String(localized: "ios.hidden.empty.description")
+        case .imports: String(localized: "ios.imports.empty.description")
+        case .duplicates: String(localized: "ios.collections.duplicates.coming_soon")
         }
     }
 }

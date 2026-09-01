@@ -24,13 +24,19 @@ pub mod keys;
 pub mod primitives;
 pub mod provenance;
 pub mod pwkdf;
+pub mod receipts;
+pub mod revoke;
 pub mod rng;
+pub mod upgrade;
 pub mod verify_asset;
 
 pub use hash::{Hash32, Sha256Hasher};
 pub use primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION, SuiteId};
 use thiserror::Error;
-pub use verify_asset::{PendingReason, RejectReason, VerifyOutcome, verify_asset};
+pub use verify_asset::{
+    BindingReject, MetadataBinding, PendingReason, RejectReason, VerifyOutcome, verify_asset,
+    verify_metadata_binding,
+};
 
 /// Errors surfaced by the cryptographic layer.
 ///
@@ -56,4 +62,11 @@ pub enum CryptoError {
     /// A key could not be derived, decoded, or reconstructed from bytes.
     #[error("key error: {0}")]
     Key(&'static str),
+
+    /// A re-keying writer drew a fresh nonce equal to the one it supersedes — refused as
+    /// defense in depth on top of the CSPRNG draw (SSoT: [Encryption § Re-keying on Rewrite]).
+    ///
+    /// [Encryption § Re-keying on Rewrite]: https://docs/design/cryptography/encryption/#re-keying-on-rewrite
+    #[error("refusing to reuse the nonce of the record being replaced")]
+    NonceReuse,
 }

@@ -12,6 +12,7 @@ use capsule_core::backup::{recover_seed, split_seed_2of3};
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::Workspace;
+use capsule_core::sidecar::sidecar_v1::CullFlag;
 use colored::*;
 use eyre::{Result, eyre};
 
@@ -56,8 +57,12 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
 
     // ── 1. Account + device keys ────────────────────────────────────────────
     step(1, "Create account + device keys");
-    let mut ws = Workspace::create_with_params(&source_lib, b"demo-passphrase", DEMO_KDF)
-        .map_err(|e| eyre!("create workspace: {e}"))?;
+    // Tag the demo workspace with this CLI's build identity so every manifest it authors reports
+    // `capsule-cli/{semver}+{commit}` (S-D15), the same as a real `capsule import`.
+    let mut ws = crate::as_capsule_cli(
+        Workspace::create_with_params(&source_lib, b"demo-passphrase", DEMO_KDF)
+            .map_err(|e| eyre!("create workspace: {e}"))?,
+    );
     ok(
         "master key generated; identity (IK), device signing (DSK), and device encryption (DEK) keys created",
     );
@@ -72,7 +77,9 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
         2,
         "Create a container album (mint AMK + write-tier + admin keys)",
     );
-    let album = ws.create_album("Trip to the Coast");
+    let album = ws
+        .create_album("Trip to the Coast")
+        .map_err(|e| eyre!("create album: {e}"))?;
     ok("AMK_v1 minted; admin-signed authority attests epoch 1");
     info("album_id", album);
 
@@ -152,8 +159,43 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
         .collect();
     info("chain", actions.join(" → "));
 
-    // ── 7. Backup export ─────────────────────────────────────────────────────
-    step(7, "Export a portable, signed backup artifact");
+    // ── 7. Culling: flag → filter → reject-sweep ─────────────────────────────
+    step(
+        7,
+        "Culling review: flag assets, filter by flag, then sweep rejects to trash",
+    );
+    // Import two sibling frames alongside the keeper to review as a set.
+    for (i, flag) in [CullFlag::Pick, CullFlag::Reject].into_iter().enumerate() {
+        let p = root.join(format!("frame-{i}.jpg"));
+        let mut bytes = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        bytes.extend((0..2048).map(|b| ((b + i) % 256) as u8));
+        std::fs::write(&p, &bytes)?;
+        let id = ws
+            .import_asset(album, &p)
+            .map_err(|e| eyre!("import: {e}"))?;
+        ws.set_cull(&id, flag).map_err(|e| eyre!("cull: {e}"))?;
+    }
+    ok("flagged sibling frames as pick / reject (signed metadata-update per flag)");
+    info(
+        "pick view",
+        format!("{} asset(s)", ws.assets_by_cull(CullFlag::Pick).len()),
+    );
+    info(
+        "reject view",
+        format!("{} asset(s)", ws.assets_by_cull(CullFlag::Reject).len()),
+    );
+    let swept = ws.reject_sweep(30).map_err(|e| eyre!("sweep: {e}"))?;
+    ok(format!(
+        "reject-sweep moved {} asset(s) to trash — soft, retention-respecting, the only destructive step",
+        swept.len()
+    ));
+    ok(format!(
+        "reject view now {} asset(s); pick untouched (flagging never touches bytes and is reversible)",
+        ws.assets_by_cull(CullFlag::Reject).len()
+    ));
+
+    // ── 8. Backup export ─────────────────────────────────────────────────────
+    step(8, "Export a portable, signed backup artifact");
     ws.export_backup(&backup_path, b"recovery-passphrase")
         .map_err(|e| eyre!("export: {e}"))?;
     let size = std::fs::metadata(&backup_path)?.len();
@@ -163,8 +205,8 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
         format!("{} ({} bytes)", backup_path.display(), size),
     );
 
-    // ── 8. Restore into a fresh library ──────────────────────────────────────
-    step(8, "Restore into a FRESH library and verify byte-equality");
+    // ── 9. Restore into a fresh library ──────────────────────────────────────
+    step(9, "Restore into a FRESH library and verify byte-equality");
     let exporter_pub = ws.exporter_verifying_key();
     let mut fresh = Workspace::create_with_params(&fresh_lib, b"new-device-pass", DEMO_KDF)
         .map_err(|e| eyre!("create fresh: {e}"))?;
@@ -200,8 +242,8 @@ pub(crate) fn run(workdir: Option<PathBuf>, image: Option<PathBuf>) -> Result<()
         Ok(_) => return Err(eyre!("untrusted exporter backup was wrongly accepted")),
     }
 
-    // ── 9. Shamir social recovery ────────────────────────────────────────────
-    step(9, "Opt-in Shamir 2-of-3 recovery-seed sharing");
+    // ── 10. Shamir social recovery ───────────────────────────────────────────
+    step(10, "Opt-in Shamir 2-of-3 recovery-seed sharing");
     let seed = [0x5Au8; 32];
     let shares = split_seed_2of3(&seed);
     let recovered =

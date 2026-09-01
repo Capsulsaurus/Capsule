@@ -60,7 +60,23 @@ pub fn format_message(template: &str, args: &[(&str, Value<'_>)]) -> String {
                 let _ = write!(out, "{{{body}}}");
             }
         } else {
-            // Complex (plural/select) or unterminated placeholder: emit verbatim.
+            // Complex (plural/select) or unterminated placeholder.
+            //
+            // Emitting it verbatim means the **user reads the message source** — the exact failure
+            // Android shipped for as long as its renderer had no plural support (slice `S-I6`), and
+            // that Apple would have shipped before `S-I4`. This runtime is the third place the same
+            // construct has arrived with nowhere to go, so it refuses loudly where a developer will
+            // see it rather than quietly where a user will.
+            //
+            // `debug_assert!` and not a hard panic: a release build must not gain a new crash on a
+            // catalog it could previously render badly, and every test and debug run is a build
+            // where the assertion fires. The pass-through below is what production still does.
+            debug_assert!(
+                !closed,
+                "capsule-i18n cannot render the ICU construct `{{{body}}}` — it would be printed to \
+                 the user verbatim. The per-platform renderers compile plurals ahead of time \
+                 (`xtask i18n`); this runtime does not. See slice `S-I7`."
+            );
             out.push('{');
             out.push_str(&body);
             if closed {
@@ -117,9 +133,28 @@ mod tests {
         );
     }
 
+    /// An ICU construct this runtime cannot evaluate is refused, not printed.
+    ///
+    /// This test previously asserted the opposite — that a plural block is "left verbatim" as a
+    /// known limitation. Emitting it verbatim means the **user reads the message source**, which is
+    /// precisely what Android shipped for as long as its renderer lacked plural support (slice
+    /// `S-I6`). A limitation that renders as output is not a limitation, it is a defect, and a test
+    /// pinning it made it look deliberate. Retargeted rather than deleted, because the case still
+    /// needs coverage — only the expected behaviour changed.
     #[test]
-    fn complex_placeholder_is_left_verbatim() {
-        // Known limitation: the MVP runtime does not evaluate plural/select blocks.
+    #[should_panic(expected = "cannot render the ICU construct")]
+    fn an_unrenderable_icu_construct_is_refused_in_debug_builds() {
+        let template = "{count, plural, one {# item} other {# items}}";
+        let _ = format_message(template, &[("count", Value::Int(2))]);
+    }
+
+    /// Release builds still pass the construct through rather than crashing on a catalog they
+    /// previously rendered badly — the assertion above is a developer-facing signal, not a
+    /// production behaviour change. Asserted on the shape the pass-through produces: each `{…}`
+    /// segment is reconstructed with its braces, so the output equals the input exactly.
+    #[test]
+    #[cfg(not(debug_assertions))]
+    fn release_builds_pass_the_construct_through_unchanged() {
         let template = "{count, plural, one {# item} other {# items}}";
         assert_eq!(
             format_message(template, &[("count", Value::Int(2))]),

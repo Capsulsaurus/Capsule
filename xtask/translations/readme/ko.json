@@ -1,0 +1,318 @@
+[
+  {
+    "source": "# Capsule",
+    "target": "# Capsule"
+  },
+  {
+    "source": "Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.",
+    "target": "전문가와 프로슈머를 위해 만들어진 오픈소스, 연합형, E2E 암호화 사진 관리 및 공유 서비스입니다."
+  },
+  {
+    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.",
+    "target": "> 면책 조항: 이 프로젝트는 계속해서 활발히 개발 중입니다. 최신 소식을 받아보려면 이 저장소에 Star를 눌러주세요!\n>\n> 알파 상태: `master` 브랜치가 메인 개발 브랜치입니다. GitHub 릴리스는 다음 조건이 충족되면 이루어집니다: 1. 기능/API가 내부적으로 안정화되었을 때; 2. 내부 테스트 그룹이 충분히 테스트했을 때.\n>\n> 프로젝트 업데이트 (2026년 4월): E2E 암호화와 오프라인 우선 철학으로 이식하는 중이므로, 다시 알파 단계에 도달하기까지 앞으로 몇 개월이 더 걸릴 예정입니다.\n> 프로젝트 업데이트 (2026년 6월): 개발자는 여전히 활발히 작업하고 있지만 여가 시간에만 진행하고 있습니다. 별도의 저장소에서 이식 가능한 순수 Rust 라이브러리를 구축하는 새로운 선행 작업(예: 이미지 인코딩/디코딩, 메타데이터 처리, 지리좌표 로직, 사용 사례에 맞게 미세 조정된 온디바이스 ML 모델)이 많아 진행을 가로막고 있습니다. 그러나 Rust 생태계에서 이러한 누락된 구성 요소를 채우는 것은 견고한 제품을 위해 무엇보다 중요합니다."
+  },
+  {
+    "source": "## Features",
+    "target": "## 기능"
+  },
+  {
+    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
+    "target": "- **네이티브 및 크로스 플랫폼**: Capsule은 일반적인 모든 데스크톱 및 모바일 플랫폼에서 사용할 수 있습니다. 모든 플랫폼에서 빠르고 네이티브하게 동작합니다."
+  },
+  {
+    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
+    "target": "- **가장 폭넓은 형식 지원**: Capsule은 일반 스마트폰에서 사용되는 형식부터 전문가용 RAW 형식까지 대부분의 이미지 및 동영상 형식을 지원합니다. 스마트폰 사진과 동영상을 보듯 어떤 기기에서든 모든 콘텐츠를 확인하세요!"
+  },
+  {
+    "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
+    "target": "- **데이터는 항상 최적화됩니다**: Capsule은 원활한 전달을 위해 용량이 큰 콘텐츠를 철저하게 캐싱하고 최적화합니다(방법론은 [여기에 문서화](https://capsule.justinchung.net/design/thumbnails/)되어 있습니다). 느리다고 느껴지는 부분이 있다면 알려주세요."
+  },
+  {
+    "source": "- **Privacy**: Your data is yours and end-to-end encrypted.",
+    "target": "- **프라이버시**: 데이터는 오직 사용자의 것이며 종단 간 암호화됩니다."
+  },
+  {
+    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
+    "target": "- **완전한 기능 지원**: Capsule은 실시간 보기, 시맨틱 검색, AI 정리 등 다양한 강력한 기능을 제공합니다."
+  },
+  {
+    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
+    "target": "- **연합형**: Capsule 사용자는 다른 서버의 사용자와 원활하게 자산을 공유할 수 있습니다. 사진을 위한 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))라고 생각하시면 됩니다."
+  },
+  {
+    "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
+    "target": "- **오픈소스**: Capsule은 영원히 오픈소스이며 자체 서버를 직접 호스팅할 수 있습니다."
+  },
+  {
+    "source": "## Is Capsule for you?",
+    "target": "## Capsule은 당신을 위한 것인가요?"
+  },
+  {
+    "source": "Capsule is highly refined for photographers and prosumers who want to store and share their photos nearly as seamlessly as do cloud photo services that do not necessarily work on all your devices equally as well and own your data.",
+    "target": "Capsule은 모든 기기에서 반드시 동일하게 잘 작동하지는 않으면서도 여러분의 데이터를 소유하는 클라우드 사진 서비스만큼이나 원활하게 사진을 저장하고 공유하고 싶은 사진작가와 프로슈머를 위해 매우 정교하게 다듬어졌습니다."
+  },
+  {
+    "source": "We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.",
+    "target": "저희는 저장된 모든 데이터를 권한이 없는 제3자가 열람할 수 있다는 가정 하에 엄격한 보안 및 프라이버시 요구 사항을 구현합니다. 그렇기 때문에 모든 것이 종단 간 암호화되고 로컬에서 처리됩니다."
+  },
+  {
+    "source": "However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!",
+    "target": "다만 (적어도 현재는) Capsule이 어느 정도의 기술적 지식이 필요한 **셀프 호스팅** 서버를 필요로 한다는 점은 중요하게 알아두셔야 합니다. 이는 즉시 사용 가능한 솔루션이 아니라 역량 있고 활발하게 개발되고 있는 오픈소스 프로젝트입니다. 이 프로젝트는 열정으로 만들어졌으며, 저(작성자)는 어떠한 금전적 대가도 요구하지 않습니다. 가장 좋은 형태의 보상은 기술적 기여와 피드백입니다!"
+  },
+  {
+    "source": "## Screenshots",
+    "target": "## 스크린샷"
+  },
+  {
+    "source": "## Who is Capsule for?",
+    "target": "## Capsule은 누구를 위한 것인가요?"
+  },
+  {
+    "source": "- **Photographers**: Capsule is designed for photographers who want to store and share their photos with clients and peers.",
+    "target": "- **사진작가**: Capsule은 고객 및 동료와 사진을 저장하고 공유하고자 하는 사진작가를 위해 설계되었습니다."
+  },
+  {
+    "source": "- **Families and friends**: Capsule is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.",
+    "target": "- **가족과 친구**: Capsule은 메타데이터까지 완전하게 보존된 원본 화질로 서로 사진과 동영상을 저장하고 공유하고자 하는 프로슈머를 위해 설계되었습니다."
+  },
+  {
+    "source": "- **Organizations**: Organizations can use Capsule to share full-quality photos and videos with their members and clients.",
+    "target": "- **조직**: 조직은 Capsule을 사용하여 구성원 및 고객과 원본 화질의 사진과 동영상을 공유할 수 있습니다."
+  },
+  {
+    "source": "- **People who care about privacy**: Capsule implements the best of privacy and security practices and leaves the data in your hands.",
+    "target": "- **프라이버시를 중요하게 생각하는 사람들**: Capsule은 최고 수준의 프라이버시 및 보안 관행을 구현하며 데이터를 여러분의 손에 맡깁니다."
+  },
+  {
+    "source": "### Who is Capsule not for?",
+    "target": "### Capsule은 누구를 위한 것이 아닌가요?"
+  },
+  {
+    "source": "This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Capsule might not be for you.",
+    "target": "이는 개인적인 선택의 문제이지만, Google Photos나 iCloud 같은 기존 서비스에 만족하거나 메시징 앱으로 고압축 콘텐츠를 주고받는 것으로 충분하다면 Capsule은 여러분에게 맞지 않을 수 있습니다."
+  },
+  {
+    "source": "## Some similar alternatives",
+    "target": "## 비슷한 대안들"
+  },
+  {
+    "source": "- **Google Photos or similar**: Google Photos is a great service for storing and sharing photos and videos. However, it compresses and strips metadata from your photos and videos by default, and does not support many more professional or non-smartphone formats.",
+    "target": "- **Google Photos 또는 유사 서비스**: Google Photos는 사진과 동영상을 저장하고 공유하기에 훌륭한 서비스입니다. 다만 기본적으로 사진과 동영상을 압축하고 메타데이터를 제거하며, 더 전문적이거나 스마트폰이 아닌 기기의 형식은 다수 지원하지 않습니다."
+  },
+  {
+    "source": "- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Capsule should offer a much more comfortable experience.",
+    "target": "- **AirDrop, Quick Share 또는 메시징 앱**: 이러한 옵션은 사진과 동영상을 빠르게 공유하기에는 좋지만, 콘텐츠를 압축하거나 용량 제한이 있거나 장기적인 접근을 위한 저장을 지원하지 않는 경우가 많습니다. 콘텐츠가 수 기가바이트를 넘는다면 Capsule이 훨씬 더 편안한 경험을 제공할 것입니다."
+  },
+  {
+    "source": "## Getting Started",
+    "target": "## 시작하기"
+  },
+  {
+    "source": "[See our docs](https://capsule.justinchung.net/guides/getting-started/).",
+    "target": "[문서를 참고하세요](https://capsule.justinchung.net/guides/getting-started/)."
+  },
+  {
+    "source": "### Features Relevant to New Users",
+    "target": "### 신규 사용자에게 유용한 기능"
+  },
+  {
+    "source": "*Note: This section is being updated on the development branch.*",
+    "target": "*참고: 이 섹션은 개발 브랜치에서 업데이트되는 중입니다.*"
+  },
+  {
+    "source": "- Official tools for bulk imports: Capsule was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)",
+    "target": "- 대량 가져오기를 위한 공식 도구: Capsule은 즉시 대용량(TB 이상)의 가져오기를 지원하도록 만들어졌습니다. 중복 제거, 일괄 정리 등을 대신 처리해 줍니다. (다만 기존 라이브러리의 경우 CLI 사용을 권장합니다.)"
+  },
+  {
+    "source": "- Native clients with native features: Sometimes you want to backup your content on particular platforms that require platform-specific APIs (e.g. iOS). If we have a native client for you, it will be using the latest APIs available in that ecosystem.",
+    "target": "- 네이티브 기능을 갖춘 네이티브 클라이언트: 때로는 플랫폼별 API가 필요한 특정 플랫폼(예: iOS)에서 콘텐츠를 백업하고 싶을 수 있습니다. 해당 플랫폼용 네이티브 클라이언트가 제공된다면, 그 생태계에서 사용 가능한 최신 API를 활용하게 됩니다."
+  },
+  {
+    "source": "- Performance-oriented architecture: Capsule is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.",
+    "target": "- 성능 지향 아키텍처: Capsule은 가장 중요한 데이터를 저장하기 위한 견고하고 안전한 백엔드를 제공하는 데 중점을 두며, 아무리 큰 컬렉션이라도 제공된 하드웨어 자원을 모두 활용해 처리된다는 것을 보장합니다."
+  },
+  {
+    "source": "## Development",
+    "target": "## 개발"
+  },
+  {
+    "source": "Components:",
+    "target": "구성 요소:"
+  },
+  {
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
+  },
+  {
+    "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
+    "target": "- [Capsule Web](capsule-web/README.md) (진행 중): React로 작성된 웹 클라이언트"
+  },
+  {
+    "source": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic",
+    "target": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): 클라이언트별 로직을 위한 공유 코어 Kotlin 멀티플랫폼 라이브러리"
+  },
+  {
+    "source": "- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App",
+    "target": "- [Capsule Android](capsule-android/README.md) (진행 중): Jetpack Compose 앱"
+  },
+  {
+    "source": "- [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS",
+    "target": "- [Capsule Swift](capsule-swift/README.md): iOS/macOS용 SwiftUI 클라이언트"
+  },
+  {
+    "source": "- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)",
+    "target": "- [Capsule Docs](capsule-docs/README.md): Starlight(Astro) 기반 문서 웹사이트"
+  },
+  {
+    "source": "Planned server dependencies:",
+    "target": "Planned server dependencies:"
+  },
+  {
+    "source": "- [PostgreSQL](https://www.postgresql.org/)",
+    "target": "- [PostgreSQL](https://www.postgresql.org/)"
+  },
+  {
+    "source": "- [Valkey](https://valkey.io/) (optional session-state adapter)",
+    "target": "- [Valkey](https://valkey.io/) (optional session-state adapter)"
+  },
+  {
+    "source": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service.",
+    "target": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service."
+  },
+  {
+    "source": "Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:",
+    "target": "사용되는 다양한 기술을 고려할 때, 프로젝트의 여러 부분을 개발하려면 IDE를 전환해야 할 수도 있습니다. 저희가 권장하는 조합은 다음과 같습니다:"
+  },
+  {
+    "source": "- `capsule-android`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-android`: 플러그인을 설치한 Android Studio 또는 IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`: VS Code 또는 유사한 편집기"
+  },
+  {
+    "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-core-kotlin`: 플러그인을 설치한 Android Studio 또는 IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-docs`: VS Code or similar",
+    "target": "- `capsule-docs`: VS Code 또는 유사한 편집기"
+  },
+  {
+    "source": "- `capsule-swift`: Xcode",
+    "target": "- `capsule-swift`: Xcode"
+  },
+  {
+    "source": "- `capsule-web`: VS Code or similar",
+    "target": "- `capsule-web`: VS Code 또는 유사한 편집기"
+  },
+  {
+    "source": "### Setup",
+    "target": "### 설정"
+  },
+  {
+    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on.",
+    "target": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on."
+  },
+  {
+    "source": "Setup in the following order:",
+    "target": "다음 순서로 설정하세요:"
+  },
+  {
+    "source": "- Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.",
+    "target": "- [mise](https://mise.jdx.dev)를 설치하고, 저장소 루트에서 `mise install`을 실행하여 고정된 공유 도구를 가져옵니다."
+  },
+  {
+    "source": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev)).",
+    "target": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev))."
+  },
+  {
+    "source": "- Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>",
+    "target": "- Kotlin Multiplatform 관련 필수 도구를 모두 설정합니다: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>"
+  },
+  {
+    "source": "- Setup each of the following tools in the Development sections of each component's README.",
+    "target": "- 각 구성 요소 README의 Development 섹션에 나와 있는 도구들을 각각 설정합니다."
+  },
+  {
+    "source": "### Style and Guidelines",
+    "target": "### 스타일 및 가이드라인"
+  },
+  {
+    "source": "- Due to the numerous languages in this monorepo, we use multiple linters/formatters, each native to each language/technology. CI/CD will enforce these and it is recommended to use the same tools in the IDE of your choice to reduce merge conflicts. (Also, all code is standardized to 4 spaces as some languages have specific guidelines while others (e.g. TypeScript) have mixed guides.)",
+    "target": "- 이 모노레포에는 다양한 언어가 사용되므로, 각 언어/기술에 맞는 여러 린터와 포매터를 사용합니다. CI/CD에서 이를 강제하며, 병합 충돌을 줄이기 위해 사용하는 IDE에서도 동일한 도구를 사용하는 것을 권장합니다. (또한 일부 언어는 고유한 가이드라인을 가지고 있고 다른 언어(예: TypeScript)는 혼재된 가이드를 가지고 있기 때문에, 모든 코드는 4칸 공백으로 통일되어 있습니다.)"
+  },
+  {
+    "source": "## Issue Reporting",
+    "target": "## 이슈 제보"
+  },
+  {
+    "source": "GitHub Issues is the only accepted method of technical issue reporting. For assistance on setup, we recommend opening a GitHub Discussion (for visibility).",
+    "target": "기술적인 이슈 제보는 GitHub Issues를 통해서만 접수됩니다. 설정에 관한 도움이 필요하다면 (가시성을 위해) GitHub Discussion을 열어주시기를 권장합니다."
+  },
+  {
+    "source": "> Note on third-party clients and scripts: This is outside the scope of the project but if there is missing functionality that led to resorting to external solutions, we highly encourage you to submit a feature request!",
+    "target": "> 서드파티 클라이언트 및 스크립트에 대한 참고 사항: 이는 프로젝트 범위 밖의 영역이지만, 외부 솔루션에 의존하게 만든 누락된 기능이 있다면 기능 요청을 제출해 주시기를 적극 권장합니다!"
+  },
+  {
+    "source": "## FAQ",
+    "target": "## FAQ"
+  },
+  {
+    "source": "**Q: Why may Capsule be more suitable than other open-source solutions?**",
+    "target": "**Q: Capsule이 다른 오픈소스 솔루션보다 더 적합할 수 있는 이유는 무엇인가요?**"
+  },
+  {
+    "source": "A: Capsule is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.",
+    "target": "A: Capsule은 성능, 사용성, 호환성을 염두에 두고 처음부터 설계되었습니다. 호스팅에는 어느 정도 초기 설정이 필요하지만(모두 세심하게 문서화되어 있습니다), 저희는 단연코 가장 폭넓은 형식 지원과 실시간 보기 기능을 제공합니다. 지원되는 하드웨어와 소프트웨어 조합을 철저히 테스트하며, 새로운 기능은 신중하게 안정 버전으로 반영합니다. 대량의 콘텐츠를 보유하고 있고 어떤 기기에서든 모든 자산을 하나의 화면에서 관리하고 싶은 분들에게 훌륭한 선택이 될 것입니다."
+  },
+  {
+    "source": "**Q: Why not extend off existing open-source solutions?**",
+    "target": "**Q: 왜 기존 오픈소스 솔루션을 확장하지 않았나요?**"
+  },
+  {
+    "source": "A: While there are multiple great open-source solutions, they lack a lot of the involved functions that professionals and prosumers need. For prosumers interested in an open-source and self-hosted solution, we have a robust, and highly scalable solution. For professionals looking to host all their assets in a seamless and integrated service, we have a solution that may be a better fit than some proprietary options.",
+    "target": "A: 훌륭한 오픈소스 솔루션이 여러 가지 있지만, 전문가와 프로슈머에게 필요한 정교한 기능들이 많이 빠져 있습니다. 오픈소스이면서 셀프 호스팅되는 솔루션에 관심 있는 프로슈머를 위해 저희는 견고하고 높은 확장성을 갖춘 솔루션을 제공합니다. 모든 자산을 원활하고 통합된 서비스에서 호스팅하고자 하는 전문가를 위해서는, 일부 독점 솔루션보다 더 적합할 수 있는 솔루션을 제공합니다."
+  },
+  {
+    "source": "Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.\n**Q: For the API, were languages other than Rust considered?**",
+    "target": "참고로, 원저자는 오픈소스를 사랑하며 다양한 프로젝트에 기여해 왔습니다. 처음부터 새로 시작한 이유는 사용자 경험과 성능이라는 목표를 달성하기 위한 여러 기술적 결정들이 다수의 핵심적인 설계 결정을 필요로 하기 때문입니다.\n**Q: API를 위해 Rust 이외의 언어도 고려했나요?**"
+  },
+  {
+    "source": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger.",
+    "target": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger."
+  },
+  {
+    "source": "**Q: How do bugfixes happen?**",
+    "target": "**Q: 버그 수정은 어떻게 이루어지나요?**"
+  },
+  {
+    "source": "A: Even if the best development practices, rigorous testing, and conservative designs, no software is without bugs. Bug reporting and thoughtful feature requests submitted to the issues page would be much appreciated. Certain types of bugs, such as those affecting data integrity, should be marked with the appropriate tags and will be ironed out ASAP. Patches typically roll out to the latest major version and marked in a notice board separate from CHANGELOGs.",
+    "target": "A: 최선의 개발 관행, 철저한 테스트, 신중한 설계를 갖추더라도 버그 없는 소프트웨어는 없습니다. 이슈 페이지에 버그를 제보하거나 신중하게 고민한 기능 요청을 제출해 주시면 큰 도움이 됩니다. 데이터 무결성에 영향을 주는 것과 같은 특정 유형의 버그는 적절한 태그로 표시되어야 하며, 최대한 빠르게 해결될 것입니다. 패치는 일반적으로 최신 메이저 버전에 반영되며, CHANGELOG와는 별도의 공지 게시판에 표시됩니다."
+  },
+  {
+    "source": "## How to contribute",
+    "target": "## 기여 방법"
+  },
+  {
+    "source": "Capsule primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.",
+    "target": "Capsule은 무엇보다 활발한 기여와 피드백에서 큰 도움을 받습니다! 저희에게 필요한 것은 후원보다는 더 많은 손길입니다. 자세한 내용은 [CONTRIBUTING.md](./CONTRIBUTING.md)를 참고하세요."
+  },
+  {
+    "source": "### Contributor License Agreement (CLA)",
+    "target": "### 기여자 라이선스 계약 (CLA)"
+  },
+  {
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "모든 기여자에게 [CLA](CLA.md) 동의를 요구합니다. Capsule의 저작권은 한 사람이 보유하고 있으며, 바로 그것이 앱 스토어 배포를 가능하게 합니다. App Store 약관은 AGPL과 양립할 수 없으므로, 스토어용 빌드는 저작권자가 별도로 부여하는 이용 허락으로만 성립합니다. 그 대가로 공개되는 모든 소스 릴리스는 OSI 승인 라이선스 하에 유지됩니다."
+  },
+  {
+    "source": "## License",
+    "target": "## 라이선스"
+  },
+  {
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule은 [AGPL-3.0-only](LICENSE)로 공개됩니다. 저작권은 Justin Chung이 단독으로 보유하며, 서드파티 고지는 [NOTICE](NOTICE)에 있습니다. 저작권자는 앱 스토어가 요구하는 독점적 조건을 포함하여 별도의 상업적 조건으로 Capsule을 제공할 수도 있습니다. 이는 이미 공개된 것에는 영향을 주지 않습니다. AGPL로 받은 버전은 영구적으로 AGPL 하에서 여러분의 것입니다. 전체 입장은 [라이선스 설계 문서](https://capsule.justinchung.net/design/licensing/)에 정리되어 있습니다."
+  }
+]

@@ -31,6 +31,8 @@ A hallucinating model can pollute its own namespace, never user intent. This is 
 
 Semantic search converts an image and a text query into vectors and measures their distance. Because embeddings are generated client-side, every device must run the same canonical model along a deterministic path so vectors are comparable — the constraint and its platform-partition fallback are specified in [Embedding Provenance](#embedding-provenance).
 
+**Status note.** The real weight-loading runner is **post-v1** (decision 2026-07-12): model weights never live in git and download at runtime behind the default-off `inference` feature, so v1 ships the deterministic execution path, registry, index, and staleness rules against the seamed fixture runner; the [v1-committed slots](#v1-committed-slots) name what the real runner loads when it lands.
+
 ### Image Categorization & Tagging
 
 The semantic embeddings are reused for zero-shot classification to generate tags, enabling faceted search and auto-album generation without a separate classifier.

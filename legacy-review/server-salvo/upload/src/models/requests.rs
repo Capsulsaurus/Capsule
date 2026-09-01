@@ -37,6 +37,41 @@ pub(crate) struct CreateUploadRequest {
     pub intent_id: Option<String>,
 }
 
+/// Request body for `POST /albums` — album provisioning (slice `S-C25`).
+///
+/// **One field, on purpose.** The album id is derived from the account master key, so it is
+/// the only thing the client can tell the server that the server does not already know.
+/// Strict (`deny_unknown_fields`): a `name` or `description` field is a `400`, never a
+/// silently-ignored extra — the plaintext `albums.name`/`albums.description` columns predate
+/// the key-free model and the server is not entitled to album titles, which live in the
+/// encrypted sidecar (slice `S-C26` retires the columns).
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProvisionAlbumRequest {
+    /// The caller's derived album id, as a canonical lowercase hyphenated UUID.
+    pub album_id: String,
+}
+
+/// Request body for a generic lifecycle write, `POST /albums/{album_id}/ops` (slice `S-C16`).
+///
+/// The signed manifest bundle: the opaque manifest as its [`ManifestEnvelope`] projection
+/// (re-serialized to canonical CBOR server-side, never re-modeled on the wire — the same
+/// projection the sync feed carries) plus, when the action carries one, the encrypted
+/// metadata blob as standard base64. Strict (`deny_unknown_fields`): an unknown field is a
+/// client bug (`400 error.upload.malformed_request`), never silently ignored.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct OpRequest {
+    /// The unencrypted manifest envelope fields the server validates (invariants 16–18, 25).
+    /// Its `album_id` MUST equal the `{album_id}` path segment and its `action` MUST be a
+    /// non-upload lifecycle action — a contradiction is `400 error.upload.envelope_mismatch`.
+    pub manifest_envelope: ManifestEnvelope,
+    /// The encrypted metadata blob (standard base64), present exactly when the action binds a
+    /// metadata blob (`metadata-update`). Its content hash must equal the manifest's committed
+    /// `metadata_blob_hash` (invariant 25).
+    pub metadata_blob: Option<String>,
+}
+
 /// The server-visible mirror of the signed manifest's envelope fields, as declared
 /// at `POST /upload` (owned by the provenance design doc; validated per the
 /// threat-model invariants). Strict like the rest of the transport JSON — the

@@ -24,7 +24,10 @@ struct AlbumCoverCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            Text("^[\(album.count) Photo](inflect: true)")
+            Text(String(
+                localized: "ios.albums.photo_count",
+                defaultValue: "\(album.count) Photo"
+            ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

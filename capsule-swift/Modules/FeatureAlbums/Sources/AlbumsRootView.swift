@@ -28,13 +28,13 @@ public struct AlbumsRootView: View {
     public var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Albums")
+                .navigationTitle("ios.albums.title")
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { isCreatingAlbum = true } label: {
                             Image(systemName: "plus")
                         }
-                        .accessibilityLabel("New Album")
+                        .accessibilityLabel("ios.albums.new_album.title")
                     }
                 }
                 .navigationDestination(for: AlbumSummary.self) { album in
@@ -48,16 +48,16 @@ public struct AlbumsRootView: View {
                 }
         }
         .task { await model.load() }
-        .alert("New Album", isPresented: $isCreatingAlbum) {
-            TextField("Album Name", text: $newAlbumName)
-            Button("Cancel", role: .cancel) { newAlbumName = "" }
-            Button("Create") {
+        .alert("ios.albums.new_album.title", isPresented: $isCreatingAlbum) {
+            TextField("ios.albums.new_album.name_field", text: $newAlbumName)
+            Button("ios.common.cancel", role: .cancel) { newAlbumName = "" }
+            Button("ios.common.create") {
                 let name = newAlbumName
                 newAlbumName = ""
                 Task { await model.createAlbum(named: name) }
             }
         } message: {
-            Text("Name your new Capsule album.")
+            Text("ios.albums.new_album.message")
         }
     }
 
@@ -67,19 +67,19 @@ public struct AlbumsRootView: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.userAlbums.isEmpty, model.smartAlbums.isEmpty {
             ContentUnavailableView(
-                "No Albums",
+                "ios.albums.empty.title",
                 systemImage: "rectangle.stack",
-                description: Text("Create a Capsule album with the + button.")
+                description: Text("ios.albums.empty.description")
             )
         } else {
             List {
                 if !model.userAlbums.isEmpty {
-                    Section("My Albums") {
+                    Section("ios.albums.section.my_albums") {
                         ForEach(model.userAlbums) { albumRow($0) }
                     }
                 }
                 if !model.smartAlbums.isEmpty {
-                    Section("Smart Albums") {
+                    Section("ios.albums.section.smart_albums") {
                         ForEach(model.smartAlbums) { albumRow($0) }
                     }
                 }
@@ -98,7 +98,10 @@ public struct AlbumsRootView: View {
                     .frame(width: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(album.title)
-                    Text("^[\(album.count) Photo](inflect: true)")
+                    Text(String(
+                localized: "ios.albums.photo_count",
+                defaultValue: "\(album.count) Photo"
+            ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

@@ -8,6 +8,7 @@
  */
 
 import { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import QRCode from 'react-qr-code';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,7 @@ interface TotpEnrollProps {
 type EnrollStep = 'start' | 'scan' | 'verify';
 
 export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
+    const intl = useIntl();
     const [step, setStep] = useState<EnrollStep>('start');
     const [provisioningUri, setProvisioningUri] = useState('');
     const [code, setCode] = useState('');
@@ -39,7 +41,7 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to start enrollment.',
+                    : intl.formatMessage({ id: 'mfa.totp.start_failed' }),
             );
         } finally {
             setLoading(false);
@@ -57,7 +59,7 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Invalid code. Please try again.',
+                    : intl.formatMessage({ id: 'mfa.totp.invalid_code' }),
             );
         } finally {
             setLoading(false);
@@ -68,15 +70,18 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
         return (
             <div className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                    Use an authenticator app (e.g. Google Authenticator, Authy)
-                    to scan a QR code and generate one-time codes.
+                    <FormattedMessage id="mfa.totp.start_description" />
                 </p>
                 <div className="flex gap-2">
                     <Button onClick={handleStart} disabled={loading}>
-                        {loading ? 'Starting…' : 'Set up authenticator'}
+                        {loading ? (
+                            <FormattedMessage id="mfa.totp.starting" />
+                        ) : (
+                            <FormattedMessage id="mfa.totp.setup" />
+                        )}
                     </Button>
                     <Button variant="ghost" onClick={onCancel}>
-                        Cancel
+                        <FormattedMessage id="common.cancel" />
                     </Button>
                 </div>
             </div>
@@ -87,22 +92,21 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
         return (
             <div className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                    Scan this QR code with your authenticator app, then enter
-                    the 6-digit code to confirm.
+                    <FormattedMessage id="mfa.totp.scan_description" />
                 </p>
                 <div className="flex justify-center p-4 bg-white rounded-md">
                     <QRCode value={provisioningUri} size={180} />
                 </div>
                 <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer select-none">
-                        Can't scan? Show setup key
+                        <FormattedMessage id="mfa.totp.show_key" />
                     </summary>
                     <p className="mt-1 break-all font-mono">
                         {provisioningUri}
                     </p>
                 </details>
                 <Button onClick={() => setStep('verify')} className="w-full">
-                    I've scanned the code
+                    <FormattedMessage id="mfa.totp.scanned" />
                 </Button>
             </div>
         );
@@ -111,17 +115,20 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
     return (
         <form onSubmit={handleVerify} className="space-y-4">
             <p className="text-sm text-muted-foreground">
-                Enter the 6-digit code from your authenticator app to complete
-                setup.
+                <FormattedMessage id="mfa.totp.verify_description" />
             </p>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <div className="grid gap-2">
-                <Label htmlFor="totp-verify">Verification Code</Label>
+                <Label htmlFor="totp-verify">
+                    <FormattedMessage id="mfa.totp.code_label" />
+                </Label>
                 <Input
                     id="totp-verify"
                     type="text"
                     inputMode="numeric"
-                    placeholder="123456"
+                    placeholder={intl.formatMessage({
+                        id: 'common.code_placeholder',
+                    })}
                     maxLength={6}
                     required
                     value={code}
@@ -132,14 +139,18 @@ export function TotpEnroll({ onSuccess, onCancel }: TotpEnrollProps) {
             </div>
             <div className="flex gap-2">
                 <Button type="submit" disabled={loading}>
-                    {loading ? 'Verifying…' : 'Confirm'}
+                    {loading ? (
+                        <FormattedMessage id="auth.verifying" />
+                    ) : (
+                        <FormattedMessage id="mfa.totp.confirm" />
+                    )}
                 </Button>
                 <Button
                     variant="ghost"
                     type="button"
                     onClick={() => setStep('scan')}
                 >
-                    Back
+                    <FormattedMessage id="common.back" />
                 </Button>
             </div>
         </form>

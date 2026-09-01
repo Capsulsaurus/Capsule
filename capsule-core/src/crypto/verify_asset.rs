@@ -17,6 +17,7 @@
 //! [Keys — Write Authorization]: https://docs/design/cryptography/keys/#write-authorization
 
 use crate::crypto::authority::AlbumAuthority;
+use crate::crypto::encryption::{blob_ciphertext_hash, open_blob};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::DeviceDirectory;
 use crate::crypto::primitives::SuiteId;
@@ -140,8 +141,15 @@ pub fn verify_asset(
         Some(false) => return Reject(DeviceAddedAfter),
         Some(true) => {}
     }
-    // 8. The device signature must verify (provenance).
+    // 8. The device signature must verify under the entry's **declared classical algorithm**.
+    //    The directory entry's `dsk_public` is algorithm-tagged — Ed25519 (software) or
+    //    ECDSA-P256 (hardware secure elements) — so verification dispatches on that tag. A
+    //    signature whose classical half is a *different* algorithm than the entry declares is a
+    //    cross-algorithm forgery and is rejected before the (algorithm-specific) verify.
     let signing_bytes = manifest.signing_bytes();
+    if manifest.device_sig.classical_algorithm() != entry.dsk_public.classical_algorithm() {
+        return Reject(BadDeviceSig);
+    }
     if !entry
         .dsk_public
         .verify(&signing_bytes, &manifest.device_sig)
@@ -177,18 +185,107 @@ pub fn verify_asset(
     }
 }
 
+/// Why a metadata blob fails to bind to its manifest and the locally-signed sidecar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingReject {
+    /// The manifest commits to no `metadata_blob_hash` — a metadata-bearing action must
+    /// (`create | replace | metadata-update`); a caller should not seek a binding otherwise.
+    NoManifestCommitment,
+    /// The blob's content hash does not equal the manifest's committed `metadata_blob_hash`.
+    /// This is the key-free half — the same comparison the server runs as [invariant 25].
+    ///
+    /// [invariant 25]: crate::validation::check_metadata_blob_envelope
+    BlobHashMismatch,
+    /// The blob did not decrypt/authenticate under the derived blob key (tampered ciphertext,
+    /// wrong key, or a truncated wire).
+    Undecryptable,
+    /// The blob decrypted, but its plaintext is not byte-identical to the locally-signed
+    /// sidecar — the client would be persisting one sidecar while its manifest commits to a
+    /// different one.
+    SidecarMismatch,
+}
+
+/// The outcome of the metadata↔manifest round-trip binding check (client-side; SSoT:
+/// [Metadata — Local and Server Metadata Equivalence]).
+///
+/// This is a **distinct class** from a [`verify_asset`] terminal-reject: a manifest's two
+/// signatures can be perfectly valid while the metadata blob a client was handed diverges from
+/// what the manifest commits to. Per the [client-side invariant] a divergence is
+/// **quarantined** — surfaced, never silently persisted — exactly like the pending→timeout and
+/// terminal-reject cases funnel into quarantine, but reached from a different check.
+///
+/// [Metadata — Local and Server Metadata Equivalence]: https://docs/design/metadata/#local-and-server-metadata-equivalence
+/// [client-side invariant]: https://docs/design/threat-model/validation/#client-side-validation-invariants
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetadataBinding {
+    /// The blob decrypts to the byte-identical signed sidecar and hashes to the manifest field.
+    Bound,
+    /// The blob diverges from the manifest or the signed sidecar — quarantine, never persist.
+    Quarantine(BindingReject),
+}
+
+impl MetadataBinding {
+    /// Convenience: did the metadata blob bind?
+    pub fn is_bound(self) -> bool {
+        matches!(self, MetadataBinding::Bound)
+    }
+}
+
+/// Run the metadata↔manifest round-trip equivalence check for a metadata-bearing manifest
+/// (SSoT: [Metadata — Local and Server Metadata Equivalence], [Encryption — Local–server
+/// equivalence]). Two facts must hold, both funnelling a failure into a
+/// [quarantine](MetadataBinding::Quarantine):
+///
+/// 1. **Content address** — the metadata blob's content hash equals the manifest's committed
+///    `metadata_blob_hash` (the key-free half; the server enforces the same value at
+///    [invariant 25](crate::validation::check_metadata_blob_envelope)).
+/// 2. **Round-trip** — decrypting the blob under `blob_key` yields canonical CBOR
+///    byte-identical to `signed_sidecar` (the sidecar the client persists locally).
+///
+/// A client therefore never persists a sidecar that does not round-trip to the committed
+/// `metadata_blob_hash`.
+///
+/// [Metadata — Local and Server Metadata Equivalence]: https://docs/design/metadata/#local-and-server-metadata-equivalence
+/// [Encryption — Local–server equivalence]: https://docs/design/cryptography/encryption/#metadata-encryption
+pub fn verify_metadata_binding(
+    manifest: &AssetManifest,
+    metadata_blob: &[u8],
+    blob_key: &[u8; 32],
+    signed_sidecar: &[u8],
+) -> MetadataBinding {
+    use MetadataBinding::Quarantine;
+
+    let Some(committed) = manifest.core.metadata_blob_hash else {
+        return Quarantine(BindingReject::NoManifestCommitment);
+    };
+    // (1) Key-free content address: the ciphertext blob hashes to the committed value.
+    if blob_ciphertext_hash(metadata_blob) != committed {
+        return Quarantine(BindingReject::BlobHashMismatch);
+    }
+    // (2) Round-trip: the blob decrypts to the byte-identical signed sidecar.
+    match open_blob(blob_key, metadata_blob) {
+        Err(_) => Quarantine(BindingReject::Undecryptable),
+        Ok(plaintext) if plaintext != signed_sidecar => Quarantine(BindingReject::SidecarMismatch),
+        Ok(_) => MetadataBinding::Bound,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use uuid::Uuid;
 
     use super::*;
     use crate::crypto::authority::ReferenceAuthority;
+    use crate::crypto::encryption::stream::{decrypt_asset_vec, encrypt_asset_vec_with_prefix};
+    use crate::crypto::encryption::{seal_file_key, unseal_file_key};
     use crate::crypto::hash::Hash32;
     use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
-    use crate::crypto::keys::{AmkVersion, HybridSigningKey};
+    use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::action::Action;
-    use crate::crypto::provenance::manifest::{ASSET_MANIFEST_VERSION, KeyMode, ManifestCore};
+    use crate::crypto::provenance::manifest::{
+        ASSET_MANIFEST_VERSION, KeyMode, ManifestCore, WrappedFileKey,
+    };
 
     const USER: u128 = 0x05E2;
     const DEVICE: u128 = 0xD1;
@@ -220,6 +317,7 @@ mod tests {
                 devices: vec![DeviceEntry {
                     device_id: Uuid::from_u128(DEVICE),
                     dsk_public: device.verifying_key(),
+                    dek_public: None,
                     added_at: "2026-05-30T00:00:00Z".into(),
                     revoked_at: None,
                 }],
@@ -255,13 +353,16 @@ mod tests {
                 nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
                 key_mode: KeyMode::Derived,
                 wrapped_file_key: None,
-                metadata_blob_hash: None,
+                // Present exactly on the metadata-bearing actions, so `structural_ok` (checked
+                // before any signature) holds for every otherwise-valid fixture.
+                metadata_blob_hash: action.binds_metadata_blob().then(|| Hash32([0x4D; 32])),
                 created_by_user: Uuid::from_u128(USER),
                 created_by_device: Uuid::from_u128(DEVICE),
                 client_version: "capsule-cli/0.1.0".into(),
                 timestamp: "2026-05-31T12:00:00Z".into(),
                 action,
                 prior_provenance_hash: prior,
+                upgraded_from: None,
                 retention_until: None,
             }
         }
@@ -430,6 +531,62 @@ mod tests {
         );
     }
 
+    // ── Directory dispatch on the declared classical algorithm (S-A4) ────────────
+
+    /// The chokepoint accepts a manifest whose signing device is a **hardware P-256** hybrid
+    /// key: the directory entry declares `EcdsaP256`, and `verify_asset` dispatches to the
+    /// P-256 verify path. Proves the Ed25519-only assumption is gone from the chokepoint.
+    #[test]
+    fn accept_valid_create_from_p256_device() {
+        use std::sync::Arc;
+
+        use crate::crypto::keys::p256::MockP256Element;
+        use crate::crypto::keys::{P256HybridSigningKey, Signer as _};
+
+        let f = Fixture::new();
+        let ik = HybridSigningKey::from_seed_bytes(&[10; 32], &[11; 32]);
+        let device = P256HybridSigningKey::enroll(
+            Arc::new(MockP256Element::new([7; 32], false)),
+            "device-dsk".into(),
+            &[2; 32],
+        )
+        .unwrap();
+        let directory = DirectoryCore {
+            user_id: Uuid::from_u128(USER),
+            directory_version: 1,
+            updated_at: "2026-05-30T00:00:00Z".into(),
+            devices: vec![DeviceEntry {
+                device_id: Uuid::from_u128(DEVICE),
+                dsk_public: device.verifying_key(),
+                dek_public: None,
+                added_at: "2026-05-30T00:00:00Z".into(),
+                revoked_at: None,
+            }],
+        }
+        .sign(&ik);
+
+        // Sign the manifest with the P-256 device (device_sig) and the epoch-1 write key.
+        let m = f
+            .core(Action::Create, None)
+            .sign(&device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_asset(&m, CIPHERTEXT, &directory, &f.authority, None),
+            VerifyOutcome::Accept
+        );
+
+        // Cross-algorithm forgery: an Ed25519 device signature against the P-256 directory entry
+        // is rejected at the algorithm-dispatch guard (declared EcdsaP256 ≠ signature Ed25519).
+        let ed_signed = f
+            .core(Action::Create, None)
+            .sign(&f.device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_asset(&ed_signed, CIPHERTEXT, &directory, &f.authority, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+    }
+
     #[test]
     fn reject_reader_signed_no_write_capability() {
         let f = Fixture::new();
@@ -515,6 +672,7 @@ mod tests {
             devices: vec![DeviceEntry {
                 device_id: Uuid::from_u128(DEVICE),
                 dsk_public: device.verifying_key(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],
@@ -544,6 +702,102 @@ mod tests {
         );
     }
 
+    // ── Wrapped file-key mode (adopted web-upload drop) ──────────────────────────
+
+    /// The doc's wrapped-mode positive case: a `key_mode = wrapped` create verifies, and a
+    /// member holding the AMK unwraps `wrapped_file_key` to recover the guest-chosen file key
+    /// and STREAM-decrypts the unchanged ciphertext. Authorization is unchanged from derived.
+    #[test]
+    fn wrapped_mode_member_unwraps_and_decrypts() {
+        let f = Fixture::new();
+        let amk = Amk::from_bytes([0x5A; 32]);
+        let file_id = Uuid::from_u128(0xF11E);
+        // A guest chose a random file key K and STREAM-encrypted the asset under it.
+        let k = [0x77u8; 32];
+        let plaintext = b"adopted web-upload drop bytes";
+        let (enc, ct) = encrypt_asset_vec_with_prefix(&k, [1, 2, 3, 4, 5, 6, 7], plaintext);
+
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(seal_file_key(&amk, &file_id, &k)));
+        c.ciphertext_hash = enc.ciphertext_hash;
+        c.nonce_prefix = enc.nonce_prefix;
+        let m = c.sign(&f.device, &f.write1).unwrap();
+
+        // verify_asset accepts the wrapped manifest exactly like a derived one.
+        assert_eq!(
+            verify_asset(&m, &ct, &f.directory, &f.authority, None),
+            VerifyOutcome::Accept
+        );
+        // The AMK-holding member recovers K and decrypts.
+        let recovered =
+            unseal_file_key(&amk, &file_id, &m.core.wrapped_file_key.as_ref().unwrap().0).unwrap();
+        assert_eq!(recovered, k);
+        assert_eq!(
+            decrypt_asset_vec(&recovered, &enc.nonce_prefix, &ct).unwrap(),
+            plaintext
+        );
+    }
+
+    /// The doc's wrapped-mode negative case: altering `wrapped_file_key` (or `key_mode`
+    /// itself) after signing fails `verify_asset` like any other tampered signed field —
+    /// both are covered by both signatures, so tampering diverges the signing bytes.
+    #[test]
+    fn wrapped_mode_tampering_a_signed_field_terminally_rejects() {
+        let f = Fixture::new();
+        // A valid wrapped-mode create (bound to the fixture's CIPHERTEXT for the hash check).
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; 60]));
+        let signed = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(f.verify(&signed, None), VerifyOutcome::Accept);
+
+        // Tamper the wrapped key after signing → device_sig no longer verifies.
+        let mut tampered = signed.clone();
+        tampered.core.wrapped_file_key = Some(WrappedFileKey(vec![0xCD; 60]));
+        assert_eq!(
+            f.verify(&tampered, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+
+        // Flip the mode back to derived (dropping the wrapped key to keep it structurally
+        // well-formed) → still a signed-field divergence → terminal reject.
+        let mut flipped = signed.clone();
+        flipped.core.key_mode = KeyMode::Derived;
+        flipped.core.wrapped_file_key = None;
+        assert!(flipped.structural_ok(), "flip is structurally well-formed");
+        assert_eq!(
+            f.verify(&flipped, None),
+            VerifyOutcome::TerminalReject(RejectReason::BadDeviceSig)
+        );
+    }
+
+    /// A `key_mode = wrapped` manifest missing its `wrapped_file_key` (or a derived one that
+    /// carries one) is structurally rejected before any signature check.
+    #[test]
+    fn wrapped_mode_presence_mismatch_is_structural() {
+        let f = Fixture::new();
+        // Wrapped but no wrapped_file_key.
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Wrapped;
+        c.wrapped_file_key = None;
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(
+            f.verify(&m, None),
+            VerifyOutcome::TerminalReject(RejectReason::Structural)
+        );
+
+        // Derived but carrying a wrapped_file_key.
+        let mut c = f.core(Action::Create, None);
+        c.key_mode = KeyMode::Derived;
+        c.wrapped_file_key = Some(WrappedFileKey(vec![0xAB; 60]));
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        assert_eq!(
+            f.verify(&m, None),
+            VerifyOutcome::TerminalReject(RejectReason::Structural)
+        );
+    }
+
     #[test]
     fn drop_in_authority_parity() {
         // The seam is honored only through &dyn AlbumAuthority: a second authority that
@@ -555,6 +809,97 @@ mod tests {
         assert_eq!(
             verify_asset(&f.valid_create(), CIPHERTEXT, &f.directory, dynamic, None),
             VerifyOutcome::TerminalReject(RejectReason::WrongEpoch)
+        );
+    }
+
+    // ── Metadata↔manifest binding (S-A3, invariant 25 client half) ───────────────
+
+    use crate::crypto::encryption::seal_metadata_blob;
+
+    /// Seal `sidecar` into a metadata blob (fresh nonce folded into the derived blob key) and
+    /// produce a create manifest committing to the blob's content hash. Returns
+    /// `(manifest, blob, blob_key)`.
+    fn sealed_create(f: &Fixture, sidecar: &[u8]) -> (AssetManifest, Vec<u8>, [u8; 32]) {
+        let amk = Amk::from_bytes([0x5A; 32]);
+        let file_id = Uuid::from_u128(0xF11E);
+        let (blob, blob_key) = seal_metadata_blob(&amk, &file_id, sidecar, None).unwrap();
+        let mut c = f.core(Action::Create, None);
+        c.metadata_blob_hash = Some(blob_ciphertext_hash(&blob));
+        let m = c.sign(&f.device, &f.write1).unwrap();
+        (m, blob, blob_key)
+    }
+
+    /// The doc's positive case: a metadata blob decrypts to the byte-identical signed sidecar
+    /// and its content hash equals the manifest's `metadata_blob_hash`.
+    #[test]
+    fn metadata_binding_round_trips() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, blob_key) = sealed_create(&f, sidecar);
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &blob_key, sidecar),
+            MetadataBinding::Bound
+        );
+    }
+
+    /// A one-byte mutation of the *local* sidecar breaks the round-trip: the blob decrypts to
+    /// the original bytes, which no longer match. Quarantined, never persisted.
+    #[test]
+    fn metadata_binding_one_byte_sidecar_mutation_quarantines() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset".to_vec();
+        let (m, blob, blob_key) = sealed_create(&f, &sidecar);
+        let mut tampered = sidecar.clone();
+        tampered[0] ^= 0x01;
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &blob_key, &tampered),
+            MetadataBinding::Quarantine(BindingReject::SidecarMismatch),
+        );
+    }
+
+    /// A one-byte mutation of the *blob* breaks the content-address half first (the key-free
+    /// check the server also runs): the hash no longer matches the committed value.
+    #[test]
+    fn metadata_binding_one_byte_blob_mutation_quarantines() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, blob_key) = sealed_create(&f, sidecar);
+        let mut tampered = blob.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0x01;
+        assert_eq!(
+            verify_metadata_binding(&m, &tampered, &blob_key, sidecar),
+            MetadataBinding::Quarantine(BindingReject::BlobHashMismatch),
+        );
+    }
+
+    /// The blob hashes correctly but the wrong key can't decrypt it → `Undecryptable`
+    /// (distinct from a hash mismatch — the content address held, the AEAD did not).
+    #[test]
+    fn metadata_binding_undecryptable_under_wrong_key() {
+        let f = Fixture::new();
+        let sidecar = b"canonical CBOR sidecar bytes for the asset";
+        let (m, blob, _blob_key) = sealed_create(&f, sidecar);
+        assert_eq!(
+            verify_metadata_binding(&m, &blob, &[0u8; 32], sidecar),
+            MetadataBinding::Quarantine(BindingReject::Undecryptable),
+        );
+    }
+
+    /// A manifest that commits to no `metadata_blob_hash` (e.g. a caller mis-invoking on a
+    /// delete) yields `NoManifestCommitment`, never a false `Bound`.
+    #[test]
+    fn metadata_binding_requires_a_manifest_commitment() {
+        let f = Fixture::new();
+        // A delete manifest carries no metadata_blob_hash.
+        let head = hash::hash_bytes(b"prior");
+        let m = f
+            .core(Action::Delete, Some(head))
+            .sign(&f.device, &f.write1)
+            .unwrap();
+        assert_eq!(
+            verify_metadata_binding(&m, b"whatever", &[0u8; 32], b"whatever"),
+            MetadataBinding::Quarantine(BindingReject::NoManifestCommitment),
         );
     }
 }

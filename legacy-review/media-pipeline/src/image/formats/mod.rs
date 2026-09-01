@@ -1,1 +1,11 @@
+pub mod avif;
+pub mod bmp;
+pub mod dng;
+pub mod gif;
+pub mod heif;
 pub mod jpeg;
+pub mod jxl;
+pub mod png;
+pub mod raw;
+pub mod tiff;
+pub mod webp;

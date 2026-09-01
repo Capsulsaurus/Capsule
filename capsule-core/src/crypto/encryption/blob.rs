@@ -25,15 +25,29 @@ use crate::crypto::primitives::{CRYPTO_SUITE_ID, SuiteId};
 use crate::crypto::{CryptoError, rng};
 
 const SUITE_LEN: usize = 2;
-const NONCE_LEN: usize = 12;
+/// Length of the per-blob AES-256-GCM nonce (fresh CSPRNG draw per seal).
+pub const NONCE_LEN: usize = 12;
 const TAG_LEN: usize = 16;
 /// Minimum valid blob length: header + nonce + empty ciphertext + tag.
 pub const MIN_BLOB_LEN: usize = SUITE_LEN + NONCE_LEN + TAG_LEN;
 
 /// Seal `plaintext` (canonical CBOR) into the metadata-blob wire format under `blob_key`,
 /// tagging it with the current `crypto_suite_id`. A fresh nonce is drawn per call.
+///
+/// This is the nonce-agnostic AEAD primitive (also used for the KEM-DEM drop wrap and the
+/// share-scope wrap, whose keys are not blob-id-derived). Metadata-blob writers that fold
+/// the nonce into a derived key go through [`super::rekey::seal_metadata_blob`].
 pub fn seal_blob(blob_key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
-    let nonce = rng::random_array::<NONCE_LEN>();
+    seal_blob_with_nonce(blob_key, rng::random_array::<NONCE_LEN>(), plaintext)
+}
+
+/// [`seal_blob`] with an explicit `nonce`, so a metadata-blob writer can fold that same
+/// nonce into the derived `blob_key` salt before sealing (the salt depends on the nonce).
+pub fn seal_blob_with_nonce(
+    blob_key: &[u8; 32],
+    nonce: [u8; NONCE_LEN],
+    plaintext: &[u8],
+) -> Vec<u8> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(blob_key));
     let ct_and_tag = cipher
         .encrypt(Nonce::from_slice(&nonce), plaintext)
@@ -44,6 +58,12 @@ pub fn seal_blob(blob_key: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&nonce);
     out.extend_from_slice(&ct_and_tag);
     out
+}
+
+/// The 12-byte nonce a blob carries in its header, needed to re-derive the folded
+/// `blob_key` before opening. `None` if the wire is shorter than the fixed prefix.
+pub fn blob_nonce(wire: &[u8]) -> Option<[u8; NONCE_LEN]> {
+    wire.get(SUITE_LEN..SUITE_LEN + NONCE_LEN)?.try_into().ok()
 }
 
 /// Open a metadata-blob wire string under `blob_key`. Rejects an unknown `crypto_suite_id`
@@ -143,6 +163,15 @@ mod tests {
             open_blob(&KEY, &wire),
             Err(CryptoError::UnknownSuite(0xffff))
         );
+    }
+
+    #[test]
+    fn blob_nonce_reads_the_header_nonce() {
+        let nonce = [0xA5u8; NONCE_LEN];
+        let wire = seal_blob_with_nonce(&KEY, nonce, b"payload");
+        assert_eq!(blob_nonce(&wire), Some(nonce));
+        // Too short to carry a full nonce → None (fail-closed at the caller).
+        assert_eq!(blob_nonce(&[0u8; SUITE_LEN + NONCE_LEN - 1]), None);
     }
 
     #[test]

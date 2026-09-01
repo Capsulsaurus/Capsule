@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { createLazyFileRoute, Link } from '@tanstack/react-router';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -12,7 +13,7 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { ApiError, updateProfile } from '@/lib/api';
+import { ApiError, changePassword, updateProfile } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 
 export const Route = createLazyFileRoute('/settings')({
@@ -20,11 +21,11 @@ export const Route = createLazyFileRoute('/settings')({
 });
 
 function Settings() {
+    const intl = useIntl();
     const { user } = useAuth();
     const queryClient = useQueryClient();
 
-    const [username, setUsername] = useState('');
-    const [email, setEmail] = useState('');
+    const [displayName, setDisplayName] = useState('');
     const [currentPassword, setCurrentPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -34,8 +35,7 @@ function Settings() {
 
     useEffect(() => {
         if (user) {
-            setUsername(user.username);
-            setEmail(user.email);
+            setDisplayName(user.display_name ?? '');
         }
     }, [user]);
 
@@ -45,14 +45,21 @@ function Settings() {
         setSuccess(null);
         setLoading(true);
         try {
-            const updated = await updateProfile({ username, email });
+            // A blank field is a request to clear the name, which is an explicit `null` on the
+            // wire — an absent key would mean "leave it alone" and the form would be unable to
+            // remove a name it just showed.
+            const updated = await updateProfile({
+                display_name: displayName.trim() === '' ? null : displayName,
+            });
             queryClient.setQueryData(['auth', 'profile'], updated);
-            setSuccess('Profile updated.');
+            setSuccess(intl.formatMessage({ id: 'settings.profile_updated' }));
         } catch (err) {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to update profile.',
+                    : intl.formatMessage({
+                          id: 'settings.profile_update_failed',
+                      }),
             );
         } finally {
             setLoading(false);
@@ -64,20 +71,20 @@ function Settings() {
         setError(null);
         setSuccess(null);
         if (newPassword !== confirmPassword) {
-            setError('New passwords do not match.');
+            setError(intl.formatMessage({ id: 'settings.password_mismatch' }));
             return;
         }
-        if (newPassword.length < 8) {
-            setError('Password must be at least 8 characters.');
+        if (newPassword.length < 12) {
+            setError(intl.formatMessage({ id: 'common.password_min' }));
             return;
         }
         setLoading(true);
         try {
-            await updateProfile({
-                current_password: currentPassword,
-                new_password: newPassword,
-            });
-            setSuccess('Password updated.');
+            // Its own operation, not a profile edit: it ends every *other* session of the
+            // account and re-opens this one, so it is a credential rotation rather than a field
+            // change (`S-C54`).
+            await changePassword(currentPassword, newPassword);
+            setSuccess(intl.formatMessage({ id: 'settings.password_updated' }));
             setCurrentPassword('');
             setNewPassword('');
             setConfirmPassword('');
@@ -85,7 +92,9 @@ function Settings() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'Failed to update password.',
+                    : intl.formatMessage({
+                          id: 'settings.password_update_failed',
+                      }),
             );
         } finally {
             setLoading(false);
@@ -95,20 +104,24 @@ function Settings() {
     return (
         <div className="max-w-2xl mx-auto p-6 space-y-8">
             <div className="flex items-center justify-between">
-                <h1 className="text-2xl font-bold">Profile Settings</h1>
+                <h1 className="text-2xl font-bold">
+                    <FormattedMessage id="settings.title" />
+                </h1>
                 <Link
                     to="/settings/security"
                     className="text-sm underline text-muted-foreground"
                 >
-                    Security settings →
+                    <FormattedMessage id="settings.security_link" />
                 </Link>
             </div>
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Profile Information</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="settings.profile.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Update your username and email address.
+                        <FormattedMessage id="settings.profile.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -120,26 +133,38 @@ function Settings() {
                             <p className="text-sm text-green-600">{success}</p>
                         )}
                         <div className="grid gap-2">
-                            <Label htmlFor="username">Username</Label>
+                            <Label htmlFor="display_name">
+                                <FormattedMessage id="common.display_name" />
+                            </Label>
                             <Input
-                                id="username"
-                                value={username}
-                                onChange={(e) => setUsername(e.target.value)}
+                                id="display_name"
+                                value={displayName}
+                                onChange={(e) => setDisplayName(e.target.value)}
                                 disabled={loading}
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="email">Email</Label>
+                            <Label htmlFor="email">
+                                <FormattedMessage id="common.email" />
+                            </Label>
+                            {/* Read-only. Changing a login address needs proof the caller
+                                controls the new one, and this deployment has no way to obtain
+                                it — so the server has no field for it rather than a field it
+                                refuses (`S-C54`). */}
                             <Input
                                 id="email"
                                 type="email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                disabled={loading}
+                                value={user?.email ?? ''}
+                                readOnly
+                                disabled
                             />
                         </div>
                         <Button type="submit" disabled={loading}>
-                            {loading ? 'Saving…' : 'Save changes'}
+                            {loading ? (
+                                <FormattedMessage id="common.saving" />
+                            ) : (
+                                <FormattedMessage id="common.save_changes" />
+                            )}
                         </Button>
                     </form>
                 </CardContent>
@@ -147,16 +172,18 @@ function Settings() {
 
             <Card>
                 <CardHeader>
-                    <CardTitle>Change Password</CardTitle>
+                    <CardTitle>
+                        <FormattedMessage id="settings.password.title" />
+                    </CardTitle>
                     <CardDescription>
-                        Enter your current password to set a new one.
+                        <FormattedMessage id="settings.password.description" />
                     </CardDescription>
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handlePasswordSubmit} className="space-y-4">
                         <div className="grid gap-2">
                             <Label htmlFor="current-password">
-                                Current Password
+                                <FormattedMessage id="settings.current_password" />
                             </Label>
                             <Input
                                 id="current-password"
@@ -170,7 +197,9 @@ function Settings() {
                             />
                         </div>
                         <div className="grid gap-2">
-                            <Label htmlFor="new-password">New Password</Label>
+                            <Label htmlFor="new-password">
+                                <FormattedMessage id="auth.new_password" />
+                            </Label>
                             <Input
                                 id="new-password"
                                 type="password"
@@ -183,7 +212,7 @@ function Settings() {
                         </div>
                         <div className="grid gap-2">
                             <Label htmlFor="confirm-password">
-                                Confirm New Password
+                                <FormattedMessage id="settings.confirm_new_password" />
                             </Label>
                             <Input
                                 id="confirm-password"
@@ -197,7 +226,11 @@ function Settings() {
                             />
                         </div>
                         <Button type="submit" disabled={loading}>
-                            {loading ? 'Updating…' : 'Update password'}
+                            {loading ? (
+                                <FormattedMessage id="settings.updating" />
+                            ) : (
+                                <FormattedMessage id="settings.update_password" />
+                            )}
                         </Button>
                     </form>
                 </CardContent>

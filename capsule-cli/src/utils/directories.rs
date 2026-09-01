@@ -12,9 +12,10 @@ pub(crate) fn get_config_dir() -> Option<PathBuf> {
     get_project_dirs().map(|proj_dirs| proj_dirs.config_dir().to_path_buf())
 }
 
-/// Returns the config file path for the Capsule CLI.
-pub(crate) fn get_config_file_path() -> Option<PathBuf> {
-    get_config_dir().map(|proj_dirs| proj_dirs.join("config.toml"))
+/// Returns the persisted-session file path for the Capsule CLI (slice `S-D5`).
+/// The token pair is stored here with owner-only permissions.
+pub(crate) fn get_session_file_path() -> Option<PathBuf> {
+    get_config_dir().map(|proj_dirs| proj_dirs.join("session.json"))
 }
 
 /// Returns the default data directory for the Capsule CLI.

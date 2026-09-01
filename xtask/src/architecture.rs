@@ -9,11 +9,18 @@ use eyre::{ContextCompat, Result, WrapErr, bail};
 use serde_json::Value;
 use toml_edit::DocumentMut;
 
+// Two different reasons live in one list, and the violation text says so: a dependency is here
+// because it was **retired** (its stack moved to `legacy-review/`) or because it was
+// **not yet approved** (it existed but the project had not accepted it). `chromahash` was the
+// second kind, gated by AGENTS.md to "after its v1 release" — it left this list when 0.7.1 shipped
+// and the gate was amended to that version, because a check that forbids an approved dependency
+// stops describing a decision and starts blocking one. `thumbhash` stays: it is what `chromahash`
+// replaces, and it is still a live optional dependency of `capsule-core`'s retiring `media`
+// feature, so it remains a genuine violation until that stack retires.
 const RETIRED_DEPENDENCIES: &[&str] = &[
     "async-graphql",
     "async-graphql-salvo",
     "capsule-media",
-    "chromahash",
     "graphql-client",
     "object_store",
     "progenitor",
@@ -238,7 +245,20 @@ fn walk_files(directory: &Path, visit: &mut impl FnMut(&Path) -> Result<()>) -> 
 fn is_ignored_directory(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|name| name.to_str()),
-        Some(".git" | ".gradle" | "build" | "dist" | "legacy-review" | "node_modules" | "target")
+        // `.claude` holds agent worktrees (`.claude/worktrees/<name>`), each a full checkout of
+        // this repository. Walking them counts every violation a second time per worktree — an
+        // agent working in one saw 63 while the parent tree reported 115 for the same commit.
+        // The worktree has its own root and checks itself; from here it is somebody else's tree.
+        Some(
+            ".claude"
+                | ".git"
+                | ".gradle"
+                | "build"
+                | "dist"
+                | "legacy-review"
+                | "node_modules"
+                | "target"
+        )
     )
 }
 
@@ -283,9 +303,23 @@ mod tests {
         assert!(!is_architecture_text(Path::new("image.png")));
     }
 
+    /// The list holds what is retired or unapproved, and nothing that has since been approved.
+    ///
+    /// `chromahash`'s **absence** is asserted rather than left implicit. It was on this list as the
+    /// enforcement of AGENTS.md's "after its v1 release" gate; 0.7.1 shipped, the gate was amended
+    /// to that version, and `S-B14` adopts it. Re-adding it would silently un-approve a decision
+    /// the design docs record, and the failure would surface as a confusing dependency error in
+    /// whichever crate got there first rather than as "someone changed the policy".
     #[test]
-    fn retired_dependency_list_pins_deferred_chromahash() {
-        assert!(RETIRED_DEPENDENCIES.contains(&"chromahash"));
+    fn retired_dependency_list_holds_the_retired_but_not_the_approved() {
+        assert!(
+            !RETIRED_DEPENDENCIES.contains(&"chromahash"),
+            "chromahash is approved as of 0.7.1 — see design/thumbnails.md and slice S-B14"
+        );
+
+        // Still genuinely retired. `thumbhash` is what chromahash replaces and stays listed until
+        // `capsule-core`'s `media` feature retires with it.
+        assert!(RETIRED_DEPENDENCIES.contains(&"thumbhash"));
         assert!(RETIRED_DEPENDENCIES.contains(&"object_store"));
         assert!(RETIRED_DEPENDENCIES.contains(&"tonic"));
     }

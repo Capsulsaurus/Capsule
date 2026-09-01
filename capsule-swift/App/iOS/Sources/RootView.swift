@@ -22,7 +22,7 @@ struct RootView: View {
 
     var body: some View {
         TabView {
-            Tab("Library", systemImage: "photo.on.rectangle.angled") {
+            Tab("ios.tab.library", systemImage: "photo.on.rectangle.angled") {
                 TimelineRootView(
                     assetProvider: environment.assetProvider,
                     albumProvider: environment.albumProvider,
@@ -32,7 +32,7 @@ struct RootView: View {
                     hiddenStore: environment.hiddenStore
                 )
             }
-            Tab("Collections", systemImage: "rectangle.stack") {
+            Tab("ios.tab.collections", systemImage: "rectangle.stack") {
                 CollectionsRootView(
                     albumProvider: environment.albumProvider,
                     assetProvider: environment.assetProvider,
@@ -42,7 +42,7 @@ struct RootView: View {
                     mediaLoader: environment.mediaLoader
                 )
             }
-            Tab("Search", systemImage: "magnifyingglass", role: .search) {
+            Tab("ios.tab.search", systemImage: "magnifyingglass", role: .search) {
                 SearchRootView(
                     assetProvider: environment.assetProvider,
                     albumProvider: environment.albumProvider,
@@ -50,7 +50,7 @@ struct RootView: View {
                     mediaLoader: environment.mediaLoader
                 )
             }
-            Tab("Settings", systemImage: "gearshape") {
+            Tab("ios.tab.settings", systemImage: "gearshape") {
                 SettingsView(
                     consentStore: environment.consentStore,
                     diagnostics: environment.diagnostics
@@ -80,8 +80,8 @@ struct RootView: View {
                 crashReportOffered = true
             }
         }
-        .alert("Capsule quit unexpectedly last time", isPresented: $crashReportOffered) {
-            Button("Send Report") {
+        .alert("ios.diagnostics.crash_alert.title", isPresented: $crashReportOffered) {
+            Button("ios.diagnostics.crash_alert.send") {
                 Task {
                     let bundle = await environment.diagnostics.makeReportBundle()
                     await environment.diagnostics.acknowledgeCrashReport()
@@ -90,11 +90,11 @@ struct RootView: View {
                     }
                 }
             }
-            Button("Not Now", role: .cancel) {
+            Button("ios.common.not_now", role: .cancel) {
                 Task { await environment.diagnostics.acknowledgeCrashReport() }
             }
         } message: {
-            Text("A redacted diagnostic report can help us fix the crash. It contains no photos or album contents.")
+            Text("ios.diagnostics.crash_alert.body")
         }
         .sheet(item: $crashReport) { DiagnosticsReportView(report: $0) }
     }

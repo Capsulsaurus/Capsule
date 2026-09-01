@@ -10,6 +10,7 @@ use crate::models::responses::{
     TotpDisableResponses, TotpEnrollResponses, TotpEnrollmentResponse,
     TotpVerifyEnrollmentResponses, TotpVerifyLoginResponses,
 };
+use crate::session::SessionContext;
 use crate::state::AppState;
 
 /// Enroll in TOTP - generates secret and provisioning URI
@@ -172,10 +173,16 @@ pub async fn totp_verify_login(
         return TotpVerifyLoginResponses::InternalServerError(e);
     }
 
-    // Generate full token pair
+    // Generate full token pair. The second factor is a login ceremony like any other, so it
+    // carries the same client-asserted cohort/device provenance password login does — without
+    // it a TOTP login would land in the devices view as an unknown, ungrouped device (S-N3).
     match state
         .auth_service
-        .generate_token_pair(user_id, &state.session_manager)
+        .generate_token_pair(
+            user_id,
+            &state.session_manager,
+            SessionContext::new(request.cohort_hash, request.device_id),
+        )
         .await
     {
         Ok(tokens) => TotpVerifyLoginResponses::Success(tokens),

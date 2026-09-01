@@ -70,26 +70,41 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
 export const Route = createRootRoute({
     component: () => {
         const [showDevtools, setShowDevtools] = React.useState(false);
+        const { location } = useRouterState();
 
         React.useEffect(() => {
             // @ts-expect-error
             window.toggleDevtools = () => setShowDevtools((old) => !old);
         }, []);
 
+        // The guest surfaces — the share viewer (/s/…) and the drop uploader (/u/…) — are
+        // full-page, unauthenticated pages: they render outside the app chrome (no sidebar,
+        // header, or auth gate) so someone with no Capsule account sees only the shared content
+        // or the contribute-only upload flow.
+        const isGuest =
+            location.pathname.startsWith('/s/') ||
+            location.pathname.startsWith('/u/');
+
         return (
             <QueryClientProvider client={queryClient}>
                 <AuthProvider>
-                    <AuthGuard>
-                        <div className="flex flex-col h-screen">
-                            <Header />
-                            <div className="flex flex-1 overflow-hidden">
-                                <AppSidebar className="hidden md:flex flex-shrink-0" />
-                                <main className="flex-1 overflow-y-auto bg-background">
-                                    <Outlet />
-                                </main>
+                    {isGuest ? (
+                        <main className="min-h-screen bg-background">
+                            <Outlet />
+                        </main>
+                    ) : (
+                        <AuthGuard>
+                            <div className="flex flex-col h-screen">
+                                <Header />
+                                <div className="flex flex-1 overflow-hidden">
+                                    <AppSidebar className="hidden md:flex flex-shrink-0" />
+                                    <main className="flex-1 overflow-y-auto bg-background">
+                                        <Outlet />
+                                    </main>
+                                </div>
                             </div>
-                        </div>
-                    </AuthGuard>
+                        </AuthGuard>
+                    )}
                     <Suspense>
                         <TanStackRouterDevtools />
                     </Suspense>

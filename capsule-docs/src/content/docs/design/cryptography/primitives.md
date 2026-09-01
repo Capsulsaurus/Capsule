@@ -19,7 +19,7 @@ The primitive identities themselves live in `capsule-core::crypto::primitives` a
 | [MLS control AEAD](#mls-control-aead)                               | ChaCha20-Poly1305                                                               | Inherited from the [MLS ciphersuite](#mls-ciphersuite) |
 | [Signature scheme](#signature-scheme)                               | Hybrid Ed25519 + ML-DSA-65                                                      | Identity, device, asset manifest, write tier           |
 | [KEM](#kem)                                                         | X-Wing (X25519 + ML-KEM-768)                                                    | MLS HPKE                                               |
-| [MLS ciphersuite](#mls-ciphersuite)                                 | `MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519` (codepoint pending)             | Group key management                                   |
+| [MLS ciphersuite](#mls-ciphersuite)                                 | `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`)                       | Group key management                                   |
 | [Randomness](#randomness)                                           | OS CSPRNG (`getrandom`)                                                         | All keys, salts, nonces                                |
 | [Transport](/design/cryptography/failure-modes/#transport-security) | TLS 1.3 with hybrid X25519+ML-KEM                                               | Client-server, server-server                           |
 
@@ -97,7 +97,7 @@ MLS LeafNode signatures stay Ed25519-only (pinned by the ciphersuite); the ML-DS
 
 ### MLS Ciphersuite
 
-**`MLS_256_XWING_CHACHA20POLY1305_SHA512_Ed25519`** (codepoint pending — the X-Wing suite the upstream ecosystem is converging on; adoption gating owned by the [status note in MLS](/design/cryptography/mls/)) — MLS (RFC 9420) with the PQ ciphersuites from `draft-ietf-mls-pq-ciphersuites`. The suite's SHA-512 is MLS-internal (transcript and tree hashing); Capsule's [content-address hash](#cryptographic-hash) is a separate primitive and unaffected. See [MLS](/design/cryptography/mls/) for how the ciphersuite's choices (X-Wing KEM, ChaCha20-Poly1305 control AEAD, Ed25519 leaf sigs) interact with the identity layer.
+**`MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`** (codepoint `0x004D` — the X-Wing suite OpenMLS ships today via its libcrux provider; suite-choice rationale and migration posture owned by the [status note in MLS](/design/cryptography/mls/)) — MLS (RFC 9420) with the X-Wing PQ KEM (`draft-mahy-mls-xwing`; **not** the WG's `draft-ietf-mls-pq-ciphersuites`, which moved to direct ML-KEM hybrid). The suite's SHA-256 is MLS-internal (transcript and tree hashing); Capsule's [content-address hash](#cryptographic-hash) is a separate primitive and unaffected. See [MLS](/design/cryptography/mls/) for how the ciphersuite's choices (X-Wing KEM, ChaCha20-Poly1305 control AEAD, Ed25519 leaf sigs) interact with the identity layer.
 
 ### Randomness
 

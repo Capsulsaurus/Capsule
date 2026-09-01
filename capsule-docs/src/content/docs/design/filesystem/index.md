@@ -12,9 +12,9 @@ The on-disk layout is itself part of the contract — the filenames, directory s
 
 | Sub-doc                                         | Concern                                                                           | Primary crate(s)                                                     |
 | ----------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
-| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, ownership, deletion         | `capsule-api` + storage glue                                         |
+| [Server Filesystem](/design/filesystem/server/) | Blob store layout, Postgres index, required services, ownership, deletion         | `capsule-server` + storage glue                                         |
 | [Client Filesystem](/design/filesystem/client/) | Desktop / mobile library layout, local SQLite index, space recovery               | `capsule-core::{library,db}` + per-platform glue                     |
-| [Maintenance](/design/filesystem/maintenance/)  | Self-validation, scrubbing, repair, intra-library dedup, atomic-write granularity | `capsule-core::library` (client) + `capsule-api` (server-side scrub) |
+| [Maintenance](/design/filesystem/maintenance/)  | Self-validation, scrubbing, repair, intra-library dedup, atomic-write granularity | `capsule-core::library` (client) + `capsule-server` (server-side scrub) |
 
 This index covers the principles both sides share. The import pipeline, the upload protocol, and synchronization are covered in [Import and Synchronization](/design/import/); metadata extraction in [Metadata](/design/metadata/); derivative generation in [Thumbnails and Previews](/design/thumbnails/); grouping and trash semantics in [Asset Organization](/design/organization/); backup and recovery in [Backup and Recovery](/design/backup-recovery/).
 

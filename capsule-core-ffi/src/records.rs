@@ -30,6 +30,9 @@ pub struct AssetRecord {
     pub rating: i64,
     pub is_deleted: bool,
     pub deleted_at: Option<i64>,
+    /// Projection of the sidecar `hidden` LWW register: excluded from default views,
+    /// served only by the gated Hidden view (SSoT: design/organization § Hidden Assets).
+    pub is_hidden: bool,
 }
 
 impl From<AssetRow> for AssetRecord {
@@ -53,6 +56,7 @@ impl From<AssetRow> for AssetRecord {
             rating: r.rating,
             is_deleted: r.is_deleted,
             deleted_at: r.deleted_at,
+            is_hidden: r.is_hidden,
         }
     }
 }
@@ -78,6 +82,7 @@ impl From<AssetRecord> for AssetRow {
             rating: r.rating,
             is_deleted: r.is_deleted,
             deleted_at: r.deleted_at,
+            is_hidden: r.is_hidden,
         }
     }
 }

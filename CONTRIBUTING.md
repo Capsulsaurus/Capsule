@@ -47,8 +47,23 @@ While we will still accept PRs with unsigned commits, to maintain transparent ow
 
 ### Contributor Checklist
 
-* [ ] I have signed the [Contributor License Agreement](CLA.md).
+* [ ] I agree to the [Contributor License Agreement](CLA.md).
 * [ ] My code follows the project's style guidelines.
+
+### Contributor License Agreement
+
+Capsule is copyright Justin Chung, who is its sole copyright holder. Opening a
+pull request and confirming the checklist in the pull request template is how you
+agree to the [Individual CLA](CLA.md) — there is no separate form to sign.
+
+The CLA lets the copyright holder distribute Capsule under terms other than the
+AGPL, which is what makes app-store distribution possible at all: the App Store's
+terms of service are incompatible with the AGPL, so a shipped iOS or Mac App Store
+build cannot be an AGPL distribution. In exchange, [CLA §4(b)](CLA.md) commits the
+project to keeping every public source release under an OSI-approved licence.
+
+Contributing on behalf of a company? Have an authorized signatory execute the
+[Corporate CLA](CCLA.md) instead.
 
 ## Translations
 
