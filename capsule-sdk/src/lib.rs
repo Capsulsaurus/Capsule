@@ -62,21 +62,5 @@ pub mod ffi;
 #[cfg(feature = "ffi")]
 uniffi::setup_scaffolding!();
 
-/// Generated gRPC client stubs for the key-free sync feed
-/// (`capsule.sync.v1.SyncService`). The proto is single-sourced from the sync
-/// server crate (slice `S-C2`) and compiled client-only by `build.rs`; the
-/// ergonomic consumer over this stub lives in [`sync`].
-pub mod proto {
-    /// `capsule.sync.v1` — the key-free sync feed contract (slice `S-C2`).
-    pub mod capsule {
-        pub mod sync {
-            pub mod v1 {
-                #![allow(clippy::pedantic, unreachable_pub)]
-                tonic::include_proto!("capsule.sync.v1");
-            }
-        }
-    }
-}
-
 // `AuthenticatedClient` (revived over the generated `rest::Client`, composed with the S-D7
 // session store) now lives in [`client`]; the parked comment block it replaced is gone.

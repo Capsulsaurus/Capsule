@@ -328,7 +328,7 @@ mod tests {
         let handler: Handler = Arc::new(|path| {
             Box::pin(async move {
                 match path.as_str() {
-                    "/v1/upload/quota" => MockResponse {
+                    "/v1/quota" => MockResponse {
                         status: 200,
                         body: r#"{"state":"ok","used":0}"#.to_string(),
                     },
@@ -349,7 +349,7 @@ mod tests {
         let requests = server.requests.lock().unwrap();
         let quota_req = requests
             .iter()
-            .find(|r| r.path == "/v1/upload/quota")
+            .find(|r| r.path == "/v1/quota")
             .expect("quota endpoint was hit");
         assert_eq!(
             quota_req.authorization.as_deref(),
@@ -376,7 +376,7 @@ mod tests {
                             body: token_json("access-2", "refresh-2", far_future()),
                         }
                     }
-                    "/v1/upload/quota" => MockResponse {
+                    "/v1/quota" => MockResponse {
                         status: 200,
                         body: r#"{"state":"ok","used":7}"#.to_string(),
                     },
@@ -409,7 +409,7 @@ mod tests {
         let requests = server.requests.lock().unwrap();
         let quota_req = requests
             .iter()
-            .find(|r| r.path == "/v1/upload/quota")
+            .find(|r| r.path == "/v1/quota")
             .expect("quota endpoint was hit");
         assert_eq!(
             quota_req.authorization.as_deref(),

@@ -259,6 +259,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
 | S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
+| S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | ready | found by `S-D28`; five Salvo auth operations were not ported and only one of them is optional |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -285,6 +286,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-D25 | `hidden` has a column, a gate and views but no writer | sdk/clients | S-D19 | S | ACTIVE | done | |
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
 | S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
+| S-D28 | The SDK's second transport, and the document it generates from | client SDK | S-D8, S-C2 | L | MIXED | done\* | gRPC retires; the client generates from the Kynos document; four `application/cbor` operations stay hand-written |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -2972,6 +2974,38 @@ the record — and the scrub adjudicates neither.
   `a_lifecycle_write_retains_the_manifest_it_supersedes` in the index conformance suite so every
   adapter owes it. **Tier:** Unit.
 
+### S-C53 — account creation has no surface on the rebuilt server
+
+- **Contract:** [Authentication](capsule-docs/src/content/docs/design/authentication.md), and the
+  reconciliation plan's own acceptance round trip — *"register → `library init` → `import` →
+  `push` → `sync` → `list`"*.
+- **Gap** (found 2026-08-31 landing `S-D28`, while pointing the SDK at the Kynos document): the
+  SDK's `AuthClient` has a `register` and the Kynos server has nothing behind it. **There is no
+  way to create an account on the rebuilt server**, so the plan's own end-to-end criterion cannot
+  be run and a fresh deployment has no first user.
+- **The audit, because one missing operation turned out to be five.** The Salvo document declared
+  twenty-one `/v1/auth/*` paths; the Kynos port declares six. Most of the difference is
+  deliberate, and this row is about the part that is not:
+
+  | Salvo operation | Verdict |
+  | --- | --- |
+  | `POST /v1/auth/register` | **owed.** Nothing replaces it and nothing can start without it |
+  | `GET /v1/auth/profile` | **owed, smaller.** A client learns its own account id only from a token claim today, which works and is not a contract |
+  | `POST /v1/auth/validate` | **deliberately gone.** A token-introspection endpoint is what a server without a session ledger needs; `S-C48` put the ledger on every request, so validation *is* the request |
+  | `POST /v1/auth/login/verify-totp`, `/totp/enroll`, `/totp/verify-enrollment`, `/totp/disable` | **decide.** MFA is not in v1's slice list and the counters it needs landed with `S-C32`; whether it ships is a product call, not an oversight |
+  | `POST /v1/auth/password-reset`, `/password-reset-request` | **decide, and carefully.** A password reset on an end-to-end-encrypted account is not a password reset — the master key is derived from it. `keys.md`'s recovery story is the escrow blob (`S-C12`), and a reset endpoint that did not go through it would be a way to lose a library rather than regain one |
+
+- **Deliverable:** `POST /v1/auth/register`, with the account-creation half of the directory
+  anchor decided at the same time (`S-C20` removed the account-creation fallback, so a new
+  account has no invariant-7 floor until it publishes a directory — which is transient by design
+  but is now the *first* thing a new client must do).
+- **Watch out:** registration is the one unauthenticated write on the surface, so it is where a
+  rate limiter is not optional (`S-C32`'s port exists; no consumer does this yet), and where the
+  disclosure rule of `S-C4`/`S-C25` applies — a "that email is taken" answer is an account oracle.
+- **Done when:** a fresh server with an empty directory accepts one registration, refuses the
+  second under the same identity, and the plan's round trip runs end to end. **Tier:** Unit +
+  Smoke.
+
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 
 - **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md);
@@ -3340,6 +3374,80 @@ them was incidental:
   **Re-scoped:** the schema must come from **Kynos**, not from the Salvo `gen_openapi`
   binary — that is the second of the SDK's two owed items.
 - **Owed:** 401-retry-once → `S-D17`.
+
+### S-D28 — the SDK's second transport, and the document it generates from
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md) — the public
+  server surface is Kynos REST/OpenAPI only; the Rust Architecture Decisions — *"Generate clients
+  with Spargen from the checked-in Kynos OpenAPI contract"*.
+- **Gap:** the SDK generated from `capsule-sdk/openapi.json`, a **copy** of the retiring Salvo
+  document, and drove the sync feed over tonic against a gRPC service. Two wire contracts, two
+  transports, and a client that could be regenerated into agreement with a server nobody runs.
+- **Landed `done*` 2026-08-31.**
+
+**One document.** `build.rs` reads `../capsule-server/openapi.json` — the exact bytes
+`openapi-check-kynos` gates — rather than a copy in this crate. There is no second file to keep
+in step and no window where the client is generated from a document the server no longer serves.
+
+**One transport.** `capsule.sync.v1` is gone: the feed is `GET /v1/sync` and is a generated
+operation like every other. `tonic`, `tonic-prost`, `prost` and `tonic-prost-build` leave the
+SDK's dependency graph with it. **Nothing below the transport moved** — `SyncState`, the
+per-album anti-rewind high-water marks and the forward-version rule are the same pure state
+machine, because none of them was ever about gRPC.
+
+**The Salvo document's four narrowings are gone, and four different ones took their place.** The
+old ones were defects Kynos makes unrepresentable: an operation declaring `responses: {}` because
+its handler chose a status at run time, and three path templates whose parameter was never
+declared. The new ones are outside the contract entirely — **spargen has no
+`application/cbor`**. Its `classify_media` knows JSON, XML, multipart, form-urlencoded,
+octet-stream, event-stream, NDJSON and `text/*`, and Capsule serves four operations in CBOR: the
+signed device directory in and out, the signed upgrade intent, and the signed custody receipt.
+All four are documents that are **signed** and therefore served byte-for-byte, which is exactly
+why they are not JSON. Re-labelling them `application/octet-stream` would satisfy the generator
+by telling every client that a document with a schema it knows is opaque bytes — the thing the
+media type exists to deny. Narrowed instead, which is the instruction's own remedy.
+
+**A document fix that belongs upstream** (recorded here because it is what unblocked the rest):
+Kynos describes a raw-byte body as `"schema": {}`. That is true — the empty schema is JSON
+Schema's "any instance" and the idiomatic 3.1 spelling for *these are bytes* — and it is not
+actionable, because a generator that guessed would decode a ciphertext blob as UTF-8.
+`capsule_server::openapi` fills the empty schema with `{"type": "string", "format": "binary"}`,
+which **adds** description and changes no instance. `contentEncoding: base64` would also satisfy
+the generator and would be a lie: these are raw octets. Kynos knows the body is bytes — that is
+what `Binary<M>` means — so saying so is its natural job, which makes this the third seam
+(`S-C36`, `S-C38`) owed upstream.
+
+**The two live auth bugs from the audit, both closed.**
+
+- **The CLI threw away its rotated session.** The server rotates on refresh and closes the old
+  session, and only `auth_login`/`auth_register` ever wrote the store — so `sync`, `push` and
+  `list` refreshed, worked, and discarded the new pair. Fifteen minutes after signing in, every
+  command demanded an interactive login while the stored refresh token had seven days left. Each
+  of those commands now resumes through one helper and **checkpoints on the way out, on the
+  failing path too**: a refresh that landed before a later failure still rotated the pair, and
+  dropping it there is the same bug by a different route. It is fixed in the CLI rather than the
+  SDK because the store is the CLI's — a library that wrote to a caller's disk would be the
+  surprising thing.
+- **`revoke_all_for_user` over-counting** was already unrepresentable: `S-C29`'s port exposes no
+  operation that names the per-user index, so there is no phantom entry to count.
+
+**What it cost, and what replaced it.** Three test files in the retiring Salvo crates drove the
+*real* SDK and the *real* CLI against the *real* Salvo server — genuinely good tests of a stack
+that no longer exists. They are deleted, and `capsule-server/tests/sdk_client.rs` replaces the
+SDK half in the right place: the assembled context bound to an ephemeral port, driven by the
+generated client over reqwest, proving the cursor round trip, the base64 manifest bytes arriving
+byte-identical, the client-held anti-rewind refusing a page the *real* server authenticated and
+re-served, the `error.*` code on a forged cursor, and the refresh rotation the CLI bug tripped
+over. **The CLI half is owed**: a `capsule login → push → sync → list` round trip against the
+Kynos server, which cannot be written until `S-C53` gives the server a way to create an account.
+
+- **Owed:** the CLI round trip (blocked on `S-C53`); the four CBOR operations, if spargen ever
+  learns the media type.
+- **Done when:** ✅ the SDK builds with no `tonic` in its graph, generates from the Kynos
+  document, and `the_generated_client_round_trips_the_feed_over_a_socket`,
+  `a_forged_cursor_is_refused_with_the_code_the_client_localizes` and
+  `a_refresh_rotates_the_pair_and_closes_the_one_it_replaced` pass over a socket.
+  **Tier:** Unit + Integration.
 
 ### S-D9 — capsule-sdk uniffi FFI bindings
 

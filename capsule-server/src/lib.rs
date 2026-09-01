@@ -226,5 +226,9 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // `additionalProperties: true` — and a generated client would lose the `code` the i18n
     // contract tells it to localize. See [`openapi`](crate::openapi) the module.
     openapi::describe_problem_extensions(&mut document);
+    // `S-Z7`: Kynos describes a raw-byte body as the empty schema, which is true and useless to
+    // a generator. Filled in with the binary marker so the SDK's client can be generated from
+    // the whole document instead of most of it.
+    openapi::describe_raw_byte_payloads(&mut document);
     Ok(document)
 }

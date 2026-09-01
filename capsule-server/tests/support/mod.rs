@@ -1964,6 +1964,8 @@ impl AssetIndex for SwitchableIndex {
 pub(crate) struct Fixture {
     /// The in-process client. No socket, no port, no runtime flavour.
     pub(crate) client: TestClient<App>,
+    /// The context the client drives, for the one case that has to serve it on a socket.
+    app: App,
     /// The store the server opened its sessions in.
     pub(crate) sessions: Arc<SwitchableSessions>,
     /// The directory the server authenticated against.
@@ -2126,7 +2128,10 @@ impl Fixture {
         });
 
         Self {
-            client: TestClient::new(capsule_server::service(app).expect("the router builds")),
+            client: TestClient::new(
+                capsule_server::service(app.clone()).expect("the router builds"),
+            ),
+            app,
             sessions,
             accounts,
             tokens,
@@ -2158,6 +2163,17 @@ impl Fixture {
     /// Just the application context, for a test that needs no handles on what is behind it.
     pub(crate) fn working_app() -> App {
         Self::working_context().0
+    }
+
+    /// The application context of *this* fixture, for a test that has to serve it on a socket.
+    ///
+    /// The fixture's own `TestClient` drives the router in-process, which is what every other
+    /// case wants and is exactly what a client-library test must not do: the property there is
+    /// that the **generated** client, over reqwest, over TCP, round-trips the real thing. This
+    /// hands the same context to a listener, so the stores a case seeds through `fixture.index`
+    /// are the stores that listener serves.
+    pub(crate) fn app(&self) -> App {
+        self.app.clone()
     }
 
     /// The application context, plus the clock it was built on.

@@ -590,7 +590,10 @@
         "requestBody": {
           "content": {
             "application/cbor": {
-              "schema": {}
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           },
           "required": true
@@ -748,7 +751,10 @@
             "description": "OK",
             "content": {
               "application/cbor": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -823,7 +829,10 @@
             "description": "OK",
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -864,7 +873,10 @@
         "requestBody": {
           "content": {
             "application/octet-stream": {
-              "schema": {}
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           },
           "required": true
@@ -1704,7 +1716,10 @@
         "requestBody": {
           "content": {
             "application/cbor": {
-              "schema": {}
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           },
           "required": true
@@ -2708,7 +2723,10 @@
         "requestBody": {
           "content": {
             "application/octet-stream": {
-              "schema": {}
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           },
           "required": true
@@ -2896,7 +2914,10 @@
             "description": "OK",
             "content": {
               "application/cbor": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3297,7 +3318,10 @@
             },
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3334,7 +3358,10 @@
             },
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3801,7 +3828,10 @@
             "description": "OK",
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3932,7 +3962,10 @@
             },
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -3969,7 +4002,10 @@
             },
             "content": {
               "application/octet-stream": {
-                "schema": {}
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
@@ -4393,7 +4429,10 @@
         "requestBody": {
           "content": {
             "application/octet-stream": {
-              "schema": {}
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
             }
           },
           "required": true

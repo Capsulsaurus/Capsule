@@ -106,8 +106,18 @@ color-eyre = "0.6.5"
 [dev-dependencies]
 # `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
 # no socket, no port, no runtime flavour — and the two conformance assertions the suite is
-# built around. Dev-only: the assertions belong to the tests, not the served binary.
-kynos = { workspace = true, features = ["test-util"] }
+# built around. `server` is on top of it for exactly one test: `tests/sdk_client.rs` binds the
+# real router to an ephemeral port so the **SDK's own client** drives it over a socket, which
+# is the one property an in-process client cannot prove. Dev-only either way: the assertions
+# and the ephemeral listener belong to the tests, not to the served binary.
+kynos = { workspace = true, features = ["test-util", "server"] }
+# The SDK, as a *consumer* of this server. It depends on nothing here — its client is
+# generated from `openapi.json`, a file — so this is acyclic, and it is what makes the
+# generated client's round trip against the real router a test rather than a hope (`S-D28`).
+capsule-sdk = { path = "../capsule-sdk" }
+# The SDK's persisted tokens are `SecretBox<str>`; a test that asserts a rotation happened has
+# to look at them. Test-only, and the only place this crate touches the type.
+secrecy = { workspace = true }
 # `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
 # `#[tokio::test]` attribute and a runtime to drive it. Test-only, so the served binary carries
 # neither.

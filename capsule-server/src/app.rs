@@ -50,7 +50,12 @@ use crate::verify::VerifyContext;
 /// Handed to [`Router::build`](kynos::Router::build) once and borrowed per request. It holds
 /// handles, never connections: acquisition that can fail belongs in a handler body, where the
 /// failure lands in the return type and therefore in the description.
-#[derive(Debug, Provider)]
+///
+/// `Clone` is cheap and shares everything: every field is a context whose own fields are `Arc`s,
+/// so a clone is a handful of refcount bumps and both copies drive the *same* stores. That is
+/// the property a test needs when it serves the assembled context on a socket while keeping a
+/// handle on what is behind it (`S-D28`).
+#[derive(Debug, Clone, Provider)]
 pub struct App {
     /// The authentication module's collaborators.
     auth: AuthContext,

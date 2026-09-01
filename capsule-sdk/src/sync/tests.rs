@@ -30,6 +30,7 @@ fn entry(album_id: &[u8], sync_seq: u64, protocol: &str) -> FeedEntry {
         metadata_blob: Vec::new(),
         blobs: BlobManifest::default(),
         original_held: true,
+        changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }
 
@@ -37,6 +38,7 @@ fn page(entries: Vec<FeedEntry>, cursor_tag: u8) -> SyncPage {
     SyncPage {
         entries,
         next_cursor: SyncCursor::from_bytes(vec![cursor_tag; 41]),
+        has_more: false,
     }
 }
 

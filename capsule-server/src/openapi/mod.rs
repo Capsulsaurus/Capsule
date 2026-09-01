@@ -68,6 +68,14 @@ use kynos::openapi::{Document, Schema};
 /// The media type a problem is served as, as the document spells it.
 const PROBLEM_JSON: &str = "application/problem+json";
 
+/// The media types Capsule carries as raw bytes.
+///
+/// `application/octet-stream` is ciphertext and staged upload chunks; `application/cbor` is the
+/// signed documents that are served byte-for-byte — a device directory, a custody receipt, an
+/// upgrade intent, a wrapped master key. Neither has a JSON shape and neither is ever decoded by
+/// the transport.
+const RAW_BYTE_MEDIA: &[&str] = &["application/octet-stream", "application/cbor"];
+
 /// The component name Kynos emits for its own problem type.
 const BASE: &str = "Problem";
 
@@ -221,6 +229,85 @@ const PROTOCOL_RANGE: &[Member] = &[
 ///
 /// Does nothing if the document carries no `Problem` component, which is the state a document
 /// with no failing operation would be in — an empty router rather than an error.
+/// Gives every raw-byte body and response an explicit binary schema (`S-Z7`).
+///
+/// # What Kynos emits, and why a generator cannot use it
+///
+/// A `Binary<M>` body or a `Served` response is described as `"schema": {}` — the empty schema,
+/// which in JSON Schema means *any instance* and is the idiomatic 3.1 spelling for "these are
+/// just bytes". It is not wrong. It is also not actionable: `spargen` refuses a raw-byte media
+/// type whose schema it cannot recognise as byte-shaped, because the alternative is guessing —
+/// and guessing wrong on a ciphertext body means decoding a blob as UTF-8.
+///
+/// So the empty schema is filled in with the marker every OpenAPI generator recognises:
+/// `{"type": "string", "format": "binary"}`. This **adds** description rather than removing any:
+/// the set of instances is unchanged, and a reader who ignores `format` sees the same document.
+///
+/// `contentEncoding: base64` would also satisfy the generator and would be a **lie** — these
+/// bodies are raw octets on the wire, not base64 text, and a client that believed the annotation
+/// would decode every blob to nothing.
+///
+/// Only an *empty* schema is filled. A media object that already describes its payload is left
+/// exactly as the router emitted it, so this can never overwrite a real declaration.
+///
+/// Owed upstream, like `S-C36`'s and `S-C38`'s seams: Kynos knows the body is bytes — that is
+/// what `Binary<M>` means — so it is the natural place to say so.
+pub(crate) fn describe_raw_byte_payloads(document: &mut Document) {
+    for item in document.paths.items.values_mut() {
+        let slots: Vec<&mut Option<Box<kynos::openapi::Operation>>> = vec![
+            &mut item.get,
+            &mut item.put,
+            &mut item.post,
+            &mut item.delete,
+            &mut item.options,
+            &mut item.head,
+            &mut item.patch,
+            &mut item.trace,
+            &mut item.query,
+        ];
+        for operation in slots.into_iter().filter_map(|slot| slot.as_deref_mut()) {
+            if let Some(kynos::openapi::RefOr::Item(body)) = operation.request_body.as_mut() {
+                for media in RAW_BYTE_MEDIA {
+                    if let Some(entry) = body.content.get_mut(*media) {
+                        fill_binary(&mut entry.schema);
+                    }
+                }
+            }
+            for response in operation.responses.responses.values_mut() {
+                let kynos::openapi::RefOr::Item(response) = response else {
+                    continue;
+                };
+                for media in RAW_BYTE_MEDIA {
+                    if let Some(entry) = response.content.get_mut(*media) {
+                        fill_binary(&mut entry.schema);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The binary marker, when the media object carries no schema of its own.
+fn fill_binary(schema: &mut Option<Schema>) {
+    // No schema at all, `true`, and an object with no keywords are the three spellings of "any
+    // instance"; Kynos emits the last. Anything else is a real declaration and is left alone.
+    let empty = match schema {
+        None | Some(Schema::Bool(true)) => true,
+        Some(Schema::Object(object)) => **object == kynos::openapi::SchemaObject::default(),
+        Some(Schema::Bool(false)) => false,
+    };
+    if !empty {
+        return;
+    }
+    *schema = Some(
+        serde_json::from_value(serde_json::json!({
+            "type": "string",
+            "format": "binary",
+        }))
+        .expect("a literal binary schema is a schema"),
+    );
+}
+
 pub(crate) fn describe_problem_extensions(document: &mut Document) {
     let Some(base) = document.components.schemas.get(BASE).cloned() else {
         return;

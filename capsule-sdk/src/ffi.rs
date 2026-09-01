@@ -445,8 +445,8 @@ impl From<HeadInfo> for FfiUploadStatus {
 pub enum FfiChangeKind {
     /// A new asset became visible in the album.
     Created,
-    /// An existing asset's metadata advanced.
-    MetadataUpdated,
+    /// An existing asset advanced — new metadata, new bytes, or a restore.
+    Updated,
     /// The asset was tombstoned.
     Deleted,
 }
@@ -455,7 +455,7 @@ impl From<ChangeKind> for FfiChangeKind {
     fn from(kind: ChangeKind) -> Self {
         match kind {
             ChangeKind::Created => Self::Created,
-            ChangeKind::MetadataUpdated => Self::MetadataUpdated,
+            ChangeKind::Updated => Self::Updated,
             ChangeKind::Deleted => Self::Deleted,
         }
     }
@@ -468,8 +468,6 @@ pub struct FfiBlobRef {
     pub ciphertext_hash: String,
     /// `original | metadata | derivative | provenance`.
     pub role: String,
-    /// MIME/format string, for derivatives.
-    pub format: String,
     /// Ciphertext size in bytes.
     pub size: u64,
 }
@@ -479,7 +477,6 @@ impl From<BlobRef> for FfiBlobRef {
         Self {
             ciphertext_hash: blob.ciphertext_hash,
             role: blob.role,
-            format: blob.format,
             size: blob.size,
         }
     }
@@ -523,12 +520,14 @@ pub struct FfiFeedEntry {
     pub asset_id: Vec<u8>,
     /// The signed `AssetManifest` as opaque canonical CBOR.
     pub manifest_cbor: Vec<u8>,
-    /// The encrypted metadata blob; empty for deletes.
+    /// The encrypted metadata blob's content address, as UTF-8 bytes; empty for deletes.
     pub metadata_blob: Vec<u8>,
     /// Content addresses of the asset's blobs by role.
     pub blobs: FfiBlobManifest,
     /// Whether the original blob is finalized server-side.
     pub original_held: bool,
+    /// When the change happened, RFC 3339, on the server's clock.
+    pub changed_at: String,
 }
 
 impl From<FeedEntry> for FfiFeedEntry {
@@ -543,6 +542,7 @@ impl From<FeedEntry> for FfiFeedEntry {
             metadata_blob: entry.metadata_blob,
             blobs: entry.blobs.into(),
             original_held: entry.original_held,
+            changed_at: entry.changed_at,
         }
     }
 }
@@ -555,6 +555,8 @@ pub struct FfiSyncPage {
     pub entries: Vec<FfiFeedEntry>,
     /// The opaque cursor to pass to the next [`FfiSession::sync_pull`].
     pub next_cursor: Vec<u8>,
+    /// Whether the server holds changes beyond this page.
+    pub has_more: bool,
 }
 
 impl From<SyncPage> for FfiSyncPage {
@@ -562,6 +564,7 @@ impl From<SyncPage> for FfiSyncPage {
         Self {
             entries: page.entries.into_iter().map(FfiFeedEntry::from).collect(),
             next_cursor: page.next_cursor.as_bytes().to_vec(),
+            has_more: page.has_more,
         }
     }
 }
@@ -687,22 +690,20 @@ impl FfiSession {
         Ok(info.map(FfiUploadStatus::from))
     }
 
-    /// Pull one page of the key-free sync feed after `cursor` from `sync_endpoint`
-    /// (`http[s]://host:port`). Pass `SyncCursor::start` (an empty `cursor`) for the
-    /// first page; persist and pass back `next_cursor` to advance. The bearer rides
-    /// the gRPC metadata (auto-refreshed); it never crosses the FFI boundary.
+    /// Pull one page of the key-free sync feed after `cursor` from `api_base_url`
+    /// (`http[s]://host:port`). Pass an empty `cursor` for the first page; persist and pass
+    /// back `next_cursor` to advance. The bearer rides the `Authorization` header
+    /// (auto-refreshed); it never crosses the FFI boundary.
+    ///
+    /// The parameter is the **API base URL** now, not a gRPC endpoint: the feed is
+    /// `GET /v1/sync` on the same origin as every other call (`S-D28`).
     pub async fn sync_pull(
         &self,
-        sync_endpoint: String,
+        api_base_url: String,
         cursor: Vec<u8>,
         page_size: u32,
     ) -> Result<FfiSyncPage, FfiError> {
-        let channel = SyncConsumer::connect(sync_endpoint).await?;
-        let mut consumer = SyncConsumer::with_session(
-            channel,
-            self.session.clone(),
-            self.protocol_version.clone(),
-        );
+        let consumer = SyncConsumer::with_session(&api_base_url, self.session.clone())?;
         let cursor = SyncCursor::from_bytes(cursor);
         let page = consumer.pull(&cursor, page_size).await?;
         Ok(page.into())
