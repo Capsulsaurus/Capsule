@@ -369,22 +369,23 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
 | S-Z11 | Notification architecture (design) | design/docs | — | S | ACTIVE | done | |
 
-**Row counts.** 133 rows. By area: **49 ACTIVE / 49 RETIRED / 35 MIXED**. By status:
-**43 done / 18 done\* / 63 ready / 4 blocked / 4 post-v1 / 1 part-done** (`S-C27`).
+**Row counts.** 182 rows. By area: **65 ACTIVE / 80 RETIRED / 37 MIXED**. By status:
+**87 done / 49 done\* / 32 ready / 7 blocked / 4 post-v1 / 3 part** (`S-C8`, `S-C27`,
+`S-C39` — the table spells these `part` and `part 1 done`; they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Only four block chains are live — `S-B11` behind `S-B10`, `S-N2` behind
-`S-N1`, `S-P2`–`S-P6`/`S-P8` behind `S-P1`, and `S-Z9` behind the Kynos rebuild.
-Everything else that once read `blocked`
-is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
-which `S-D16` has since landed),
-spargen shipped and is on crates.io (freeing `S-D8`), and the X-Wing codepoint `0x004D`
-exists and OpenMLS ships it (freeing `S-X1`–`S-X3`, all three of which are now `done` in
-`ACTIVE` `capsule-core`).
+ordering. Seven rows read `blocked`, in seven chains: `S-C47` behind `S-C11`/`S-C17`,
+`S-C49` behind `S-C8`/`S-C32`, `S-C51` behind `S-C25`/`S-C39`, `S-D24` behind `S-D21`,
+`S-N2` behind `S-N1`, `S-P4` behind `S-P1`–`S-P3`, and `S-Z9` behind the Kynos rebuild.
+Nothing else is gated: every other row is `ready` or better.
 
 ```mermaid
 graph LR
   B10[S-B10 takeout enrich] --> B11[S-B11 cli provider]
+  C11[S-C11/S-C17 retention+audit] --> C47[S-C47 legal hold]
+  C8[S-C8 moderation hooks] --> C49[S-C49 federated moderation]
+  C25[S-C25/S-C39 album+read authority] --> C51[S-C51 server membership]
+  D21[S-D21 sidecar rebuild] --> D24[S-D24 unsigned-sidecar migration]
   N1[S-N1 oidc server] --> N2[S-N2 sdk/cli oidc]
   P1[S-P1 sdk ffi verbs] --> P2[S-P2 swift auth+login]
   P1 --> P3[S-P3 enrollment ui]
