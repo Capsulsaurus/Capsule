@@ -280,10 +280,28 @@ jobs:
       - name: Install dependencies
         working-directory: capsule-web
         run: bun install --frozen-lockfile
+      # `check-web` is not pure bun: `test-web` and `build-web` depend on
+      # `build-wasm` / `share-kat` / `drop-kat`, which are cargo (slices S-E1 and
+      # S-D3 added them; this job's step list predates that and was never updated).
+      # Without an explicit install here, each of those tasks triggers rustup's
+      # toolchain-file auto-install itself, and they clobber each other's
+      # `~/.rustup/downloads/*.partial`.
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install
+          # `build-wasm` compiles capsule-wasm for the browser. The target is not
+          # in rust-toolchain.toml — that pins the iOS targets only.
+          rustup target add wasm32-unknown-unknown
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+      # `build-wasm` shells out to wasm-bindgen. It is a [tools] pin, but this
+      # workflow sets MISE_AUTO_INSTALL=false, so it has to be asked for by name.
+      # After the rustup step, never before: cargo-built mise tools race the
+      # toolchain bootstrap (see the note at the top of build-ios.yml).
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
-          install: false
+          install_args: "cargo:wasm-bindgen-cli"
       - name: Check (format + lint + test + build)
         run: mise run check-web
 
