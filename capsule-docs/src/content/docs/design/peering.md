@@ -67,7 +67,7 @@ Because every blob is content-addressed, dedup is free: the receiver skips any b
 
 ## Transfer Protocol
 
-Peering is **pull-only**, mirroring [Federation](/design/federation/#pull-only-federation): the device that is behind initiates the pull and applies the result only after it verifies. A peer that has new content may send a lightweight **notification hint** — "new content exists" — over a separate low-trust channel to prompt a pull sooner; that hint never feeds the validation pipeline directly and carries no authority.
+Peering is **pull-only**, mirroring [Federation](/design/federation/#pull-only-federation): the device that is behind initiates the pull and applies the result only after it verifies. A peer that has new content may send a lightweight **hint** — "new content exists" — over a separate low-trust channel to prompt a pull sooner; that hint never feeds the validation pipeline directly and carries no authority. It is the same [advisory-hint shape](/design/notifications/#vocabulary) federation uses, and is never surfaced to the user as an alert.
 
 The artifact is fetched with HTTP `GET` and `Range` requests, which makes a transfer **resumable** across the flaky-by-nature LAN and **idempotent** — content-addressing turns a re-fetch of an already-held blob into a no-op. This is the same resumability the [upload](/design/import/upload-protocol/) and [download](/design/import/download-sync/#resumption-and-verification) paths rely on.
 

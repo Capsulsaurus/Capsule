@@ -69,7 +69,9 @@ This section owns the web client's **scope** — read-only, server-owned, versio
 
 Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/import/download-sync/#auto-syncing) on platforms where the necessary APIs are not available.
 
-**Status note.** Background upload and push-driven auto-sync (e.g. iOS `BGTaskScheduler`) are post-v1 (decision 2026-07-12); v1 sync and upload are foreground-initiated.
+**Status note.** Background upload and OS-scheduled auto-sync (the iOS `BGTaskScheduler` family, and the equivalent elsewhere) are post-v1 (decision 2026-07-12); v1 sync and upload are foreground-initiated. Server-driven wake is a separate question with its own answer — see [Notifications — Tier 1](/design/notifications/#tier-1--wake), which is also post-v1 and rules out APNs and FCM permanently.
+
+User-facing **alerts** are not deferred: they are v1, entirely local, and owned by [Notifications](/design/notifications/). A client that cannot get a background window can still warn its user, because deadline-driven alerts are pre-armed on the OS timer rather than evaluated when the app happens to run.
 
 ## Client Validation Duties
 

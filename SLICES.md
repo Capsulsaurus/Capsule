@@ -318,6 +318,7 @@ row's remainder now lives.
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
 | S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
 | S-D28 | The SDK's second transport, and the document it generates from | client SDK | S-D8, S-C2 | L | MIXED | done\* | gRPC retires; the client generates from the Kynos document; four `application/cbor` operations stay hand-written |
+| S-D29 | Local alert surface (`capsule-core::notify` + native delivery) | sdk/clients | S-Z11 | M | ACTIVE | ready | |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -398,12 +399,14 @@ row's remainder now lives.
 | S-Z8 | Reference shell + CLI reference | design/docs | S-Z7 | M | ACTIVE | ready | |
 | S-Z9 | REST reference from the Kynos document | design/docs | S-Z8, S-D8 | M | ACTIVE | blocked | Kynos document → `S-C27`/`S-D8` |
 | S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
+| S-Z11 | Notification architecture (design) | design/docs | — | S | ACTIVE | done | |
 
-**Row counts.** 199 rows — the 129 from the v1 campaign and wave 2, the 51 the
-server rebuild added, and the 19 of lane U. By area:
-**81 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
-**93 done / 54 done\* / 38 ready / 7 blocked / 4 post-v1 / 3 part-done**
-(`S-C8`, `S-C27`, `S-C39`).
+**Row counts.** 201 rows — the 129 from the v1 campaign and wave 2, the 51 the
+server rebuild added, the 19 of lane U, and the 2 of the notification lane. By
+area: **83 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
+**94 done / 54 done\* / 39 ready / 7 blocked / 4 post-v1 / 3 part**
+(`S-C8`, `S-C27`, `S-C39` — the table spells these `part` and `part 1 done`;
+they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
 ordering. Seven rows read `blocked`, and only two of them are waiting on code:
@@ -423,6 +426,10 @@ exists and OpenMLS ships it (freeing `S-X1`–`S-X3`, all three of which are now
 ```mermaid
 graph LR
   B10[S-B10 takeout enrich] --> B11[S-B11 cli provider]
+  C11[S-C11/S-C17 retention+audit] --> C47[S-C47 legal hold]
+  C8[S-C8 moderation hooks] --> C49[S-C49 federated moderation]
+  C25[S-C25/S-C39 album+read authority] --> C51[S-C51 server membership]
+  D21[S-D21 sidecar rebuild] --> D24[S-D24 unsigned-sidecar migration]
   N1[S-N1 oidc server] --> N2[S-N2 sdk/cli oidc]
   P1[S-P1 sdk ffi verbs] --> P2[S-P2 swift auth+login]
   P1 --> P3[S-P3 enrollment ui]
@@ -5642,6 +5649,54 @@ table hides what it would cost.
 | Test bootstrap: hand-rolled `docker` CLI → Kynos `TestClient` + the `S-C29` conformance suite | **deferred deliberately; retires rather than migrates** | `capsule-api-testing` is a declared default-member, so its 242 lines compile on every build, and it has **zero consumers** — `rg` for the package name outside itself returns nothing. Its `common.rs` shells out to the `docker` CLI via `std::process::Command` to start Postgres, which is a second container-bootstrap approach competing with the testcontainers six other sites hand-roll; its `schema.rs` is entirely `#[cfg(test)]` tests of sea-orm entity CRUD, and those three tests do run and pass in the workspace suite. | Nothing. This is recorded so it is not re-litigated as slimming: reviving it means teaching six call sites in the retiring Salvo tree to share a fixture, which is thrown away at Stage 7.5, and deleting it now removes the only live coverage of the sea-orm migration path while that path is still in use. It retires **with** `capsule-api`. The replacement needs no container at all — Kynos's `TestClient` drives a built `Service` in-process, and `S-C29`'s shared conformance suite is what lets the in-memory adapter stand in for Valkey. |
 | Deny `clippy::expect_used` alongside `unwrap_used` | **declined; audited rather than assumed** | `clippy::unwrap_used` is denied workspace-wide and clean, but `expect_used` is not, and the audit recorded ~60 production `.expect()` sites as a hygiene concern. Measured properly: **53 in `capsule-core` outside test modules**, and nearly all are documented invariants where a panic means a programming error, not a runtime condition — `"provenance chain is never empty"`, `"AES-256-GCM seal is infallible for a valid key/nonce"`, `"asset_id was validated above"`, canonical-CBOR serialization of a type that cannot fail to encode. The one that reads like a *state* condition, `current_write_tier`'s "distribution not yet received", turns out to be a documented committer-side convenience with a fallible `write_tier_signing_key` beside it, and `rg` shows its only caller is a test. | Nothing — this is recorded so it is not re-opened as cheap cleanup. Denying the lint would force ~53 rewrites that each replace a self-documenting invariant with an error path no caller can act on, which is worse code. The genuinely questionable sites are the eight `.lock().expect("...")` poisoned-mutex panics in `crypto/keys/tpm.rs` — and that is the **reference-only** feature no CI lane builds. Revisit if `tpm` ever ships, or per-crate for a surface where a panic crosses an FFI boundary. |
 
+### S-Z11 — Notification architecture
+
+- **Gap:** the corpus had one user-facing alert spec — the two-week staleness warning in
+  `download-sync.md` — and it named no delivery mechanism at all ("the user is notified").
+  Two more advisories, `backup-recovery.md`'s recovery-check badge and `quota.md`'s soft
+  warning, each restated snooze/badge semantics in their own words. And "notification"
+  simultaneously meant the federation/peering low-trust pull signal, so the pull-only
+  argument and the user-facing one shared a word. No owner doc, no SSoT row, no sidebar
+  slot, no module boundary, no platform permission anywhere in the repo.
+- **Deliverable:** `design/notifications.md` — the delivery contract. Fixes the vocabulary
+  (alert / wake / hint); makes Tier 0 local alerts the whole of v1, with alert text
+  composed on-device because a key-free server has no plaintext to compose from; states
+  the **pre-arm rule** that makes the staleness alert able to fire at all (it was to be
+  evaluated inside the background window whose absence it exists to report); and specifies
+  the post-v1 **wake** tier as contentless, off by default, and never a correctness
+  dependency. Its transport matrix follows one rule — a wake transport must require no
+  credential the operator cannot generate themselves — which excludes **APNs and FCM
+  permanently** and admits Web Push/VAPID and UnifiedPush. iOS therefore has no wake tier,
+  stated as a deliberate trade rather than a gap.
+- **Done when:** the doc is an owner row in `design/principles.md`, in the
+  `Organization & Clients` sidebar group and the design index, has a `Planned Client
+  Boundaries` row in `module-map.md`, the three trigger docs delegate delivery by anchor,
+  federation/peering say *hint*, the scenario map covers the wake channel, and
+  `mise run check-docs` + `lint-check-md` are green. **Tier:** docs build.
+- **Landed — verified 2026-09-01.** Design-only; `S-D29` executes it.
+
+### S-D29 — Local alert surface
+
+- **Gap:** `S-Z11` designs the alert classes and the pre-arm rule; nothing implements
+  them. The `notification.*` i18n namespace is reserved but empty (the guard needs a live
+  consumer), `capsule-core::notify` does not exist, no platform requests notification
+  authorization, and `capsule-android`'s manifest declares only `INTERNET`. The two-week
+  staleness alert has been a designed v1 product surface since 2026-07-04 and has never
+  been sliced.
+- **Deliverable:** `capsule-core::notify` — the closed alert-class enum, the trigger
+  predicates, and the arm/re-arm/cancel decisions — plus native delivery per platform
+  (`UNUserNotificationCenter` with calendar/interval triggers on iOS,
+  `NotificationManagerCompat` + `AlarmManager` on Android), the `notification.*` catalog
+  keys, and the permission request placed at first use of a class rather than at launch.
+  Tier 0 only: no wake, no server half, no token registry.
+- **Depends on:** S-Z11.
+- **Done when:** unit tests cover each trigger predicate at its threshold, the pre-arm
+  lifecycle under a mocked clock (arm on deadline-known, re-arm on the change that moves
+  it, cancel when it clears, never two live timers per class), the snooze bound degrading
+  to a badge, and a refused authorization degrading to a badge without error; a per-platform
+  smoke fires a pre-armed alert with the app terminated; `i18n-guard` passes with the new
+  namespace consumed. **Tier:** unit + smoke.
+
 ## Post-v1 Register
 
 Deliberately out of wave 2; each carries a scope-out note in its owner doc
@@ -5656,7 +5711,8 @@ Deliberately out of wave 2; each carries a scope-out note in its owner doc
 | Live mDNS responder for peering | peering.md | post-v1 |
 | Shared-Valkey (multi-replica) rate limiters | share-links.md | multi-replica deployments |
 | Sandboxed decoder platform implementations | clients.md | post-v1 (deviation documented) |
-| Background upload / push-driven auto-sync | clients.md | post-v1 |
+| Background upload / OS-scheduled auto-sync | clients.md, notifications.md | post-v1 |
+| Wake tier (contentless server→client ping; Web Push/VAPID + UnifiedPush only, default off) | notifications.md | post-v1; APNs/FCM excluded permanently |
 | iOS cross-device-add UI + devices/cohorts screen | device-enrollment.md, authentication.md | post-v1 |
 | XCUITest UI-automation bundle | clients.md (tooling) | post-v1 |
 | Client plaintext file-export command (privacy-strip client half) | metadata.md | post-v1 |
