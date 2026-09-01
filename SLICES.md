@@ -373,18 +373,22 @@ row's remainder now lives.
 | S-U5 | Virtualized timeline engine | apple-ui | S-U1 | L | ACTIVE | done\* | engine unused: the headerless grid did not need it (see slice note) |
 | S-U6 | Capsule-state design system | apple-ui | S-U3 | M | ACTIVE | done | |
 | S-U7 | Library, timeline, selection, culling | apple-ui | S-U5, S-U6 | L | ACTIVE | done\* | uniform grid + pinch zoom + zoom transition landed; culling review outstanding |
-| S-U8 | Viewer and asset detail | apple-ui | S-U5, S-U6 | L | ACTIVE | done\* | info panel + caption editing landed; provenance, verdict detail, superseded captions outstanding |
-| S-U9 | Albums + smart-album builder | apple-ui | S-U6 | L | ACTIVE | ready | |
-| S-U10 | Search, people, places | apple-ui | S-U9 | L | ACTIVE | ready | |
-| S-U11 | Import pipeline | apple-ui | S-U6 | L | ACTIVE | ready | |
-| S-U12 | Transfer, quota, quarantine | apple-ui | S-U6 | L | ACTIVE | ready | |
-| S-U13 | Auth, enrollment, recovery | apple-ui | S-U6 | L | ACTIVE | ready | |
-| S-U14 | Sharing, drops, peering, federation | apple-ui | S-U6 | L | ACTIVE | ready | |
-| S-U15 | Settings tree (18 sections) | apple-ui | S-U6 | L | ACTIVE | done | |
+| S-U8 | Viewer and asset detail | apple-ui | S-U5, S-U6 | L | ACTIVE | done\* | info panel, caption editing and the `.viewer` route landed; provenance, verdict detail, superseded captions outstanding |
+| S-U9 | Albums + smart-album builder | apple-ui | S-U6 | L | ACTIVE | part | album index and detail landed over the mock ports; smart-album screen, predicate builder, members and policy editors outstanding |
+| S-U10 | Search, people, places | apple-ui | S-U9 | L | ACTIVE | part | search and the clustered map landed; people index and cluster screens outstanding; map granularity still fixed |
+| S-U11 | Import pipeline | apple-ui | S-U6 | L | ACTIVE | part | picker, scan, plan, execution and history landed and routed; per-run detail outstanding, and the picker importer still writes the managed store directly rather than through `ImportPort` |
+| S-U12 | Transfer, quota, quarantine | apple-ui | S-U6 | L | ACTIVE | part | transfer centre, custody receipts, quota, storage and quarantine screens landed and routed; the documented ladders and triage detail are not all built |
+| S-U13 | Auth, enrollment, recovery | apple-ui | S-U6 | L | ACTIVE | part | welcome, discovery, chooser, passphrase, ceremony and device ledger landed over `Preview*` doubles; both onboarding steps are scaffolds, and six ports are still declared inside `FeatureAuth` rather than `CapsulePorts` |
+| S-U14 | Sharing, drops, peering, federation | apple-ui | S-U6 | L | ACTIVE | part | link list, drop inbox and detail, peering, federation and moderation landed and routed; share detail outstanding, inbound redemption → `S-U22` |
+| S-U15 | Settings tree (18 sections) | apple-ui | S-U6 | L | ACTIVE | done\* | fifteen of eighteen sections landed; federation, advanced and about are scaffolds, and the Advanced mock-scenario switcher this slice's note relies on does not exist |
 | S-U16 | Test + verification infrastructure | apple-ui | S-U4 | L | ACTIVE | done\* | remaining screen suites ride their own slices |
 | S-U17 | `check-swift` CI gate | apple-ui | S-U2 | S | ACTIVE | done | |
 | S-U18 | Catalog keys for the Apple client | apple-ui | S-I1 | M | ACTIVE | done\* | keys for slices still `ready` land with them |
 | S-U19 | SDK adapter swap (`CapsuleSDKAdapter`) | apple-ui | S-P1, S-U1 | M | MIXED | ready | |
+| S-U20 | Memories shelf | apple-ui | S-U7 | M | ACTIVE | ready | `SidebarItem.memories` is a live row over a scaffold |
+| S-U21 | Duplicate review surface | apple-ui | S-U7 | M | ACTIVE | ready | `SidebarItem.duplicates` is a live row over a scaffold; server-side blob dedupe is unrelated |
+| S-U22 | Inbound link redemption (`/s/`, `/u/`) | apple-ui | S-U14 | M | ACTIVE | ready | the `https` deep-link parser produces this route and it lands on a scaffold |
+| S-U23 | Onboarding photo-access + hand-off steps | apple-ui | S-U13 | S | ACTIVE | ready | the two `OnboardingStep` cases that are scaffolds |
 | S-X1 | OpenMLS backend → `OpenMlsAuthority` | crypto/mls | — | L | ACTIVE | done | |
 | S-X2 | MLS membership + Welcome/history delivery | crypto/mls | S-X1 | L | ACTIVE | done | |
 | S-X3 | Album upgrade ceremony + MLS resilience | crypto/mls | S-X2 | L | ACTIVE | done\* | server halves → `S-C24` |
@@ -401,12 +405,12 @@ row's remainder now lives.
 | S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
 | S-Z11 | Notification architecture (design) | design/docs | — | S | ACTIVE | done | |
 
-**Row counts.** 201 rows — the 129 from the v1 campaign and wave 2, the 51 the
-server rebuild added, the 19 of lane U, and the 2 of the notification lane. By
-area: **83 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
-**94 done / 54 done\* / 39 ready / 7 blocked / 4 post-v1 / 3 part**
-(`S-C8`, `S-C27`, `S-C39` — the table spells these `part` and `part 1 done`;
-they are counted together).
+**Row counts.** 205 rows — the 129 from the v1 campaign and wave 2, the 51 the
+server rebuild added, the 23 of lane U, and the 2 of the notification lane. By
+area: **87 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
+**93 done / 55 done\* / 37 ready / 9 part / 7 blocked / 4 post-v1**
+(`S-C8`, `S-C27`, `S-C39`, and `S-U9`–`S-U14` — the table spells these `part`
+and `part 1 done`; they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
 ordering. Seven rows read `blocked`, and only two of them are waiting on code:
@@ -415,7 +419,7 @@ decision rather than on an implementation — `S-C47` is a legal question, `S-C4
 and `S-C51` each need a fact the slice that found them could not settle, `S-D24`
 needs a design decision, and `S-Z9` needs the Kynos document
 (`S-C27`/`S-D8`). `S-P1` landing freed the rest of lane P and `S-U19` with it;
-lane U was built so the other eighteen Apple-client slices never waited on that
+lane U was built so the other twenty-two Apple-client slices never waited on that
 chain in the first place. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
 which `S-D16` and `S-P1` have since landed),
@@ -5414,6 +5418,41 @@ host — see the environment table above. This lane does not ride CI.
 - **Done when:** the app runs against `mise run serve-api` with no view, view-model, or
   navigation code changed relative to the mock lane. That "nothing else moved" diff is the
   evidence the seam held. **Tier:** Smoke.
+
+### S-U20 — Memories shelf
+
+- **Deliverable:** the generated memories shelf behind `SidebarItem.memories`, and the
+  `.memories` route and `ViewerContext` that page through one.
+- **Why it is its own row.** `SidebarItem.memories` and `Route.memories` shipped with the
+  shell, and until now no slice in any lane owned the screen behind them — a live sidebar
+  row over a scaffold, tracked by nothing. **Tier:** Unit.
+
+### S-U21 — Duplicate review surface
+
+- **Deliverable:** the duplicate-cluster review behind `SidebarItem.duplicates`, with the
+  keep/merge decision and the `.duplicates` `ViewerContext`.
+- **Not** the server's blob-level deduplication, which is a different concern in lane C and
+  is what a search for "duplicate" in this file used to find. Same gap as `S-U20`: a live
+  sidebar row over a scaffold that no slice claimed. **Tier:** Unit.
+
+### S-U22 — Inbound link redemption
+
+- **Deliverable:** the screens behind `Route.linkRedemption` for both kinds — redeeming a
+  received `https://…/s/<id>#<secret>` share link, and contributing to a received
+  `…/u/<id>#<secret>` guest-upload link.
+- **Why it is not `S-U14`.** That slice composes, manages and revokes links this user
+  *issues*, and shows the drop inbox they receive. Redeeming an inbound link is the other
+  side of the exchange, and the deep-link parser already produces the route for it, so the
+  gap is reachable rather than theoretical. **Tier:** Unit.
+
+### S-U23 — Onboarding photo-access and hand-off steps
+
+- **Deliverable:** the two `OnboardingStep` cases still scaffolded — the photo-access
+  rationale, and the hand-off into the library at the end of first run.
+- **Why it is not `S-U13`.** That slice's deliverable is the account and enrollment rail;
+  neither of these is on it. The access rationale in particular is the screen that has to
+  justify a system permission prompt, which the offline-first posture makes a real design
+  question rather than boilerplate. **Tier:** Unit.
 
 ## Lane X — MLS
 
