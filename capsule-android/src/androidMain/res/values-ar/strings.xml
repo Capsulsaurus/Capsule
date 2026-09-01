@@ -126,7 +126,11 @@
     <string name="drop_title">Upload photos</string>
     <string name="drop_upload_busy">Uploading…</string>
     <string name="drop_upload_only_badge">Upload only</string>
+    <string name="error_auth_current_password_invalid">That is not your current password.</string>
     <string name="error_auth_invalid_credentials">البريد الإلكتروني أو كلمة المرور غير صحيحة.</string>
+    <string name="error_auth_password_invalid">That password cannot be used.</string>
+    <string name="error_auth_profile_invalid">That display name cannot be used.</string>
+    <string name="error_auth_profile_not_found">That account no longer exists.</string>
     <string name="error_auth_rate_limited">محاولات كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
     <string name="error_auth_user_already_exists">يوجد حساب بهذه البيانات بالفعل.</string>
     <string name="error_blob_gone">ملف الصورة هذا لم يعد متاحًا.</string>

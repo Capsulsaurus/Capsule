@@ -98,7 +98,7 @@ pub fn router() -> ServerRouter {
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
-        // Six `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
+        // Seven `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
         // next addition obvious rather than a puzzle. Each group is well under the cap, so a
@@ -119,6 +119,12 @@ pub fn router() -> ServerRouter {
             routes::escrow::store_escrow,
             routes::escrow::fetch_escrow,
             routes::auth::reauthenticate,
+        ])
+        // What an account knows about itself, and the credential it opens sessions with.
+        .mount(kynos::routes![
+            routes::profile::get_profile,
+            routes::profile::update_profile,
+            routes::profile::change_password,
         ])
         // The cross-device add: one code, one channel, and the two devices' mailboxes.
         .mount(kynos::routes![

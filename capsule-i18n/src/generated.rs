@@ -56,8 +56,20 @@ pub mod error_codes {
     /// `error.auth.account_locked`
     pub const AUTH_ACCOUNT_LOCKED: &str = "error.auth.account_locked";
 
+    /// `error.auth.current_password_invalid`
+    pub const AUTH_CURRENT_PASSWORD_INVALID: &str = "error.auth.current_password_invalid";
+
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
+
+    /// `error.auth.password_invalid`
+    pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
+
+    /// `error.auth.profile_invalid`
+    pub const AUTH_PROFILE_INVALID: &str = "error.auth.profile_invalid";
+
+    /// `error.auth.profile_not_found`
+    pub const AUTH_PROFILE_NOT_FOUND: &str = "error.auth.profile_not_found";
 
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";

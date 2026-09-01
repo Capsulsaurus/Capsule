@@ -126,7 +126,11 @@
     <string name="drop_title">Upload photos</string>
     <string name="drop_upload_busy">Uploading…</string>
     <string name="drop_upload_only_badge">Upload only</string>
+    <string name="error_auth_current_password_invalid">That is not your current password.</string>
     <string name="error_auth_invalid_credentials">E-mail ou senha inválidos.</string>
+    <string name="error_auth_password_invalid">That password cannot be used.</string>
+    <string name="error_auth_profile_invalid">That display name cannot be used.</string>
+    <string name="error_auth_profile_not_found">That account no longer exists.</string>
     <string name="error_auth_rate_limited">Muitas tentativas. Aguarde e tente novamente.</string>
     <string name="error_auth_user_already_exists">Já existe uma conta com estes dados.</string>
     <string name="error_blob_gone">Esse arquivo de foto não está mais disponível.</string>

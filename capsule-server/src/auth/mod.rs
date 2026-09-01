@@ -10,16 +10,23 @@
 //! | Concern | Lives | Why |
 //! | --- | --- | --- |
 //! | Session records | [`crate::store::AuthStateStore`] (`S-C29`) | landed already; consumed, not re-declared |
-//! | Accounts and passwords | [`AccountDirectory`] | the only database dependency of these three operations |
+//! | Who exists, and whether a password is theirs | [`AccountDirectory`] | the one question a sign-in asks |
+//! | Bringing an account into existence | [`AccountRegistry`] (`S-C53`) | registration must disclose what authentication must not |
+//! | What an account keeps about itself | [`AccountProfiles`] (`S-C54`) | an ordinary authenticated write |
+//! | Replacing a password | [`PasswordChange`] (`S-C54`) | a credential rotation, and separate for that reason |
 //! | Token minting and reading | [`SessionTokens`] | a pure function of a key and a clock, so a concrete type rather than a port |
 //! | Presenting a credential | [`AccessToken`] | a Kynos `SecurityScheme`, which is the only way to guard an operation *and* describe it |
 //!
 //! # The one bundle a handler injects
 //!
-//! [`AuthContext`] carries all four. It is one injected value rather than four because a Kynos
-//! context provides *types*, and four `Inject` arguments on every handler would put the module's
-//! internal shape in every signature — a change to what authentication needs would then be a
-//! change to every operation that authenticates.
+//! [`AuthContext`] carries every one of them. It is one injected value rather than nine because a
+//! Kynos context provides *types*, and nine `Inject` arguments on every handler would put the
+//! module's internal shape in every signature — a change to what authentication needs would then
+//! be a change to every operation that authenticates. It is built from
+//! [`AuthCollaborators`], a named struct rather than a positional argument list, for the reason
+//! [`crate::app::Modules`] is one: a constructor that grows a parameter per ported surface is a
+//! constructor that will eventually be got wrong positionally, and two `Arc<dyn …>` swapped at a
+//! call site is a compile error only by luck.
 //!
 //! # Adapters this slice does not write
 //!
@@ -30,6 +37,7 @@
 //! store, and it is why [`SessionTokens`] is not a trait at all.
 
 pub mod directory;
+pub mod profile;
 pub mod registry;
 pub mod scheme;
 pub mod tokens;
@@ -37,12 +45,41 @@ pub mod tokens;
 use std::sync::Arc;
 
 pub use self::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
+pub use self::profile::{
+    AccountProfiles, MAX_DISPLAY_NAME_CHARS, MalformedProfile, PasswordChange, PasswordChanged,
+    ProfileRecord, ProfileUpdate, admissible_display_name,
+};
 pub use self::registry::{AccountRegistry, MIN_PASSWORD_LENGTH, Registration, new_user_id};
 pub use self::scheme::{AccessToken, AuthenticatedSession, TOUCH_INTERVAL};
 pub use self::tokens::{
     ACCESS_TOKEN_TTL, ISSUER, IssuedTokens, SessionTokens, TokenError, TokenKind, VerifiedToken,
 };
 use crate::store::{AuthStateStore, Clock};
+
+/// The collaborators an [`AuthContext`] is assembled from.
+///
+/// Named rather than ordered; see the module docs.
+#[derive(Debug)]
+pub struct AuthCollaborators {
+    /// The session-state store (`S-C29`).
+    pub sessions: Arc<dyn AuthStateStore>,
+    /// Who exists, and whether a presented password is theirs.
+    pub accounts: Arc<dyn AccountDirectory>,
+    /// Where accounts are created (`S-C53`).
+    pub registry: Arc<dyn AccountRegistry>,
+    /// The facts an account keeps about itself (`S-C54`).
+    pub profiles: Arc<dyn AccountProfiles>,
+    /// Where a password is replaced (`S-C54`).
+    pub passwords: Arc<dyn PasswordChange>,
+    /// The single-use revoke-all challenges (`S-C23`, `S-C29`).
+    pub challenges: Arc<dyn crate::store::ChallengeStore>,
+    /// The durable device-cohort map (`S-C13`).
+    pub cohorts: Arc<dyn crate::store::CohortStore>,
+    /// The token signer.
+    pub tokens: Arc<SessionTokens>,
+    /// The clock every record and every deadline is stamped from.
+    pub clock: Arc<dyn Clock>,
+}
 
 /// Everything the auth operations reach for, as one injectable value.
 ///
@@ -54,6 +91,8 @@ pub struct AuthContext {
     sessions: Arc<dyn AuthStateStore>,
     accounts: Arc<dyn AccountDirectory>,
     registry: Arc<dyn AccountRegistry>,
+    profiles: Arc<dyn AccountProfiles>,
+    passwords: Arc<dyn PasswordChange>,
     challenges: Arc<dyn crate::store::ChallengeStore>,
     cohorts: Arc<dyn crate::store::CohortStore>,
     tokens: Arc<SessionTokens>,
@@ -61,25 +100,30 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
-    /// Assembles the module from its seven collaborators.
+    /// Assembles the module from its nine collaborators.
     ///
     /// `clock` is passed separately rather than read back out of `tokens` because the session
     /// records and the token deadlines must be stamped from the *same* instant source; handing
     /// it in once is what makes "the same clock" a fact about construction rather than a
     /// convention two call sites have to keep.
-    pub fn new(
-        sessions: Arc<dyn AuthStateStore>,
-        accounts: Arc<dyn AccountDirectory>,
-        registry: Arc<dyn AccountRegistry>,
-        challenges: Arc<dyn crate::store::ChallengeStore>,
-        cohorts: Arc<dyn crate::store::CohortStore>,
-        tokens: Arc<SessionTokens>,
-        clock: Arc<dyn Clock>,
-    ) -> Self {
+    pub fn new(collaborators: AuthCollaborators) -> Self {
+        let AuthCollaborators {
+            sessions,
+            accounts,
+            registry,
+            profiles,
+            passwords,
+            challenges,
+            cohorts,
+            tokens,
+            clock,
+        } = collaborators;
         Self {
             sessions,
             accounts,
             registry,
+            profiles,
+            passwords,
             challenges,
             cohorts,
             tokens,
@@ -100,6 +144,16 @@ impl AuthContext {
     /// Where accounts are created (`S-C53`).
     pub fn registry(&self) -> &dyn AccountRegistry {
         self.registry.as_ref()
+    }
+
+    /// The facts an account keeps about itself (`S-C54`).
+    pub fn profiles(&self) -> &dyn AccountProfiles {
+        self.profiles.as_ref()
+    }
+
+    /// Where a password is replaced (`S-C54`).
+    pub fn passwords(&self) -> &dyn PasswordChange {
+        self.passwords.as_ref()
     }
 
     /// The single-use revoke-all challenges (`S-C23`, `S-C29`).

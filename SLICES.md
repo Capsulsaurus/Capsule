@@ -259,7 +259,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
 | S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
-| S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done\* | registration lands; profile, TOTP and password reset are audited and deferred with reasons |
+| S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done | registration lands; the unported operations are decided one by one on `S-C54`–`S-C58` |
+| S-C54 | The profile surface, and a password change that is not a reset | server | S-C53 | M | RETIRED | done | three operations where Salvo had one; the address becomes immutable and `/validate` and password reset are deleted rather than owed |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3031,18 +3032,75 @@ on the Salvo document; six on the Kynos one, seven now.
 | Salvo operation | Verdict |
 | --- | --- |
 | `POST /v1/auth/register` | **landed here** |
-| `GET /v1/auth/profile` | **owed, small.** A client learns its own account id from a token claim today, which works and is not a contract |
+| `GET /v1/auth/profile` | **landed on `S-C54`**, with a `PATCH` beside it and the email field removed |
 | `POST /v1/auth/validate` | **deliberately gone.** Token introspection is what a server without a session ledger needs; `S-C48` put the ledger on every request, so validation *is* the request |
-| the four TOTP operations | **deferred.** MFA is not in v1's slice list; the counters it needs landed with `S-C32`, so whether it ships is a product call rather than an oversight |
-| `POST /v1/auth/password-reset`, `/password-reset-request` | **deferred, and carefully.** A password reset on an end-to-end-encrypted account is not a password reset — the recovery story is the escrow blob (`S-C12`), and a reset endpoint that did not go through it would be a way to lose a library rather than regain one |
+| the four TOTP operations | **landed on `S-C55`.** Deferred here on the grounds that MFA is a product call — reversed: design/authentication.md names password + TOTP as a *first-class* local auth path, so not shipping it is a documented capability the server does not have |
+| `POST /v1/auth/password-reset`, `/password-reset-request` | **deleted, and carefully.** A password reset on an end-to-end-encrypted account is not a password reset — the recovery story is the escrow blob (`S-C12`), and a reset endpoint that did not go through it would be a way to lose a library rather than regain one. What `S-C54` ships instead is a password *change*, authenticated by the password it replaces |
 
-- **Owed:** the profile read; the rate limiter (blocked on `S-C32`'s per-source half); and the CLI
+- **Owed:** the rate limiter (blocked on `S-C32`'s per-source half); and the CLI
   round trip `S-D28` records, which this unblocks.
 - **Done when:** ✅ `registering_creates_an_account_and_signs_it_in`,
   `a_taken_address_is_refused_and_writes_nothing`,
   `a_password_under_the_floor_is_refused_before_anything_is_written` and
   `registration_answers_500_when_the_registry_cannot_answer`, plus the conformance walk.
   **Tier:** Unit + Smoke.
+
+### S-C54 — the profile surface, and a password change that is not a reset
+
+- **Contract:** [Authentication — The Profile Surface](capsule-docs/src/content/docs/design/authentication.md);
+  the recovery story it defers to is [Backup and Recovery](capsule-docs/src/content/docs/design/backup-recovery.md).
+- **Gap:** `S-C53`'s audit left `GET /v1/auth/profile` owed and password reset deferred. The
+  first is a real hole — a client has no way to learn the address it signed in with, and
+  `register_user` answers `200` rather than `201` *because* the account has no URL. The second is
+  not a hole and never was, but the capability underneath it is: the retired
+  `POST /v1/auth/profile` could change a password, and deleting reset without shipping change
+  would take that away.
+
+**Three operations, where Salvo had one.** The retired handler changed a display name, an email
+address **and** a password, branching on which fields a body happened to carry — three operations
+wearing one URL. Its failure mode was the one that shape invites: a caller sending a new password
+with no current password got a silent no-op, because the `if let (Some(_), Some(_))` gating the
+change had no `else`. Here the routine edit is `PATCH /v1/auth/profile` and the credential
+rotation is `POST /v1/auth/password`; they have different bodies, different statuses and different
+consequences, so they are different operations.
+
+**The email address is now immutable, and that is the finding.** Salvo let a live session change
+the login address with no proof the caller controlled the new one — and no deployment has a mail
+path to obtain that proof. That is not a profile edit but the first step of an account takeover:
+the account moves onto an address the attacker owns, and every later recovery flow addresses them.
+The port has **no method** for it rather than a method that refuses, so the capability cannot
+creep back through a caller.
+
+**Two ports, not one, and neither is a method on the directory.** `AccountProfiles` is an ordinary
+authenticated write; `PasswordChange` is a credential rotation. Behind one trait they would share
+an adapter and a failure type, and a `set_password` reachable from the routine profile write is a
+`set_password` somebody eventually calls without the verification in front of it. Verification
+itself stays on `AccountDirectory::authenticate_user` — the same call a sign-in makes, so the
+lockout applies to a password change exactly as it applies to a sign-in, which a second
+implementation here would have quietly lost.
+
+**A partial update needs a nested option.** `display_name` is `Option<Option<String>>` on the wire
+and in the port: an absent key leaves the name alone, an explicit `null` clears it. A flat option
+collapses those, and every partial update then wipes a field the caller never sent — silently,
+which is why `an_absent_display_name_is_not_a_cleared_one` exists.
+
+**The rotation closes every *other* session.** A change whose point is that a credential leaked
+would be worthless if the sessions opened with it kept working, and one that signed the caller out
+of the device they rotated on would be unusable. So it closes all and re-opens the caller's own
+**under its own session id** — which is what lets the operation answer `204` with no body, because
+the existing token pair still names a live session. The re-opened record's `authenticated_at` is
+now: presenting the current password *is* a credential presentation, and an `S-C7` freshness gate
+measuring from anything earlier would be measuring from the wrong moment.
+
+- **Owed:** nothing. The rate limiter this surface would also want is `S-C32`'s per-source half,
+  recorded on `S-C53` and unchanged by this.
+- **Done when:** ✅ `a_password_change_ends_every_other_session_and_keeps_this_one`,
+  `an_absent_display_name_is_not_a_cleared_one`,
+  `a_profile_carries_nothing_the_server_was_not_told`,
+  `an_email_cannot_be_changed_through_the_profile`,
+  `a_locked_account_cannot_change_its_password`,
+  `a_live_session_naming_a_deleted_account_reads_404_and_not_500` and the sixteen cases beside
+  them, plus the conformance walk's `profile_block`. **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

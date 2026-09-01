@@ -126,7 +126,11 @@
     <string name="drop_title">Upload photos</string>
     <string name="drop_upload_busy">Uploading…</string>
     <string name="drop_upload_only_badge">Upload only</string>
+    <string name="error_auth_current_password_invalid">That is not your current password.</string>
     <string name="error_auth_invalid_credentials">ईमेल या पासवर्ड ग़लत है।</string>
+    <string name="error_auth_password_invalid">That password cannot be used.</string>
+    <string name="error_auth_profile_invalid">That display name cannot be used.</string>
+    <string name="error_auth_profile_not_found">That account no longer exists.</string>
     <string name="error_auth_rate_limited">बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_auth_user_already_exists">इन विवरणों वाला खाता पहले से मौजूद है।</string>
     <string name="error_blob_gone">वह फ़ोटो फ़ाइल अब उपलब्ध नहीं है।</string>

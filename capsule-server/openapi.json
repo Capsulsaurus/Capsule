@@ -1162,6 +1162,318 @@
         ]
       }
     },
+    "/v1/auth/profile": {
+      "get": {
+        "summary": "The caller's own profile.",
+        "description": "There is no `{user_id}` segment, for the reason the escrow surface has none: the account\ncomes from the credential, so reading somebody else's profile is not a forbidden request but\nan unrepresentable one. A directory of *other* people's public facts already exists and is a\ndifferent surface — `GET /v1/auth/devices/directory/{user_id}` — which publishes keys and\nnothing else.",
+        "operationId": "get_profile",
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "Edit the caller's own profile.",
+        "description": "`PATCH`, because the body is a partial: what it does not mention, it does not change. An\nempty body is a valid request and answers `200` with the profile unchanged — a client that\nsent nothing asked for nothing, and refusing it would make \"save\" fail on a form nobody\nedited.",
+        "operationId": "update_profile",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/auth/password": {
+      "post": {
+        "summary": "Replace the password this account's sessions are opened with.",
+        "description": "# Every *other* session ends\n\nA password change whose point is that a credential has leaked would be worthless if the\nsessions opened with the leaked credential kept working. So the change closes every session\nof the account — and then re-opens the caller's own, **under its own session id**, so the\nperson doing the rotation is not signed out of the device they are doing it on while\neverybody else is.\n\nRe-opening the same id rather than minting a new one is what lets this answer `204` with no\nbody: the caller's existing token pair keeps working, because the session it names is still\nthere. Returning a fresh pair was considered and rejected — it would make this a second token\nmint with none of `POST /v1/auth/refresh`'s rotation discipline, for no gain.\n\nThe re-opened record's `authenticated_at` is **now**, and that is not bookkeeping: presenting\nthe current password *is* a credential presentation, so a freshness gate (`S-C7`) measuring\nfrom anything earlier would be measuring from the wrong moment.\n\n# Why the order is verify, write, revoke\n\nVerification first, because a wrong current password must change nothing. The write next,\nbecause a revocation that ran before it would sign everybody out and then fail. The\nrevocation last, and its failure is **logged and not returned**: the password is already\nchanged, so answering `500` would tell the caller the rotation did not happen when it did,\nand they would try again with a current password that is no longer current.",
+        "operationId": "change_password",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "204": {
+            "description": "the request succeeded and there is no content to send"
+          },
+          "423": {
+            "description": "Account locked",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/auth/devices/enroll": {
       "post": {
         "summary": "Issue a one-time enrollment code for the caller's account.",
@@ -5236,6 +5548,67 @@
           "authenticated_at"
         ],
         "description": "When the re-authenticated session's freshness window last opened."
+      },
+      "ProfileResponse": {
+        "properties": {
+          "user_id": {
+            "type": "string",
+            "description": "The account identifier every manifest and every session names."
+          },
+          "email": {
+            "type": "string",
+            "description": "The address this account signs in with.\n\nRead-only on this surface. Changing it needs proof that the caller controls the new\naddress, and this server has no way to obtain one; see [`crate::auth::profile`]."
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The name the account chose to be shown as, if it chose one.\n\nAbsent rather than `null` when unset, so a client's \"has a name\" test is a key test."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When the account was created, RFC 3339."
+          }
+        },
+        "type": "object",
+        "required": [
+          "user_id",
+          "email",
+          "created_at"
+        ],
+        "description": "An account's profile as it is served.\n\n`Deserialize` is derived so the suite reads it back through the same type the server wrote —\na test pulling `display_name` out of a `serde_json::Value` would still pass if the field were\nrenamed on the way out."
+      },
+      "UpdateProfileRequest": {
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The display name to set, clear (`null`), or leave alone (absent)."
+          }
+        },
+        "type": "object",
+        "description": "A partial edit of the caller's profile.\n\n`display_name` is a **doubly** optional field on the wire, and the two levels mean different\nthings: an absent key leaves the name alone, and an explicit `null` clears it. That is what\n`#[serde(default, deserialize_with = …)]` over an `Option<Option<String>>` buys, and it is\nthe whole reason this body is not `deny_unknown_fields`-plus-a-flat-option: a flat one cannot\ntell \"I did not mention the name\" from \"remove the name\", so every partial update would wipe\na field the caller never sent."
+      },
+      "ChangePasswordRequest": {
+        "properties": {
+          "current_password": {
+            "type": "string",
+            "description": "The password currently in use, which authorizes the change.\n\nVerified through the same directory method a sign-in uses, so a locked account is locked\nhere too."
+          },
+          "new_password": {
+            "type": "string",
+            "description": "The password to replace it with."
+          }
+        },
+        "type": "object",
+        "required": [
+          "current_password",
+          "new_password"
+        ],
+        "description": "The two passwords a rotation needs.\n\n`Debug` is hand-written for the reason `routes::auth`'s bodies are: a derived one would print\nboth credentials into any log line that formatted the request."
       },
       "EnrollmentCodeResponse": {
         "properties": {

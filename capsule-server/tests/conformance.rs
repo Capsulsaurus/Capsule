@@ -131,6 +131,9 @@ async fn every_declared_response_is_exercised() {
         ("POST", "/v1/auth/logout/all"),
         ("PUT", "/v1/auth/escrow"),
         ("GET", "/v1/auth/escrow"),
+        ("GET", "/v1/auth/profile"),
+        ("PATCH", "/v1/auth/profile"),
+        ("POST", "/v1/auth/password"),
         ("GET", "/v1/auth/devices"),
         ("DELETE", "/v1/auth/devices/anything"),
         ("POST", "/v1/auth/reauthenticate"),
@@ -2273,6 +2276,9 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
+    // ── The profile surface (`S-C54`) ──────────────────────────────────────────────────────
+    profile_block(client, &fixture).await;
+
     // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The
     // directory block above anchored the account to `account_ik`, which is the key the proof
@@ -2479,6 +2485,252 @@ fn the_document_declares_openapi_32() {
         version.starts_with("3.2"),
         "expected an OpenAPI 3.2 document, got {version:?} — check the `openapi32` feature"
     );
+}
+
+/// The profile surface's whole walk (`S-C54`).
+///
+/// On an account of its **own**, registered here rather than the fixture's seeded one. The
+/// password change on this surface closes every other session of the account it acts on, so
+/// running it against the shared account would sign the rest of the walk out — and the walk
+/// would then be testing the bearer scheme instead of the operations it had reached.
+async fn profile_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+    const OWN_EMAIL: &str = "profile-walk@example.test";
+    const OWN_PASSWORD: &str = "correct horse battery staple";
+    const OWN_NEW_PASSWORD: &str = "a different correct horse";
+
+    let tokens: serde_json::Value = client
+        .post("/v1/auth/register")
+        .header("accept", "application/json")
+        .json(&json!({ "email": OWN_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    let bearer = format!(
+        "Bearer {}",
+        tokens["access_token"].as_str().expect("an access token")
+    );
+
+    // 401 and 403 on the credential itself: absent, and a refresh token where an access token
+    // belongs. Both are the framework's, through `Auth`.
+    for (method, path) in [
+        ("GET", "/v1/auth/profile"),
+        ("PATCH", "/v1/auth/profile"),
+        ("POST", "/v1/auth/password"),
+    ] {
+        let unauthenticated = match method {
+            "GET" => client.get(path),
+            "PATCH" => client.patch(path),
+            _ => client.post(path),
+        };
+        unauthenticated
+            .json(&json!({}))
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        let wrong_kind = match method {
+            "GET" => client.get(path),
+            "PATCH" => client.patch(path),
+            _ => client.post(path),
+        };
+        wrong_kind
+            .header(
+                "authorization",
+                &format!(
+                    "Bearer {}",
+                    tokens["refresh_token"].as_str().expect("a refresh token")
+                ),
+            )
+            .json(&json!({}))
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+    }
+
+    // 200 on the read, and on an edit that sets a name.
+    client
+        .get("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "display_name": "Ada Lovelace" }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 415 and 422 are the `Json` extractor's; 400 is the surface's own ceiling.
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .json(&json!({ "display_name": 42 }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "display_name": "a".repeat(capsule_server::auth::MAX_DISPLAY_NAME_CHARS + 1),
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 415 and 422 on the change are the `Json` extractor's, exactly as on the edit.
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .json(&json!({ "current_password": 42, "new_password": OWN_NEW_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+
+    // The password change's own refusals, cheapest first: the floor, then the wrong current
+    // password, then the lockout.
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "current_password": OWN_PASSWORD, "new_password": "short" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "current_password": "not the password",
+            "new_password": OWN_NEW_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::FORBIDDEN);
+    fixture.accounts.lock(OWN_EMAIL);
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "current_password": OWN_PASSWORD,
+            "new_password": OWN_NEW_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::LOCKED);
+    fixture.accounts.unlock(OWN_EMAIL);
+
+    // 500 on all three, from the one collaborator all three reach.
+    fixture.accounts.set_unavailable(true);
+    client
+        .get("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "display_name": "Ada" }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "current_password": OWN_PASSWORD,
+            "new_password": OWN_NEW_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.accounts.set_unavailable(false);
+
+    // 404 on the change, reachable only as a deletion landing between the verification that
+    // authorized it and the write that applies it.
+    fixture.accounts.forget_after_next_authentication();
+    client
+        .post("/v1/auth/password")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({
+            "current_password": OWN_PASSWORD,
+            "new_password": OWN_NEW_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // The account is gone now, so the read and the edit answer 404 too — the same state, from
+    // the one credential that outlived it.
+    client
+        .get("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    client
+        .patch("/v1/auth/profile")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&json!({ "display_name": "Ada" }))
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 204: a change that lands, on a second account of its own — the first one no longer
+    // exists, and a rotation needs an account.
+    const SECOND_EMAIL: &str = "profile-walk-2@example.test";
+    let second: serde_json::Value = client
+        .post("/v1/auth/register")
+        .header("accept", "application/json")
+        .json(&json!({ "email": SECOND_EMAIL, "password": OWN_PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK)
+        .json();
+    client
+        .post("/v1/auth/password")
+        .header(
+            "authorization",
+            &format!(
+                "Bearer {}",
+                second["access_token"].as_str().expect("an access token")
+            ),
+        )
+        .json(&json!({
+            "current_password": OWN_PASSWORD,
+            "new_password": OWN_NEW_PASSWORD,
+        }))
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
 }
 
 /// The guest-drop surface's whole walk (`S-C5`).

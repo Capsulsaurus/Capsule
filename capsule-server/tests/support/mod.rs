@@ -36,7 +36,9 @@ use capsule_server::album::{
 use capsule_server::app::Modules;
 use capsule_server::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
 use capsule_server::auth::{
-    AccountDirectory, AuthContext, Authentication, DirectoryError, DirectoryFuture, SessionTokens,
+    AccountDirectory, AccountProfiles, AuthCollaborators, AuthContext, Authentication,
+    DirectoryError, DirectoryFuture, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
+    SessionTokens,
 };
 use capsule_server::blob::{
     BlobFuture, BlobPage, BlobStat, BlobStore, ContentAddress, InMemoryBlobStore, Placement,
@@ -217,6 +219,7 @@ pub(crate) const CURSOR_KEY: [u8; CURSOR_KEY_LEN] = [0x5C; CURSOR_KEY_LEN];
 pub(crate) struct InMemoryAccounts {
     accounts: Mutex<BTreeMap<String, Account>>,
     unavailable: AtomicBool,
+    forget_after_authentication: AtomicBool,
 }
 
 #[derive(Debug, Clone)]
@@ -224,6 +227,8 @@ struct Account {
     user_id: UserId,
     password: String,
     locked: bool,
+    display_name: Option<String>,
+    created_at: Timestamp,
 }
 
 impl InMemoryAccounts {
@@ -240,8 +245,36 @@ impl InMemoryAccounts {
                 user_id: user_id.clone(),
                 password: password.to_owned(),
                 locked: false,
+                display_name: None,
+                created_at: Timestamp::UNIX_EPOCH,
             },
         );
+    }
+
+    /// Arm the one interleaving a password change cannot rule out: the account is deleted
+    /// *between* the verification that authorized the change and the write that applies it.
+    ///
+    /// Staged rather than raced, because a race would be a flaky test of a real hazard. The next
+    /// successful `authenticate_user` removes the account it just authenticated, which is
+    /// precisely the window the route's `NoSuchAccount` arm exists for.
+    pub(crate) fn forget_after_next_authentication(&self) {
+        self.forget_after_authentication
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Forget an account entirely, leaving any session it opened live.
+    ///
+    /// The one way a suite reaches the `404` on the profile surface: a valid credential naming
+    /// an account the directory no longer holds is not a hypothetical, it is what a deletion
+    /// during a live session leaves behind.
+    pub(crate) fn forget(&self, email: &str) {
+        self.accounts().remove(email);
+    }
+
+    /// The password an account currently authenticates with, for a case that has to prove a
+    /// change reached the store rather than only the response.
+    pub(crate) fn password_of(&self, email: &str) -> Option<String> {
+        self.accounts().get(email).map(|held| held.password.clone())
     }
 
     /// Put an existing account into the locked-out state.
@@ -308,18 +341,27 @@ impl AccountDirectory for InMemoryAccounts {
                 });
             }
 
-            let accounts = self.accounts();
-            let Some(account) = accounts.values().find(|held| &held.user_id == user) else {
+            let mut accounts = self.accounts();
+            let Some(account) = accounts
+                .values()
+                .find(|held| &held.user_id == user)
+                .cloned()
+            else {
                 return Ok(Authentication::Refused);
             };
             if account.locked {
                 return Ok(Authentication::Locked);
             }
-            if account.password == password {
-                Ok(Authentication::Granted(account.user_id.clone()))
-            } else {
-                Ok(Authentication::Refused)
+            if account.password != password {
+                return Ok(Authentication::Refused);
             }
+            if self
+                .forget_after_authentication
+                .swap(false, Ordering::SeqCst)
+            {
+                accounts.retain(|_, held| held.user_id != account.user_id);
+            }
+            Ok(Authentication::Granted(account.user_id))
         })
     }
 }
@@ -330,7 +372,7 @@ impl capsule_server::auth::AccountRegistry for InMemoryAccounts {
         email: &'a str,
         password: &'a str,
         user: &'a UserId,
-        _at: Timestamp,
+        at: Timestamp,
     ) -> capsule_server::auth::DirectoryFuture<'a, capsule_server::auth::Registration> {
         Box::pin(async move {
             if self.unavailable.load(Ordering::SeqCst) {
@@ -350,10 +392,94 @@ impl capsule_server::auth::AccountRegistry for InMemoryAccounts {
                     user_id: user.clone(),
                     password: password.to_owned(),
                     locked: false,
+                    display_name: None,
+                    created_at: at,
                 },
             );
             Ok(capsule_server::auth::Registration::Created(user.clone()))
         })
+    }
+}
+
+impl AccountProfiles for InMemoryAccounts {
+    fn read<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, Option<ProfileRecord>> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            Ok(self
+                .accounts()
+                .iter()
+                .find(|(_, held)| &held.user_id == user)
+                .map(|(email, held)| profile_of(email, held)))
+        })
+    }
+
+    fn update<'a>(
+        &'a self,
+        user: &'a UserId,
+        update: &'a ProfileUpdate,
+    ) -> DirectoryFuture<'a, Option<ProfileRecord>> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            // One critical section, as the port requires: a read-modify-write a caller could
+            // interleave is an edit from another device silently clobbered.
+            let mut accounts = self.accounts();
+            let Some((email, held)) = accounts
+                .iter_mut()
+                .find(|(_, held)| &held.user_id == user)
+                .map(|(email, held)| (email.clone(), held))
+            else {
+                return Ok(None);
+            };
+            if let Some(display_name) = update.display_name.clone() {
+                held.display_name = display_name;
+            }
+            Ok(Some(profile_of(&email, held)))
+        })
+    }
+}
+
+impl PasswordChange for InMemoryAccounts {
+    fn set_password<'a>(
+        &'a self,
+        user: &'a UserId,
+        password: &'a str,
+        _at: Timestamp,
+    ) -> DirectoryFuture<'a, PasswordChanged> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            let mut accounts = self.accounts();
+            let Some(held) = accounts.values_mut().find(|held| &held.user_id == user) else {
+                return Ok(PasswordChanged::NoSuchAccount);
+            };
+            held.password = password.to_owned();
+            // The port requires it: a change is a successful credential presentation, and
+            // leaving the lockout behind would bar somebody from an account they just proved
+            // they own.
+            held.locked = false;
+            Ok(PasswordChanged::Yes)
+        })
+    }
+}
+
+/// The profile view of a held account.
+fn profile_of(email: &str, held: &Account) -> ProfileRecord {
+    ProfileRecord {
+        user_id: held.user_id.clone(),
+        email: email.to_owned(),
+        display_name: held.display_name.clone(),
+        created_at: held.created_at,
     }
 }
 
@@ -2109,15 +2235,17 @@ impl Fixture {
         // One index behind both modules, which is what makes "upload it, then read it back off
         // the feed" a test of the server rather than of two disconnected doubles.
         let app = App::new(Modules {
-            auth: AuthContext::new(
-                sessions.clone(),
-                accounts.clone(),
-                accounts.clone(),
-                challenges.clone(),
-                cohorts.clone(),
-                tokens.clone(),
-                clock.clone(),
-            ),
+            auth: AuthContext::new(AuthCollaborators {
+                sessions: sessions.clone(),
+                accounts: accounts.clone(),
+                registry: accounts.clone(),
+                profiles: accounts.clone(),
+                passwords: accounts.clone(),
+                challenges: challenges.clone(),
+                cohorts: cohorts.clone(),
+                tokens: tokens.clone(),
+                clock: clock.clone(),
+            }),
             upload: UploadContext::new(
                 uploads.clone(),
                 blobs.clone(),
@@ -2223,15 +2351,17 @@ impl Fixture {
         let index = Arc::new(SwitchableIndex::new());
         let tokens = Arc::new(signer(clock.clone()));
         let app = App::new(Modules {
-            auth: AuthContext::new(
-                Arc::new(SwitchableSessions::new(clock.clone())),
-                accounts.clone(),
-                accounts,
-                Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
-                Arc::new(InMemoryCohorts::new()),
-                tokens.clone(),
-                clock.clone(),
-            ),
+            auth: AuthContext::new(AuthCollaborators {
+                sessions: Arc::new(SwitchableSessions::new(clock.clone())),
+                accounts: accounts.clone(),
+                registry: accounts.clone(),
+                profiles: accounts.clone(),
+                passwords: accounts,
+                challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
+                cohorts: Arc::new(InMemoryCohorts::new()),
+                tokens: tokens.clone(),
+                clock: clock.clone(),
+            }),
             upload: UploadContext::new(
                 Arc::new(SwitchableUploads::new(clock.clone())),
                 blobs.clone(),

@@ -55,6 +55,22 @@
         "message": "Слишком много попыток. Подождите и повторите попытку.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.auth.profile_not_found": {
+        "message": "That account no longer exists.",
+        "context": "HTTP 404 on GET/PATCH /v1/auth/profile and POST /v1/auth/password (slice S-C54): the presented credential is valid and names an account the directory no longer holds — a session outlives the account row it names when the account is deleted mid-session. The server is working correctly; the account is gone."
+    },
+    "error.auth.profile_invalid": {
+        "message": "That display name cannot be used.",
+        "context": "HTTP 400 on PATCH /v1/auth/profile (slice S-C54): the submitted display name is past the 128-character ceiling or carries control characters. Refused rather than silently rewritten — a name that renders as something other than what was typed is worse than one the server declines."
+    },
+    "error.auth.password_invalid": {
+        "message": "That password cannot be used.",
+        "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
+    },
+    "error.auth.current_password_invalid": {
+        "message": "That is not your current password.",
+        "context": "HTTP 403 on POST /v1/auth/password (slice S-C54): the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
+    },
     "error.protocol.version_unsupported": {
         "message": "Эта версия Capsule больше не поддерживается. Обновите приложение.",
         "context": "Machine-translated seed pending human review."
