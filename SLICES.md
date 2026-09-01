@@ -273,6 +273,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C58 | The durable custody chain did not come across | server | S-C15, S-C52 | S | RETIRED | done | `GET /v1/assets/{asset_id}/receipts`, narrowed to the owner and answering one `404` for everyone else |
 | S-C59 | The Salvo tree leaves the workspace | server | S-C54, S-C55, S-C56, S-C57, S-C58 | L | RETIRED | done | parity reached, `capsule-api/**` and `capsule_core::media` quarantined, `architecture-check` becomes a gate |
 | S-C60 | The browser still speaks a transport nothing serves | sdk/clients | S-C2, S-C59 | M | RETIRED | done | 410 lines of hand-rolled Protobuf replaced by one `GET`; the store's rules are untouched |
+| S-C61 | The drop passphrase is provisioned and never checked | server | S-C5, S-C60 | S | RETIRED | done | a gated link admitted anyone holding the opaque id; the web client was posting to paths that no longer exist |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3416,6 +3417,56 @@ one catch-up, and it holds no user data that is not re-derivable. That is the di
   `an unknown change kind or blob role is refused`, and
   `a cursor is percent-encoded, so an opaque token survives the query string`;
   no `grpc` reference left in `capsule-web/src`. **Tier:** Unit.
+
+### S-C61 — the drop passphrase is provisioned and never checked
+
+- **Contract:** [Web Upload](capsule-docs/src/content/docs/design/web-upload.md) —
+  *"the guest proves possession at drop-session creation by submitting the Argon2id-derived
+  proof."*
+- **Gap** (found 2026-09-01, re-pointing the web drop client after `S-C60`): the Kynos port
+  stored `passphrase_verifier` on the link record at provision and **read it nowhere**.
+  `CreateDropRequest` had no proof field at all, so a passphrase-gated link admitted anyone
+  holding the opaque id and let them spend the owner's quota. The retired Salvo route did check
+  it; the port dropped the check with the field that carried it.
+
+  Same class as `S-C55`: a control that is configured, reported as configured, and enforces
+  nothing. It is worse than not offering the gate, because an owner who set a passphrase believes
+  their link is restricted.
+
+**The check goes before the reservation, and that ordering is the point.** `charge` admits the
+link and spends its caps in one store operation; a wrong proof checked *after* it would let a
+guesser burn a single-use link down, which is precisely what the passphrase exists to stop. That
+costs a second `resolve` of a record `charge` also reads, and the duplication is not a race — a
+verifier is fixed at provision, and a link revoked between the two reads still fails `charge`.
+`a_wrong_proof_is_refused_and_spends_no_cap` pins it against a `max_file_count: 1` link.
+
+**`403`, not the indistinguishable `404`.** The rest of the guest surface answers one `404` for
+not-found, revoked and expired, because a guest carries no credential and anything finer is an
+enumeration oracle. A passphrase refusal is different: the caller already holds the opaque id, so
+"this link needs a passphrase" tells them nothing they did not have — and answering `404` would
+send a guest with a typo away believing the link is dead.
+`a_gated_link_that_does_not_exist_is_still_indistinguishable` pins the other half: an id that
+resolves to nothing answers `404` whether a proof was presented or not.
+
+**The web client was posting to paths that no longer exist.** `drop-upload.ts` opened sessions at
+`POST /u/{opaque-id}/drop` and chunked to `PATCH /u/{opaque-id}/drop/{drop-id}` — the Salvo
+shapes — against a server serving `POST /d/{opaque-id}` and `PATCH /d/{opaque-id}/{upload-id}`,
+with a different body (`{content_type, size, ciphertext_hash, kem_ct}` rather than a nested
+`descriptor`) and a different response key (`upload_id`, not `drop_id`). Every guest drop would
+have 404'd. Its failure classifier also switched on the HTTP status **before** the code, which
+collapsed a refused passphrase and an exhausted quota — both `403` — into "this link's owner is
+out of space"; the order is inverted and
+`a refused passphrase is not read as an exhausted quota` pins it.
+
+- **Owed:** the conformance walk does not exercise the passphrase `403` separately, because
+  `assert_declared_responses_covered` keys by **status** and the quota `403` on the same operation
+  already covers it. That is a real limit of the guard — two coded problems sharing a status are
+  one response to it — and the coverage lives in the unit cases instead.
+- **Done when:** ✅ `a_gated_link_refuses_a_drop_with_no_proof`,
+  `a_wrong_proof_is_refused_and_spends_no_cap`, `the_right_proof_opens_a_session`,
+  `a_proof_presented_to_an_ungated_link_is_ignored`,
+  `a_gated_link_that_does_not_exist_is_still_indistinguishable`, and the seven web cases in
+  `drop-upload.test.ts`. **Tier:** Unit.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

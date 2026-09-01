@@ -54,21 +54,45 @@ fn link_body(id: &str, caps: Value) -> Value {
 
 /// Open a drop session through a link.
 async fn create_drop(fixture: &Fixture, id: &str, bytes: &[u8], expect: StatusCode) -> Value {
+    create_drop_with(fixture, id, bytes, None, expect).await
+}
+
+/// The same, presenting a passphrase proof.
+async fn create_drop_with(
+    fixture: &Fixture,
+    id: &str,
+    bytes: &[u8],
+    proof: Option<&str>,
+    expect: StatusCode,
+) -> Value {
+    let mut body = json!({
+        "content_type": "image/jpeg",
+        "size": bytes.len(),
+        "ciphertext_hash": checksum(bytes),
+        "kem_ct": BASE64.encode([9_u8; 64]),
+        "suggested_filename": "from-a-guest.jpg",
+    });
+    if let Some(proof) = proof {
+        body["passphrase_proof"] = json!(proof);
+    }
     fixture
         .client
         .post(&format!("/d/{id}"))
         .header("accept", "application/json")
-        .json(&json!({
-            "content_type": "image/jpeg",
-            "size": bytes.len(),
-            "ciphertext_hash": checksum(bytes),
-            "kem_ct": BASE64.encode([9_u8; 64]),
-            "suggested_filename": "from-a-guest.jpg",
-        }))
+        .json(&body)
         .send()
         .await
         .assert_status(expect)
         .json()
+}
+
+/// The Argon2id verifier a passphrase-gated link is provisioned with, and its matching proof.
+///
+/// The server compares bytes and never derives, so the suite does not run Argon2id: what is
+/// under test is *possession of the derived value*, and a real KDF here would test `argon2`.
+fn gate() -> (String, String) {
+    let verifier = BASE64.encode([0xA5_u8; 32]);
+    (verifier.clone(), verifier)
 }
 
 /// Send the whole blob as one chunk.
@@ -767,4 +791,132 @@ async fn probing_a_link_that_does_not_exist_still_costs_the_prober() {
             .await;
     }
     create_drop(&fixture, &unknown, &bytes, StatusCode::TOO_MANY_REQUESTS).await;
+}
+
+// ===========================================================================================
+// The passphrase abuse gate (slice `S-C61`)
+// ===========================================================================================
+
+#[tokio::test]
+async fn a_gated_link_refuses_a_drop_with_no_proof() {
+    // The case the slice exists for. The gate was provisioned and never checked, so a
+    // passphrase-gated link spent the owner's quota for anyone holding the opaque id.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (verifier, _) = gate();
+    let id = opaque(60);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "passphrase_verifier": verifier })),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    let bytes = payload(b'p', 4096);
+    let body = create_drop_with(&fixture, &id, &bytes, None, StatusCode::FORBIDDEN).await;
+    assert_eq!(body["code"], "error.drop.passphrase_required");
+}
+
+#[tokio::test]
+async fn a_wrong_proof_is_refused_and_spends_no_cap() {
+    // A guess that burned a cap would let a guesser take the link down, which is the one thing
+    // the passphrase exists to stop — so the refusal has to land before the reservation.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (verifier, proof) = gate();
+    let id = opaque(61);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(
+            &id,
+            json!({ "passphrase_verifier": verifier, "max_file_count": 1 }),
+        ),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    let bytes = payload(b'q', 4096);
+    for _ in 0..3 {
+        create_drop_with(
+            &fixture,
+            &id,
+            &bytes,
+            Some(&BASE64.encode([0x5A_u8; 32])),
+            StatusCode::FORBIDDEN,
+        )
+        .await;
+    }
+
+    // The link's single file cap is intact: the right proof still opens a session.
+    create_drop_with(&fixture, &id, &bytes, Some(&proof), StatusCode::CREATED).await;
+}
+
+#[tokio::test]
+async fn the_right_proof_opens_a_session() {
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let (verifier, proof) = gate();
+    let id = opaque(62);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({ "passphrase_verifier": verifier })),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    let bytes = payload(b'r', 4096);
+    let opened = create_drop_with(&fixture, &id, &bytes, Some(&proof), StatusCode::CREATED).await;
+    let upload_id = opened["upload_id"].as_str().expect("an upload id");
+    send(&fixture, &id, upload_id, &bytes, StatusCode::NO_CONTENT).await;
+
+    let listing = inbox(&fixture, &bearer).await;
+    assert_eq!(listing["drops"].as_array().expect("an array").len(), 1);
+}
+
+#[tokio::test]
+async fn a_proof_presented_to_an_ungated_link_is_ignored() {
+    // An ungated link has nothing to compare against, and refusing a caller who sent one anyway
+    // would break a guest who typed a passphrase into a link that never needed it.
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let id = opaque(63);
+    provision(
+        &fixture,
+        &bearer,
+        &link_body(&id, json!({})),
+        StatusCode::CREATED,
+    )
+    .await;
+
+    let bytes = payload(b's', 4096);
+    create_drop_with(
+        &fixture,
+        &id,
+        &bytes,
+        Some(&BASE64.encode([0x11_u8; 32])),
+        StatusCode::CREATED,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_gated_link_that_does_not_exist_is_still_indistinguishable() {
+    // The 403 must not become an oracle over which opaque ids name a real link: an id that
+    // resolves to nothing answers the same 404 it always did, proof or no proof.
+    let fixture = Fixture::working();
+    let (_, proof) = gate();
+    let bytes = payload(b't', 4096);
+
+    create_drop_with(
+        &fixture,
+        &opaque(64),
+        &bytes,
+        Some(&proof),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    create_drop_with(&fixture, &opaque(65), &bytes, None, StatusCode::NOT_FOUND).await;
 }

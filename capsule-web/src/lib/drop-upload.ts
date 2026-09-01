@@ -1,12 +1,16 @@
-// Guest-drop chunked uploader (slice S-D3).
+// Guest-drop chunked uploader (slices S-D3, S-C61).
 //
-// Speaks the drop endpoints' HTTP protocol directly — there is no generated client for the bare
-// `#[handler]` drop routes. It opens a drop session (`POST /u/{opaque-id}/drop`) and streams the
-// sealed ciphertext in chunks (`PATCH /u/{opaque-id}/drop/{id}`) using the upload protocol's chunk
-// rules verbatim: `application/octet-stream`, an `X-Capsule-Offset`, and a per-chunk
-// `X-Capsule-Checksum` (SHA-256 hex of the chunk body). It is deliberately minimal — sequential,
-// fixed-size, 4 KiB-aligned chunks with no resumable/adaptive sophistication beyond what a guest
-// upload needs. Contribute-only: it never lists or reads anything back.
+// Speaks the drop endpoints' HTTP protocol directly. It opens a drop session
+// (`POST /d/{opaque-id}`) and streams the sealed ciphertext in chunks
+// (`PATCH /d/{opaque-id}/{upload-id}`) using the upload protocol's chunk rules verbatim:
+// `application/octet-stream`, an `X-Capsule-Offset`, and a per-chunk `X-Capsule-Checksum`
+// (SHA-256 hex of the chunk body). It is deliberately minimal — sequential, fixed-size,
+// 4 KiB-aligned chunks with no resumable/adaptive sophistication beyond what a guest upload
+// needs. Contribute-only: it never lists or reads anything back.
+//
+// It is hand-written rather than generated, and that is the one exception the SDK contract
+// allows: a guest holds no account, so nothing here can ride `capsule-sdk`'s authenticated
+// client, and the chunk loop is orchestration over two calls rather than a second parser.
 
 import type { SealedDropWire } from './drop-seal';
 
@@ -53,11 +57,12 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string> {
 
 /** Map a rejection (HTTP status + optional stable `error.*` code) to a client failure class. */
 function classifyFailure(status: number, code: string | null): DropFailureCode {
-    if (status === 404) return 'unavailable';
-    if (status === 429) return 'rate_limited';
-    if (status === 413) return 'too_large';
+    // The code is checked first and the status is the fallback. Two of the codes below share a
+    // status with each other — a refused passphrase and an exhausted quota are both `403` — so
+    // switching on the status alone would collapse "retype your passphrase" into "this link's
+    // owner is out of space".
     switch (code) {
-        case 'error.drop.cap_exceeded':
+        case 'error.drop.cap_exhausted':
             return 'cap';
         case 'error.drop.passphrase_required':
             return 'passphrase';
@@ -66,13 +71,18 @@ function classifyFailure(status: number, code: string | null): DropFailureCode {
         case 'error.quota.exceeded':
         case 'error.quota.grace_locked':
             return 'quota';
+        case 'error.drop.file_too_large':
         case 'error.upload.file_too_large':
             return 'too_large';
         case 'error.upload.unsupported_content_type':
             return 'unsupported_type';
         default:
-            return 'generic';
+            break;
     }
+    if (status === 404) return 'unavailable';
+    if (status === 429) return 'rate_limited';
+    if (status === 413) return 'too_large';
+    return 'generic';
 }
 
 /** Read a rejection response's stable `error.*` code, if it carries a JSON `{ code }` body. */
@@ -127,17 +137,29 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
     } = opts;
 
     // 1. Open the drop session. The descriptor + declared size are validated server-side here.
-    const createRes = await fetchImpl(`${base}/u/${opaqueId}/drop`, {
+    const createRes = await fetchImpl(`${base}/d/${opaqueId}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+        },
         body: JSON.stringify({
+            content_type: sealed.descriptor.content_type,
             size: sealed.size,
-            passphrase_proof: passphraseProof ?? null,
-            descriptor: sealed.descriptor,
+            ciphertext_hash: sealed.descriptor.ciphertext_hash,
+            kem_ct: sealed.descriptor.kem_ct,
+            // Absent rather than null when there is no passphrase: the body is strict, and a
+            // present-null is a value the server would have to decide what to do with.
+            ...(passphraseProof ? { passphrase_proof: passphraseProof } : {}),
+            ...(sealed.descriptor.suggested_filename
+                ? { suggested_filename: sealed.descriptor.suggested_filename }
+                : {}),
         }),
     });
     if (!createRes.ok) throw await toUploadError(createRes);
-    const { drop_id: dropId } = (await createRes.json()) as { drop_id: string };
+    const { upload_id: uploadId } = (await createRes.json()) as {
+        upload_id: string;
+    };
 
     // 2. Stream the ciphertext in sequential, aligned chunks until the server has all of it.
     const ciphertext = sealed.ciphertext;
@@ -148,18 +170,15 @@ export async function uploadDrop(opts: UploadDropOptions): Promise<void> {
         const chunk = ciphertext.subarray(offset, end);
         const checksum = await sha256Hex(chunk);
 
-        const chunkRes = await fetchImpl(
-            `${base}/u/${opaqueId}/drop/${dropId}`,
-            {
-                method: 'PATCH',
-                headers: {
-                    'Content-Type': 'application/octet-stream',
-                    'X-Capsule-Offset': String(offset),
-                    'X-Capsule-Checksum': checksum,
-                },
-                body: chunk as BodyInit,
+        const chunkRes = await fetchImpl(`${base}/d/${opaqueId}/${uploadId}`, {
+            method: 'PATCH',
+            headers: {
+                'Content-Type': 'application/octet-stream',
+                'X-Capsule-Offset': String(offset),
+                'X-Capsule-Checksum': checksum,
             },
-        );
+            body: chunk as BodyInit,
+        });
         if (!chunkRes.ok) throw await toUploadError(chunkRes);
 
         // The server echoes the authoritative new offset; fall back to our own bookkeeping.

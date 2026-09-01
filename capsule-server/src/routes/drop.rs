@@ -45,6 +45,7 @@ use capsule_i18n::error_codes;
 use kynos::prelude::*;
 use kynos::response::status::NoContent;
 use serde::{Deserialize, Serialize};
+use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
 use crate::auth::AccessToken;
@@ -133,6 +134,17 @@ pub struct CreateDropRequest {
     /// `K` encapsulated to the link's Drop Key, base64. Length fixed by the suite
     /// (invariant 30).
     pub kem_ct: String,
+    /// The Argon2id **proof** for a passphrase-gated link, base64.
+    ///
+    /// Required exactly when the link carries a verifier, and absent otherwise. The passphrase
+    /// itself is never transmitted: what travels is the derived proof, and the KDF's cost is
+    /// what rate-limits guessing on top of the per-link limiter.
+    ///
+    /// It gates a **write** and adds no confidentiality — the guest already encrypts every
+    /// asset. What it limits is *who may spend the owner's quota*
+    /// ([Web Upload](../../../capsule-docs/src/content/docs/design/web-upload.md)).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passphrase_proof: Option<String>,
     /// Guest-supplied and unverified. Advisory only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested_filename: Option<String>,
@@ -361,6 +373,19 @@ pub enum DropRejection {
     #[error("not found")]
     #[problem(status = 404, title = "Not found")]
     NotFound,
+
+    /// The link is passphrase-gated and the presented proof was absent or wrong.
+    ///
+    /// Distinct from the indistinguishable `404`, and deliberately so: the caller already holds
+    /// the opaque id, so "this link needs a passphrase" tells them nothing they did not have —
+    /// and answering `404` would send a guest with a typo away believing the link is dead.
+    #[error("this link requires a passphrase")]
+    #[problem(status = 403, title = "Passphrase required")]
+    PassphraseRequired {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
 
     /// The owner's quota will not admit the drop (invariant 29).
     #[error("the link owner's quota will not admit this drop")]
@@ -638,6 +663,39 @@ pub async fn create_drop(
     }
     if request.content_type.trim().is_empty() {
         return Err(DropRejection::malformed("content_type is required"));
+    }
+
+    // The abuse gate, **before** the cap is reserved. A wrong passphrase that spent a cap on its
+    // way to being refused would let a guesser burn the link down — which is the one thing the
+    // passphrase exists to stop. That costs a second lookup of a record `charge` also reads, and
+    // the duplication is not a race: a verifier is fixed at provision, and a link that is revoked
+    // between the two reads still fails `charge`.
+    if let Some(link) = drops
+        .drops()
+        .resolve(&path.opaque_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "the drop store could not resolve a link");
+            DropRejection::unavailable()
+        })?
+        && let Some(verifier) = link.passphrase_verifier.as_deref()
+    {
+        let presented = request
+            .passphrase_proof
+            .as_deref()
+            .and_then(|proof| BASE64.decode(proof).ok());
+        let matches = presented
+            .as_deref()
+            .is_some_and(|proof| bool::from(proof.ct_eq(verifier)));
+        if !matches {
+            tracing::info!(
+                opaque_id = %path.opaque_id,
+                "a drop was refused: the passphrase proof did not verify"
+            );
+            return Err(DropRejection::PassphraseRequired {
+                code: error_codes::DROP_PASSPHRASE_REQUIRED,
+            });
+        }
     }
 
     let now = drops.clock().now();

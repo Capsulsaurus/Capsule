@@ -5306,7 +5306,7 @@
             }
           },
           "403": {
-            "description": "Quota exceeded",
+            "description": "Passphrase required",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -7657,6 +7657,13 @@
           "kem_ct": {
             "type": "string",
             "description": "`K` encapsulated to the link's Drop Key, base64. Length fixed by the suite\n(invariant 30)."
+          },
+          "passphrase_proof": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The Argon2id **proof** for a passphrase-gated link, base64.\n\nRequired exactly when the link carries a verifier, and absent otherwise. The passphrase\nitself is never transmitted: what travels is the derived proof, and the KDF's cost is\nwhat rate-limits guessing on top of the per-link limiter.\n\nIt gates a **write** and adds no confidentiality — the guest already encrypts every\nasset. What it limits is *who may spend the owner's quota*\n([Web Upload](../../../capsule-docs/src/content/docs/design/web-upload.md))."
           },
           "suggested_filename": {
             "type": [
