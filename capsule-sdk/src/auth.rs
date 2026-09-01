@@ -14,8 +14,8 @@
 //!   refreshed once and replayed, so a token that expired between the pre-flight
 //!   check and the wire is transparently recovered.
 //!
-//! It is hand-rolled over `reqwest` (rustls only) against the real
-//! [`capsule-api-auth`] endpoints (`POST /login`, `/refresh`, `/logout`). It does not
+//! It is hand-rolled over `reqwest` (rustls only) against the server's own
+//! `/v1/auth/{register,login,refresh,logout}`. It does not
 //! route through the generated client, but the reason is no longer that spargen is
 //! parked — spargen ships and `S-D8` generates the typed surface today. What lives here
 //! is token *orchestration*: the pre-flight refresh, the `401`-retry-once replay, and
@@ -27,13 +27,11 @@
 //! ## Testing
 //!
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
-//! against a focused in-process mock HTTP server rather than a booted
-//! `capsule-api-auth`: booting the real server from this crate would drag the
-//! Postgres and Valkey testcontainers, sea-orm migrations, salvo and webauthn in as
-//! SDK dev-dependencies, and salvo's in-memory `TestClient` is not a TCP server, so
-//! a real `reqwest` round-trip would need the router bound to a socket regardless.
-//! Per the repo's mocking guidance, a dependency-light mock is the deterministic
-//! choice. The pre-flight and single-flight guarantees are proven with an injected
+//! against a focused in-process mock HTTP server rather than a booted server: booting one
+//! from this crate would invert the dependency — the *server* dev-depends on this crate, not
+//! the other way round (`S-D28`) — and a mock keeps every wire case deterministic. The round
+//! trip against the real router, over a real socket, lives where the dependency points:
+//! `capsule-server/tests/sdk_client.rs`. The pre-flight and single-flight guarantees are proven with an injected
 //! [`Clock`] — no sleeps, no wall-clock dependence.
 
 use std::sync::Arc;
@@ -188,8 +186,11 @@ struct LoginRequestBody<'a> {
     cohort_hash: Option<&'a str>,
 }
 
-/// The registration body. The SDK mirrors the server's `RegisterRequest`
-/// (`capsule-api-auth`) and lets the same advisory cohort ride account creation.
+/// The registration body: an address and a password, and nothing else.
+///
+/// It carried a username, a display name and the advisory cohort hash until `S-C53`. The server
+/// takes none of them and its body is **strict**, so a field kept for old times' sake would be a
+/// `422` rather than a value quietly ignored.
 #[derive(Serialize)]
 struct RegisterRequestBody<'a> {
     email: &'a str,
@@ -201,7 +202,7 @@ struct RefreshRequestBody<'a> {
     refresh_token: &'a str,
 }
 
-/// The server's `TokenResponse` (`capsule-api-auth`). `token_type` and any other
+/// The server's `TokenResponse`. `token_type` and any other
 /// fields are ignored; `expires_by` is the **absolute** Unix-seconds expiry of the
 /// access token.
 #[derive(Deserialize)]

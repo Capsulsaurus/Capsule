@@ -18,7 +18,7 @@
  * INVARIANT — the signed `AssetManifest` (`manifestCbor`) and the encrypted
  * `metadataBlob` travel as OPAQUE bytes and are never decoded here: the browser holds no
  * album keys (gateway.ts). The server serializes the id / hash "bytes" fields as the
- * UTF-8 bytes of their string form (see `capsule-api-sync::feed::map_entry`), so this
+ * UTF-8 bytes of their string form (see the server's `routes::sync`), so this
  * codec surfaces them as strings — matching what is actually on the wire.
  */
 

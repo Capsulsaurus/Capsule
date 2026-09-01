@@ -93,7 +93,7 @@ re-encoding would detach it from its signatures).
 
 ## Legacy: GraphQL (removed)
 
-The `capsule-api-library` crate exposed an `async-graphql` schema at `/v1/library`. It predated the
+A now-deleted crate exposed an `async-graphql` schema at `/v1/library`. It predated the
 E2EE key-free server model and was **removed** in slice S-G1 (repo-root `SLICES.md`); no GraphQL
 surface exists. It was never evolving, for reasons that also foreclose reviving it:
 
