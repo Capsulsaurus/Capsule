@@ -58,19 +58,10 @@ export class SyncRewindError extends Error {
     }
 }
 
-/** A structurally invalid entry (e.g. an unspecified/unknown `ChangeKind`). */
-export class SyncStructuralError extends Error {
-    constructor(message: string) {
-        super(message);
-        this.name = 'SyncStructuralError';
-    }
-}
-
 /** A blob content address by role, as the feed exposes it (never blob bytes). */
 export interface StoredBlobRef {
     hash: string;
     role: string;
-    format: string;
     size: bigint;
 }
 
@@ -119,7 +110,13 @@ interface PersistedAsset {
 /** The full serializable state — cursor and high-water persist atomically together. */
 export interface SyncSnapshot {
     version: 1;
-    /** Base64 of the opaque server cursor; empty string before the first sync. */
+    /**
+     * The opaque server cursor; empty string before the first sync.
+     *
+     * It used to be base64 of the gRPC feed's cursor *bytes*. The REST feed's cursor is already
+     * a URL-safe string, so there is nothing left to encode — and one fewer encoding is one
+     * fewer place a resumption token can be mangled in transit through storage.
+     */
     cursor: string;
     /** Per-album high-water marks (`albumId` → decimal `sync_seq`). */
     highWater: Record<string, string>;
@@ -129,35 +126,13 @@ export interface SyncSnapshot {
 function toStoredRef(ref: {
     ciphertextHash: string;
     role: string;
-    format: string;
     size: bigint;
 }): StoredBlobRef {
     return {
         hash: ref.ciphertextHash,
         role: ref.role,
-        format: ref.format,
         size: ref.size,
     };
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-    let binary = '';
-    for (const b of bytes) {
-        binary += String.fromCharCode(b);
-    }
-    return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-    if (value.length === 0) {
-        return new Uint8Array();
-    }
-    const binary = atob(value);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
-    }
-    return bytes;
 }
 
 /**
@@ -168,27 +143,28 @@ function base64ToBytes(value: string): Uint8Array {
 export class SyncStore {
     private assets = new Map<string, AssetRecord>();
     private highWater = new Map<string, bigint>();
-    private cursorBytes = new Uint8Array();
+    private cursorToken = '';
 
-    /** The opaque resumption cursor for the next `Sync` request. */
-    get cursor(): Uint8Array {
-        return this.cursorBytes;
+    /** The opaque resumption cursor for the next feed request. */
+    get cursor(): string {
+        return this.cursorToken;
     }
 
     /**
      * Validate and apply a feed page, then advance the cursor. Throws
-     * `SyncProtocolError` / `SyncRewindError` / `SyncStructuralError` WITHOUT mutating the
-     * store or cursor when the page is invalid.
+     * `SyncProtocolError` / `SyncRewindError` WITHOUT mutating the store or cursor when the
+     * page is invalid. A structurally impossible entry never gets here — see below.
      */
-    applyPage(entries: SyncEntry[], nextCursor: Uint8Array): void {
+    applyPage(entries: SyncEntry[], nextCursor: string): void {
         // Pass 1 — validate the whole page against a scratch copy of the high-water marks.
+        //
+        // There is no `ChangeKind.Unspecified` check here any more, and the guarantee it gave
+        // has not gone: it existed because a proto3 enum defaults to 0 when the field is absent,
+        // so an unset kind arrived here looking like a value. On the REST feed the kind is a
+        // closed string enum and an unknown one is a `SyncDecodeError` at the transport
+        // boundary, which is strictly earlier — the page never reaches the store at all.
         const advanced = new Map(this.highWater);
         for (const entry of entries) {
-            if (entry.kind === ChangeKind.Unspecified) {
-                throw new SyncStructuralError(
-                    `unspecified ChangeKind for asset ${entry.assetId}`,
-                );
-            }
             if (entry.protocolVersion > CLIENT_MAX_PROTOCOL) {
                 throw new SyncProtocolError(
                     entry.protocolVersion,
@@ -221,7 +197,7 @@ export class SyncStore {
             });
         }
         this.highWater = advanced;
-        this.cursorBytes = nextCursor;
+        this.cursorToken = nextCursor;
     }
 
     /** All live assets, newest change first (by `sync_seq` desc, id as a stable tiebreak). */
@@ -277,7 +253,7 @@ export class SyncStore {
         }
         return {
             version: 1,
-            cursor: bytesToBase64(this.cursorBytes),
+            cursor: this.cursorToken,
             highWater,
             assets: [...this.assets.values()].map((a) => ({
                 assetId: a.assetId,
@@ -310,7 +286,7 @@ export class SyncStore {
         this.highWater = new Map(
             Object.entries(snapshot.highWater).map(([k, v]) => [k, BigInt(v)]),
         );
-        this.cursorBytes = base64ToBytes(snapshot.cursor);
+        this.cursorToken = snapshot.cursor;
     }
 }
 

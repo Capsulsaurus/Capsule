@@ -91,6 +91,17 @@ the Salvo server: sync and federation pull are REST operations on the same OpenA
 the signed manifest still travelling as opaque canonical CBOR (never re-modelled as wire fields —
 re-encoding would detach it from its signatures).
 
+**The browser followed** (slice `S-C60`). `capsule-web` spoke gRPC-web through a hand-rolled
+Protobuf codec — 410 lines of varint and length-delimited framing, written to avoid pulling a
+`protobuf-es`/`connect-web` toolchain in to read a handful of fields — and now issues one
+`GET /v1/sync` and parses JSON. The store's client rules are untouched: forward-version rejection
+and per-album anti-rewind were always behind a transport seam, which is what a seam is for.
+
+Two things the browser can no longer see, and both are the REST feed being *stricter*: a blob's
+MIME type, which was plaintext metadata about an encrypted blob and is simply not a field any
+more, and an "unspecified" change kind, which existed only because a proto3 enum defaults to zero
+when a field is absent.
+
 ## Legacy: GraphQL (removed)
 
 A now-deleted crate exposed an `async-graphql` schema at `/v1/library`. It predated the

@@ -272,12 +272,13 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C57 | The resumption listing did not come across | server | S-C1 | S | RETIRED | done | `GET /v1/upload/sessions`, with a `?status=` that is refused rather than silently ignored |
 | S-C58 | The durable custody chain did not come across | server | S-C15, S-C52 | S | RETIRED | done | `GET /v1/assets/{asset_id}/receipts`, narrowed to the owner and answering one `404` for everyone else |
 | S-C59 | The Salvo tree leaves the workspace | server | S-C54, S-C55, S-C56, S-C57, S-C58 | L | RETIRED | done | parity reached, `capsule-api/**` and `capsule_core::media` quarantined, `architecture-check` becomes a gate |
+| S-C60 | The browser still speaks a transport nothing serves | sdk/clients | S-C2, S-C59 | M | RETIRED | done | 410 lines of hand-rolled Protobuf replaced by one `GET`; the store's rules are untouched |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-D4 | Verify-before-destroy wiring | sdk/clients | S-C3, S-C15 | M | MIXED | done | |
 | S-D5 | CLI auth/sync/list | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
-| S-D6 | Web server gateway (key-free reads) | sdk/clients | S-D2 | L | MIXED | done\* | live gRPC-web smoke → `S-Q5`; decode boundary → post-v1 |
+| S-D6 | Web server gateway (key-free reads) | sdk/clients | S-D2, S-C60 | L | MIXED | done\* | live browser smoke → `S-Q5`; decode boundary → post-v1 |
 | S-D7 | SDK auth/session foundation + auto token refresh | sdk/clients | — | M | RETIRED | ready | |
 | S-D8 | spargen REST client integration | sdk/clients | — | M | RETIRED | ready | 401-retry-once → `S-D17` |
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
@@ -3369,6 +3370,53 @@ somewhere to point at each stage of the rebuild.
   `mise run check-rust` and `mise run test-rust` green with no `capsule-api` in the workspace.
   **Tier:** Unit.
 
+### S-C60 — the browser still speaks a transport nothing serves
+
+- **Contract:** [API Surfaces](capsule-docs/src/content/docs/design/api-surfaces.md), and the
+  `CapsuleGateway` seam in `capsule-web/src/data/gateway.ts`.
+- **Gap:** `S-C59` retired the `capsule.sync.v1` gRPC feed. `capsule-web` was still speaking
+  gRPC-web to it — and, because `ServerGateway` treats a transport error as *offline* and warns
+  rather than throwing, the failure mode was a browser that quietly stopped receiving changes.
+
+**410 lines of hand-rolled Protobuf are gone.** `wire.ts` implemented the exact subset of the
+Protobuf wire format the feed used — varint and length-delimited — plus gRPC-web framing and a
+status that could arrive in headers *or* in a trailer block. It was written that way to avoid
+pulling a `protobuf-es`/`connect-web` toolchain into the bun build to read a handful of fields,
+which was the right call at the time. On REST the parser is `JSON.parse` and the framing problem
+does not exist.
+
+**The store did not change, and that is the seam doing its job.** `SyncStore` holds the
+client rules the download-sync contract sets — forward-version rejection and per-album anti-rewind
+— and depends only on `SyncEntry`/`ChangeKind`, never on how they arrived. The rewrite is
+confined to `wire.ts` and `transport.ts`.
+
+**Two things the browser can no longer see, and both are the REST feed being stricter.**
+
+- A blob's **MIME type**. The gRPC `BlobRef` carried a `format` string, and the gateway guessed
+  image-vs-video from it. A MIME type is plaintext media metadata *about an encrypted blob*, which
+  is exactly what the key-free envelope contract forbids the server to hold — so the field is
+  gone, the guess is gone, and everything renders as the neutral shell until a key-holding client
+  decrypts the metadata. A wrong badge on a video is a worse answer than no badge.
+- An **unspecified change kind**. `SyncStructuralError` existed because a proto3 enum defaults to
+  zero when the field is absent, so an unset kind reached the store looking like a value. The REST
+  kind is a closed string enum and an unknown one is refused by `decodeSyncResponse` at the
+  transport boundary — strictly earlier. The guarantee moved; it did not go.
+
+**The IndexedDB schema is bumped, and the bump is load-bearing.** A version-1 snapshot holds a
+base64-of-bytes cursor from the gRPC feed. Replayed against the REST feed that cursor fails its
+MAC — forever, and silently, for the reason above. The upgrade **drops** the store rather than
+migrating it: the snapshot is a cache of a feed that is the source of truth, so re-syncing costs
+one catch-up, and it holds no user data that is not re-derivable. That is the distinction
+`versioning.md`'s client-catalog clause draws between this and the local library.
+
+- **Owed:** nothing here. The live-browser smoke against a running server is `S-Q5`'s, and it is
+  blocked on the server having a binary at all.
+- **Done when:** ✅ `bun test src/data/server/` green (28 cases), including
+  `a body missing a required field is refused, not silently undefined`,
+  `an unknown change kind or blob role is refused`, and
+  `a cursor is percent-encoded, so an opaque token survives the query string`;
+  no `grpc` reference left in `capsule-web/src`. **Tier:** Unit.
+
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 
 - **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md);
@@ -3701,10 +3749,9 @@ them was incidental:
 - **Depends on:** S-D2. **Blocks:** S-G1.
 - **Done when:** the gateway methods run against a dev server with the mock gateway
   deleted. **Tier:** Smoke (`mise run check-web` + bun tests).
-- **Landed:** the client-side store and query layer are `ACTIVE`. The gRPC-web bridge it
-  reads through is a hand-written salvo `Handler` over a `tower::Service` and re-scopes
-  with `S-C2`.
-- **Owed:** live gRPC-web smoke → `S-Q5`; decode boundary → post-v1.
+- **Landed:** the client-side store and query layer are `ACTIVE`. The transport under them
+  re-scoped with `S-C2` and was rewritten onto REST by `S-C60`.
+- **Owed:** live browser smoke → `S-Q5`; decode boundary → post-v1.
 
 ### S-D7 — SDK auth/session foundation + auto token refresh
 

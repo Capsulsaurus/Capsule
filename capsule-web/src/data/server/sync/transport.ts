@@ -1,33 +1,38 @@
 /**
- * The transport seam for the sync feed. `SyncStore` and `ServerGateway` depend only on
- * this interface, so the store logic is unit-tested against a mock transport with no live
- * server (S-D6 gate). The real implementation, `GrpcWebSyncTransport`, speaks gRPC-web
- * over `fetch` per the api-surfaces transport map.
+ * The transport seam for the sync feed. `SyncStore` and `ServerGateway` depend only on this
+ * interface, so the store logic is unit-tested against a mock transport with no live server
+ * (`S-D6` gate).
+ *
+ * The real implementation was `GrpcWebSyncTransport`, which framed a hand-rolled Protobuf
+ * message into gRPC-web and reconciled a status that could arrive in headers *or* in a trailer
+ * block. `S-C2` moved the feed onto REST and `S-C59` retired the gRPC surface entirely, so what
+ * is left is [`RestSyncTransport`]: one `GET`, one JSON body, one status line.
  */
 
 import {
     decodeSyncResponse,
     encodeSyncRequest,
-    frameRequest,
-    parseResponseFrames,
     type SyncRequest,
     type SyncResponse,
 } from './wire';
 
-/** A single `Sync` RPC. The cursor + page-size hint go in, one page comes back. */
+/** A single page fetch. The cursor + page-size hint go in, one page comes back. */
 export interface SyncTransport {
     sync(request: SyncRequest): Promise<SyncResponse>;
 }
 
 /**
- * A transport failure with the cross-transport `error.*` discriminator when the server
- * supplied one (`x-capsule-error-code`), plus the numeric gRPC status. A client switches
- * on `errorCode`, never on the transport status alone (api-surfaces Rejection Mapping).
+ * A transport failure with the cross-transport `error.*` discriminator when the server supplied
+ * one, plus the HTTP status.
+ *
+ * A client switches on `errorCode`, never on the status alone (api-surfaces Rejection Mapping):
+ * the server answers RFC 9457 problem documents whose `code` extension is the stable catalog
+ * key, and that key is what a client can act on. The status says how, the code says what.
  */
 export class SyncTransportError extends Error {
     constructor(
-        /** The numeric gRPC status code (0 = OK). */
-        public readonly grpcStatus: number,
+        /** The HTTP status the server answered with. */
+        public readonly httpStatus: number,
         /** The stable `error.*` code, when the server sent one. */
         public readonly errorCode: string | undefined,
         message: string,
@@ -37,13 +42,10 @@ export class SyncTransportError extends Error {
     }
 }
 
-/** Everything the gRPC-web transport needs, injected so it stays free of app globals. */
-export interface GrpcWebTransportConfig {
+/** Everything the REST transport needs, injected so it stays free of app globals. */
+export interface RestTransportConfig {
     /**
-     * Feed base URL up to (not including) the gRPC service path — the transport appends
-     * `/capsule.sync.v1.SyncService/Sync`. In the deployed server this is the bare
-     * `${API_BASE}`: the service mounts at the root, not under `/v1` (see
-     * `capsule-api::create_router` for why).
+     * The API origin, up to but not including `/v1`. The transport appends `/v1/sync`.
      */
     baseUrl: string;
     /** The `x-capsule-protocol` version the client speaks (`YYYY-MM-DD`). */
@@ -54,29 +56,22 @@ export interface GrpcWebTransportConfig {
     fetchImpl?: typeof fetch;
 }
 
-const SERVICE_PATH = '/capsule.sync.v1.SyncService/Sync';
-const CONTENT_TYPE = 'application/grpc-web+proto';
+const FEED_PATH = '/v1/sync';
 const MD_PROTOCOL = 'x-capsule-protocol';
-const MD_ERROR_CODE = 'x-capsule-error-code';
 
 /**
- * gRPC-web transport for the sync feed. One unary `Sync` call per page; the opaque cursor
- * carries resumption. The bearer token and `x-capsule-protocol` ride request metadata
- * exactly as the REST surfaces carry them (api-surfaces Negotiation Across Transports).
+ * REST transport for the sync feed. One `GET` per page; the opaque cursor carries resumption.
  */
-export class GrpcWebSyncTransport implements SyncTransport {
+export class RestSyncTransport implements SyncTransport {
     private readonly fetchImpl: typeof fetch;
 
-    constructor(private readonly config: GrpcWebTransportConfig) {
+    constructor(private readonly config: RestTransportConfig) {
         this.fetchImpl = config.fetchImpl ?? fetch;
     }
 
     async sync(request: SyncRequest): Promise<SyncResponse> {
-        const body = frameRequest(encodeSyncRequest(request));
         const headers = new Headers({
-            'content-type': CONTENT_TYPE,
-            accept: CONTENT_TYPE,
-            'x-grpc-web': '1',
+            accept: 'application/json',
             [MD_PROTOCOL]: this.config.protocol,
         });
         const token = this.config.accessToken();
@@ -84,70 +79,38 @@ export class GrpcWebSyncTransport implements SyncTransport {
             headers.set('authorization', `Bearer ${token}`);
         }
 
-        const res = await this.fetchImpl(
-            `${this.config.baseUrl}${SERVICE_PATH}`,
-            {
-                method: 'POST',
-                headers,
-                body,
-            },
-        );
+        const url = `${this.config.baseUrl}${FEED_PATH}${encodeSyncRequest(request)}`;
+        const res = await this.fetchImpl(url, { method: 'GET', headers });
 
-        // A gRPC-web status can arrive as HTTP headers (trailers-only) or in the trailer
-        // frame within the body. Read the body first, then reconcile both sources.
-        const raw = new Uint8Array(await res.arrayBuffer());
-        const { messages, trailers } = parseResponseFrames(raw);
-
-        const status = readStatus(res.headers, trailers);
-        if (status.code !== 0) {
-            throw new SyncTransportError(
-                status.code,
-                status.errorCode,
-                status.message ?? `sync failed with gRPC status ${status.code}`,
-            );
-        }
         if (!res.ok) {
-            throw new SyncTransportError(
-                status.code,
-                status.errorCode,
-                `sync HTTP ${res.status}`,
-            );
+            throw await problemError(res);
         }
-        if (messages.length === 0) {
-            throw new SyncTransportError(
-                2,
-                undefined,
-                'sync response carried no message',
-            );
-        }
-        return decodeSyncResponse(messages[0]);
+        return decodeSyncResponse(await res.json());
     }
 }
 
-interface GrpcStatus {
-    code: number;
-    message?: string;
-    errorCode?: string;
-}
-
-/** Resolve the gRPC status from response headers and/or the trailer block. */
-function readStatus(
-    headers: Headers,
-    trailers: Map<string, string>,
-): GrpcStatus {
-    const rawCode =
-        trailers.get('grpc-status') ?? headers.get('grpc-status') ?? undefined;
-    const message =
-        trailers.get('grpc-message') ??
-        headers.get('grpc-message') ??
-        undefined;
-    const errorCode =
-        trailers.get(MD_ERROR_CODE) ?? headers.get(MD_ERROR_CODE) ?? undefined;
-    // Absent grpc-status on a 200 body-carrying response is treated as OK.
-    const code = rawCode === undefined ? 0 : Number.parseInt(rawCode, 10);
-    return {
-        code: Number.isNaN(code) ? 2 : code,
-        message: message ? decodeURIComponent(message) : undefined,
-        errorCode,
-    };
+/**
+ * Turn a non-2xx response into a [`SyncTransportError`], carrying the problem document's `code`
+ * when there is one.
+ *
+ * Deliberately tolerant of a body that is not a problem document: a proxy, a load balancer or a
+ * gateway timeout can answer on the server's behalf with HTML or with nothing at all, and a
+ * transport that threw a `SyntaxError` there would report a JSON parse failure where the real
+ * fault is "the server did not answer". The status is always available; the code is not.
+ */
+async function problemError(res: Response): Promise<SyncTransportError> {
+    let code: string | undefined;
+    let detail: string | undefined;
+    try {
+        const body = (await res.json()) as { code?: unknown; detail?: unknown };
+        code = typeof body?.code === 'string' ? body.code : undefined;
+        detail = typeof body?.detail === 'string' ? body.detail : undefined;
+    } catch {
+        // Not a problem document. The status still is one.
+    }
+    return new SyncTransportError(
+        res.status,
+        code,
+        detail ?? `sync failed with HTTP ${res.status}`,
+    );
 }
