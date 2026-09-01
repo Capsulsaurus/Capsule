@@ -16,7 +16,7 @@ This list is the canonical statement; [Filesystem](/design/filesystem/), [Import
 
 Invariants carry **stable numbers** (referenced across docs as "invariant 17", "items 1–18", etc.); they are grouped by write phase but the numbering is continuous.
 
-### On `POST /upload` (session creation)
+### On `POST /v1/upload` (session creation)
 
 - **1.** `X-Capsule-Protocol` is within the server's `[Min, Max]` range. Otherwise `426 Upgrade Required`, no session created.
 - **2.** `crypto_suite_id` is a row of the [Primitives Inventory](/design/cryptography/primitives/#primitives-inventory). Otherwise `400`.
@@ -27,7 +27,7 @@ Invariants carry **stable numbers** (referenced across docs as "invariant 17", "
 - **7.** `created_by_device` is in the user's published device directory, and the directory entry's `added_at` precedes the request's `timestamp`. Otherwise `403`.
 - **8.** `timestamp` passes a gross-drift **sanity** bound (default ±30 days of server clock, configurable). This is a non-security guard that surfaces a wildly-wrong honest client, **not** an authorization control — authorization and ordering ride the epoch and chain, and the server records its own trusted `received_at` as the authoritative time for time-based policy. The client `timestamp` is stored verbatim for audit. See [Keys — Write Authorization](/design/cryptography/keys/#write-authorization). Otherwise `400`.
 
-### On each `PATCH /upload/{id}` chunk
+### On each `PATCH /v1/upload/{id}` chunk
 
 - **9.** Offset is exactly the current received-byte count. Otherwise `409`, with `X-Capsule-Offset` returned.
 - **10.** The chunk body is well-shaped: `Content-Type: application/octet-stream` (otherwise `415`), non-empty (otherwise `400`), a non-final chunk is a multiple of 4 KiB (otherwise `400`), and no chunk exceeds the 16 MiB protocol maximum (otherwise `413`).
@@ -42,9 +42,20 @@ Session TTL, the ≥ 1-hour survival floor, and pressure-discard semantics are s
 - **14.** Recomputed ciphertext hash == declared `hash`. Otherwise `FailedProcessing` + corruption error.
 - **15.** Manifest envelope re-validated (rerun 1–8) inside the finalization transaction.
 
-### On non-upload writes (lifecycle action manifest, metadata-update, derivative-add/replace, trash-restore)
+### In the index critical section (every manifest write, upload or lifecycle)
 
-These checks run at the single lifecycle-write surface, `POST /albums/{album_id}/ops`, owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface) (transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map); slice `S-C16`).
+These three are grouped by **where they are enforced**, not by which request carries them, and the
+distinction is load-bearing. They run inside the index's critical section — the one that re-points
+the roles and mints the sequence number — for a lifecycle write at `POST /v1/albums/{album_id}/ops`
+(owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface),
+transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map), slice `S-C16`) **and
+equally for a `replace` arriving over the upload protocol**.
+
+Filing them under "non-upload writes" was a phase label describing the common case, and it made
+[Upload Protocol — `create` and `replace`](/design/import/upload-protocol/#what-gets-uploaded) look
+like it was claiming an exception when it was describing the rule. Enforcing them at the gate
+instead of in the critical section would let two concurrent replaces both pass and double-apply —
+reintroducing the stale revival that 17 exists to catch, in the code enforcing it.
 
 - **16.** `action` is in the closed enum. Otherwise `400`.
 - **17.** `prior_provenance_hash` equals the last accepted manifest's content hash for this `asset_id`. Otherwise `409` (stale-revival).
@@ -64,19 +75,19 @@ These checks run at the single lifecycle-write surface, `POST /albums/{album_id}
 
 ### On any write whose bundle carries a metadata blob
 
-- **25.** The encrypted metadata blob in the bundle has a content hash equal to the manifest's `metadata_blob_hash`. The server holds no key, but it can compare the content address it stores against the value the signed manifest commits to, so a client cannot present the server a metadata blob different from the one its asset manifest is signed over. A mismatch is rejected (`400`) and no state is written. This applies on `POST /upload` (the `create` bundle), at finalization, and on a non-upload `metadata-update`. Owner: [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
+- **25.** The encrypted metadata blob in the bundle has a content hash equal to the manifest's `metadata_blob_hash`. The server holds no key, but it can compare the content address it stores against the value the signed manifest commits to, so a client cannot present the server a metadata blob different from the one its asset manifest is signed over. A mismatch is rejected (`400`) and no state is written. This applies on `POST /v1/upload` (the `create` bundle), at finalization, and on a non-upload `metadata-update`. Owner: [Metadata — Local and Server Metadata Equivalence](/design/metadata/#local-and-server-metadata-equivalence).
 
-### On `POST /drop` (upload-link drop session) and adoption
+### On `POST /d/{opaque_id}` (upload-link drop session) and adoption
 
 A [web-upload](/design/web-upload/) drop carries **no `AssetManifest`** — no signatures, no `album_id`, no provenance — so it runs its own structural checks instead of 1–8, and is written only to the provisioning user's inbox, never the library. Owner: [Web Upload — Security Contract](/design/web-upload/#security-contract).
 
-- **26.** `{opaque-id}` resolves to a **live** upload link: it exists, is not expired, is not revoked, and its per-link caps (cumulative bytes, file count) are not already exhausted. A not-found, expired, or revoked link returns an **indistinguishable `404`** (never `410`); a cap exhausted on an otherwise-live link returns `409` / `413`.
+- **26.** `{opaque_id}` resolves to a **live** upload link: it exists, is not expired, is not revoked, and its per-link caps (cumulative bytes, file count) are not already exhausted. A not-found, expired, or revoked link returns an **indistinguishable `404`** (never `410`); a cap exhausted on an otherwise-live link returns `409` / `413`.
 - **27.** `content_type` ∈ the closed enum for the link's pinned `protocol_version` (the same set as invariant 5). Otherwise `400`.
 - **28.** `size` ∈ (0, the link's `max_file_size`]. Otherwise `400` / `413`.
 - **29.** The provisioning (link-owner) user's quota admits the drop at session creation: `quota_used(owner) + declared_size ≤ hard_limit`. Otherwise `403 Quota Exceeded`. This reuses the single [quota enforcement point](/design/quota/#enforcement-points) with `upload_user_id = owner_id`.
 - **30.** The `DropDescriptor` is structurally well-formed and `kem_ct`'s length matches the KEM ciphertext size for the link's `crypto_suite_id`; the drop request carries **no** `album_id`, `amk_version`, manifest, or provenance field. A drop that names an album or supplies signatures is rejected (`400`) — a drop can only ever land in the inbox.
-- **31.** Drop-session creation is rate-limited per `{opaque-id}` and per source IP (the same two limiters as the [share-link serve path](/design/share-links/#security-contract)). Otherwise `429`.
-- **32.** On **adoption** (`POST /drops/{id}/adopt`, a `create` manifest referencing an inbox blob): the manifest re-runs invariants 1–8, 16–18, and 25; additionally the manifest's `ciphertext_hash` must reference a drop blob in **the caller's own inbox**, and `key_mode` must be in its closed enum (`derived | wrapped`). The server then atomically promotes the blob from inbox to album asset and deletes the inbox row, in one transaction. Otherwise `400` / `403` / `409`, with no state written.
+- **31.** Drop-session creation is rate-limited per `{opaque_id}` and per source IP (the same two limiters as the [share-link serve path](/design/share-links/#security-contract)). Otherwise `429`.
+- **32.** On **adoption** (`POST /v1/drops/{drop_id}/adopt`, a `create` manifest referencing an inbox blob): the manifest re-runs invariants 1–8, 16–18, and 25; additionally the manifest's `ciphertext_hash` must reference a drop blob in **the caller's own inbox**, and `key_mode` must be in its closed enum (`derived | wrapped`). The server then atomically promotes the blob from inbox to album asset and deletes the inbox row, in one transaction. Otherwise `400` / `403` / `409`, with no state written.
 
 Drop **chunks** reuse the `PATCH` chunk rules (9–12) and **finalization** reuses the integrity checks (13–14) unchanged; only drop-session creation (26–31) and adoption (32) differ from the album upload path.
 
@@ -121,7 +132,7 @@ The rules are stated once in REST terms (headers + HTTP statuses) and applied by
 | `X-Capsule-Protocol-Max`     | server on every response  | the highest protocol version this server accepts                                                      |
 | `X-Capsule-Min-Client-Build` | server on responses       | semver deprecation cutoff; advisory unless the path is hard-deprecated                                |
 
-This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Upload-Status` (server → client on `HEAD /upload/{id}`), `X-Capsule-Checksum` (**required** on `PATCH /upload/{id}`), and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)); and `X-Capsule-Identity-Key` (**required** on the device-directory publish — the account's identity public key, base64 over the hybrid `classical ‖ ml` layout, which is what invariant 23's second clause is checked against; it travels beside the document rather than inside it because the document is stored and served back verbatim). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift. (Registered by pointer as a **body field, deliberately not a header**: the advisory `cohort_hash` in the session-creation request — semantics owned by [Authentication — Device Cohorts](/design/authentication/#device-cohorts).)
+This table is also the **census of the `X-Capsule-*` header namespace**. Surface-specific headers register here by pointer: the upload protocol's `X-Capsule-Offset`, `X-Capsule-Content-Length`, `X-Capsule-Upload-Status` (server → client on `HEAD /v1/upload/{id}`), `X-Capsule-Checksum` (**required** on `PATCH /v1/upload/{id}`), and `X-Capsule-Suggested-Chunk-Size` (semantics owned by [Import — Upload Protocol](/design/import/upload-protocol/#endpoints)); and `X-Capsule-Identity-Key` (**required** on the device-directory publish — the account's identity public key, base64 over the hybrid `classical ‖ ml` layout, which is what invariant 23's second clause is checked against; it travels beside the document rather than inside it because the document is stored and served back verbatim). A new `X-Capsule-*` header MUST be registered here when introduced — two homes for the namespace is how headers drift. (Registered by pointer as a **body field, deliberately not a header**: the advisory `cohort_hash` in the session-creation request — semantics owned by [Authentication — Device Cohorts](/design/authentication/#device-cohorts).)
 
 ### Fail-Closed Rules
 
@@ -139,8 +150,8 @@ Every write surface has a single idempotency key. Duplicates are no-ops; conflic
 
 | Surface                             | Idempotency key                                                                    | Duplicate behavior                                |
 | ----------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------- |
-| Upload chunk (`PATCH /upload/{id}`) | `(upload_id, offset, chunk_hash)`                                                  | Returns current offset; no double-write           |
-| Session creation (`POST /upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Active session: returned as-is, no second session. Hash already finalized: `409 error.upload.duplicate_blob` + the existing asset reference (the client's merge trigger) |
+| Upload chunk (`PATCH /v1/upload/{id}`) | `(upload_id, offset, chunk_hash)`                                                  | Returns current offset; no double-write           |
+| Session creation (`POST /v1/upload`)   | `(owner_id, hash, album_id)` — server's existing dedup check                       | Active session: returned as-is, no second session. Hash already finalized: `409 error.upload.duplicate_blob` + the existing asset reference (the client's merge trigger) |
 | Lifecycle manifest write            | `(asset_id, prior_provenance_hash, manifest_hash)`                                 | No-op append; chain advances exactly once         |
 | Metadata-update operation           | Operation id (UUIDv7) + `(asset_id, prior_provenance_hash)`                        | Re-applying the same op is structurally identical |
 | Federation capability proof         | `(peer_id, jti)`                                                                   | Refresh with same `jti` returns the same response |
@@ -151,7 +162,7 @@ Every write surface has a single idempotency key. Duplicates are no-ops; conflic
 | Device enrollment (code redeem / cross-device add) | The [enrollment code](/design/device-enrollment/#cross-device-add) — single-use, deleted on redemption or expiry | Re-redemption is rejected (the code is consumed); a restarted ceremony mints a fresh code |
 | Share-link / upload-link creation   | Client-supplied operation id (UUIDv7)                                              | Retried create returns the already-minted link    |
 | Share-link / upload-link revoke     | `link_id`                                                                          | Second revoke is a no-op                          |
-| Drop adoption (`POST /drops/{id}/adopt`) | `drop_id` — the atomic inbox→album promotion (invariant 32)                   | A retry after success finds the inbox row gone and returns the already-promoted asset |
+| Drop adoption (`POST /v1/drops/{drop_id}/adopt`) | `drop_id` — the atomic inbox→album promotion (invariant 32)                   | A retry after success finds the inbox row gone and returns the already-promoted asset |
 
 A write surface that does not appear here is, by default, **not** idempotent and must be designed before it ships.
 

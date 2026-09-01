@@ -34,6 +34,34 @@ const RETIRED_DEPENDENCIES: &[&str] = &[
     "tus",
 ];
 
+// `[workspace.dependencies]` entries no member consumes yet, each with the decision that
+// sanctions it. Cargo does not lock an unused workspace dependency, so without this list the
+// only options for a not-yet-wired pin are "delete it" or "leave the tree carrying a
+// declaration nothing can verify" — which is how `testcontainers` came to be cited by nine
+// design docs as proof of a smoke tier that has never run.
+const PLANNED_WORKSPACE_DEPENDENCIES: &[(&str, &str)] = &[
+    (
+        "bb8",
+        "Valkey adapter pooling for the two typed state ports (AGENTS.md)",
+    ),
+    (
+        "bb8-redis",
+        "Valkey adapter pooling for the two typed state ports (AGENTS.md)",
+    ),
+    (
+        "redis",
+        "the `redis-rs` Valkey adapters AGENTS.md requires for AuthStateStore/UploadSessionStore",
+    ),
+    (
+        "testcontainers",
+        "the smoke tier the design docs specify; no test starts a container yet",
+    ),
+    (
+        "testcontainers-modules",
+        "the smoke tier the design docs specify; no test starts a container yet",
+    ),
+];
+
 const RETIRED_COMPONENT_NAMES: &[&str] = &[
     "capsule-api-auth",
     "capsule-api-library",
@@ -48,6 +76,7 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     let mut violations = Vec::new();
     check_workspace_members(root, &mut violations)?;
     check_dependencies(root, &mut violations)?;
+    check_workspace_dependencies(root, &mut violations)?;
     check_legacy_manifests(root, &mut violations)?;
     check_retired_references(root, &mut violations)?;
 
@@ -189,6 +218,83 @@ fn check_dependencies(root: &Path, violations: &mut Vec<String>) -> Result<()> {
     Ok(())
 }
 
+/// `check_dependencies` reads `cargo metadata`, which only ever reports *member* packages, so a
+/// `[workspace.dependencies]` entry no member inherits is invisible to it — and, because cargo
+/// does not lock one either, invisible to `Cargo.lock` too. That is how `salvo`, `tonic*` and
+/// `prost*` stayed declared in the root manifest while `AGENTS.md` banned them by name.
+///
+/// Two rules, both over the root manifest: nothing retired may be declared, and nothing declared
+/// may go unused unless [`PLANNED_WORKSPACE_DEPENDENCIES`] says why.
+fn check_workspace_dependencies(root: &Path, violations: &mut Vec<String>) -> Result<()> {
+    let manifest = root.join("Cargo.toml");
+    let document: DocumentMut = fs::read_to_string(&manifest)
+        .wrap_err_with(|| format!("reading {}", manifest.display()))?
+        .parse()
+        .wrap_err("parsing the root Cargo.toml")?;
+
+    let Some(declared) = document
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(toml_edit::Item::as_table)
+    else {
+        return Ok(());
+    };
+
+    let planned: BTreeMap<&str, &str> = PLANNED_WORKSPACE_DEPENDENCIES.iter().copied().collect();
+    let consumed = member_dependency_names(root)?;
+
+    for (name, _) in declared {
+        if RETIRED_DEPENDENCIES.contains(&name) {
+            violations.push(format!(
+                "`[workspace.dependencies] {name}` is retired or not-yet-approved; remove the declaration"
+            ));
+            continue;
+        }
+        if !consumed.contains(name) && !planned.contains_key(name) {
+            violations.push(format!(
+                "`[workspace.dependencies] {name}` is declared but no workspace member uses it; \
+                 remove it, or add it to PLANNED_WORKSPACE_DEPENDENCIES with a reason"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Every dependency name any workspace member declares, in any dependency kind.
+fn member_dependency_names(root: &Path) -> Result<BTreeSet<String>> {
+    let metadata = cargo_metadata(root)?;
+    let member_ids: BTreeSet<&str> = metadata["workspace_members"]
+        .as_array()
+        .context("cargo metadata workspace_members missing")?
+        .iter()
+        .map(|id| id.as_str().context("workspace member id missing"))
+        .collect::<Result<_>>()?;
+
+    let mut names = BTreeSet::new();
+    for package in metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages missing")?
+    {
+        let id = package["id"].as_str().context("package id missing")?;
+        if !member_ids.contains(id) {
+            continue;
+        }
+        for dependency in package["dependencies"]
+            .as_array()
+            .context("package dependencies missing")?
+        {
+            names.insert(
+                dependency["name"]
+                    .as_str()
+                    .context("dependency name missing")?
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(names)
+}
+
 fn check_legacy_manifests(root: &Path, violations: &mut Vec<String>) -> Result<()> {
     let legacy = root.join("legacy-review");
     if legacy.exists() {
@@ -322,5 +428,45 @@ mod tests {
         assert!(RETIRED_DEPENDENCIES.contains(&"thumbhash"));
         assert!(RETIRED_DEPENDENCIES.contains(&"object_store"));
         assert!(RETIRED_DEPENDENCIES.contains(&"tonic"));
+    }
+
+    #[test]
+    fn a_dependency_is_never_both_retired_and_planned() {
+        for (name, _) in PLANNED_WORKSPACE_DEPENDENCIES {
+            assert!(
+                !RETIRED_DEPENDENCIES.contains(name),
+                "`{name}` cannot be both retired and sanctioned pending work"
+            );
+        }
+    }
+
+    #[test]
+    fn every_planned_workspace_dependency_states_its_reason() {
+        for (name, reason) in PLANNED_WORKSPACE_DEPENDENCIES {
+            assert!(
+                !reason.trim().is_empty(),
+                "`{name}` is exempted with no reason, which is the exemption this list exists to prevent"
+            );
+        }
+    }
+
+    #[test]
+    fn the_valkey_adapters_and_the_smoke_tier_are_the_only_planned_entries() {
+        // A guard on scope rather than on content: this list is the one place an
+        // unused pin can hide, so growing it should be a deliberate edit here.
+        let names: BTreeSet<&str> = PLANNED_WORKSPACE_DEPENDENCIES
+            .iter()
+            .map(|(name, _)| *name)
+            .collect();
+        assert_eq!(
+            names,
+            BTreeSet::from([
+                "bb8",
+                "bb8-redis",
+                "redis",
+                "testcontainers",
+                "testcontainers-modules",
+            ])
+        );
     }
 }

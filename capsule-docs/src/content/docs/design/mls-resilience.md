@@ -6,7 +6,7 @@ status: draft
 
 OpenMLS handles MLS (RFC 9420) correctly under normal operation — commits ordered by the group's chain, duplicates rejected, ratchet advanced atomically. But MLS can still hit scenarios the base protocol does not resolve on its own: a commit lost in transit, two devices proposing concurrently with the wrong ordering, a member whose local state has diverged from the server's. This doc owns Capsule's recovery contracts for those edge cases.
 
-It is kept **separate** from [Cryptography — MLS](/design/cryptography/mls/) (which owns the ciphersuite binding and the four standard ceremonies) because recovery is a distinct, cross-cutting concern — it reaches into the [OGK](/design/cryptography/keys/#owner-group-keys-ogks), backup, and quarantine UX, not the steady-state membership protocol. The recovery surfaces here will be exercised in `capsule-core::crypto::mls` (the OpenMLS wrapper — planned/buildable with the rest of the MLS layer; see the [status note](/design/cryptography/mls/)) and surface to users through quarantine + reconciliation UX in the native clients.
+It is kept **separate** from [Cryptography — MLS](/design/cryptography/mls/) (which owns the ciphersuite binding and the four standard ceremonies) because recovery is a distinct, cross-cutting concern — it reaches into the [OGK](/design/cryptography/keys/#owner-group-keys-ogks), backup, and quarantine UX, not the steady-state membership protocol. The recovery surfaces here will be exercised in `capsule-core::crypto::authority::openmls_authority` (the OpenMLS wrapper — planned/buildable with the rest of the MLS layer; see the [status note](/design/cryptography/mls/)) and surface to users through quarantine + reconciliation UX in the native clients.
 
 ## Failure Modes
 

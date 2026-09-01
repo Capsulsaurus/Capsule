@@ -44,7 +44,7 @@ Server-level blocklists, plus per-user blocks that federate:
 
 A server admin can suspend a user account on their home server. Suspended accounts:
 
-- Cannot upload — `POST /upload` session creation is refused with a structured `403 AccountSuspended` code (distinct from quota and permission rejections, so the client surfaces the right remediation).
+- Cannot upload — `POST /v1/upload` session creation is refused with a structured `403 AccountSuspended` code (distinct from quota and permission rejections, so the client surfaces the right remediation).
 - Cannot share new albums or create new share/upload links (existing share links keep serving until they expire or are revoked — [share links](/design/share-links/) have optional expiry plus revocation, no implicit TTL).
 - **Can still secure the account**: `revoke_all_sessions` remains available to a suspended user — it is gated by [master-key proof](/design/authentication/#explicit-revocation), not by account standing, so it cannot be abused by a session-token thief, and a suspended user whose account may be compromised needs it most. Suspension removes upload and sharing capability, never the ability to evict sessions.
 

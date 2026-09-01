@@ -2403,7 +2403,7 @@ they are two fields rather than one variable.
 
 - **Contract:** [Authentication](capsule-docs/src/content/docs/design/authentication.md),
   [Share Links](capsule-docs/src/content/docs/design/share-links.md),
-  [Drops](capsule-docs/src/content/docs/design/drops.md).
+  [Web Upload](capsule-docs/src/content/docs/design/web-upload.md).
 - **Gap** (found landing `S-C29`): counters rode the Salvo grab-bag and `S-C29` deliberately gave
   them no home — they are counters, not records, with a different failure mode (they must survive
   a lost increment badly, not a lost record) — so several documented limits had nothing to

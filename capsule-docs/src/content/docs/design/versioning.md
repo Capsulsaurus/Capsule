@@ -6,7 +6,7 @@ status: draft
 
 Changes are inevitable. Capsule minimizes breaking changes but generously accepts compatible ones. The aim is backward-compatible reads forever and a deliberately fail-closed write path — a [version-mismatched client](/design/threat-model/) never silently corrupts state; it is rejected at the handshake.
 
-The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-server` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::mls` driven by client UI (planned with the MLS layer — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-server` (planned).
+The enforcement is cross-cutting: every wire request, every album commit, and every sidecar carries a version identifier. The header set below is the **contract** that lets two implementations agree (or fail-closed) without negotiating. Album pinning lands in the album metadata model (`capsule-server` + `capsule-core`; planned with the networked surface); the upgrade ceremony is an MLS application-layer flow in `capsule-core::crypto::authority::openmls_authority` driven by client UI (planned with the MLS layer — see the [status note](/design/cryptography/mls/)). The min-supported-client window is enforced server-side in `capsule-server` (planned).
 
 ## Versioned Surfaces
 
@@ -84,9 +84,9 @@ Four of the steps above are the server's, and each one is the server's **because
 
 | | |
 | --- | --- |
-| `POST /v1/albums/{id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
-| `GET /v1/albums/{id}/upgrade` | the phase, the expiry, and the **drain count** |
-| `DELETE /v1/albums/{id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
+| `POST /v1/albums/{album_id}/upgrade` | enters quiescence, carrying the `SignedUpgradeIntent` as `application/cbor` |
+| `GET /v1/albums/{album_id}/upgrade` | the phase, the expiry, and the **drain count** |
+| `DELETE /v1/albums/{album_id}/upgrade?intent_id=…` | aborts, named by the id that holds the album |
 
 - **The proposer is verified, against the account's [published device directory](/design/cryptography/keys/#device-directory).** Without that check anyone holding an access token could freeze an album by posting a struct, which is the opposite of a ceremony keyed to an admin device. What the server does **not** verify — and has no surface that could carry — is the `frozen_state_hash`: that is each member's independent statement about its own view, and a server that adjudicated it would be the single point the hostile-member defence exists to avoid.
 - **The window is `received_at + deadline` on the server's clock**, which is the whole reason the deadline is a duration. `received_at` is stamped when the proposal is accepted and never moves.
