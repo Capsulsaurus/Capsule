@@ -10,20 +10,21 @@ import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.Signature
 import java.security.interfaces.ECPrivateKey
+import java.security.interfaces.ECPublicKey
 
 /**
  * Android StrongBox–backed [HardwareSigner]. The private key is generated inside the
  * AndroidKeyStore — StrongBox (a dedicated secure element) when [strongBoxBacked] is true, else
  * the TEE — and never leaves it.
  *
- * ## Algorithm caveat (the same one Secure Enclave and the TPM have)
+ * ## Algorithm (the same one Secure Enclave and the TPM reference produce)
  *
  * The AndroidKeyStore exposes **ECDSA over NIST P-256**, not Ed25519, so this returns P-256
- * material: an X.509 `SubjectPublicKeyInfo` public key and an ASN.1/DER ECDSA signature over
- * `msg`. It therefore does **not** yet plug into the Ed25519 `createWithHardwareSigner` path —
- * wiring a StrongBox device in needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). It is
- * the real hardware adapter + the on-device non-exportability check; for an end-to-end FFI round
- * trip use [SoftwareSigner] (genuine Ed25519).
+ * material: a 65-byte **uncompressed SEC1** (`0x04‖x‖y`) public key — the same encoding Secure
+ * Enclave's x9.63 representation uses, which `P256HybridSigningKey` normalizes on the Rust side —
+ * and an ASN.1/DER ECDSA signature over `msg` that `p256::ecdsa` verifies verbatim. It therefore
+ * plugs into the P-256 `createWithP256HardwareSigner` path end to end (slice S-F2); the Ed25519
+ * [SoftwareSigner] drives the separate `createWithHardwareSigner` path.
  *
  * Requires API 23+ (StrongBox: API 28+ on devices that ship a secure element).
  */
@@ -51,9 +52,18 @@ class StrongBoxSigner(
         return classicalPublicKey(keyAlias)
     }
 
-    override fun classicalPublicKey(keyAlias: String): ByteArray =
-        keyStore.getCertificate(keyAlias)?.publicKey?.encoded
+    override fun classicalPublicKey(keyAlias: String): ByteArray {
+        val pub = keyStore.getCertificate(keyAlias)?.publicKey as? ECPublicKey
             ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
+        // Emit uncompressed SEC1 (0x04‖x‖y, 65 bytes) — the shape `P256HybridSigningKey` ingests —
+        // rather than the JCA default X.509 SubjectPublicKeyInfo, which the Rust side cannot parse.
+        val w = pub.w
+        val out = ByteArray(65)
+        out[0] = 0x04
+        fixedField(w.affineX, out, 1)
+        fixedField(w.affineY, out, 33)
+        return out
+    }
 
     override fun signClassical(
         keyAlias: String,
@@ -79,5 +89,17 @@ class StrongBoxSigner(
 
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
+
+        /// Write `value` as a fixed 32-byte big-endian field into `out` at `offset`, left-padding
+        /// with zeros and dropping any BigInteger sign byte — the SEC1 coordinate encoding.
+        private fun fixedField(
+            value: java.math.BigInteger,
+            out: ByteArray,
+            offset: Int,
+        ) {
+            val bytes = value.toByteArray() // big-endian, possibly with a leading sign byte
+            val src = if (bytes.size > 32) bytes.copyOfRange(bytes.size - 32, bytes.size) else bytes
+            System.arraycopy(src, 0, out, offset + (32 - src.size), src.size)
+        }
     }
 }

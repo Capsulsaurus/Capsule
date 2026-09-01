@@ -31,8 +31,12 @@ impl Query {
 
     /// Returns whether user has access to album
     /// Returns None if user or album does not exist or user does not have access
-    pub async fn get_album_access(
-        db: &DbConn,
+    ///
+    /// Generic over the connection so it can run **inside** a transaction — album
+    /// provisioning (slice `S-C25`) re-checks real write capability on an already-existing
+    /// row in the same transaction that would otherwise have created it.
+    pub async fn get_album_access<C: ConnectionTrait>(
+        db: &C,
         user_id: &str,
         album_id: &str,
     ) -> Result<Option<AlbumAccess>, DbErr> {

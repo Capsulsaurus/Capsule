@@ -53,7 +53,7 @@ public struct AssetViewerView: View {
             }
         }
         .confirmationDialog(
-            "Add to Album",
+            "ios.add_to_album.title",
             isPresented: $isAddToAlbumPresented,
             titleVisibility: .visible
         ) {
@@ -64,8 +64,8 @@ public struct AssetViewerView: View {
             }
         } message: {
             Text(model.userAlbums.isEmpty
-                ? "Create an album in the Albums tab first."
-                : "Choose a Capsule album.")
+                ? LocalizedStringKey("ios.add_to_album.empty_albums")
+                : LocalizedStringKey("ios.add_to_album.choose"))
         }
     }
 
@@ -106,7 +106,9 @@ public struct AssetViewerView: View {
             barButton(model.isPlayingSlideshow ? "pause.fill" : "play.fill") {
                 model.toggleSlideshow()
             }
-            .accessibilityLabel(model.isPlayingSlideshow ? "Pause Slideshow" : "Play Slideshow")
+            .accessibilityLabel(model.isPlayingSlideshow
+                ? LocalizedStringKey("ios.viewer.pause_slideshow")
+                : LocalizedStringKey("ios.viewer.play_slideshow"))
             barButton("info.circle") { model.isInfoPanelPresented = true }
             if model.currentAsset?.isManaged == true {
                 barButton("rectangle.stack.badge.plus") {

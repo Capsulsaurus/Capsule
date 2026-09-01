@@ -6,7 +6,7 @@ status: draft
 
 Storage quota in Capsule is accounted to `upload_user_id` (the authenticated uploader), which is distinct from `owner_id` (the asset's owner). This separation lets a user upload on behalf of a different owner (with verified permission) while keeping storage cost attributed correctly. The accounting model is enforced at the [server filesystem](/design/filesystem/server/#ownership-partitioning-and-quota) and at [upload session creation](/design/import/upload-protocol/#quota-and-permissions); this doc owns the threshold model and what happens when limits are hit.
 
-Implementation will live in the planned `capsule-api::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
+Implementation will live in the planned `capsule-server::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
 
 ## Accounting Model
 
@@ -23,7 +23,7 @@ Notable:
 - **Provenance blobs count.** Each per-asset `.provenance.cbor` (server-side encrypted blob) is small but accumulates.
 - **Federated-received blobs count against the receiver.** When a user's home server caches a blob pulled from a [federated](/design/federation/) peer on that user's behalf, the cached bytes count against the **receiving** user's quota, deduped by content hash so a blob the server already holds is never counted twice. A per-`(receiving_user, source_peer)` caching budget (deployment-configurable; default 25% of the receiver's hard quota per source peer) bounds how much one user can pull from any single peer, so a user receiving from many peers cannot push the home server's storage past their own quota. This is the storage-side counterpart of [Federation's per-peer compartmentalization](/design/federation/#per-peer-compartmentalization) and is the resolution of the federated-receive DoS.
 - **Trash-retained assets count fully.** An asset in trash still occupies storage until its [retention window](/design/organization/#retention-window) expires and it is hard-purged, so it counts against quota at full size. This is deliberate: it keeps accounting honest and gives users a concrete reason to empty trash rather than treating it as free overflow.
-- **Derivatives are reclaimed on hard-purge.** When an asset is hard-purged, its derivative and metadata blob references drop alongside the original's; any blob whose reference count reaches zero is [garbage-collected](/design/filesystem/server/#deletion-and-garbage-collection) and the freed bytes are credited back to whichever user they were attributed to. A purged asset never leaves orphaned derivatives silently inflating a quota.
+- **Derivatives are reclaimed on hard-purge.** When an asset is hard-purged, its derivative and metadata blob references drop alongside the original's; any blob whose reference count reaches zero is [garbage-collected](/design/filesystem/server/#deletion-and-garbage-collection) and the freed bytes are credited back to whichever user they were attributed to. A purged asset never leaves orphaned derivatives silently inflating a quota. The credit belongs to the **sweep**, not to the purge: a purge drops one asset's references while the blob may still have others — two assets legitimately share a thumbnail — so refunding at purge time would give back bytes the server is still storing for the surviving holder. And because attribution is global by content address, the sweep asks the ledger who the bytes were charged to rather than assuming the deleting account: the blob may belong to somebody with no remaining connection to the asset whose purge exposed it.
 
 ## Thresholds and States
 
@@ -32,9 +32,9 @@ A user account exists in one of these quota states:
 | State             | Threshold                                                         | Behavior                                                                                                                                                             |
 | ----------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **OK**            | quota_used < soft_limit                                           | All uploads succeed normally.                                                                                                                                        |
-| **Soft warning**  | soft_limit ≤ quota_used < hard_limit                              | Uploads succeed, but the UI surfaces a warning.                                                                                                                      |
+| **Soft warning**  | soft_limit ≤ quota_used < hard_limit                              | Uploads succeed, but the client warns — the `quota_soft` [alert class](/design/notifications/#alert-classes). Quota state is server-held, so the warning is only as current as the last `GET /quota`.                        |
 | **Hard exceeded** | quota_used ≥ hard_limit                                           | New uploads rejected at session creation with a structured error. Metadata edits and every other write still work; existing assets remain accessible.               |
-| **Grace expired** | quota_used ≥ hard_limit for > `grace_window` (default 14 days)    | Adds to Hard-exceeded: **all other metadata-growth writes** (caption/tag edits, new share or upload links) are now refused too. Reads, deletes, and restore-from-trash still work — the provenance/metadata writes a `delete`, `trash-restore`, or trash-empty itself produces are **always admitted** (a user must be able to delete their way back under quota). Freeing space lifts it. |
+| **Grace expired** | quota_used ≥ hard_limit for > `grace_window` (default 14 days)    | Entering the grace window raises `quota_grace_expiring` ([alert class](/design/notifications/#alert-classes)). Adds to Hard-exceeded: **all other metadata-growth writes** (caption/tag edits, new share or upload links) are now refused too. Reads, deletes, and restore-from-trash still work — the provenance/metadata writes a `delete`, `trash-restore`, or trash-empty itself produces are **always admitted** (a user must be able to delete their way back under quota). Freeing space lifts it. |
 | **Suspended**     | (admin or billing action — see [Moderation](/design/moderation/)) | Server-defined; possibly upload refusal, possibly full lockout.                                                                                                      |
 
 Defaults for `soft_limit`, `hard_limit`, and `grace_window` are deployment-configurable. Self-hosted servers might run with no quota (`hard_limit = ∞`); hosted services set per-tier limits.
@@ -61,7 +61,7 @@ Where the quota check actually runs:
 ## Contract Skeleton
 
 ```rust
-// planned in capsule-api::quota
+// planned in capsule-server::quota
 struct QuotaStatus {
     used: u64,
     soft_limit: u64,

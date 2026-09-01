@@ -49,6 +49,10 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
     public var isDeleted: Bool
     /// When the asset was soft-deleted, Unix epoch seconds.
     public var deletedAt: Int64?
+    /// Whether the user has hidden this asset — the sidecar `hidden` register.
+    /// Hidden assets are excluded from the timeline and album listings and are
+    /// served only by the gated Hidden view (Local Gallery — SR1).
+    public var isHidden: Bool
 
     public init(
         id: String,
@@ -68,7 +72,8 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
         albumID: String? = nil,
         rating: Int64 = 0,
         isDeleted: Bool = false,
-        deletedAt: Int64? = nil
+        deletedAt: Int64? = nil,
+        isHidden: Bool = false
     ) {
         self.id = id
         self.assetType = assetType
@@ -88,6 +93,7 @@ public struct CatalogAsset: Sendable, Equatable, Identifiable {
         self.rating = rating
         self.isDeleted = isDeleted
         self.deletedAt = deletedAt
+        self.isHidden = isHidden
     }
 
     /// The canonical timeline axis: the UTC capture instant when known, else

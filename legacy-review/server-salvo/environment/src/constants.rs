@@ -21,7 +21,7 @@ pub const RATE_LIMIT_PASSWORD_RESET_MAX: i64 = 5;
 #[cfg(feature = "auth")]
 pub const RATE_LIMIT_PASSWORD_RESET_WINDOW_SECS: u64 = 60;
 
-#[cfg(feature = "upload")]
+#[cfg(any(feature = "upload", feature = "media"))]
 pub const MAX_FILE_SIZE: usize = 32 * 1024 * 1024 * 1024; // 32 GiB
 #[cfg(feature = "upload")]
 pub const MAX_CACHE_SIZE: usize = 64 * 1024 * 1024 * 1024; // 64 GiB

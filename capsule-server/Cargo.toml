@@ -1,0 +1,147 @@
+[package]
+name = "capsule-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The Kynos REST/OpenAPI server that replaces the Salvo stack (`SLICES.md`, lane C).
+#
+# It is `capsule-server` and not `capsule-api` only because the Salvo `capsule-api` is still a
+# live workspace member while the rebuild reaches parity — retiring it first would leave the tree
+# with no server, no CLI network commands and no end-to-end test for the duration. The rename is
+# a `git mv` in the same change that moves the old tree into `legacy-review/`.
+#
+# One application, cohesive internal modules — not separate transports or services
+# (design/module-map.md, "Planned Server Modules").
+
+# Kynos's route attribute generates a `relative_uri` doc comment whose prose is indented four
+# spaces, which rustdoc reads as an indented Rust code block and then fails to parse. Every one
+# of this crate's doctests is that generated block, so `cargo test -p capsule-server` is red for
+# a reason no author here can fix. `cargo nextest` — what `mise run test-rust` runs — never
+# collects doctests, so the gate was green while the plain command was not, which is the worst
+# of the two states: a red command people learn to ignore.
+#
+# Turned off here rather than worked around, and revisited at the next Kynos repin: if the
+# generated doc stops being indented, delete this and the doctests come back. Nothing is lost
+# today because this crate has no doctest of its own.
+[lib]
+doctest = false
+
+[dependencies]
+# The framework. Pinned to a rev in the root manifest; see design/dependencies.md for why a rev
+# and not a version, and for the repin-on-publish exit.
+kynos = { workspace = true }
+# The shared, key-free validation invariants (slice `S-C1`). The envelope gate does not
+# reimplement invariants 1-8 and 15: `capsule_core::validation` owns them, the client's own
+# `verify_asset` mirrors them, and a second implementation here would be a second answer to a
+# question the threat model allows one answer to. `capsule_core::crypto::hash` comes with it,
+# which is how finalization recomputes the ciphertext hash without this crate picking its own
+# digest crate. A workspace member, already in the lock file through `capsule-api`, so this
+# adds no external dependency and needs no design/dependencies.md row. The `native` default is
+# not optional: `validation` is gated behind it.
+# `default-features = false`: the server needs only `capsule_core::validation` — the pure, key-less
+# refuse-by-default invariants — and the crypto types they read. The default `native` feature pulls
+# SQLite, sqlite-vec, OpenMLS and libcrux, none of which a key-free server touches.
+capsule-core = { path = "../capsule-core", default-features = false }
+# The framework-free wire contracts (slice `S-C27`). The response taxonomy lives here so it
+# outlives whichever framework renders it.
+capsule-wire = { path = "../capsule-wire" }
+serde = { workspace = true }
+# The state ports (slice `S-C29`). `thiserror` because these are a library surface;
+# `jiff` because every record and every TTL is a time and chrono is banned; `tracing` because
+# the ports are on the critical path of every authenticated request and every upload chunk;
+# `uuid` so a session's asserted `device_id` is parsed once at the port boundary instead of
+# being re-normalized as a string at each call site. All four are already workspace
+# dependencies with a row in design/dependencies.md.
+thiserror = { workspace = true }
+jiff = { workspace = true }
+tracing = { workspace = true }
+# `v7` for the session ids this crate mints: a session id is a new identifier, and the
+# Identifiers row in design/dependencies.md makes UUIDv7 the default for one. `v4` rides along
+# from the workspace default.
+uuid = { workspace = true, features = ["v7"] }
+# The message catalog's stable `error.*` codes (slice `S-C27`, the i18n design doc). Every
+# rejection this server renders names one from `capsule_i18n::error_codes` rather than a string
+# literal, so a typo is a compile error and the code cannot drift from `locales/`.
+capsule-i18n = { path = "../capsule-i18n" }
+# EdDSA access and refresh tokens. Already the workspace's JWT crate, pinned with `aws_lc_rs`;
+# see the Tokens row in design/dependencies.md. Nothing else in this crate parses a JWT.
+jsonwebtoken = { workspace = true }
+# The blob store's filesystem adapter (slice `S-C33`). `tokio::fs` because every blob write is
+# an await on a server runtime and `std::fs` on that runtime blocks it; `fs`/`io-util`/`rt` are
+# the three features a ranged read and a durable append need, and nothing more. Already the
+# workspace's async runtime (design/dependencies.md, "Async runtime") and already in this
+# crate's tree through kynos — this promotes it from a dev-dependency, it does not add a crate.
+tokio = { workspace = true, features = ["fs", "io-util", "rt"] }
+# The `.reason.json` a quarantined blob keeps beside it (design/filesystem/server.md). The
+# encoding belongs to the filesystem *adapter*, not to the port's record — which derives no
+# serde traits, exactly as the state ports' records do not — so this is used in one file.
+# Already a workspace dependency with a row in design/dependencies.md, and already here as a
+# dev-dependency.
+serde_json = { workspace = true }
+# The sync cursor's HMAC-SHA256 (slice `S-C2`, validation invariant 22). `ring` is already the
+# workspace's key-generation crate and was already here as a dev-dependency; this promotes it.
+# The alternative was the RustCrypto `hmac` + `sha2` pair, which would have put a second HMAC
+# implementation in one binary for one 41-byte token.
+ring = { workspace = true }
+# base64url for that cursor, which is a query parameter and therefore has to survive a URL.
+# Already a workspace dependency with a row in design/dependencies.md.
+base64 = { workspace = true }
+# The buffer type Kynos's `ByteSource` signature is written in, so ranged blob serving can hand
+# back a span without a copy. Already in the lock file through `capsule-sdk` and `capsule-api`;
+# no new external dependency and no new domain, so no design/dependencies.md row.
+bytes = { workspace = true }
+# The coded-problem interceptor (`S-C36`) reads a rendered problem body back before putting it
+# down again, and `Body` is an `http_body::Body` with no inherent collector. Already in the lock
+# file through Kynos and hyper; see design/dependencies.md.
+http-body-util = { workspace = true }
+
+# RFC 6238 second-factor codes (slice `S-C55`). `otpauth` for the provisioning URI an
+# authenticator app scans, `gen_secret` for the shared secret this server generates. See the
+# Second factor row in design/dependencies.md; already in the lock file through the retired
+# `capsule-api/auth`, which is where the four TOTP operations are being ported *from*.
+totp-rs = { workspace = true }
+# The constant-time comparison that check uses. See the Constant-time comparison row in
+# design/dependencies.md.
+subtle = { workspace = true }
+
+# `gen_openapi` only. Both are already in the lock file via `capsule-api`'s equivalent binary,
+# and this mirrors it deliberately: two committed documents, two identical drift guards, so the
+# changeover at parity is a re-point rather than a new mechanism.
+clap = { version = "4.6.1", features = ["derive"] }
+color-eyre = "0.6.5"
+
+[dev-dependencies]
+# `test-util` carries `kynos::test::TestClient`, which drives a built `Service` in-process —
+# no socket, no port, no runtime flavour — and the two conformance assertions the suite is
+# built around. `server` is on top of it for exactly one test: `tests/sdk_client.rs` binds the
+# real router to an ephemeral port so the **SDK's own client** drives it over a socket, which
+# is the one property an in-process client cannot prove. Dev-only either way: the assertions
+# and the ephemeral listener belong to the tests, not to the served binary.
+kynos = { workspace = true, features = ["test-util", "server"] }
+# The SDK, as a *consumer* of this server. It depends on nothing here — its client is
+# generated from `openapi.json`, a file — so this is acyclic, and it is what makes the
+# generated client's round trip against the real router a test rather than a hope (`S-D28`).
+capsule-sdk = { path = "../capsule-sdk" }
+# The SDK's persisted tokens are `SecretBox<str>`; a test that asserts a rotation happened has
+# to look at them. Test-only, and the only place this crate touches the type.
+secrecy = { workspace = true }
+# `macros` and `rt-multi-thread` on top of what the blob store's adapter already needs: the
+# `#[tokio::test]` attribute and a runtime to drive it. Test-only, so the served binary carries
+# neither.
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+# The feed's manifest bytes arrive base64-encoded, and a test that asserts byte equality has to
+# decode them. A normal dependency of the crate since `S-C2`; listed here because the suite
+# uses it directly.
+base64 = { workspace = true }
+# The suite builds its own authenticator from `capsule_server::auth::totp`'s exported constants
+# and asks it for the code an app would be showing. That is deliberately a second construction
+# rather than a helper on `TotpCodes`: a server has no business generating codes, and a test that
+# reconstructs SHA-1/6 digits/30 seconds from the published constants is checking the interop
+# contract every authenticator app assumes rather than trusting one function to agree with itself.
+totp-rs = { workspace = true }
+# Ed25519 key generation for the token tests: the suite mints a fresh key pair per signer
+# rather than reading a checked-in PEM, because a private key in the repository is a private
+# key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);
+# it stays listed here only so the intent of the test usage is recorded.

@@ -19,6 +19,10 @@ The offline-first requirement set every native client must satisfy — the local
 
 Given the quantity of distinct native clients (each with its own platform-specific portion), certain features are limited to certain platforms — notably [auto sync](/design/import/download-sync/#auto-syncing) on platforms where the necessary APIs are not available.
 
+**Status note.** Background upload and OS-scheduled auto-sync (the iOS `BGTaskScheduler` family, and the equivalent elsewhere) are post-v1 (decision 2026-07-12); v1 sync and upload are foreground-initiated. Server-driven wake is a separate question with its own answer — see [Notifications — Tier 1](/design/notifications/#tier-1--wake), which is also post-v1 and rules out APNs and FCM permanently.
+
+User-facing **alerts** are not deferred: they are v1, entirely local, and owned by [Notifications](/design/notifications/). A client that cannot get a background window can still warn its user, because deadline-driven alerts are pre-armed on the OS timer rather than evaluated when the app happens to run.
+
 ## Client Validation Duties
 
 Clients are not trusted to enforce their own correctness — but they **are** responsible for **refusing to apply** state they cannot validate. The full client-side validation checklist is owned by [Threat Model — Client-Side Validation Invariants](/design/threat-model/validation/#client-side-validation-invariants); the duties are summarized here so client implementations have a single in-doc reference for what they must do:
@@ -31,10 +35,9 @@ Clients are not trusted to enforce their own correctness — but they **are** re
 - **Preserve unknown CBOR keys within a known schema** (Postel's Law) but never act on them.
 - **Decode remote-origin asset bytes only in the [Sandboxed Decoder](#sandboxed-decoder).**
 - **Honor the [forbidden behaviors checklist](/design/threat-model/schema-rules/#forbidden-client-behaviors).** A client that backdates timestamps, strips unknown sidecar fields, overwrites provenance, signs for an epoch it does not hold, or invokes `revoke_all_sessions` without master-key proof is *buggy by definition*.
+- **Run the [recovery verification cadence](/design/backup-recovery/#recovery-verification-cadence)** — and never persist the passphrase (or any derivative able to satisfy the check) to auto-pass it: a client that does so is buggy by definition, because the check exists to verify the *user* still holds the secret.
 
 Centralizing the validation logic in `capsule-core` ensures each native client gets the same enforcement; the wrapper layer that issues UI surfaces for quarantine and protocol-mismatch errors is the platform-specific portion.
-
-- **Run the [recovery verification cadence](/design/backup-recovery/#recovery-verification-cadence)** — and never persist the passphrase (or any derivative able to satisfy the check) to auto-pass it: a client that does so is buggy by definition, because the check exists to verify the *user* still holds the secret.
 
 ## Reading State From a Newer Client
 
@@ -47,6 +50,8 @@ A client routinely encounters state a *newer* client wrote: unknown CBOR keys in
 This is the resolution of the former "new client UI surface" question: forward-written state is legible and safe, never silently dropped and never destructively rewritten.
 
 ## Sandboxed Decoder
+
+**Status: contract fixed, platform implementations post-v1** (decision 2026-07-12). Until a platform's sandbox lands, a client decoding remote-origin bytes in-process is running a documented deviation of this contract — the isolation requirement stands and is tracked in the post-v1 register (`SLICES.md`).
 
 Capsule's server never holds plaintext, so server-side image/video decoding is impossible by design. **Decoding happens on the client**, and the decode path is the largest remaining attack surface — image-format CVEs (libjpeg, libwebp, libheif, libavif have all shipped exploits in recent years) reach the client directly with attacker-controlled bytes.
 
@@ -78,6 +83,6 @@ The validation duties above translate directly to test surface. Most live in `ca
 - **Forward-state read surface (unit).** Present a sidecar with unknown CBOR keys and (opt-in) a higher `sidecar_schema`; assert known fields render, the non-destructive "newer version" indicator shows, editing is disabled, and any write-back attempt is refused *without* stripping the unknown keys.
 - **Sandbox crash isolation (smoke per platform).** Feed the sandbox a known-CVE corpus; assert the host process survives every crash; assert the asset is surfaced as "unreadable on this device" and not removed from the library.
 - **Sandbox boundary (smoke per platform).** Assert the sandbox cannot read the parent process's filesystem, open network sockets, or write outside its scratch area. Per-platform fixtures verify each restriction.
-- **Forbidden-behavior tripwire (unit).** For each item in the [forbidden-behaviors checklist](/design/threat-model/schema-rules/#forbidden-client-behaviors) **that maps to a `capsule-core` API** — backdating into signed structures, stripping unknown sidecar fields, overwriting provenance, signing for an epoch the client does not hold — a unit test confirms the API panics or returns a structural error (so a buggy client cannot accidentally do the wrong thing). The auth-surface items (notably `revoke_all_sessions` without master-key proof) are server-enforced and tested in `capsule-api::auth`, not in core.
+- **Forbidden-behavior tripwire (unit).** For each item in the [forbidden-behaviors checklist](/design/threat-model/schema-rules/#forbidden-client-behaviors) **that maps to a `capsule-core` API** — backdating into signed structures, stripping unknown sidecar fields, overwriting provenance, signing for an epoch the client does not hold — a unit test confirms the API panics or returns a structural error (so a buggy client cannot accidentally do the wrong thing). The auth-surface items (notably `revoke_all_sessions` without master-key proof) are server-enforced and tested in `capsule-server::auth`, not in core.
 
 There is no client-only E2E case; the closest cross-module test is the upload-and-display round-trip used by the [Import](/design/import/) pipeline, which is bounded E2E in [Module Map](/design/module-map/#e2e-test-surface).

@@ -2,6 +2,7 @@
 name = "capsule-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]
@@ -18,28 +19,76 @@ name = "uniffi-bindgen"
 required-features = ["ffi-bindgen"]
 
 [features]
-# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). `ffi-bindgen`
-# additionally pulls uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
-ffi = ["dep:uniffi"]
+# `native` (default) is the on-device library/import/lifecycle surface: it links SQLite,
+# the filesystem, and the media stack. Turning it OFF (`--no-default-features`) leaves only
+# the WASM sealing surface (`cbor` + `crypto` + `drop`), which targets
+# `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
+#   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
+default = ["native"]
+native = ["dep:rusqlite", "dep:sqlite-vec", "mls"]
+# `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
+# S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
+# (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
+# library build (CLI, FFI, tests) exercises it; **excluded** from the `wasm32-unknown-unknown`
+# sealing build (`--no-default-features`) because the libcrux provider does not target wasm32.
+# The offline `ReferenceAuthority` stays available on every build regardless of this feature.
+mls = [
+    "dep:openmls",
+    "dep:openmls_traits",
+    "dep:openmls_libcrux_crypto",
+    "dep:openmls_basic_credential",
+    "dep:openmls_memory_storage",
+]
+# `ffi` exposes the uniffi-annotated surface (FfiWorkspace + foreign traits). It wraps the
+# native `lifecycle::Workspace`, so it implies `native`. `ffi-bindgen` additionally pulls
+# uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
+ffi = ["native", "dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
 # `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
 # `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
 # TPM-capable host with `--features tpm`.
 tpm = ["dep:tss-esapi"]
+# `inference` gates the real per-platform model runners behind the `ml::ModelRunner` seam
+# (`ml/runner.rs`, `ml/orchestrator.rs`). It is **empty today and enables nothing** — that is
+# deliberate rather than an oversight. Four doc comments already describe the runners as riding a
+# "default-off, weight-fetching `inference` feature", and until this line existed that sentence
+# was simply untrue: `--features inference` was a hard cargo error, so the seam it names could not
+# be gated on even to test the claim. Declaring it makes the documentation honest and gives the
+# post-v1 CLIP runner something to attach to without a manifest change in the same commit as the
+# implementation. Nothing in the tree is `#[cfg(feature = "inference")]` yet; the first real runner
+# adds both the cfg and the `dep:` entries here. No model weights ship in git regardless.
+inference = []
 
 [dependencies]
 ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
+# The LQIP placeholder codec (SSoT: Thumbnails — LQIP; slice S-B14). **Not optional and not
+# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the uniffi FFI and
+# `capsule-wasm`, so a photo's placeholder never depends on which client imported it. Safe to
+# keep unconditional because chromahash has zero runtime dependencies and builds for
+# `wasm32-unknown-unknown` (it ships a `simd128` backend alongside AVX2/SSE2 and NEON).
+# `default-features = false` drops `spec-vectors`, which only compiles the crate's own
+# integration test; `simd` is kept because every backend replays the scalar path op-for-op
+# and is byte-identical — it changes speed, never output. Imported **directly** rather than
+# through Rawshift, which AGENTS.md forbids from wrapping it.
+chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
 indexmap = { workspace = true }
 jiff = { workspace = true }
-log = { workspace = true }
-rusqlite = { version = "0.32", features = ["bundled"] }
+kamadak-exif = "0.5"
+# Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
+# cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# The client-local embedding index: `sqlite-vec`'s `vec0` virtual tables over `library.sqlite`.
+# Optional + gated by `native` alongside `rusqlite` (it registers as a SQLite auto-extension and
+# cannot target `wasm32-unknown-unknown`); the WASM sealing build drops it. See `db::vector`.
+sqlite-vec = { version = "0.1.9", optional = true }
 serde = { workspace = true }
 serde_bytes = "0.11"     # CBOR byte-string (de)serialization for keys/signatures
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tzf-rs = "0.4"
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 walkdir = "2"
 sha2 = { workspace = true }
@@ -54,6 +103,13 @@ hmac = "0.12"
 sha3 = "0.10"            # SHA3-256 combiner + SHAKE256 seed expansion for the X-Wing KEM
 argon2 = { workspace = true }
 ed25519-dalek = "2"
+# RustCrypto NIST P-256 ECDSA + ECDH — the classical half of the hardware-backed hybrid device
+# keys (Secure Enclave / StrongBox / TPM expose P-256, not Ed25519/X25519). `ecdsa` backs the
+# hybrid DSK (`crypto::keys::p256`); `ecdh` backs the hybrid DEK's hardware-bound classical half
+# (`crypto::keys::kem_p256`, slice S-F5). Already in the workspace tree via `jsonwebtoken`; the
+# software `p256` element is the reference/mock a real secure element replaces. DER ECDSA over
+# SHA-256 — `default-features = false` drops the unused `pem`/`pkcs8`/`std` surface.
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "ecdh", "arithmetic"] }
 ml-dsa = "0.1"            # RustCrypto FIPS-204 (ML-DSA-65) — the PQ signature half
 ml-kem = "0.3"           # RustCrypto FIPS-203 (ML-KEM-768) — PQ half of the X-Wing device KEM
 x25519-dalek = "2"       # RustCrypto X25519 — classical half of the X-Wing device KEM
@@ -61,10 +117,34 @@ getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 
+# Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
+# Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
+# events, and the WASM sealing build links only the facade (no subscriber), which is free.
+tracing = { workspace = true }
+
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
 # build (CLI, server, tests) never compiles it.
 uniffi = { version = "0.31", optional = true }
+
+# ── MLS group layer (optional; `mls` feature, implied by `native`) ──────────
+# RFC 9420 MLS backing the live `OpenMlsAuthority`, pinned to the X-Wing PQ ciphersuite
+# `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`). The `libcrux-provider` feature
+# wires OpenMLS to Cryspen's formally-verified libcrux crypto — the only released provider
+# shipping the X-Wing suite. `openmls_libcrux_crypto` is that provider; `openmls_basic_credential`
+# supplies the leaf `SignatureKeyPair`; `openmls_traits` exposes the `Ciphersuite` type. All four
+# are host-only (libcrux does not target `wasm32-unknown-unknown`), so they sit behind `mls`,
+# which `native` implies and the wasm sealing build excludes. See `crypto::authority::openmls`.
+openmls = { version = "0.8.1", default-features = false, features = [
+    "libcrux-provider",
+], optional = true }
+openmls_traits = { version = "0.5", optional = true }
+openmls_libcrux_crypto = { version = "0.3.1", optional = true }
+openmls_basic_credential = { version = "0.5", optional = true }
+# The OpenMLS storage provider Capsule owns (rather than the libcrux provider's private one), so
+# durable group state serializes for `OpenMlsAuthority::export_state`/`import_state` (slice S-X2).
+# Same version the libcrux provider already pulls transitively; host-only alongside the rest of `mls`.
+openmls_memory_storage = { version = "0.5.0", optional = true }
 
 # ── TPM (optional; `tpm` feature) — desktop reference HardwareSigner ─────────
 # RustCrypto-adjacent bindings to the TPM 2.0 Enhanced System API (links system
@@ -72,5 +152,43 @@ uniffi = { version = "0.31", optional = true }
 # build pulls in the TPM stack. See `crypto::keys::tpm`.
 tss-esapi = { version = "7", optional = true }
 
+# ── Free-space probe (native `library::space`) ─────────────────────────────
+# The streaming-import free-space probe (`library::available_bytes`, slice S-B3) is a thin
+# `statvfs` / `GetDiskFreeSpaceEx` wrapper. rustix gives the pure-Rust POSIX `statvfs(2)`
+# on Unix (no libc link, aligned with the rustls/no-openssl ethos); windows-sys exposes the
+# Win32 `GetDiskFreeSpaceExW`. Both are host-only — the `library` module is behind `native`,
+# so the wasm32 sealing build (target below) links neither. See the Dependencies design doc.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+# `Win32_System_TpmBaseServices` adds the TBS (TPM Base Services) surface —
+# `Tbsi_Context_Create` / `Tbsip_Submit_Command` / `Tbsi_Is_Tpm_Present` — the Windows path of
+# the desktop TPM 2.0 `HardwareSigner` (`crypto::keys::tbs`, slice S-F4). TBS is the raw TPM
+# command channel the tss-esapi reference (`crypto::keys::tpm`) wraps on Linux; on Windows the
+# adapter marshals the TPM 2.0 commands itself and submits them through `tbs.dll` (raw-dylib —
+# no import library, so the crate cross-`check`s for `x86_64-pc-windows-msvc` off-Windows).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = [
+    "Win32_Storage_FileSystem",
+    "Win32_Foundation",
+    "Win32_System_TpmBaseServices",
+] }
+
+# On wasm32 the OS CSPRNG has no default backend. `crypto::rng` uses getrandom 0.3 directly
+# (Web Crypto via the `wasm_js` feature + `--cfg getrandom_backend="wasm_js"`, set for this
+# target in `.cargo/config.toml`). The crypto stack (via `rand_core 0.6`) also pulls
+# getrandom 0.2 transitively, whose wasm backend is its `js` feature — enabled here so the
+# whole graph links. Neither is used on any other target.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+# `uuid` also needs an explicit wasm randomness source; route it through getrandom (whose
+# wasm backend is configured above) so the drop id / file-id draws work in the browser.
+uuid = { workspace = true, features = ["rng-getrandom"] }
+
 [dev-dependencies]
 tempfile = "3"
+# Integration tests (e.g. the S-D14 placement audit) build UUIDs to exercise the `library::paths`
+# surface; `uuid` is a normal dependency, so the test crate needs its own dev-dependency on it.
+uuid = { workspace = true }

@@ -1,4 +1,3 @@
-use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,34 +21,4 @@ impl From<entity::asset::AssetType> for AssetType {
             entity::asset::AssetType::Sidecar => AssetType::Sidecar,
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CreateAsset {
-    pub owner_id: String,
-    pub album_id: Option<String>,
-    pub width: i32,
-    pub height: i32,
-    pub asset_type: AssetType,
-    pub original_filename: String,
-    pub file_size: i64,
-    pub file_hash: String,
-    pub content_type: String,
-    pub date: Option<Timestamp>,
-    pub uploaded: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct UpdateAsset {
-    pub album_id: Option<Option<String>>,
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-    pub asset_type: Option<AssetType>,
-    pub original_filename: Option<String>,
-    pub file_size: Option<i64>,
-    pub file_hash: Option<i64>,
-    pub content_type: Option<String>,
-    pub date: Option<Option<Timestamp>>,
-    pub uploaded: Option<bool>,
-    pub deleted_at: Option<Option<Timestamp>>,
 }

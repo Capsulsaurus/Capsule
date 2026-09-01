@@ -6,6 +6,7 @@
 //!
 //! [Threat Model — Server-Side Validation Invariants]: https://docs/design/threat-model/validation/#server-side-validation-invariants
 
+use crate::crypto::encryption::blob_ciphertext_hash;
 use crate::crypto::hash::Hash32;
 use crate::crypto::primitives::SuiteId;
 use crate::crypto::provenance::ManifestCore;
@@ -76,6 +77,19 @@ pub fn amk_version_monotonic(new: u32, stored: Option<u32>) -> bool {
     }
 }
 
+/// Invariant 25 (key-free): the metadata blob in the bundle has a content hash equal to the
+/// manifest's committed `metadata_blob_hash`. The server holds no key, but it hashes the
+/// ciphertext object it stores and compares it against the signed manifest field, so a client
+/// cannot present a metadata blob different from the one its manifest is signed over. `false`
+/// when the manifest commits to no hash — a bundle carrying a blob must be committed to.
+///
+/// This is the value half of the client-side round-trip check
+/// ([`verify_metadata_binding`](crate::crypto::verify_metadata_binding)); the server never
+/// decrypts, so it checks only the content address.
+pub fn metadata_blob_hash_matches(committed: Option<Hash32>, metadata_blob: &[u8]) -> bool {
+    committed.is_some_and(|h| blob_ciphertext_hash(metadata_blob) == h)
+}
+
 /// A keyless envelope decision over a manifest core plus the server-known context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EnvelopeReject {
@@ -91,6 +105,9 @@ pub enum EnvelopeReject {
     StaleChain,
     /// `amk_version` regressed (invariant 18).
     AmkRegressed,
+    /// The bundled metadata blob's content hash does not match the manifest's committed
+    /// `metadata_blob_hash` (invariant 25).
+    MetadataBlobHashMismatch,
 }
 
 /// Context a key-less server holds when validating a non-upload lifecycle manifest.
@@ -141,6 +158,25 @@ pub fn check_manifest_envelope(
         return Err(EnvelopeReject::AmkRegressed);
     }
     Ok(())
+}
+
+/// Invariant 25 as a refuse-by-default decision: run on any write whose bundle carries a
+/// metadata blob (a `create` bundle, at finalization, or a non-upload `metadata-update`). The
+/// blob's content hash must equal the manifest's committed `metadata_blob_hash`. Key-free — the
+/// server never decrypts (SSoT: [Threat Model — invariant 25], [Metadata — Local and Server
+/// Metadata Equivalence]).
+///
+/// [Threat Model — invariant 25]: https://docs/design/threat-model/validation/#server-side-validation-invariants
+/// [Metadata — Local and Server Metadata Equivalence]: https://docs/design/metadata/#local-and-server-metadata-equivalence
+pub fn check_metadata_blob_envelope(
+    core: &ManifestCore,
+    metadata_blob: &[u8],
+) -> Result<(), EnvelopeReject> {
+    if metadata_blob_hash_matches(core.metadata_blob_hash, metadata_blob) {
+        Ok(())
+    } else {
+        Err(EnvelopeReject::MetadataBlobHashMismatch)
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +268,7 @@ mod tests {
             timestamp: "2026-05-31T00:00:00Z".into(),
             action,
             prior_provenance_hash: prior,
+            upgraded_from: None,
             retention_until: None,
         };
         let _ = c.clone().sign(&dev, &wt); // ensure it's a well-formed signable core
@@ -301,6 +338,36 @@ mod tests {
         assert_eq!(
             check_manifest_envelope(&c, &bad),
             Err(EnvelopeReject::DeviceAddedAfter)
+        );
+    }
+
+    #[test]
+    fn invariant_25_metadata_blob_hash_matches_key_free() {
+        use crate::crypto::encryption::seal_blob;
+
+        let blob = seal_blob(&[0x33; 32], b"the canonical sidecar bytes");
+        let committed = crate::crypto::encryption::blob_ciphertext_hash(&blob);
+
+        // A create manifest committing to the blob's content address accepts, no key needed.
+        let mut c = core(Action::Create, None, 1);
+        c.metadata_blob_hash = Some(committed);
+        assert!(metadata_blob_hash_matches(c.metadata_blob_hash, &blob));
+        assert_eq!(check_metadata_blob_envelope(&c, &blob), Ok(()));
+
+        // A one-byte mutation of the blob (what a malicious client might substitute) is caught.
+        let mut tampered = blob.clone();
+        tampered[0] ^= 0x01;
+        assert_eq!(
+            check_metadata_blob_envelope(&c, &tampered),
+            Err(EnvelopeReject::MetadataBlobHashMismatch)
+        );
+
+        // A manifest committing to no hash cannot admit a bundle that carries a blob.
+        let none = core(Action::Delete, Some(Hash32([9; 32])), 1);
+        assert!(!metadata_blob_hash_matches(none.metadata_blob_hash, &blob));
+        assert_eq!(
+            check_metadata_blob_envelope(&none, &blob),
+            Err(EnvelopeReject::MetadataBlobHashMismatch)
         );
     }
 }

@@ -14,43 +14,18 @@ pub struct Model {
     #[sea_orm(nullable, indexed)]
     pub album_id: Option<String>,
 
-    /// Width of asset
-    pub width: i32,
-    /// Height of asset
-    pub height: i32,
-
+    /// Coarse media kind (photo/video/motion-photo/sidecar), mechanically derived from
+    /// `content_type` — carries no capture-time, dimensional, locational, or user-authored
+    /// information, so it is not plaintext user metadata (S-G3 key-free row set).
     pub asset_type: AssetType,
 
-    /// Original filename from client
-    pub original_filename: String,
-    /// File size in bytes
+    /// Declared ciphertext size in bytes (quota attribution).
     pub file_size: i64,
-    /// SHA-256 hash of the file content (64-char lowercase hex)
+    /// SHA-256 hash of the file content (64-char lowercase hex) — the blob content address.
     #[sea_orm(column_type = "String(StringLen::N(64))")]
     pub file_hash: String,
     /// MIME type
     pub content_type: String,
-
-    // ===== Geo-location (for efficient spatial queries) =====
-    /// GPS latitude
-    #[sea_orm(column_type = "Double", nullable)]
-    pub latitude: Option<f64>,
-    /// GPS longitude  
-    #[sea_orm(column_type = "Double", nullable)]
-    pub longitude: Option<f64>,
-
-    // ===== Visual placeholders =====
-    /// Low Quality Image Placeholder hash for instant loading
-    #[sea_orm(column_type = "String(StringLen::N(50))", nullable)]
-    pub lqip_hash: Option<String>,
-    /// Dominant color hex code (e.g., "#FF5733")
-    #[sea_orm(column_type = "String(StringLen::N(7))", nullable)]
-    pub dominant_color: Option<String>,
-
-    // ===== User preferences =====
-    /// Whether this asset is marked as favorite
-    #[sea_orm(default_value = "false", indexed)]
-    pub is_favorite: bool,
 
     // ===== Stack membership (new) =====
     /// If part of a stack, the stack ID (for fast lookup)
@@ -64,9 +39,6 @@ pub struct Model {
     pub is_stack_hidden: bool,
 
     // ===== Timestamps =====
-    /// Date when the asset was captured/taken (from EXIF DateTimeOriginal)
-    #[sea_orm(indexed)]
-    pub captured_at: Option<DateTime<Utc>>,
     #[sea_orm(
         column_type = "TimestampWithTimeZone",
         default_value = "CURRENT_TIMESTAMP",
@@ -88,6 +60,13 @@ pub struct Model {
     /// User who uploaded the asset (for storage quota)
     #[sea_orm(indexed)]
     pub upload_user_id: String,
+
+    // ===== Moderation (S-C8) =====
+    /// Whether this asset is servable. A takedown flips it `false`; a federated fetch then
+    /// returns `410 Gone`. The underlying blob is never deleted — takedown is a serving
+    /// constraint, not destruction (moderation doc). Default `true`.
+    #[sea_orm(default_value = "true")]
+    pub served: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum)]

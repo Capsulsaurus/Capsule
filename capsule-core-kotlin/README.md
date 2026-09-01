@@ -22,12 +22,16 @@ cd capsule-core-kotlin
 ./gradlew test             # JVM software smoke (JNA loads the host libcapsule_core)
 ```
 
+Or let Gradle stage the bindings for you (S-F3): `./gradlew test -Pcapsule.wireFfi` runs
+the `stageUniffiBindings` task (equivalent to `./stage-bindings.sh`) automatically. The flag
+is off by default so the lint-only lane (ktlint/detekt) needs no Rust toolchain; the repo's
+`mise run test-kotlin` / `build-kotlin` pass it for you.
+
 On-device StrongBox (a physical device with a secure element; an emulator only has a TEE):
 
 ```sh
-(cd .. && mise run build-android)      # per-ABI libcapsule_core.so via cargo-ndk
-# copy the .so into src/main/jniLibs/<abi>/ (see stage-bindings.sh), then:
-./gradlew connectedAndroidTest
+# -Pcapsule.wireFfi also runs `buildAndroidJniLibs` (cargo-ndk → src/main/jniLibs/<abi>/):
+./gradlew connectedAndroidTest -Pcapsule.wireFfi
 ```
 
 ## ⚠️ Toolchain prerequisites / known caveats

@@ -65,10 +65,9 @@ This is a personal choice but if you're happy with existing services like Google
 
 Components:
 
-- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined
+- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`
 - [Capsule Web](capsule-web/README.md) (WIP): Web client in React
 - [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
-- [Capsule Desktop](capsule-desktop/README.md) (Planned): Windows/Linux desktop client
 - [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
 - [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS
 - [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)
@@ -88,9 +87,8 @@ Blob storage is implemented behind a Capsule-owned backend contract; it does not
 Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:
 
 - `capsule-android`: Android Studio or IntelliJ IDEA with plugins
-- `capsule-api`: VS Code or similar
+- `capsule-server`: VS Code or similar
 - `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
-- `capsule-desktop`: VS Code or similar
 - `capsule-docs`: VS Code or similar
 - `capsule-swift`: Xcode
 - `capsule-web`: VS Code or similar
@@ -99,12 +97,12 @@ Considering all the technologies used, you may have to switch between IDEs to de
 
 ### Setup
 
-This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) pins the shared dev tooling (`just`, `lefthook`, `convco`) and [just](https://just.systems) is the task runner that ties the per-language tasks together (`just check`, `just build`, etc.). Various tools will need to be setup based on services you need to work on.
+This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on.
 
 Setup in the following order:
 
 - Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.
-- Install the git hooks with `just hooks-install`.
+- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev)).
 - Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>
 - Setup each of the following tools in the Development sections of each component's README.
 
@@ -145,8 +143,8 @@ Capsule primarily benefits from active contributions and feedback! Rather than a
 
 ### Contributor License Agreement (CLA)
 
-We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.
+We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.
 
 ## License
 
-Capsule is licensed under the [AGPL-3.0 License](LICENSE).
+Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).

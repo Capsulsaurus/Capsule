@@ -33,9 +33,9 @@ struct ImportsView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if assets.isEmpty {
                 ContentUnavailableView(
-                    "No Imports",
+                    "ios.imports.empty.title",
                     systemImage: "square.and.arrow.down",
-                    description: Text("Photos imported into Capsule appear here.")
+                    description: Text("ios.imports.empty.description")
                 )
             } else {
                 PhotoGridView(
@@ -48,7 +48,7 @@ struct ImportsView: View {
                 .ignoresSafeArea(edges: .bottom)
             }
         }
-        .navigationTitle("Imports")
+        .navigationTitle("ios.imports.title")
         .navigationBarTitleDisplayMode(.inline)
         .task { await reload() }
         .fullScreenCover(item: $viewerSelection) { selection in

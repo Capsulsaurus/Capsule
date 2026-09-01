@@ -10,7 +10,7 @@ use thiserror::Error;
 /// exist now so the taxonomy is frozen.
 #[allow(dead_code)]
 #[derive(Debug, Error)]
-pub(crate) enum UploadError {
+pub enum UploadError {
     #[error("File exceeds size limit")]
     FileTooLarge,
     #[error("File system error: {0}")]
@@ -31,6 +31,10 @@ pub(crate) enum UploadError {
     FinalizeInProgress,
     #[error("Invalid offset: expected {expected}, got {actual}")]
     InvalidOffset { expected: u64, actual: u64 },
+    #[error("Missing or invalid X-Capsule-Offset header")]
+    MissingOffset,
+    #[error("Same offset re-sent with a different chunk hash")]
+    ChunkConflict,
     #[error("Invalid upload: {0}")]
     InvalidUpload(String),
     #[error("Upload exceeds its declared size")]
@@ -57,6 +61,67 @@ pub(crate) enum UploadError {
     ParseError(#[from] std::string::ParseError),
     #[error("Upload file length {on_disk} diverged from expected offset {expected}")]
     StorageInconsistent { expected: u64, on_disk: u64 },
+
+    // ── Session-creation envelope invariants (upload-protocol Error Taxonomy). ──
+    /// Invariant 1: `X-Capsule-Protocol` / `protocol_version` outside the accepted window.
+    #[error("Protocol version is not supported; accepted range is [{min}, {max}]")]
+    ProtocolUnsupported { min: String, max: String },
+    /// Invariant 2: `crypto_suite_id` not in the primitives inventory.
+    #[error("Unknown crypto suite")]
+    UnknownCryptoSuite,
+    /// Invariant 3: declared `hash` is not lowercase hex of the suite's digest length.
+    #[error("Declared hash is not valid for the crypto suite")]
+    InvalidHash,
+    /// Invariant 4: declared `size` is zero (or otherwise out of `(0, max_file_size]`).
+    #[error("Declared size must be greater than zero")]
+    InvalidSize,
+    /// Invariant 5: `content_type` outside the closed enum for this protocol version.
+    #[error("Unsupported content type")]
+    UnsupportedContentType,
+    /// Invariant 6: album missing / no write capability / protocol drift.
+    #[error("Album access denied")]
+    AlbumAccessDenied,
+    /// Invariant 7: `created_by_device` not authorized in the uploader's directory.
+    #[error("Creating device is not authorized")]
+    DeviceNotAuthorized,
+    /// Invariant 8: envelope `timestamp` beyond the gross-drift sanity window.
+    #[error("Envelope timestamp is outside the accepted range")]
+    TimestampOutOfRange,
+    /// Invariant 15 family: a top-level field contradicts the `manifest_envelope`.
+    #[error("Top-level fields contradict the manifest envelope: {0}")]
+    EnvelopeMismatch(&'static str),
+    /// Invariant 15 (finalization): the envelope failed re-validation.
+    #[error("Manifest envelope re-validation failed: {0}")]
+    EnvelopeRejected(String),
+    /// On-behalf upload without a verified relationship.
+    #[error("Uploading on behalf of this owner is not permitted")]
+    OwnerNotPermitted,
+    /// The declared size would exceed the uploader's storage quota.
+    #[error("Quota would be exceeded by the declared size")]
+    QuotaExceeded,
+    /// A metadata-growth lifecycle write refused because the account is Grace-expired (read-only).
+    #[error("Account is grace-expired (read-only); metadata-growth writes are refused")]
+    QuotaGraceLocked,
+    /// The account is suspended (moderation, S-C8): upload-session creation is refused.
+    #[error("Account is suspended; uploads are not permitted")]
+    AccountSuspended,
+    /// The caller is neither the uploader nor the owner of the session.
+    #[error("Forbidden")]
+    Forbidden,
+
+    // ── Lifecycle-write invariants (S-C16, `POST /albums/{id}/ops`). ──
+    /// Invariant 16: the manifest `action` is outside the closed lifecycle set, or is an
+    /// upload-only action (`create`/`replace`) submitted to the non-upload surface.
+    #[error("Lifecycle action is not allowed on this surface: {0}")]
+    ActionNotAllowed(String),
+    /// Invariant 17: `prior_provenance_hash` does not match the asset's current chain head
+    /// (a stale or forked chain position — stale-revival).
+    #[error("Manifest prior_provenance_hash does not match the asset's provenance-chain head")]
+    StaleRevival,
+    /// Invariant 18: `amk_version` regressed below the album's recorded epoch.
+    #[error("Manifest amk_version regressed below the album's recorded epoch")]
+    AmkRegressed,
+
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -65,7 +130,7 @@ impl UploadError {
     /// The stable `error.*` catalog code for this rejection, when one applies.
     /// Constants come from `capsule_i18n::error_codes` so a typo is a compile
     /// error and the code stays in sync with the canonical catalog.
-    pub(crate) fn code(&self) -> Option<&'static str> {
+    pub fn code(&self) -> Option<&'static str> {
         match self {
             UploadError::FileTooLarge => Some(error_codes::UPLOAD_FILE_TOO_LARGE),
             UploadError::SessionNotFound => Some(error_codes::UPLOAD_SESSION_NOT_FOUND),
@@ -89,6 +154,30 @@ impl UploadError {
                 Some(error_codes::UPLOAD_STORAGE_INCONSISTENT)
             }
             UploadError::InvalidUpload(_) => Some(error_codes::UPLOAD_MALFORMED_REQUEST),
+            UploadError::MissingOffset => Some(error_codes::UPLOAD_MISSING_OFFSET),
+            UploadError::ChunkConflict => Some(error_codes::UPLOAD_CHUNK_CONFLICT),
+            UploadError::ProtocolUnsupported { .. } => {
+                Some(error_codes::PROTOCOL_VERSION_UNSUPPORTED)
+            }
+            UploadError::UnknownCryptoSuite => Some(error_codes::UPLOAD_UNKNOWN_CRYPTO_SUITE),
+            UploadError::InvalidHash => Some(error_codes::UPLOAD_INVALID_HASH),
+            UploadError::InvalidSize => Some(error_codes::UPLOAD_INVALID_SIZE),
+            UploadError::UnsupportedContentType => {
+                Some(error_codes::UPLOAD_UNSUPPORTED_CONTENT_TYPE)
+            }
+            UploadError::AlbumAccessDenied => Some(error_codes::UPLOAD_ALBUM_ACCESS_DENIED),
+            UploadError::DeviceNotAuthorized => Some(error_codes::UPLOAD_DEVICE_NOT_AUTHORIZED),
+            UploadError::TimestampOutOfRange => Some(error_codes::UPLOAD_TIMESTAMP_OUT_OF_RANGE),
+            UploadError::EnvelopeMismatch(_) => Some(error_codes::UPLOAD_ENVELOPE_MISMATCH),
+            UploadError::EnvelopeRejected(_) => Some(error_codes::UPLOAD_ENVELOPE_REJECTED),
+            UploadError::OwnerNotPermitted => Some(error_codes::UPLOAD_OWNER_NOT_PERMITTED),
+            UploadError::QuotaExceeded => Some(error_codes::QUOTA_EXCEEDED),
+            UploadError::QuotaGraceLocked => Some(error_codes::QUOTA_GRACE_LOCKED),
+            UploadError::AccountSuspended => Some(error_codes::MODERATION_ACCOUNT_SUSPENDED),
+            UploadError::Forbidden => Some(error_codes::UPLOAD_FORBIDDEN),
+            UploadError::ActionNotAllowed(_) => Some(error_codes::UPLOAD_INVALID_ACTION),
+            UploadError::StaleRevival => Some(error_codes::UPLOAD_STALE_REVIVAL),
+            UploadError::AmkRegressed => Some(error_codes::UPLOAD_AMK_REGRESSED),
             _ => None,
         }
     }
@@ -100,15 +189,35 @@ impl UploadError {
             UploadError::SessionNotActive
             | UploadError::FinalizeInProgress
             | UploadError::DuplicateBlob { .. }
+            | UploadError::ChunkConflict
+            | UploadError::StaleRevival
             | UploadError::InvalidOffset { .. } => StatusCode::CONFLICT,
             UploadError::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            UploadError::ProtocolUnsupported { .. } => StatusCode::UPGRADE_REQUIRED,
+            UploadError::AlbumAccessDenied
+            | UploadError::DeviceNotAuthorized
+            | UploadError::OwnerNotPermitted
+            | UploadError::QuotaExceeded
+            | UploadError::QuotaGraceLocked
+            | UploadError::AccountSuspended
+            | UploadError::Forbidden => StatusCode::FORBIDDEN,
             UploadError::InvalidUpload(_)
             | UploadError::SizeExceeded
             | UploadError::EmptyChunk
             | UploadError::ChunkNotAligned
             | UploadError::MissingChecksum
+            | UploadError::MissingOffset
             | UploadError::ChunkChecksumMismatch { .. }
             | UploadError::ContentHashMismatch { .. }
+            | UploadError::UnknownCryptoSuite
+            | UploadError::InvalidHash
+            | UploadError::InvalidSize
+            | UploadError::UnsupportedContentType
+            | UploadError::TimestampOutOfRange
+            | UploadError::EnvelopeMismatch(_)
+            | UploadError::EnvelopeRejected(_)
+            | UploadError::ActionNotAllowed(_)
+            | UploadError::AmkRegressed
             | UploadError::ParseError(_) => StatusCode::BAD_REQUEST,
             UploadError::IoError(_)
             | UploadError::DbError(_)
@@ -140,6 +249,15 @@ impl Writer for UploadError {
         // can re-align without a extra HEAD round-trip.
         if let UploadError::InvalidOffset { expected, .. } = &self {
             res.add_header("X-Capsule-Offset", expected.to_string(), true)
+                .ok();
+        }
+
+        // An out-of-window protocol rejection advertises the accepted range so the
+        // client can surface an actionable "update to keep uploading" message.
+        if let UploadError::ProtocolUnsupported { min, max } = &self {
+            res.add_header("X-Capsule-Protocol-Min", min.clone(), true)
+                .ok();
+            res.add_header("X-Capsule-Protocol-Max", max.clone(), true)
                 .ok();
         }
 

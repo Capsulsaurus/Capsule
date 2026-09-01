@@ -5,4 +5,8 @@ if [ "$(uname)" != "Darwin" ]; then echo "Skipping Apple targets (not macOS)"; e
 for t in aarch64-apple-darwin x86_64-apple-darwin aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios; do
     echo ":: building capsule-core for $t"
     cargo build -p capsule-core --features ffi --target "$t"
+    # The app umbrella staticlib (S-F3): the capsule_core_ffi + capsule_sdk namespaces —
+    # the artifact the iOS xcframework actually packages (see capsule-core-ffi/src/lib.rs).
+    echo ":: building capsule-core-ffi (app umbrella) for $t"
+    cargo build -p capsule-core-ffi --target "$t"
 done

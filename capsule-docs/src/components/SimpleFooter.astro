@@ -6,14 +6,17 @@
     
     <nav class="footer-nav">
       <a href="/guides/getting-started/" class="footer-link">Documentation</a>
-      <a href="https://github.com/capsule-app/capsule" target="_blank" rel="noopener noreferrer" class="footer-link">GitHub</a>
+      <a href="https://github.com/Capsulsaurus/Capsule" target="_blank" rel="noopener noreferrer" class="footer-link">GitHub</a>
       <a href="/blog" class="footer-link">Blog</a>
       <a href="/roadmap" class="footer-link">Roadmap</a>
     </nav>
   </div>
   
   <div class="footer-bottom">
-    <p class="copyright">© {new Date().getFullYear()} Capsule. All rights reserved.</p>
+    <p class="copyright">
+      © {new Date().getFullYear()} Justin Chung · Capsule is free software under the
+      <a href="https://github.com/Capsulsaurus/Capsule/blob/master/LICENSE">AGPL-3.0-only</a>
+    </p>
   </div>
 </footer>
 
@@ -64,6 +67,15 @@
   .copyright {
     color: var(--sl-color-gray-4);
     font-size: 0.875rem;
+  }
+
+  .copyright a {
+    color: inherit;
+    text-decoration: underline;
+  }
+
+  .copyright a:hover {
+    color: var(--sl-color-white);
   }
 
   @media (max-width: 600px) {

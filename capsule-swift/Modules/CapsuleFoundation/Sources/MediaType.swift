@@ -27,9 +27,9 @@ public enum MediaType: String, Sendable, Codable, CaseIterable, Hashable {
     /// A human-readable name for display in the UI.
     public var displayName: String {
         switch self {
-        case .photo: "Photo"
-        case .video: "Video"
-        case .livePhoto: "Live Photo"
+        case .photo: String(localized: "ios.media_type.photo")
+        case .video: String(localized: "ios.media_type.video")
+        case .livePhoto: String(localized: "ios.media_type.live_photo")
         }
     }
 }

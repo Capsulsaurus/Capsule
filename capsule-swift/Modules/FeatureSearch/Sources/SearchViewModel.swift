@@ -105,9 +105,9 @@ public enum SearchSuggestion: Identifiable, Hashable, Sendable {
         switch self {
         case let .media(type):
             switch type {
-            case .photo: "Photos"
-            case .video: "Videos"
-            case .livePhoto: "Live Photos"
+            case .photo: String(localized: "ios.search.category.photos")
+            case .video: String(localized: "ios.search.category.videos")
+            case .livePhoto: String(localized: "ios.search.category.live_photos")
             }
         case let .date(range): range.title
         }

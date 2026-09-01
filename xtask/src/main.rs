@@ -1,6 +1,6 @@
 //! Repo-maintenance tasks for the Capsule workspace.
 //!
-//! Three commands:
+//! Commands:
 //!
 //! - `set-version <X.Y.Z>` writes a single repo-wide version string into every
 //!   package's source of truth so a release bump stays in sync across Rust, web,
@@ -9,11 +9,22 @@
 //! - `i18n [--check]` compiles the canonical `locales/` catalogs into each
 //!   platform's native localization format (see [`i18n`]). `--check` verifies the
 //!   committed files are up to date instead of writing them.
+//! - `i18n-guard` scans the web/SwiftUI/Compose surfaces for hardcoded user-facing
+//!   string literals and fails on any that is not a catalog key or allowlisted (the
+//!   S-I1 regression gate; see [`i18n_guard`]).
+//! - `translate-readme [--check | --extract]` regenerates the translated
+//!   `README.<lang>.md` files from the repo-root `README.md` (see
+//!   [`translate_readme`]). `--check` is the CI drift gate; `--extract` scaffolds a
+//!   locale's translation-data file.
 //! - `architecture-check` rejects implicit workspace packages, retired dependencies,
-//!   buildable review-only code, and stale component references.
+//!   buildable review-only code, and stale component references (see [`architecture`]).
 
 mod architecture;
+mod drop_kat;
 mod i18n;
+mod i18n_guard;
+mod share_kat;
+mod translate_readme;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,7 +34,13 @@ use regex::{Captures, Regex};
 use semver::Version;
 use toml_edit::Item;
 
-const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | architecture-check>";
+const USAGE: &str = "usage: xtask <set-version <X.Y.Z> | i18n [--check] | i18n-guard | translate-readme [--check | --extract] | share-kat [<out-path>] | drop-kat [<out-path>] | architecture-check>";
+
+/// Default output path (repo-relative) for the share-link KAT fixture the bun test consumes.
+const SHARE_KAT_OUT: &str = "capsule-web/src/generated/share-kat.json";
+
+/// Default output path (repo-relative) for the guest-drop KAT fixture the bun test consumes.
+const DROP_KAT_OUT: &str = "capsule-web/src/generated/drop-kat.json";
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
@@ -38,7 +55,28 @@ fn main() -> Result<()> {
             let check = args.next().as_deref() == Some("--check");
             i18n::run(&repo_root(), check)
         }
+        Some("i18n-guard") => i18n_guard::run(&repo_root()),
         Some("architecture-check") => architecture::run(&repo_root()),
+        Some("translate-readme") => {
+            let mode = match args.next().as_deref() {
+                None => translate_readme::Mode::Generate { api: false },
+                Some("--api") => translate_readme::Mode::Generate { api: true },
+                Some("--check") => translate_readme::Mode::Check,
+                Some("--extract") => translate_readme::Mode::Extract,
+                Some(other) => bail!(
+                    "unknown flag `{other}`; usage: xtask translate-readme [--check | --extract | --api]"
+                ),
+            };
+            translate_readme::run(&repo_root(), mode)
+        }
+        Some("share-kat") => {
+            let out = args.next().unwrap_or_else(|| SHARE_KAT_OUT.to_string());
+            share_kat::run(&repo_root(), &out)
+        }
+        Some("drop-kat") => {
+            let out = args.next().unwrap_or_else(|| DROP_KAT_OUT.to_string());
+            drop_kat::run(&repo_root(), &out)
+        }
         Some(other) => bail!("unknown command `{other}`; {USAGE}"),
         None => bail!("{USAGE}"),
     }

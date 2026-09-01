@@ -19,13 +19,27 @@ Kynos server
   ├─ auth and structural validation
   ├─ Capsule upload/sync state machines
   ├─ Postgres key-free index
-  ├─ optional Valkey hot state
+  ├─ Valkey volatile state (required)
   └─ Capsule-owned opaque blob store
 ```
 
 Rich timeline, search, tag, face, and memory queries run against the client's local SQLite catalog.
 The server stores and synchronizes opaque ciphertext plus the minimum key-free index required for
 authorization, ordering, quota, lifecycle, and retrieval.
+
+## Clients
+
+Native clients are preferred wherever the platform supports one:
+
+- [Android](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-android) — Jetpack Compose app over the `capsule-core-kotlin` shared library
+- [iOS/macOS](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-swift) — SwiftUI app over the `capsule-core-swift` shared library
+- [Web](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-web) — React client (guest drops and the share-link viewer; the authenticated read path is a key-free projection of the sync feed)
+- [CLI](https://github.com/Capsulsaurus/Capsule/tree/master/capsule-cli) — for development and advanced users primarily
+
+The native apps and the CLI share their client logic through `capsule-core` and `capsule-sdk`,
+exposed to Swift and Kotlin as uniffi bindings. **There is no desktop application**: `capsule-desktop`
+does not exist, and Windows and Linux users are served by the CLI and the web client. See
+[Clients](/design/clients/) for the per-platform contract.
 
 ## Dependency Boundaries
 

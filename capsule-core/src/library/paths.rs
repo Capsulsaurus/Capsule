@@ -70,6 +70,14 @@ pub fn sidecar_path(root: &Path, uuid: &Uuid, _ext: &str, capture_utc: Option<i6
     media_dir(root, year, month).join(format!("{}.cbor", uuid.simple()))
 }
 
+/// `media/{YYYY}/{YYYY-MM}/{uuid}.receipts.cbor` — the client's custody-receipt log for the
+/// asset, appended beside the provenance chain (SSoT: Storage Verification — Custody Receipts).
+/// Evidentiary, not a cache: it is included verbatim in the backup artifact.
+pub fn receipts_path(root: &Path, uuid: &Uuid, capture_utc: Option<i64>) -> PathBuf {
+    let (year, month) = date_parts(capture_utc);
+    media_dir(root, year, month).join(format!("{}.receipts.cbor", uuid.simple()))
+}
+
 /// `index/thumbnails/{size}/{s1}/{s2}/{uuid}.{format}` where format is "jxl" or "webp"
 pub fn thumbnail_path(root: &Path, uuid: &Uuid, size: ThumbnailSize) -> PathBuf {
     let (s1, s2) = shard_dirs(uuid);
@@ -121,12 +129,10 @@ pub fn trash_path(root: &Path, uuid: &Uuid, ext: &str) -> PathBuf {
         .join(format!("{}.{}", uuid.simple(), ext))
 }
 
-/// Appends `.tmp` to any path
-pub fn tmp_path(path: &Path) -> PathBuf {
-    let mut s = path.as_os_str().to_owned();
-    s.push(".tmp");
-    PathBuf::from(s)
-}
+// `tmp_path` encodes no library layout, so it lives in `crate::utils::paths` where
+// `crate::sidecar` can reach it without depending on `library`. Re-exported here so
+// `library::paths::tmp_path` and `library::tmp_path` keep resolving for existing callers.
+pub use crate::utils::paths::tmp_path;
 
 #[cfg(test)]
 mod tests {

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 /// uploads reason over it — see the upload-protocol design doc).
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum BlobRole {
+pub enum BlobRole {
     Original,
     Derivative,
     Metadata,
@@ -16,7 +16,7 @@ pub(crate) enum BlobRole {
 }
 
 impl BlobRole {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             BlobRole::Original => "original",
             BlobRole::Derivative => "derivative",
@@ -34,7 +34,7 @@ impl BlobRole {
 /// finalizable from its own record with no further client input (upload-protocol
 /// design doc, §Endpoints).
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
-pub(crate) struct UploadSession {
+pub struct UploadSession {
     /// Upload Session ID
     pub id: String,
     /// Asset ID (usually created by Postgres during session creation)
@@ -81,7 +81,7 @@ pub(crate) struct UploadSession {
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize, ToSchema)]
-pub(crate) enum UploadSessionStatus {
+pub enum UploadSessionStatus {
     /// Active with no accepted chunk yet
     Pending,
     /// Active with at least one accepted chunk
@@ -97,17 +97,17 @@ pub(crate) enum UploadSessionStatus {
 impl UploadSessionStatus {
     /// Returns true if the upload is in progress
     #[allow(dead_code)]
-    pub(crate) fn in_progress(&self) -> bool {
+    pub fn in_progress(&self) -> bool {
         matches!(self, UploadSessionStatus::Uploading)
     }
 
     /// Returns true if upload session is still active
-    pub(crate) fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         !self.is_inactive()
     }
 
     /// Returns true is upload session is inactive
-    pub(crate) fn is_inactive(&self) -> bool {
+    pub fn is_inactive(&self) -> bool {
         matches!(
             self,
             UploadSessionStatus::Completed | UploadSessionStatus::FailedProcessing
@@ -115,7 +115,7 @@ impl UploadSessionStatus {
     }
 
     /// Wire value for the `X-Capsule-Upload-Status` response header on `HEAD`.
-    pub(crate) fn as_header_value(&self) -> &'static str {
+    pub fn as_header_value(&self) -> &'static str {
         match self {
             UploadSessionStatus::Pending => "pending",
             UploadSessionStatus::Uploading => "uploading",

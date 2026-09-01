@@ -1,0 +1,318 @@
+[
+  {
+    "source": "# Capsule",
+    "target": "# Capsule"
+  },
+  {
+    "source": "Open-source, federated, E2E encrypted photo management and sharing service built for professionals and prosumers.",
+    "target": "開放原始碼、聯邦式、E2E 加密的相片管理與分享服務,專為專業人士與進階玩家打造。"
+  },
+  {
+    "source": "> Disclaimer: This project continues to be in active development. Star this repo to get the latest updates!\n>\n> Alpha status: The `master` branch is the main development branch. Releases on GitHub will be made once: 1. Features/APIs have been stabilized internally; 2. Internal testing group have tested sufficiently.\n>\n> Project Update (April 2026): We are porting to E2E encryption and offline-first philosophy so it will be another few months before we reach alpha again.\n> Project Update (June 2026): Developer is still working actively but only during spare time. Lots of new prerequisite work on establishing portable, pure Rust libraries in separate repos have been blocking (e.g. image encoding/decoding, metadata processing, geocoordinate logic, on-device ML models finetuned for use cases). However, fleshing out these missing building blocks in the Rust ecosystem is paramount to a solid product.",
+    "target": "> 免責聲明:本專案仍在積極開發中。請為此儲存庫加星號以獲取最新更新!\n>\n> Alpha 狀態:`master` 分支是主要開發分支。GitHub 上的正式發布將在以下條件達成後進行:1. 功能/API 已在內部穩定;2. 內部測試小組已充分測試。\n>\n> 專案更新(2026 年 4 月):我們正在轉向 E2E 加密與離線優先(offline-first)的理念,因此還需要幾個月的時間才能再次達到 Alpha 階段。\n> 專案更新(2026 年 6 月):開發者仍在積極開發,但僅限於業餘時間。許多在獨立儲存庫中建立可攜、純 Rust 函式庫的前置工作(例如影像編碼/解碼、中繼資料處理、地理座標邏輯、針對特定使用情境微調的裝置端 ML 模型)一直是進度上的阻礙。然而,充實 Rust 生態系中這些缺失的基礎元件,對於打造穩固的產品至關重要。"
+  },
+  {
+    "source": "## Features",
+    "target": "## 功能"
+  },
+  {
+    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
+    "target": "- **原生且跨平台**:Capsule 支援所有常見的桌面與行動平台,在每個平台上都同樣快速且原生。"
+  },
+  {
+    "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
+    "target": "- **最廣泛的格式支援**:Capsule 支援絕大多數的影像與影片格式,從常見智慧型手機格式到專業級 RAW 格式一應俱全。在任何裝置上檢視任何內容,就像檢視你手機裡的相片和影片一樣!"
+  },
+  {
+    "source": "- **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.",
+    "target": "- **資料始終經過最佳化**:Capsule 會嚴謹地快取並最佳化任何大型內容,以實現無縫傳輸(我們的方法已[記錄在文件中](https://capsule.justinchung.net/design/thumbnails/))。如果你覺得哪裡變慢了,歡迎告訴我們。"
+  },
+  {
+    "source": "- **Privacy**: Your data is yours and end-to-end encrypted.",
+    "target": "- **隱私**:你的資料屬於你自己,並經過端對端加密。"
+  },
+  {
+    "source": "- **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.",
+    "target": "- **功能完整的存取體驗**:Capsule 實作了多項強大功能,例如即時檢視、語意搜尋、AI 整理等。"
+  },
+  {
+    "source": "- **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.",
+    "target": "- **聯邦式**:Capsule 使用者可以與其他伺服器的使用者無縫分享他們的資產。可以把它想像成相片版的 [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol))。"
+  },
+  {
+    "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
+    "target": "- **開放原始碼**:Capsule 永遠開放原始碼,你可以自行架設伺服器。"
+  },
+  {
+    "source": "## Is Capsule for you?",
+    "target": "## Capsule 適合你嗎?"
+  },
+  {
+    "source": "Capsule is highly refined for photographers and prosumers who want to store and share their photos nearly as seamlessly as do cloud photo services that do not necessarily work on all your devices equally as well and own your data.",
+    "target": "Capsule 為攝影師與進階玩家精心打造,讓你能像使用雲端相片服務一樣近乎無縫地儲存與分享相片,卻不必擔心那些服務未必能在你所有裝置上同樣好用,也不必讓別人擁有你的資料。"
+  },
+  {
+    "source": "We implement strict security and privacy requirements with the assumption that any data stored can be viewed by unauthorized parties. As such, everything is end-to-end encrypted and processed locally.",
+    "target": "我們採用嚴格的安全與隱私要求,並假設任何儲存的資料都可能被未經授權的第三方檢視。因此,所有內容都經過端對端加密,並在本機處理。"
+  },
+  {
+    "source": "However, it is important to note that (at least currently) Capsule requires a **self-hosted** server which requires some technical knowledge. This is not a turn-key solution but rather a capable and actively-developed open-source project. It was created out of passion and so I (as the author) do not ask for any monetary compensation. The best form of compensation is technical contributions and feedback!",
+    "target": "不過,值得注意的是(至少目前而言)Capsule 需要**自行架設**伺服器,這需要一定的技術知識。這並非開箱即用的解決方案,而是一個功能完善、持續積極開發的開源專案。它是出於熱情而誕生的,因此身為作者的我不要求任何金錢報酬。最好的回報形式就是技術貢獻與意見回饋!"
+  },
+  {
+    "source": "## Screenshots",
+    "target": "## 截圖"
+  },
+  {
+    "source": "## Who is Capsule for?",
+    "target": "## Capsule 適合誰使用?"
+  },
+  {
+    "source": "- **Photographers**: Capsule is designed for photographers who want to store and share their photos with clients and peers.",
+    "target": "- **攝影師**:Capsule 專為想要與客戶及同儕儲存並分享相片的攝影師而設計。"
+  },
+  {
+    "source": "- **Families and friends**: Capsule is designed for prosumers who want to store and share their photos and videos with each other at full quality, complete with metadata.",
+    "target": "- **家人與朋友**:Capsule 專為想要以完整畫質、連同中繼資料一起互相儲存與分享相片和影片的進階玩家而設計。"
+  },
+  {
+    "source": "- **Organizations**: Organizations can use Capsule to share full-quality photos and videos with their members and clients.",
+    "target": "- **組織**:組織可以使用 Capsule 與其成員及客戶分享完整畫質的相片和影片。"
+  },
+  {
+    "source": "- **People who care about privacy**: Capsule implements the best of privacy and security practices and leaves the data in your hands.",
+    "target": "- **重視隱私的使用者**:Capsule 實作了最佳的隱私與安全實務,並將資料的掌控權交還給你。"
+  },
+  {
+    "source": "### Who is Capsule not for?",
+    "target": "### Capsule 不適合誰?"
+  },
+  {
+    "source": "This is a personal choice but if you're happy with existing services like Google Photos or iCloud, or sending highly compressed content over messaging apps, Capsule might not be for you.",
+    "target": "這取決於個人選擇,但如果你對 Google Photos 或 iCloud 等現有服務感到滿意,或是習慣透過通訊軟體傳送高度壓縮的內容,那麼 Capsule 或許不適合你。"
+  },
+  {
+    "source": "## Some similar alternatives",
+    "target": "## 一些類似的替代方案"
+  },
+  {
+    "source": "- **Google Photos or similar**: Google Photos is a great service for storing and sharing photos and videos. However, it compresses and strips metadata from your photos and videos by default, and does not support many more professional or non-smartphone formats.",
+    "target": "- **Google Photos 或類似服務**:Google Photos 是儲存與分享相片、影片的優秀服務。然而,它預設會壓縮你的相片和影片並移除中繼資料,也不支援許多更專業或非智慧型手機的格式。"
+  },
+  {
+    "source": "- **AirDrop, Quick Share or some messaging app**: These options are great for sharing photos and videos quickly, but they compress the content, have size limits, and/or do not store it for long-term access. If you have more than a few gigabytes of content, Capsule should offer a much more comfortable experience.",
+    "target": "- **AirDrop、Quick Share 或其他通訊軟體**:這些選項很適合快速分享相片和影片,但它們會壓縮內容、有大小限制,而且/或不會長期儲存以供日後存取。如果你的內容超過幾 GB,Capsule 應能提供舒適許多的體驗。"
+  },
+  {
+    "source": "## Getting Started",
+    "target": "## 快速上手"
+  },
+  {
+    "source": "[See our docs](https://capsule.justinchung.net/guides/getting-started/).",
+    "target": "[請參閱我們的文件](https://capsule.justinchung.net/guides/getting-started/)。"
+  },
+  {
+    "source": "### Features Relevant to New Users",
+    "target": "### 與新使用者相關的功能"
+  },
+  {
+    "source": "*Note: This section is being updated on the development branch.*",
+    "target": "*註:此章節正在開發分支中更新。*"
+  },
+  {
+    "source": "- Official tools for bulk imports: Capsule was built to support massive (TB+) imports on the fly. It handles deduplication, bulk organization, etc. for you. (For existing libraries, it is recommended that you use the CLI though.)",
+    "target": "- 官方批次匯入工具:Capsule 從設計之初就支援大規模(TB 等級以上)的即時匯入,能為你處理重複資料刪除、批次整理等工作。(不過若是既有的資料庫,建議改用 CLI。)"
+  },
+  {
+    "source": "- Native clients with native features: Sometimes you want to backup your content on particular platforms that require platform-specific APIs (e.g. iOS). If we have a native client for you, it will be using the latest APIs available in that ecosystem.",
+    "target": "- 具備原生功能的原生用戶端:有時你會想在需要特定平台 API(例如 iOS)的平台上備份內容。如果我們為你的平台提供了原生用戶端,它將會使用該生態系中最新可用的 API。"
+  },
+  {
+    "source": "- Performance-oriented architecture: Capsule is focused on providing a robust and secure backend to store your most important data, and you can be sure whatever big collection you have will be processed with all the hardware you give.",
+    "target": "- 效能導向的架構:Capsule 專注於提供穩健又安全的後端來儲存你最重要的資料,無論你擁有多龐大的收藏,都能確信它會善用你所提供的所有硬體資源來處理。"
+  },
+  {
+    "source": "## Development",
+    "target": "## 開發"
+  },
+  {
+    "source": "Components:",
+    "target": "元件:"
+  },
+  {
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
+  },
+  {
+    "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
+    "target": "- [Capsule Web](capsule-web/README.md)(開發中):以 React 打造的網頁用戶端"
+  },
+  {
+    "source": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic",
+    "target": "- [Capsule Core Kotlin](capsule-core-kotlin/README.md):供用戶端專屬邏輯使用的共用核心 Kotlin 多平台函式庫"
+  },
+  {
+    "source": "- [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App",
+    "target": "- [Capsule Android](capsule-android/README.md)(開發中):Jetpack Compose 應用程式"
+  },
+  {
+    "source": "- [Capsule Swift](capsule-swift/README.md): SwiftUI client for iOS/macOS",
+    "target": "- [Capsule Swift](capsule-swift/README.md):適用於 iOS/macOS 的 SwiftUI 用戶端"
+  },
+  {
+    "source": "- [Capsule Docs](capsule-docs/README.md): Documentation website in Starlight (Astro)",
+    "target": "- [Capsule Docs](capsule-docs/README.md):以 Starlight(Astro)打造的文件網站"
+  },
+  {
+    "source": "Planned server dependencies:",
+    "target": "Planned server dependencies:"
+  },
+  {
+    "source": "- [PostgreSQL](https://www.postgresql.org/)",
+    "target": "- [PostgreSQL](https://www.postgresql.org/)"
+  },
+  {
+    "source": "- [Valkey](https://valkey.io/) (optional session-state adapter)",
+    "target": "- [Valkey](https://valkey.io/) (optional session-state adapter)"
+  },
+  {
+    "source": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service.",
+    "target": "Blob storage is implemented behind a Capsule-owned backend contract; it does not require a separate object-storage service."
+  },
+  {
+    "source": "Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:",
+    "target": "考量到專案中使用的所有技術,你可能需要在不同 IDE 之間切換以開發專案的各個部分。以下是我們的建議:"
+  },
+  {
+    "source": "- `capsule-android`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-android`:Android Studio 或搭配外掛的 IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`:VS Code 或類似工具"
+  },
+  {
+    "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
+    "target": "- `capsule-core-kotlin`:Android Studio 或搭配外掛的 IntelliJ IDEA"
+  },
+  {
+    "source": "- `capsule-docs`: VS Code or similar",
+    "target": "- `capsule-docs`:VS Code 或類似工具"
+  },
+  {
+    "source": "- `capsule-swift`: Xcode",
+    "target": "- `capsule-swift`:Xcode"
+  },
+  {
+    "source": "- `capsule-web`: VS Code or similar",
+    "target": "- `capsule-web`:VS Code 或類似工具"
+  },
+  {
+    "source": "### Setup",
+    "target": "### 設定"
+  },
+  {
+    "source": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on.",
+    "target": "This is a polyglot monorepo (5+ programming languages: Rust, TypeScript, Kotlin, Swift/Objective-C, C/C++, Python), so each language uses its native toolchain rather than a single unified build system. [mise](https://mise.jdx.dev) is the task runner that ties the per-language tasks together (`mise run check`, `mise run build`, etc.), and it also pins the shared dev tooling it invokes (`hk`, `convco`, `cargo-nextest`, `wasm-bindgen-cli`). Various tools will need to be setup based on services you need to work on."
+  },
+  {
+    "source": "Setup in the following order:",
+    "target": "請依照下列順序進行設定:"
+  },
+  {
+    "source": "- Install [mise](https://mise.jdx.dev) and run `mise install` from the repo root to fetch the pinned shared tooling.",
+    "target": "- 安裝 [mise](https://mise.jdx.dev),並在儲存庫根目錄執行 `mise install` 以取得固定版本的共用工具。"
+  },
+  {
+    "source": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev)).",
+    "target": "- Install the git hooks with `mise run hooks-install` (they are run by [hk](https://hk.jdx.dev))."
+  },
+  {
+    "source": "- Setup all necessary tools related to Kotlin Multiplatform: <https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>",
+    "target": "- 設定所有與 Kotlin Multiplatform 相關的必要工具:<https://www.jetbrains.com/help/kotlin-multiplatform-dev/multiplatform-setup.html>"
+  },
+  {
+    "source": "- Setup each of the following tools in the Development sections of each component's README.",
+    "target": "- 依照各元件 README 中「Development」章節的說明,設定下列各項工具。"
+  },
+  {
+    "source": "### Style and Guidelines",
+    "target": "### 風格與準則"
+  },
+  {
+    "source": "- Due to the numerous languages in this monorepo, we use multiple linters/formatters, each native to each language/technology. CI/CD will enforce these and it is recommended to use the same tools in the IDE of your choice to reduce merge conflicts. (Also, all code is standardized to 4 spaces as some languages have specific guidelines while others (e.g. TypeScript) have mixed guides.)",
+    "target": "- 由於這個 monorepo 中包含多種語言,我們針對每種語言/技術分別使用其原生的 linter/formatter。CI/CD 會強制執行這些規範,建議你在所選的 IDE 中使用相同工具,以減少合併衝突。(此外,所有程式碼統一採用 4 個空白字元縮排,因為部分語言有特定規範,而其他語言(例如 TypeScript)的規範則較為混雜。)"
+  },
+  {
+    "source": "## Issue Reporting",
+    "target": "## 問題回報"
+  },
+  {
+    "source": "GitHub Issues is the only accepted method of technical issue reporting. For assistance on setup, we recommend opening a GitHub Discussion (for visibility).",
+    "target": "GitHub Issues 是唯一接受的技術問題回報方式。若需要設定方面的協助,我們建議開啟 GitHub Discussion(以提高能見度)。"
+  },
+  {
+    "source": "> Note on third-party clients and scripts: This is outside the scope of the project but if there is missing functionality that led to resorting to external solutions, we highly encourage you to submit a feature request!",
+    "target": "> 關於第三方用戶端與腳本的說明:這不在本專案的範疇之內,但如果是因為缺少某項功能而不得不轉用外部解決方案,我們強烈建議你提交功能需求!"
+  },
+  {
+    "source": "## FAQ",
+    "target": "## 常見問答"
+  },
+  {
+    "source": "**Q: Why may Capsule be more suitable than other open-source solutions?**",
+    "target": "**問:為什麼 Capsule 可能比其他開源解決方案更適合?**"
+  },
+  {
+    "source": "A: Capsule is designed from the ground up with performance, usability, and compatibility in mind. While hosting requires some initial setup (all of which is carefully documented), we have by far the most comprehensive format support, real-time viewing capabilities. We thoroughly test the supported hardware and software combinations and conservatively push new features to stable. It should be a great option for those with large amounts of content and want a single pane of glass to manage all their assets from any device.",
+    "target": "答:Capsule 從一開始就以效能、易用性與相容性為核心設計。雖然架設伺服器需要一些初期設定(所有步驟都經過詳盡記錄),但我們擁有目前最全面的格式支援與即時檢視能力。我們會徹底測試所支援的軟硬體組合,並以保守的態度將新功能推送至穩定版。對於擁有大量內容、並希望能從任何裝置以單一介面管理所有資產的使用者來說,這會是絕佳的選擇。"
+  },
+  {
+    "source": "**Q: Why not extend off existing open-source solutions?**",
+    "target": "**問:為什麼不在既有的開源解決方案上進行擴充?**"
+  },
+  {
+    "source": "A: While there are multiple great open-source solutions, they lack a lot of the involved functions that professionals and prosumers need. For prosumers interested in an open-source and self-hosted solution, we have a robust, and highly scalable solution. For professionals looking to host all their assets in a seamless and integrated service, we have a solution that may be a better fit than some proprietary options.",
+    "target": "答:雖然市面上有多個優秀的開源解決方案,但它們缺少許多專業人士與進階玩家所需的複雜功能。對於有興趣採用開源且自架方案的進階玩家,我們提供了一套穩健且高度可擴展的解決方案。對於希望以無縫整合的服務架設所有資產的專業人士,我們提供的方案可能比某些專有選項更加合適。"
+  },
+  {
+    "source": "Side note: The original author loves open-source and has contributed to various projects. The reason for starting from the ground up is that many of the technical decisions to achieve the goals with user experience and performance require multiple critical design decisions.\n**Q: For the API, were languages other than Rust considered?**",
+    "target": "附註:原作者熱愛開源,並曾為多個專案做出貢獻。之所以選擇從零開始打造,是因為要在使用者體驗與效能上達成目標,需要做出許多關鍵的技術設計決策。\n**問:在 API 方面,是否考慮過 Rust 以外的語言?**"
+  },
+  {
+    "source": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger.",
+    "target": "A: Yes, we considered Go, TypeScript, and Kotlin/Java; the first proof of concept was a REST API in TypeScript. Capsule now standardizes its server boundary on one Kynos REST/OpenAPI contract while clients perform the end-to-end encrypted media processing. Rust provides the memory safety, performance, and cross-platform support required by both halves of that design. Several other languages remain in use where their native platform support is stronger."
+  },
+  {
+    "source": "**Q: How do bugfixes happen?**",
+    "target": "**問:錯誤修復是如何進行的?**"
+  },
+  {
+    "source": "A: Even if the best development practices, rigorous testing, and conservative designs, no software is without bugs. Bug reporting and thoughtful feature requests submitted to the issues page would be much appreciated. Certain types of bugs, such as those affecting data integrity, should be marked with the appropriate tags and will be ironed out ASAP. Patches typically roll out to the latest major version and marked in a notice board separate from CHANGELOGs.",
+    "target": "答:即使採用最佳開發實務、嚴謹的測試與保守的設計,任何軟體都難免存在錯誤。我們非常歡迎大家在 issues 頁面提交錯誤回報與經過深思熟慮的功能需求。某些類型的錯誤,例如影響資料完整性的錯誤,應標記適當的標籤,我們會盡快處理修復。修補程式通常會發布到最新的主要版本,並記錄在與 CHANGELOG 分開的公告欄中。"
+  },
+  {
+    "source": "## How to contribute",
+    "target": "## 如何貢獻"
+  },
+  {
+    "source": "Capsule primarily benefits from active contributions and feedback! Rather than a donation we actually need more hands. See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.",
+    "target": "Capsule 主要受益於積極的貢獻與意見回饋!比起捐款,我們其實更需要更多人手參與。詳情請參閱 [CONTRIBUTING.md](./CONTRIBUTING.md)。"
+  },
+  {
+    "source": "### Contributor License Agreement (CLA)",
+    "target": "### 貢獻者授權合約(CLA)"
+  },
+  {
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "我們要求所有貢獻者同意 [CLA](CLA.md)。Capsule 的著作權由一個人持有，正是這一點使應用程式商店散布成為可能：App Store 的條款與 AGPL 不相容，因此面向商店的建置只能是著作權人另行作出的授權。作為回報，每一次公開的原始碼發布都將維持在 OSI 認可的授權條款之下。"
+  },
+  {
+    "source": "## License",
+    "target": "## 授權"
+  },
+  {
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule 以 [AGPL-3.0-only](LICENSE) 發布。著作權由 Justin Chung 單獨持有；第三方聲明請見 [NOTICE](NOTICE)。著作權人亦可在另行約定的商業條款下提供 Capsule，包括應用程式商店所要求的專有條款。這不影響已經發布的內容：你在 AGPL 下取得的任何版本，將永久地在 AGPL 下屬於你。完整立場記錄於[授權設計文件](https://capsule.justinchung.net/design/licensing/)。"
+  }
+]

@@ -6,7 +6,7 @@ status: draft
 
 The server's job is to hold ciphertext blobs and a key-free index that maps assets to blobs. It performs no decoding, no metadata extraction, and no thumbnail generation — it cannot, since it never holds a decryption key. The blob layout below **is** the contract: a server-side rebuild (re-deriving the Postgres index from blob bytes) depends on the file naming and the manifest envelope being exactly as specified here.
 
-Implementation is planned in `capsule-api::{blob,index}` behind a narrow Capsule-owned blob-store port with arbitrary backend support. Volatile session state will live in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
+Implementation is planned in `capsule-server::{blob,index}` behind a narrow Capsule-owned blob-store port with arbitrary backend support. Volatile session state will live in Valkey (see [Required Services](#required-services)); it is not a versioned API surface.
 
 ## Required Services
 
@@ -18,6 +18,8 @@ The server's state is split across **three required systems** — one code path,
 
 The durable/volatile split is design, not a tuning knob: the hot upload path — offset increments and status transitions — never touches the durable Postgres asset row, which is written exactly twice per upload (pending row at session creation, `uploaded` flip at finalization). A Postgres-resident session table would be a second implementation of the same contract; Capsule ships exactly one.
 
+Required means required. The server refuses to start without `VALKEY_URL` — it is a startup variable the environment loader demands, not a scaling knob a small deployment can leave unset — and there is no profile, measured or otherwise, in which Valkey is optional. Each state port keeps an **in-memory adapter for tests only**: a deterministic test double, never a deployment mode. The alternative considered and rejected was a Postgres fallback that would let a single-node deployment skip Valkey; it fails on exactly the ground the split above rests on, since emulating TTL and expiry in SQL is the generic TTL abstraction the [server module plan](/design/module-map/#planned-server-modules) declines to introduce.
+
 ## Blob Store Layout
 
 ```text
@@ -26,7 +28,7 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 │   └── {upload_id}.bin             # in-progress append-only upload, pre-verification
 ├── blobs/
 │   └── {hash[0:2]}/{hash[2:4]}/
-│       └── {hash}                  # finalized blob, content-addressed
+│       └── {hash}.bin              # finalized blob, content-addressed, two-level hex shard
 └── .server/
     ├── version                     # server filesystem schema version
     └── config                      # server-wide configuration
@@ -34,8 +36,37 @@ The durable/volatile split is design, not a tuning knob: the hot upload path —
 
 - **`{blob_root}`**: absolute path configured at server startup. The entire tree must be on a single filesystem so that finalization renames are atomic.
 - **`incoming/`**: live uploads. Each session owns a single append-only file `{upload_id}.bin`; accepted chunks are appended in order, and the 4 KiB chunk alignment keeps every write block-aligned. There is no per-chunk staging and no assembly step. See [Import — Upload Protocol: Append-Only Storage](/design/import/upload-protocol/#append-only-storage).
-- **`blobs/`**: the finalized store. A blob's filename is its [ciphertext content hash](/design/cryptography/primitives/); the two-level hex-prefix shard keeps directory sizes bounded for multi-million-blob stores. A finalized blob is immutable.
+- **`blobs/`**: the finalized store, **sharded two levels deep on the content hash's own hex prefix**: `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin`, the filename being the [ciphertext content hash](/design/cryptography/primitives/) with a `.bin` suffix. This is the re-ratification the 2026-07-12 amendment demanded, and it overturns that amendment's flat namespace. The amendment argued the flat layout from the wrong sizing case: *no hot path enumerates the directory* is true and beside the point, because lookup is a `stat` at a known content address and costs the same flat or sharded. The cost lands on the **enumerations**, of which there are three, each a full `readdir` + `stat` of the store — the [integrity scrub](/design/filesystem/maintenance/#server-side-integrity-scrub)'s blob→row pass, the [refcount GC](#deletion-and-garbage-collection)'s orphan sweep, and the [index rebuild](#recovering-the-index-from-blobs-alone) — and a multi-million-entry flat directory is precisely where those hurt. All three are integrity or recovery paths, so they must stay affordable exactly when a deployment is already in trouble. Timing settles the rest: no deployment holds blobs to move, so the shard is free **now** and a version-bumped data move behind `.server/version` forever after. The store in the tree today is still flat; the shard is the target `capsule-server::blob` is built to, not a migration it performs. Shard directories are created on demand at finalization and the rename stays inside `{blob_root}`, so finalization remains atomic. A finalized blob is immutable.
 - **`.server/`**: the server operator's own configuration and schema version. This is plaintext server metadata, not user data — it is the one thing under `{blob_root}` that is not an encrypted blob.
+
+### What the shard does not decide
+
+Sharding `blobs/` leaves four questions open, and each has a correctness consequence rather than a
+stylistic one. Settled with slice `S-C35`:
+
+- **Temp files live inside the target shard**, as `blobs/{aa}/{bb}/.{hash}.{uuid}.tmp`. Same
+  directory is a stronger guarantee than same filesystem and needs no configuration to stay true.
+  The alternative — `blobs/{hash}.tmp` beside a now-sharded tree — would be the one file outside
+  every shard, a permanent exception every enumeration has to carry. A crashed temp is then debris
+  *inside* a shard the scrub already walks. Note the upload path has no temp file at all:
+  `incoming/{upload_id}.bin` **is** the staging file and finalization renames it straight to the
+  content address.
+- **Directory creation is fsynced before the row is committed**, in order: the staged data, then
+  each shard directory this write actually created, then the rename, then the shard it landed in.
+  The asymmetry forces this rather than making it tunable — a lost directory entry underneath a
+  committed index row is a **dangling reference**, a loud integrity error that is never
+  auto-deleted, whereas the reverse is an orphan the refcount GC already reclaims. Directory fsync
+  is a Unix operation; other hosts are not supported deployments.
+- **Nothing else shards.** `incoming/` is bounded by concurrent sessions under the 24-hour cap, and
+  its enumeration is over that live set. `quarantine/` is bounded by failures, is empty in a healthy
+  store, and exists to be **read by a human** — sharding would hide the one inventory an operator
+  wants to list. Neither is content-addressed, so neither has a prefix to shard on without inventing
+  one.
+- **The layout is coupled to the digest**, deliberately and mechanically. The two-level split is
+  derived from the 64-character lowercase-hex address and nowhere else; a content address is
+  constructed only by parsing, so no loose string reaches a path. Changing the digest is therefore a
+  layout change — a `.server/version` bump and a data move — and fails a compile-time assertion
+  rather than silently misfiling blobs under shards that no longer derive from them.
 
 ## Uniform, Opaque Blobs
 
@@ -103,11 +134,12 @@ The server cannot read an asset's `is_deleted` flag — it lives inside the encr
 
 ## Storage Verification
 
-Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route will live in `capsule-api::blob`.
+Clients need to confirm an asset is *safely stored* before they discard their only local copy — not just that a hash matches, but that the server physically holds the bytes, has them indexed, and would serve them. The server answers this without any key, composing the three facts it already tracks: the blob is present in `blobs/` (a `stat`), it is referenced by a committed `uploaded = true` row, and it is retrievable — reference count > 0 and **not** `collectable_since` (mid-[GC](#deletion-and-garbage-collection)), quarantined, or a [dangling-reference integrity error](#deletion-and-garbage-collection). A blob that is marked collectable, quarantined, or missing from `blobs/` is reported non-retrievable so a client never releases a local copy the server is about to or has already lost. The wire contract, the per-blob verdict shape, and the client-side **verify-before-destroy** rule that consumes it are owned by [Import — Storage Verification](/design/import/storage-verification/); the route will live in `capsule-server::blob`.
 
 ## Validation
 
-- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly `blobs/{hash[0:2]}/{hash[2:4]}/{hash}` on disk. Recompute the hash from disk; assert match.
+- **Layout round-trip (unit).** Upload, finalize, rename, and assert the blob lives at exactly its sharded content address `blobs/{hash[0:2]}/{hash[2:4]}/{hash}.bin` on disk — never at a flat `blobs/{hash}.bin`. Recompute the hash from disk; assert match.
+- **Enumeration over the shard tree (unit).** Populate blobs across multiple shard directories; assert the scrub, GC, and rebuild walks each recover exactly the same blob set a flat walk would, and that a partially-populated shard tree (missing intermediate directories) enumerates without error.
 - **Index rebuild idempotency (smoke).** Take a real testcontainer Postgres + a populated `blobs/` tree, drop the index tables, run the rebuild routine, assert every row matches a hand-derived expected set. Re-run; assert zero changes.
 - **Quarantine on malformed envelope (unit).** Inject a blob with a corrupted manifest envelope into `blobs/`; run rebuild; assert the blob moves to `quarantine/` with a `.reason.json` that names the structural check that failed.
 - **Reference-count GC safety (unit).** Decrement a blob's last reference; assert eligibility for GC; assert GC only proceeds after a configurable grace period; concurrent re-reference during the grace period cancels GC.

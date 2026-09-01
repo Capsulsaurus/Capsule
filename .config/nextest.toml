@@ -20,3 +20,18 @@ slow-timeout = { period = "60s", terminate-after = 3 }
 # JUnit output for CI dashboards (written to target/nextest/ci/junit.xml).
 [profile.ci.junit]
 path = "junit.xml"
+
+# The container group is **empty as of `S-C59`**, and the declaration stays.
+#
+# It existed for the retired Salvo auth crate, whose integration tests spun up shared Postgres
+# and Valkey containers and shared a tracing `Once` — running them concurrently was the main
+# flakiness source, so the group was pinned to one thread with retries as the backstop. The
+# rebuilt server has no container test at all: every port has a deterministic in-memory adapter
+# and Kynos's `TestClient` drives a built service in-process, which is why `mise run test-rust`
+# now needs no podman for anything above the storage ports.
+#
+# The group is kept rather than deleted because the first Postgres or Valkey *adapter* will need
+# exactly it, and rediscovering the one-thread rule by watching CI flake is the expensive way to
+# learn it. An empty test group costs nothing.
+[test-groups.containers]
+max-threads = 1

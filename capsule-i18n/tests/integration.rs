@@ -29,15 +29,21 @@ fn error_code_resolves_to_its_message() {
 
 #[test]
 fn unknown_locale_falls_back_to_source() {
-    // No `es` bundle exists yet, so messages come from the source locale.
-    let bundle = Bundle::for_locale("es");
+    // `nl` is outside the official language set, so messages come from the source locale.
+    let bundle = Bundle::for_locale("nl");
     assert_eq!(bundle.message("back"), Some("Back"));
 }
 
 #[test]
 fn negotiation_uses_the_supported_set() {
+    // A supported language negotiates to its catalog (S-I2 rolled out the official set)…
     assert_eq!(
         negotiate("es-MX, es;q=0.9", supported_locales(), "en"),
+        "es"
+    );
+    // …while a language outside the set still falls back to the source locale.
+    assert_eq!(
+        negotiate("nl-BE, nl;q=0.9", supported_locales(), "en"),
         "en"
     );
 }

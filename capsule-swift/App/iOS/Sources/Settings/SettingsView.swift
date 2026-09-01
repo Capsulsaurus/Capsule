@@ -21,15 +21,15 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle("Share On-Device Diagnostics", isOn: diagnosticsBinding)
+                    Toggle("ios.settings.diagnostics.toggle", isOn: diagnosticsBinding)
                 } header: {
-                    Text("Diagnostics")
+                    Text("ios.settings.diagnostics.header")
                 } footer: {
-                    Text("Collects crash and performance diagnostics on this device using Apple's MetricKit. Nothing leaves your device unless you turn on uploads below.")
+                    Text("ios.settings.diagnostics.footer")
                 }
 
                 Section {
-                    Toggle("Upload Reports", isOn: uploadBinding)
+                    Toggle("ios.settings.upload.toggle", isOn: uploadBinding)
                     if consent.remoteUploadEnabled {
                         TextField("https://your-server/v1/telemetry", text: $endpointText)
                             .textInputAutocapitalization(.never)
@@ -39,25 +39,25 @@ struct SettingsView: View {
                             .submitLabel(.done)
                     }
                 } header: {
-                    Text("Self-Hosted Upload")
+                    Text("ios.settings.upload.header")
                 } footer: {
-                    Text("Optionally send diagnostic reports to your own Capsule server. Off by default — Capsule never sends anything to a third party.")
+                    Text("ios.settings.upload.footer")
                 }
 
                 Section {
-                    Button("Report a Problem…") {
+                    Button("ios.settings.report.button") {
                         Task { await buildReport() }
                     }
                     .disabled(isBuildingReport)
                 } footer: {
-                    Text("Builds a redacted report — recent logs, device info, and the last crash. No photos or album contents are included. You choose where to send it.")
+                    Text("ios.settings.report.footer")
                 }
 
                 Section {
-                    LabeledContent("Version", value: appVersion)
+                    LabeledContent("ios.settings.version", value: appVersion)
                 }
             }
-            .navigationTitle("Settings")
+            .navigationTitle("ios.tab.settings")
             .task { await load() }
             .sheet(item: $report) { DiagnosticsReportView(report: $0) }
         }

@@ -105,7 +105,7 @@ Verification is **local-only**: the client keeps a cached copy of the escrow blo
 
 - **7 days** after setup (catches the lost-napkin case while re-setup is cheap), then **90 days**, backing off to a **180-day cap** after two consecutive successes.
 - **Re-arm triggers** (reset to the 7-day step): a new device enrolls (the prompt lands on the *new* device — it has never seen the passphrase); the recovery secret rotates; a restore-from-escrow completes.
-- Snooze: 24 h or 7 d, at most 3 consecutive snoozes, then a persistent non-blocking badge. The check **never blocks** sync, unlock, or any critical flow — it is advisory by design.
+- Snooze steps are 24 h or 7 d, at most 3 consecutive. This is the `recovery_check_due` [alert class](/design/notifications/#alert-classes): the bounded-snooze-then-badge mechanic, and the rule that no alert blocks a critical flow, are owned by [Notifications](/design/notifications/); the cadence and re-arm triggers above are owned here. Because each step is a deadline the device can compute, the prompt is **pre-armed** ([pre-arm rule](/design/notifications/#the-pre-arm-rule)) rather than evaluated at launch.
 
 ### On Repeated Failure: Guided Re-Wrap
 

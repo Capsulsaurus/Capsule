@@ -83,6 +83,8 @@ async fn main() -> Result<()> {
     };
     let acceptor = TcpAcceptor::try_from(listener)?;
 
+    // Serve with HTTP/2 cleartext (h2c) support for gRPC
+    // The 'http2' and 'http2-cleartext' features in Cargo.toml enable H2C
     info!("Server listening on {}", addr);
     Server::new(acceptor).serve(router).await;
 

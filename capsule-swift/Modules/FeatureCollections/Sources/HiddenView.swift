@@ -36,24 +36,24 @@ struct HiddenView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if assets.isEmpty {
                 ContentUnavailableView(
-                    "Nothing Hidden",
+                    "ios.hidden.empty.title",
                     systemImage: "eye.slash",
-                    description: Text("Hide photos from the Library with Select → Hide.")
+                    description: Text("ios.hidden.empty.description")
                 )
             } else {
                 grid
             }
         }
-        .navigationTitle("Hidden")
+        .navigationTitle("ios.hidden.title")
         .navigationBarTitleDisplayMode(.inline)
         .task { await authenticate() }
         .confirmationDialog(
-            "Hidden Photo",
+            "ios.hidden.confirm.title",
             isPresented: unhidePresented,
             titleVisibility: .visible,
             presenting: unhideTarget
         ) { asset in
-            Button("Unhide") { Task { await unhide(asset) } }
+            Button("ios.hidden.unhide") { Task { await unhide(asset) } }
         }
     }
 
@@ -70,11 +70,11 @@ struct HiddenView: View {
 
     private var lockedView: some View {
         ContentUnavailableView {
-            Label("Hidden", systemImage: "lock.fill")
+            Label("ios.hidden.title", systemImage: "lock.fill")
         } description: {
-            Text("Authenticate to view your hidden photos.")
+            Text("ios.hidden.locked.description")
         } actions: {
-            Button("Unlock") { Task { await authenticate() } }
+            Button("ios.hidden.unlock") { Task { await authenticate() } }
         }
     }
 
@@ -92,7 +92,8 @@ struct HiddenView: View {
             return
         }
         let success = (try? await context.evaluatePolicy(
-            .deviceOwnerAuthentication, localizedReason: "View your hidden photos"
+            .deviceOwnerAuthentication,
+            localizedReason: String(localized: "ios.auth.reason.hidden")
         )) ?? false
         unlocked = success
         if success { await loadHidden() }

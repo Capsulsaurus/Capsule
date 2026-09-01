@@ -49,12 +49,12 @@ public struct TimelineRootView: View {
     public var body: some View {
         NavigationStack {
             content
-                .navigationTitle("Library")
+                .navigationTitle("ios.tab.library")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if isSelecting {
                         ToolbarItem(placement: .topBarLeading) {
-                            Button("Cancel") { exitSelection() }
+                            Button("ios.common.cancel") { exitSelection() }
                         }
                         ToolbarItem(placement: .principal) {
                             Text(selectionTitle).font(.headline)
@@ -91,11 +91,11 @@ public struct TimelineRootView: View {
             if importer.isImporting { importProgressOverlay }
         }
         .alert(
-            "Import Complete",
+            "ios.timeline.import_complete.title",
             isPresented: importResultBinding,
             presenting: importer.lastResult
         ) { _ in
-            Button("OK") {}
+            Button("ios.common.ok") {}
         } message: { result in
             Text(Self.importSummary(result))
         }
@@ -103,16 +103,25 @@ public struct TimelineRootView: View {
             if isSelecting { selectionActionBar }
         }
         .confirmationDialog(
-            "Delete \(selectedIDs.count) Items?",
+            String(
+                localized: "ios.timeline.delete_selected.title",
+                defaultValue: "Delete \(selectedIDs.count) Items?"
+            ),
             isPresented: $isDeleteConfirmPresented,
             titleVisibility: .visible
         ) {
-            Button("Delete \(selectedIDs.count) Items", role: .destructive) {
+            Button(
+                String(
+                    localized: "ios.timeline.delete_selected.confirm",
+                    defaultValue: "Delete \(selectedIDs.count) Items"
+                ),
+                role: .destructive
+            ) {
                 Task { await deleteSelected() }
             }
         }
         .confirmationDialog(
-            "Add to Album",
+            "ios.add_to_album.title",
             isPresented: $isAddToAlbumPresented,
             titleVisibility: .visible
         ) {
@@ -121,8 +130,8 @@ public struct TimelineRootView: View {
             }
         } message: {
             Text(userAlbums.isEmpty
-                ? "Create an album in Collections first."
-                : "Choose a Capsule album.")
+                ? LocalizedStringKey("ios.add_to_album.empty_collections")
+                : LocalizedStringKey("ios.add_to_album.choose"))
         }
         .sheet(isPresented: $isSharePresented) {
             if !shareItems.isEmpty { TimelineActivityView(items: shareItems) }
@@ -139,16 +148,16 @@ public struct TimelineRootView: View {
             permissionPrompt
         case let .failed(message):
             ContentUnavailableView(
-                "Couldn't Load Photos",
+                "ios.timeline.load_failed.title",
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
             )
         case .ready:
             if model.sections.isEmpty {
                 ContentUnavailableView(
-                    "No Photos",
+                    "ios.timeline.empty.title",
                     systemImage: "photo.on.rectangle",
-                    description: Text("Tap the import button to add photos to Capsule.")
+                    description: Text("ios.timeline.empty.description")
                 )
             } else {
                 PhotoGridView(
@@ -174,14 +183,14 @@ public struct TimelineRootView: View {
         } label: {
             Image(systemName: "square.and.arrow.down")
         }
-        .accessibilityLabel("Import Photos")
+        .accessibilityLabel("ios.timeline.import.accessibility")
     }
 
     private var levelPicker: some View {
-        Picker("View", selection: levelBinding) {
-            Text("Years").tag(TimelineViewModel.TimelineLevel.years)
-            Text("Months").tag(TimelineViewModel.TimelineLevel.months)
-            Text("All").tag(TimelineViewModel.TimelineLevel.all)
+        Picker("ios.timeline.view_picker", selection: levelBinding) {
+            Text("ios.timeline.level.years").tag(TimelineViewModel.TimelineLevel.years)
+            Text("ios.timeline.level.months").tag(TimelineViewModel.TimelineLevel.months)
+            Text("ios.timeline.level.all").tag(TimelineViewModel.TimelineLevel.all)
         }
         .pickerStyle(.segmented)
         .frame(maxWidth: 260)
@@ -193,10 +202,10 @@ public struct TimelineRootView: View {
 
     private var densityMenu: some View {
         Menu {
-            Picker("Grid Size", selection: $model.columnCount) {
-                Label("Large", systemImage: "square.grid.2x2").tag(3)
-                Label("Medium", systemImage: "square.grid.3x3").tag(5)
-                Label("Small", systemImage: "square.grid.4x3.fill").tag(7)
+            Picker("ios.timeline.grid_size", selection: $model.columnCount) {
+                Label("ios.timeline.grid.large", systemImage: "square.grid.2x2").tag(3)
+                Label("ios.timeline.grid.medium", systemImage: "square.grid.3x3").tag(5)
+                Label("ios.timeline.grid.small", systemImage: "square.grid.4x3.fill").tag(7)
             }
         } label: {
             Image(systemName: "square.grid.2x2")
@@ -205,11 +214,11 @@ public struct TimelineRootView: View {
 
     private var permissionPrompt: some View {
         ContentUnavailableView {
-            Label("Photo Access Needed", systemImage: "lock.fill")
+            Label("ios.timeline.permission.title", systemImage: "lock.fill")
         } description: {
-            Text("Grant photo access to see your library, or import photos directly into Capsule.")
+            Text("ios.timeline.permission.description")
         } actions: {
-            Button("Open Settings") {
+            Button("ios.timeline.permission.open_settings") {
                 if let url = URL(string: UIApplication.openSettingsURLString) {
                     UIApplication.shared.open(url)
                 }
@@ -220,7 +229,7 @@ public struct TimelineRootView: View {
     private var importProgressOverlay: some View {
         ZStack {
             Color.black.opacity(0.3).ignoresSafeArea()
-            ProgressView("Importing…")
+            ProgressView("ios.timeline.importing")
                 .padding(CapsuleTheme.Spacing.xLarge)
                 .capsuleGlass(in: RoundedRectangle(cornerRadius: CapsuleTheme.Radius.medium))
         }
@@ -245,15 +254,26 @@ public struct TimelineRootView: View {
     private static func importSummary(_ result: ImportResult) -> String {
         var lines: [String] = []
         if result.importedCount > 0 {
-            lines.append("\(result.importedCount) imported into Capsule.")
+            lines.append(String(
+                localized: "ios.timeline.import.imported",
+                defaultValue: "\(result.importedCount) imported into Capsule."
+            ))
         }
         if result.duplicateCount > 0 {
-            lines.append("\(result.duplicateCount) already in your library.")
+            lines.append(String(
+                localized: "ios.timeline.import.duplicates",
+                defaultValue: "\(result.duplicateCount) already in your library."
+            ))
         }
         if result.failureCount > 0 {
-            lines.append("\(result.failureCount) couldn't be imported.")
+            lines.append(String(
+                localized: "ios.timeline.import.failed",
+                defaultValue: "\(result.failureCount) couldn't be imported."
+            ))
         }
-        return lines.isEmpty ? "Nothing to import." : lines.joined(separator: "\n")
+        return lines.isEmpty
+            ? String(localized: "ios.timeline.import.nothing")
+            : lines.joined(separator: "\n")
     }
 }
 
@@ -261,11 +281,16 @@ public struct TimelineRootView: View {
 
 private extension TimelineRootView {
     var selectButton: some View {
-        Button("Select") { isSelecting = true }
+        Button("ios.timeline.select") { isSelecting = true }
     }
 
     var selectionTitle: String {
-        selectedIDs.isEmpty ? "Select Items" : "\(selectedIDs.count) Selected"
+        selectedIDs.isEmpty
+            ? String(localized: "ios.timeline.selection.empty")
+            : String(
+                localized: "ios.timeline.selection.count",
+                defaultValue: "\(selectedIDs.count) Selected"
+            )
     }
 
     var selectionActionBar: some View {

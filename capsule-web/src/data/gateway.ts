@@ -5,7 +5,7 @@ import type { Album, Asset } from '@/domain';
  *
  * The web client holds NO business logic: validation, decryption, sync and the
  * `verify_asset` chokepoint all live in capsule-core and are surfaced to clients
- * through high-level APIs (capsule-sdk / the capsule-api server). This interface
+ * through high-level APIs (capsule-sdk / the capsule-server REST surface). This interface
  * is where those APIs plug in. Today it is backed by the mock gateway; when the
  * server schema is live a ServerGateway implements the same contract. If
  * capsule-core later ships a wasm build, a decode/verify boundary slots in

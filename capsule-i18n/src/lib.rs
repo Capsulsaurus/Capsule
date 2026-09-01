@@ -15,7 +15,7 @@
 //! let locale = negotiate("fr-CA, en;q=0.8", supported_locales(), "en");
 //! let bundle = Bundle::for_locale(&locale);
 //! let message = bundle.format(error_codes::AUTH_INVALID_CREDENTIALS, &[]);
-//! assert_eq!(message, "Invalid email or password.");
+//! assert_eq!(message, "E-mail ou mot de passe incorrect.");
 //! ```
 //!
 //! The full design (canonical format, locale resolution, the server error-code

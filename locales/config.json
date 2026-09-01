@@ -1,5 +1,32 @@
 {
     "sourceLocale": "en",
-    "supportedLocales": ["en"],
-    "fallbacks": {}
+    "supportedLocales": [
+        "en",
+        "zh-Hans",
+        "zh-Hant",
+        "ja",
+        "ko",
+        "fr",
+        "de",
+        "es",
+        "pt-BR",
+        "it",
+        "ru",
+        "hi",
+        "ar"
+    ],
+    "fallbacks": {
+        "zh-Hans": "en",
+        "zh-Hant": "en",
+        "ja": "en",
+        "ko": "en",
+        "fr": "en",
+        "de": "en",
+        "es": "en",
+        "pt-BR": "en",
+        "it": "en",
+        "ru": "en",
+        "hi": "en",
+        "ar": "en"
+    }
 }

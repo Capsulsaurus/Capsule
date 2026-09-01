@@ -12,12 +12,13 @@
 
 ## Dependencies
 
-- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-cli/entity` (convert at the entity boundary) and review-only server code.
+- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-cli/entity` (convert at the entity boundary). The server's copy went to `legacy-review/` with the Salvo tree.
 - Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
 - Logging: `tracing`, never the `log` facade in new code.
 - TLS: `rustls` only; never native-tls/openssl.
 - Identifiers: UUIDv7 for new ids; UUIDv4 only where creation time must not leak.
 - The canonical table (all platforms, exceptions, rationale) is the [Dependencies design doc](capsule-docs/src/content/docs/design/dependencies.md) — add a row there before introducing a dependency for a new domain.
+- Licences: never add a `GPL-*`, `LGPL-*`, or `AGPL-*` dependency — `deny.toml` fails the build, and a copyleft crate in a statically-linked binary forecloses app-store distribution. Elect a permitted arm of a multi-licensed crate. Anything beyond attribution needs a `deny.toml` exception plus a root `NOTICE` entry, per the [Licensing design doc](capsule-docs/src/content/docs/design/licensing.md).
 
 ## Internationalization
 
@@ -28,9 +29,9 @@
 
 ## Rust Architecture Decisions
 
-- The public server surface is Kynos REST/OpenAPI only. Do not reintroduce Salvo, GraphQL, or gRPC.
-- Generate clients with Spargen from the checked-in Kynos OpenAPI contract. Do not use Progenitor.
-- Rawshift owns media decoding, metadata extraction, and derivative generation. Capsule imports Chromahash directly only after its v1 release; Rawshift must not wrap it.
+- The public server surface is Kynos REST/OpenAPI only. Do not reintroduce Salvo, GraphQL, or gRPC. The served document is **OpenAPI 3.2**: enabling Kynos's `openapi32` feature does not by itself produce one — `capsule-server` pins it with `openapi_as(SpecVersion::V3_2)`. Never emit or commit a 3.1 or 3.0 contract.
+- Generate clients with Spargen from the checked-in Kynos OpenAPI contract. Do not use Progenitor. Everything that parses or serializes is generated — every body, every typed parameter, and the byte-serving endpoints. Only *orchestration over* generated calls is hand-written, and the resumable upload state machine (`S-D1`) is the whole of it; do not hand-write a second parser.
+- Rawshift owns media decoding, metadata extraction, and derivative generation. Capsule imports **Chromahash 0.7.1** directly — the earlier "after its v1 release" gate is amended to that release — and Rawshift must not wrap it. LQIP encode/decode lives in its own `capsule-core::lqip` module (slice `S-B14`), outside the retiring `capsule-core::media` stack, so one implementation serves the import pipeline, the FFI, and `capsule-wasm`. **ThumbHash is retired**: neither the `thumbhash` crate nor the npm `thumbhash` package may be reintroduced. Contract: [Thumbnails — LQIP](capsule-docs/src/content/docs/design/thumbnails.md#lqip).
 - Blob storage and resumable encrypted upload remain Capsule-owned behind narrow, arbitrary-backend ports. Do not add `object_store` or generic CAS/transfer crates without revisiting the security contract.
 - Keep authentication state and upload-session state as separate Capsule ports with PostgreSQL, `redis-rs`, and in-memory adapters. Do not introduce a generic TTL/CAS abstraction.
 - `legacy-review/` is non-buildable reference material. Restore code only after defining its contract and automated tests against the decisions above.

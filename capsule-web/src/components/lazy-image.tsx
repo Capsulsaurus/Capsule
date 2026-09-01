@@ -1,8 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
 
-type LazyImageProps = React.ImgHTMLAttributes<HTMLImageElement>;
-
-export function LazyImage({ src, alt, className, ...props }: LazyImageProps) {
+/**
+ * The loading placeholder is a plain skeleton.
+ *
+ * The interim JS placeholder decode this component used to run was removed with the move to
+ * Chromahash (design/thumbnails — LQIP): there is deliberately no JS placeholder codec. The
+ * browser also has nothing to decode today — the authenticated read path is a key-free
+ * projection of the sync feed, so the encrypted `lqip` never reaches it. When it does, it
+ * decodes through `capsule-wasm` over the same `capsule-core::lqip` code the native clients
+ * use, never a second implementation in JS.
+ */
+export function LazyImage({
+    src,
+    alt,
+    className,
+    ...props
+}: React.ImgHTMLAttributes<HTMLImageElement>) {
     const { data: loadedSrc, isSuccess } = useQuery({
         queryKey: ['image', src],
         queryFn: async () => {

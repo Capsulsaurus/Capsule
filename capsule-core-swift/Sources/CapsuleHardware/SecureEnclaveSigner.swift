@@ -5,14 +5,15 @@ import Foundation
 /// inside the Secure Enclave and never leaves it — there is no API to read the private bytes, so
 /// non-exportability is enforced by the platform.
 ///
-/// ## Algorithm caveat (the same one the TPM reference has)
+/// ## Algorithm (the same one StrongBox and the TPM reference produce)
 ///
 /// The Secure Enclave only does **NIST P-256**, not Ed25519, so this returns P-256 material: a
-/// 65-byte x9.63 public key and a 64-byte ECDSA `r‖s` signature over `msg`. It therefore does
-/// **not** yet plug into the Ed25519 `FfiWorkspace.createWithHardwareSigner` path — wiring a
-/// Secure Enclave device in needs the P-256 hybrid-DSK variant tracked in `SLICES.md` (slice S-A4). It is the
-/// real hardware adapter + the on-device non-exportability check; for an end-to-end FFI round trip
-/// in CI/local tests use ``SoftwareSigner`` (genuine Ed25519).
+/// 65-byte x9.63 (uncompressed SEC1) public key and a **DER-encoded ECDSA** signature over `msg`
+/// (CryptoKit hashes with SHA-256 internally). That is exactly what `P256HybridSigningKey` consumes
+/// on the Rust side — the element's public key normalizes from SEC1, and the DER signature verifies
+/// verbatim via `p256::ecdsa` — so this plugs into the P-256
+/// `FfiWorkspace.createWithP256HardwareSigner` path end to end (slice S-F2). The Ed25519
+/// ``SoftwareSigner`` drives the separate `createWithHardwareSigner` path.
 ///
 /// A production app persists `dataRepresentation` of each key (the encrypted SE blob) in the
 /// Keychain and reloads it; this reference keeps the handles in memory.
@@ -45,7 +46,8 @@ public final class SecureEnclaveSigner: HardwareSigner, @unchecked Sendable {
     }
 
     public func signClassical(keyAlias: String, msg: Data) throws -> Data {
-        try privateKey(keyAlias).signature(for: msg).rawRepresentation
+        // DER-encoded ECDSA — the form `P256HybridSigningKey` parses verbatim on the Rust side.
+        try privateKey(keyAlias).signature(for: msg).derRepresentation
     }
 
     public func assertNonExportable(keyAlias: String) throws {

@@ -2,6 +2,7 @@
 name = "capsule-api-service"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]
@@ -12,7 +13,10 @@ path = "src/lib.rs"
 capsule-api-entity = { path = "../entity" }
 capsule-api-model = { path = "../model" }
 capsule-core = { path = "../../capsule-core" }
+capsule-i18n = { path = "../../capsule-i18n" }
+ed25519-dalek = { workspace = true }
 serde = { workspace = true }
+serde_bytes = "0.11"
 serde_json = { workspace = true }
 uuid = { workspace = true }
 jiff = { workspace = true }
@@ -24,6 +28,7 @@ sea-orm = { workspace = true, features = [
     "debug-print",
 ] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 default = []

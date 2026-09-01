@@ -29,6 +29,6 @@ Capsule's E2E security stacks four layers, each owned by its own sub-doc:
 ## Implementation Posture
 
 - **Centralized.** All cryptographic primitives, key handling, and `verify_asset` live in `capsule-core::crypto`. There is no per-platform divergence in what gets verified or how — only in where keys are physically held.
-- **Audited libraries only.** RustCrypto, ed25519-dalek, x25519-dalek today; OpenMLS (over libcrux, formally verified) is the *planned* group layer — currently [blocked upstream](/design/cryptography/mls/). Capsule is never the first serious user of a primitive's implementation.
+- **Audited libraries only.** RustCrypto, ed25519-dalek, x25519-dalek today; OpenMLS (over libcrux, formally verified; independently audited) is the *planned* group layer, buildable on its shipping X-Wing suite — see [MLS](/design/cryptography/mls/). Capsule is never the first serious user of a primitive's implementation.
 - **Memory hygiene.** Decrypted bytes and key material are zeroed on drop; secure-allocation is used where the platform supports it, to prevent swap leaks.
 - **Trust the server for storage, never for authorization.** The server holds opaque ciphertext and key-free index facts. Every authorization is verified against MLS-distributed material; a server's assertion of access is never sufficient.

@@ -21,7 +21,7 @@ pub const PROTOCOL_VERSION: &str = "2026-05-31";
 #[non_exhaustive]
 pub enum SuiteId {
     /// `0x0001`: SHA-256 · HKDF-SHA512 · Argon2id · AES-256-GCM(+STREAM) ·
-    /// Ed25519+ML-DSA-65 · X-Wing · MLS X-Wing/SHA-512 suite (codepoint pending).
+    /// Ed25519+ML-DSA-65 · X-Wing · MLS X-Wing/SHA-256 suite (`0x004D`).
     V1,
 }
 
@@ -56,9 +56,13 @@ impl SuiteId {
 /// Versioned HKDF `info` labels. Including a version string lets the KDF be rotated
 /// later without a flag day; the SSoT for each label is the doc that derives that key.
 pub mod info {
-    /// Per-file asset key: `HKDF(ikm=AMK, salt=file_id, info=ASSET_FILE_V1)`.
+    /// Per-file asset key: `HKDF(ikm=AMK, salt=file_id || nonce_prefix, info=ASSET_FILE_V1)`.
+    /// The fresh `nonce_prefix` is folded into the salt so a same-epoch `replace` re-rolls
+    /// the key, not merely the nonce (see <https://docs/design/cryptography/encryption/#re-keying-on-rewrite>).
     pub const ASSET_FILE_V1: &[u8] = b"asset-file/v1";
-    /// Per-metadata-blob key: `HKDF(ikm=AMK, salt=blob_id, info=METADATA_BLOB_V1)`.
+    /// Per-metadata-blob key: `HKDF(ikm=AMK, salt=blob_id || nonce, info=METADATA_BLOB_V1)`.
+    /// The blob's fresh `nonce` is folded into the salt, re-rolling the key per write even
+    /// though `blob_id` is constant across a `metadata-update`.
     pub const METADATA_BLOB_V1: &[u8] = b"metadata-blob/v1";
     /// Wrap key for an externally-chosen file key (`key_mode = wrapped`; an adopted
     /// web-upload drop): `HKDF(ikm=AMK, salt=file_id || wrap_nonce, info=ASSET_KEYWRAP_V1)`.
@@ -67,6 +71,12 @@ pub mod info {
     pub const ASSET_KEYWRAP_V1: &[u8] = b"asset-keywrap/v1";
     /// Default-album *identifier* derived from the account master key (an ID, not a key).
     pub const DEFAULT_ALBUM_ID_V1: &[u8] = b"default-album-id/v1";
+    /// Share-link scope-key wrap: `HKDF(ikm=link_secret, salt=opaque_id,
+    /// info=SHARE_SCOPE_WRAP_V1)` derives the key that encapsulates a share link's scope
+    /// decryption material around the random link secret (SSoT: [Share Links]).
+    ///
+    /// [Share Links]: https://docs/design/share-links/
+    pub const SHARE_SCOPE_WRAP_V1: &[u8] = b"share-scope-wrap/v1";
 }
 
 /// Device hardware tier, selecting Argon2id cost parameters at *wrap* time. The chosen

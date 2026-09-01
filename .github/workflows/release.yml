@@ -66,10 +66,6 @@ jobs:
             optional: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -88,7 +84,7 @@ jobs:
           dist="capsule-v${{ needs.detect.outputs.version }}-${{ matrix.target }}"
           mkdir -p "$dist"
           cp "target/${{ matrix.target }}/release/capsule" "$dist/"
-          cp README.md LICENSE CHANGELOG.md "$dist/" 2>/dev/null || true
+          cp README.md LICENSE NOTICE CHANGELOG.md "$dist/"
           tar -czf "${dist}.tar.gz" "$dist"
           echo "ASSET=${dist}.tar.gz" >> "$GITHUB_ENV"
       - name: Package (windows)
@@ -99,6 +95,7 @@ jobs:
           dist="capsule-v${{ needs.detect.outputs.version }}-${{ matrix.target }}"
           mkdir -p "$dist"
           cp "target/${{ matrix.target }}/release/capsule.exe" "$dist/"
+          cp README.md LICENSE NOTICE CHANGELOG.md "$dist/"
           7z a "${dist}.zip" "$dist" >/dev/null
           echo "ASSET=${dist}.zip" >> "$GITHUB_ENV"
       - name: Upload build artifact

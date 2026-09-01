@@ -4,15 +4,20 @@ import Foundation
 /// An in-memory ``AssetCatalog`` for tests.
 ///
 /// `MockCatalog` is a *faithful* implementation of the catalog contract — same
-/// timeline ordering, soft-delete visibility, and album semantics as the real
-/// SQLite-backed ``CapsuleCatalog`` — so any consumer tested against it sees
-/// realistic behaviour without an FFI dependency. It is an `actor`, matching
-/// the contract's concurrency model.
+/// timeline ordering, soft-delete visibility, album semantics, and SR1 view
+/// gating as the real SQLite-backed ``CapsuleCatalog`` — so any consumer tested
+/// against it sees realistic behaviour without an FFI dependency. It is an
+/// `actor`, matching the contract's concurrency model.
+///
+/// The gate is modelled on the mock's own settable ``now``, so a test drives the
+/// grace window with ``setNow(_:)`` instead of sleeping.
 public actor MockCatalog: AssetCatalog {
     private var assets: [String: CatalogAsset] = [:]
     private var albumsByID: [String: CatalogAlbum] = [:]
     private var stacks: [String: CatalogStack] = [:]
     private var membersByStack: [String: [CatalogStackMember]] = [:]
+    /// SR1 fresh-auth grants: gated view -> the `now` at which it was minted.
+    private var grants: [GatedView: Int64] = [:]
     private let schemaVersionValue: UInt32
 
     /// The current wall-clock, overridable so trash-expiry tests are deterministic.
@@ -64,8 +69,11 @@ public actor MockCatalog: AssetCatalog {
     }
 
     public func timeline(filter: TimelineFilter, offset: Int, limit: Int) -> [CatalogAsset] {
+        // `isHidden` joins `isDeleted` / `isStackHidden` here because the real
+        // catalog's default projections exclude all three — the Hidden set is
+        // reachable only through its own gated view.
         let visible = assets.values
-            .filter { !$0.isDeleted && !$0.isStackHidden }
+            .filter { !$0.isDeleted && !$0.isStackHidden && !$0.isHidden }
             .filter { Self.filter(filter, matches: $0) }
         return Self.page(Self.timelineSorted(visible), offset: offset, limit: limit)
     }
@@ -87,7 +95,8 @@ public actor MockCatalog: AssetCatalog {
             .sorted { ($0.deletedAt ?? 0) < ($1.deletedAt ?? 0) }
     }
 
-    public func trash(offset: Int, limit: Int) -> [CatalogAsset] {
+    public func trash(offset: Int, limit: Int) throws -> [CatalogAsset] {
+        guard isViewUnlocked(.recentlyDeleted) else { throw CatalogError.ViewLocked }
         let deleted = assets.values
             .filter(\.isDeleted)
             .sorted { ($0.deletedAt ?? 0) > ($1.deletedAt ?? 0) }
@@ -154,8 +163,36 @@ public actor MockCatalog: AssetCatalog {
 
     public func albumAssets(albumID: String, offset: Int, limit: Int) -> [CatalogAsset] {
         let visible = assets.values
-            .filter { $0.albumID == albumID && !$0.isDeleted && !$0.isStackHidden }
+            .filter { $0.albumID == albumID && !$0.isDeleted && !$0.isStackHidden && !$0.isHidden }
         return Self.page(Self.timelineSorted(visible), offset: offset, limit: limit)
+    }
+
+    // MARK: Gated views
+
+    /// The SR1 per-view grace window, in seconds — the same 5 minutes the core
+    /// enforces (`capsule_core::library::DEFAULT_GRACE`).
+    public static let graceSeconds: Int64 = 300
+
+    public func unlockView(_ view: GatedView, using gate: any LocalAuthGate) throws {
+        // A live grant is reused without a second challenge, and is not slid
+        // forward: the window runs from the original mint, exactly as the core's
+        // `GateKeeper::open` does.
+        guard !isViewUnlocked(view) else { return }
+        try gate.authenticate(view: view)
+        grants[view] = now
+    }
+
+    public func isViewUnlocked(_ view: GatedView) -> Bool {
+        guard let mintedAt = grants[view] else { return false }
+        return now - mintedAt < Self.graceSeconds
+    }
+
+    public func relockView(_ view: GatedView) {
+        grants[view] = nil
+    }
+
+    public func lockViews() {
+        grants.removeAll()
     }
 
     // MARK: Helpers

@@ -1,4 +1,4 @@
-use auth::models::responses::{Device, TokenResponse};
+use auth::models::responses::{SessionListingResponse, TokenResponse};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use secrecy::ExposeSecret;
@@ -64,7 +64,8 @@ async fn devices_shows_current_session() {
         .await;
 
     assert_eq!(res.status_code, Some(StatusCode::OK));
-    let devices: Vec<Device> = res.take_json().await.expect("Failed to parse devices");
+    let listing: SessionListingResponse = res.take_json().await.expect("Failed to parse listing");
+    let devices = listing.devices;
     assert_eq!(devices.len(), 1, "Should have exactly one active session");
     assert!(
         devices[0].is_current,
@@ -93,7 +94,8 @@ async fn devices_multiple_sessions_current_flagged_correctly() {
         .await;
 
     assert_eq!(res.status_code, Some(StatusCode::OK));
-    let devices: Vec<Device> = res.take_json().await.expect("Failed to parse devices");
+    let listing: SessionListingResponse = res.take_json().await.expect("Failed to parse listing");
+    let devices = listing.devices;
 
     assert_eq!(devices.len(), 2, "Both sessions should be listed");
 

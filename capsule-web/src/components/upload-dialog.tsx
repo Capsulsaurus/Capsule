@@ -1,5 +1,6 @@
 import { UploadCloud } from 'lucide-react';
 import { useState } from 'react';
+import { FormattedMessage } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Dialog,
@@ -35,9 +36,11 @@ export function UploadDialog({ children }: { children: React.ReactNode }) {
             <DialogTrigger asChild>{children}</DialogTrigger>
             <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
-                    <DialogTitle>Upload Photos</DialogTitle>
+                    <DialogTitle>
+                        <FormattedMessage id="upload.title" />
+                    </DialogTitle>
                     <DialogDescription>
-                        Drag and drop photos here or click to browse.
+                        <FormattedMessage id="upload.description" />
                     </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
@@ -47,9 +50,11 @@ export function UploadDialog({ children }: { children: React.ReactNode }) {
                     >
                         <UploadCloud className="h-10 w-10 text-muted-foreground mb-4" />
                         <p className="text-sm text-muted-foreground text-center">
-                            {isUploading
-                                ? 'Uploading...'
-                                : 'Click to select files'}
+                            {isUploading ? (
+                                <FormattedMessage id="upload.uploading" />
+                            ) : (
+                                <FormattedMessage id="upload.select_files" />
+                            )}
                         </p>
                     </div>
                     {isUploading && (
@@ -64,7 +69,11 @@ export function UploadDialog({ children }: { children: React.ReactNode }) {
                 </div>
                 <DialogFooter>
                     <Button type="submit" disabled={isUploading}>
-                        {isUploading ? 'Cancel' : 'Upload'}
+                        {isUploading ? (
+                            <FormattedMessage id="common.cancel" />
+                        ) : (
+                            <FormattedMessage id="common.upload" />
+                        )}
                     </Button>
                 </DialogFooter>
             </DialogContent>

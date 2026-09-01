@@ -43,13 +43,43 @@ cargo run -p "$CRATE" --bin uniffi-bindgen -- \
     generate --library "$REPO_ROOT/target/$DEVICE_TARGET/release/$LIB_NAME" \
     --language swift --out-dir "$GEN_DIR"
 
-# uniffi emits `<namespace>FFI.modulemap`; an xcframework's headers directory
-# must contain a file literally named `module.modulemap`.
+# The staticlib is the app umbrella (S-F3): it carries the capsule_core_ffi namespace
+# AND capsule-sdk's capsule_sdk namespace (S-D9), so library-mode bindgen must have
+# emitted Swift glue for both. Fail loudly if either went missing.
+test -s "$GEN_DIR/capsule_core_ffi.swift"
+test -s "$GEN_DIR/capsule_sdk.swift"
+
+# Swift 6 language mode (SWIFT_VERSION 6.0 in Project.swift) rejects a global of a
+# non-Sendable type outright — it is not a strict-concurrency knob that can be dialled
+# down per target. uniffi emits exactly one such global per `with_foreign` callback
+# interface:
+#
+#   static let vtablePtr: UnsafePointer<UniffiVTableCallbackInterface…>
+#
+# which fails to compile ("not concurrency-safe because non-'Sendable' type … may have
+# shared mutable state"). The pointer is written once during static initialization and
+# only ever read afterwards, so `nonisolated(unsafe)` states the truth rather than
+# suppressing a real race. Applied here because the glue is generated on every build and
+# git-ignored, so it cannot be fixed by editing a checked-in file. Drop this step once
+# uniffi emits the annotation itself.
+echo "▸ Annotating uniffi callback vtables for Swift 6 concurrency"
+for glue in "$GEN_DIR/capsule_core_ffi.swift" "$GEN_DIR/capsule_sdk.swift"; do
+    perl -0pi -e 's/^(\s*)static let vtablePtr:/$1nonisolated(unsafe) static let vtablePtr:/mg' "$glue"
+done
+
+# uniffi emits `<namespace>FFI.modulemap` (one per namespace); an xcframework's headers
+# directory must contain a file literally named `module.modulemap` — concatenating the
+# per-namespace maps yields one file declaring every C module.
 echo "▸ Preparing C headers + modulemap"
 rm -rf "$HEADERS_DIR"
 mkdir -p "$HEADERS_DIR"
 cp "$GEN_DIR"/*FFI.h "$HEADERS_DIR/"
-cat "$GEN_DIR"/*FFI.modulemap >"$HEADERS_DIR/module.modulemap"
+# uniffi's emitted modulemaps have no trailing newline, so a bare `cat` would glue
+# `}module` together — append one after each part.
+for mm in "$GEN_DIR"/*FFI.modulemap; do
+    cat "$mm"
+    echo
+done >"$HEADERS_DIR/module.modulemap"
 
 echo "▸ Lipo-ing the universal simulator library (arm64 + x86_64)"
 rm -rf "$BUILD_DIR"
@@ -70,3 +100,4 @@ xcodebuild -create-xcframework \
 echo "✓ FFI build complete"
 echo "  xcframework : ${XCFRAMEWORK#"$REPO_ROOT/"}"
 echo "  swift glue  : ${GEN_DIR#"$REPO_ROOT/"}/capsule_core_ffi.swift"
+echo "  swift glue  : ${GEN_DIR#"$REPO_ROOT/"}/capsule_sdk.swift"

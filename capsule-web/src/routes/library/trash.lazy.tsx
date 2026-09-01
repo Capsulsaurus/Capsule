@@ -1,5 +1,6 @@
 import { createLazyFileRoute } from '@tanstack/react-router';
 import { Trash2 } from 'lucide-react';
+import { FormattedMessage } from 'react-intl';
 import { AssetGrid } from '@/components/asset-grid';
 import { Button } from '@/components/ui/button';
 import { useAssets } from '@/data/hooks';
@@ -20,16 +21,17 @@ function Trash() {
                         <div className="bg-zinc-100 dark:bg-zinc-800 p-2 rounded-full">
                             <Trash2 className="w-5 h-5 text-zinc-600 dark:text-zinc-400" />
                         </div>
-                        <h1 className="text-2xl font-bold">Trash</h1>
+                        <h1 className="text-2xl font-bold">
+                            <FormattedMessage id="nav.trash" />
+                        </h1>
                     </div>
                     <p className="text-muted-foreground ml-11">
-                        Items in trash will be permanently deleted after 30
-                        days.
+                        <FormattedMessage id="library.trash.description" />
                     </p>
                 </div>
                 {trashAssets.length > 0 && (
                     <Button variant="destructive" size="sm">
-                        Empty Trash
+                        <FormattedMessage id="library.trash.empty_button" />
                     </Button>
                 )}
             </header>
@@ -42,7 +44,9 @@ function Trash() {
             ) : (
                 <div className="flex flex-col items-center justify-center p-20 text-muted-foreground">
                     <Trash2 className="w-12 h-12 mb-4 opacity-20" />
-                    <p>Trash is empty</p>
+                    <p>
+                        <FormattedMessage id="library.trash.empty" />
+                    </p>
                 </div>
             )}
         </div>

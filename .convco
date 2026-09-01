@@ -1,0 +1,12 @@
+# convco configuration (Conventional Commits gate).
+#
+# `mise run commit-check` validates one in-progress message (commit-msg hook) and
+# `mise run check-commits` validates a range (pre-push + the CI `commit-lint` job).
+# convco discovers this file from the repo root; no `-c` flag is passed anywhere.
+#
+# scopeRegex: convco's default is `^[[:alnum:]]+(?:[-_/][[:alnum:]]+)*$`, which rejects
+# the comma-separated scopes this monorepo uses when one change genuinely spans crates
+# (`feat(sdk,core):`, `chore(api,cli):`). A comma is added to the separator class so a
+# multi-crate scope is expressible without either splitting a cohesive commit or
+# rewriting published history. Everything else stays at convco's defaults.
+scopeRegex: ^[[:alnum:]]+(?:[-_/,][[:alnum:]]+)*$

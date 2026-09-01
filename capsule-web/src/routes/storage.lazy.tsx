@@ -10,6 +10,7 @@ import {
 import { filesize } from 'filesize';
 import { FileText, FileVideo, Image, RefreshCw, Trash2 } from 'lucide-react';
 import React, { useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import {
     Dialog,
     DialogContent,
@@ -89,6 +90,7 @@ function formatFileSize(size: number) {
 type Suggestion = 'trash-files' | 'similar-assets' | 'large-files';
 
 function Storage() {
+    const intl = useIntl();
     // Mocking useQuery
     const fetching = false;
     const error = null;
@@ -119,14 +121,20 @@ function Storage() {
                 {/* Storage Usage Overview */}
                 <div className="mb-10">
                     <h1 className="text-2xl font-medium text-gray-800 mb-4">
-                        Manage Storage
+                        <FormattedMessage id="storage.title" />
                     </h1>
                     {fetching ? (
-                        <div>Loading...</div>
+                        <div>
+                            <FormattedMessage id="common.loading" />
+                        </div>
                     ) : error ? (
-                        <div>Error</div>
+                        <div>
+                            <FormattedMessage id="storage.error" />
+                        </div>
                     ) : !stats ? (
-                        <div>No data</div>
+                        <div>
+                            <FormattedMessage id="storage.no_data" />
+                        </div>
                     ) : (
                         (() => {
                             const storageData = {
@@ -134,17 +142,17 @@ function Storage() {
                                 usedStorage: stats.usedStorage, // in bytes
                                 categories: [
                                     {
-                                        name: 'Photos',
+                                        nameId: 'storage.category.photos',
                                         size: stats.usedStoragePhotos,
                                         color: 'bg-red-500',
                                     },
                                     {
-                                        name: 'Videos',
+                                        nameId: 'storage.category.videos',
                                         size: stats.usedStorageVideos,
                                         color: 'bg-blue-500',
                                     },
                                     {
-                                        name: 'Sidecar',
+                                        nameId: 'storage.category.sidecar',
                                         size: stats.usedStorageSidecar,
                                         color: 'bg-purple-600',
                                     },
@@ -152,17 +160,17 @@ function Storage() {
                                 cleanupSuggestions: [
                                     {
                                         id: 'trash-files',
-                                        title: 'Files in trash',
+                                        titleId: 'storage.suggestion.trash',
                                         size: stats.usedStorageTrash,
                                     },
                                     {
                                         id: 'similar-assets',
-                                        title: 'Similar assets',
+                                        titleId: 'storage.suggestion.similar',
                                         size: stats.usedStorageSimilarAssets,
                                     },
                                     {
                                         id: 'large-files',
-                                        title: 'Large files',
+                                        titleId: 'storage.suggestion.large',
                                         size: stats.usedStorageLargeFiles,
                                     },
                                 ],
@@ -177,20 +185,24 @@ function Storage() {
                             return (
                                 <>
                                     <h2 className="text-xl font-medium text-gray-800 mb-4">
-                                        {totalPercentageUsed.toFixed(0)}% of
-                                        storage used (
-                                        {formatFileSize(
-                                            storageData.usedStorage,
-                                        )}{' '}
-                                        of{' '}
-                                        {formatFileSize(
-                                            storageData.totalStorage,
-                                        )}
-                                        )
+                                        <FormattedMessage
+                                            id="storage.usage_summary"
+                                            values={{
+                                                percent:
+                                                    totalPercentageUsed.toFixed(
+                                                        0,
+                                                    ),
+                                                used: formatFileSize(
+                                                    storageData.usedStorage,
+                                                ),
+                                                total: formatFileSize(
+                                                    storageData.totalStorage,
+                                                ),
+                                            }}
+                                        />
                                     </h2>
                                     <p className="text-gray-600 mb-6">
-                                        Make room for your photos, files, and
-                                        more by cleaning up space
+                                        <FormattedMessage id="storage.cleanup_hint" />
                                     </p>
 
                                     {/* Progress Bar */}
@@ -198,7 +210,7 @@ function Storage() {
                                         {storageData.categories.map(
                                             (category) => (
                                                 <div
-                                                    key={category.name}
+                                                    key={category.nameId}
                                                     className={`h-full ${category.color}`}
                                                     style={{
                                                         width: `${(category.size / storageData.totalStorage) * 100}%`,
@@ -220,7 +232,7 @@ function Storage() {
                                             {storageData.categories.map(
                                                 (category) => (
                                                     <div
-                                                        key={category.name}
+                                                        key={category.nameId}
                                                         className="flex items-center mr-6 mb-2"
                                                     >
                                                         <div
@@ -231,11 +243,19 @@ function Storage() {
                                                             )}
                                                         />
                                                         <span className="text-sm text-gray-700">
-                                                            {category.name} (
-                                                            {formatFileSize(
-                                                                category.size,
-                                                            )}
-                                                            )
+                                                            <FormattedMessage
+                                                                id="storage.category_legend"
+                                                                values={{
+                                                                    name: intl.formatMessage(
+                                                                        {
+                                                                            id: category.nameId,
+                                                                        },
+                                                                    ),
+                                                                    size: formatFileSize(
+                                                                        category.size,
+                                                                    ),
+                                                                }}
+                                                            />
                                                         </span>
                                                     </div>
                                                 ),
@@ -250,12 +270,15 @@ function Storage() {
                                                 )}
                                             />
                                             <span className="text-sm text-gray-700">
-                                                Free Space (
-                                                {formatFileSize(
-                                                    storageData.totalStorage -
-                                                        storageData.usedStorage,
-                                                )}
-                                                )
+                                                <FormattedMessage
+                                                    id="storage.free_space"
+                                                    values={{
+                                                        size: formatFileSize(
+                                                            storageData.totalStorage -
+                                                                storageData.usedStorage,
+                                                        ),
+                                                    }}
+                                                />
                                             </span>
                                         </div>
                                     </div>
@@ -263,7 +286,7 @@ function Storage() {
                                     {/* Clean Up Suggestions */}
                                     <div>
                                         <h2 className="text-xl font-medium text-gray-800 mb-6">
-                                            Clean up suggested items
+                                            <FormattedMessage id="storage.cleanup_title" />
                                         </h2>
                                         <Tabs
                                             value={activeTab}
@@ -287,9 +310,11 @@ function Storage() {
                                                                 {getIconForSuggestion(
                                                                     suggestion.id,
                                                                 )}
-                                                                {
-                                                                    suggestion.title
-                                                                }
+                                                                <FormattedMessage
+                                                                    id={
+                                                                        suggestion.titleId
+                                                                    }
+                                                                />
                                                             </div>
                                                         </TabsTrigger>
                                                     ),
@@ -313,12 +338,11 @@ function Storage() {
                                                             <div className="flex flex-col">
                                                                 {assetFetching ? (
                                                                     <div>
-                                                                        Loading...
+                                                                        <FormattedMessage id="common.loading" />
                                                                     </div>
                                                                 ) : assetError ? (
                                                                     <div>
-                                                                        Error
-                                                                        (Mock)
+                                                                        <FormattedMessage id="storage.error_mock" />
                                                                     </div>
                                                                 ) : assetData ? (
                                                                     <AssetList
@@ -328,7 +352,7 @@ function Storage() {
                                                                     />
                                                                 ) : (
                                                                     <div>
-                                                                        No data
+                                                                        <FormattedMessage id="storage.no_data" />
                                                                     </div>
                                                                 )}
                                                                 <div className="flex justify-end mb-4">
@@ -342,7 +366,7 @@ function Storage() {
                                                                         className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                                                                     >
                                                                         <RefreshCw className="h-4 w-4" />
-                                                                        Refresh
+                                                                        <FormattedMessage id="common.refresh" />
                                                                     </button>
                                                                 </div>
                                                             </div>
@@ -360,7 +384,9 @@ function Storage() {
             </div>
             <DialogContent>
                 <DialogHeader>
-                    <DialogTitle>Preview</DialogTitle>
+                    <DialogTitle>
+                        <FormattedMessage id="storage.preview" />
+                    </DialogTitle>
                     <DialogDescription>
                         {previewAssetId}
                         {/* TODO: Add preview */}
@@ -373,6 +399,7 @@ function Storage() {
 
 // AssetList component
 function AssetList({ assets }: { assets: Asset[] }) {
+    const intl = useIntl();
     // Column helper for type safety
     const columnHelper = createColumnHelper<Asset>();
 
@@ -386,7 +413,12 @@ function AssetList({ assets }: { assets: Asset[] }) {
                         <div className="w-10 h-10 bg-blue-100 rounded overflow-hidden">
                             <img
                                 src={info.getValue()}
-                                alt={`Thumbnail for ${info.row.original.fileName}`}
+                                alt={intl.formatMessage(
+                                    { id: 'storage.thumbnail_alt' },
+                                    {
+                                        fileName: info.row.original.fileName,
+                                    },
+                                )}
                                 className="w-full h-full object-cover"
                             />
                         </div>
@@ -395,17 +427,35 @@ function AssetList({ assets }: { assets: Asset[] }) {
                             {info.row.original.type === AssetType.Photo ? (
                                 <Image
                                     className="size-6 text-blue-500"
-                                    aria-label={`Image file: ${info.row.original.fileName}`}
+                                    aria-label={intl.formatMessage(
+                                        { id: 'storage.image_file_alt' },
+                                        {
+                                            fileName:
+                                                info.row.original.fileName,
+                                        },
+                                    )}
                                 />
                             ) : info.row.original.type === AssetType.Video ? (
                                 <FileVideo
                                     className="size-6 text-red-500"
-                                    aria-label={`Video file: ${info.row.original.fileName}`}
+                                    aria-label={intl.formatMessage(
+                                        { id: 'storage.video_file_alt' },
+                                        {
+                                            fileName:
+                                                info.row.original.fileName,
+                                        },
+                                    )}
                                 />
                             ) : info.row.original.type === AssetType.Sidecar ? (
                                 <FileText
                                     className="size-6 text-purple-500"
-                                    aria-label={`Sidecar file: ${info.row.original.fileName}`}
+                                    aria-label={intl.formatMessage(
+                                        { id: 'storage.sidecar_file_alt' },
+                                        {
+                                            fileName:
+                                                info.row.original.fileName,
+                                        },
+                                    )}
                                 />
                             ) : null}
                         </div>
@@ -415,19 +465,23 @@ function AssetList({ assets }: { assets: Asset[] }) {
             enableSorting: false,
         }),
         columnHelper.accessor('fileName', {
-            header: 'File Name',
+            header: () => <FormattedMessage id="storage.col_filename" />,
             cell: (info) => (
                 <div className="font-medium">{info.getValue()}</div>
             ),
         }),
         columnHelper.accessor('path', {
-            header: 'Path',
+            header: () => <FormattedMessage id="storage.col_path" />,
             cell: (info) => (
                 <div className="text-gray-500 text-sm">{info.getValue()}</div>
             ),
         }),
         columnHelper.accessor('size', {
-            header: () => <div className="text-right">Size</div>,
+            header: () => (
+                <div className="text-right">
+                    <FormattedMessage id="storage.col_size" />
+                </div>
+            ),
             cell: (info) => (
                 <div className="text-right">
                     {formatFileSize(info.getValue())}
@@ -436,7 +490,11 @@ function AssetList({ assets }: { assets: Asset[] }) {
             sortingFn: 'basic',
         }),
         columnHelper.accessor('date', {
-            header: () => <div className="text-right">Date</div>,
+            header: () => (
+                <div className="text-right">
+                    <FormattedMessage id="storage.col_date" />
+                </div>
+            ),
             cell: (info) => (
                 <div className="text-right">
                     {info.getValue().toLocaleDateString()}
@@ -461,7 +519,11 @@ function AssetList({ assets }: { assets: Asset[] }) {
     });
 
     if (assets.length === 0) {
-        return <div>Empty asset list</div>;
+        return (
+            <div>
+                <FormattedMessage id="storage.empty_list" />
+            </div>
+        );
     }
 
     return (

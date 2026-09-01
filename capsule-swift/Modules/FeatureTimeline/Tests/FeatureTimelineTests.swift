@@ -39,6 +39,10 @@ struct TimelineSectioningTests {
         #expect(sections[0].id != sections[1].id)
     }
 
+    /// The titles are catalog lookups, not literals, so the expectation resolves
+    /// the same keys the implementation does — otherwise this would assert the
+    /// English catalog rather than the sectioning, and fail in a test bundle that
+    /// carries no string catalog at all.
     @Test("the current and prior days are titled Today and Yesterday")
     func relativeDayTitles() {
         let today = Date(timeIntervalSince1970: 1_720_000_000)
@@ -48,8 +52,9 @@ struct TimelineSectioningTests {
             calendar: utcCalendar,
             referenceDate: today
         )
-        #expect(sections.first?.title == "Today")
-        #expect(sections.last?.title == "Yesterday")
+        #expect(sections.first?.title == String(localized: "ios.timeline.section.today"))
+        #expect(sections.last?.title == String(localized: "ios.timeline.section.yesterday"))
+        #expect(sections.first?.title != sections.last?.title)
     }
 
     @Test("same-day assets collapse into a single section")

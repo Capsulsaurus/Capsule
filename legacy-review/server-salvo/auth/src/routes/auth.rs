@@ -10,9 +10,10 @@ use crate::claims::Claims;
 use crate::errors::ClaimValidationError;
 use crate::models::requests::{LoginRequest, RefreshTokenRequest, RegisterRequest};
 use crate::models::responses::{
-    Device, GetDevicesResponses, LoginResponses, LogoutResponses, RefreshTokenResponses,
-    RegisterUserResponses, ValidateTokenResponses,
+    Device, DeviceCohort, GetDevicesResponses, LoginResponses, LogoutResponses,
+    RefreshTokenResponses, RegisterUserResponses, SessionListingResponse, ValidateTokenResponses,
 };
+use crate::session::SessionContext;
 use crate::state::AppState;
 use crate::utils::headers::get_token_from_headers;
 
@@ -99,10 +100,20 @@ pub async fn login_user(
         _ => {}
     }
 
-    let LoginRequest { email, password } = body.into_inner();
+    let LoginRequest {
+        email,
+        password,
+        cohort_hash,
+        device_id,
+    } = body.into_inner();
     state
         .auth_service
-        .authenticate_user(&state.session_manager, &email, &password)
+        .authenticate_user(
+            &state.session_manager,
+            &email,
+            &password,
+            SessionContext::new(cohort_hash, device_id),
+        )
         .await
         .into()
 }
@@ -146,6 +157,13 @@ pub async fn refresh_token(
         return ClaimValidationError::TokenInvalid("Session user mismatch".to_string()).into();
     }
 
+    // Carry the session's asserted provenance across rotation so grouping survives a refresh
+    // and the durable map's `last_seen` keeps advancing (slices `S-C13`, `S-N3`). Both values
+    // stay non-authoritative: the refresh path authorizes on the JWT claims alone, never on
+    // these. The refreshed session must not silently lose its device id, or the support
+    // bundle's `(device_id, session_id)` pair would decay to a bare session id over time.
+    let context = SessionContext::new(session.cohort_hash.clone(), session.device_id.clone());
+
     // Revoke old session (Rotation)
     if let Err(e) = state.session_manager.revoke_session(&sid).await {
         return e.into();
@@ -155,7 +173,7 @@ pub async fn refresh_token(
 
     state
         .auth_service
-        .generate_token_pair(&user_id, &state.session_manager)
+        .generate_token_pair(&user_id, &state.session_manager, context)
         .await
         .into()
 }
@@ -265,14 +283,27 @@ pub async fn get_devices(req: &mut Request, depot: &mut Depot) -> GetDevicesResp
             };
             Device {
                 id: sid,
+                device_id: session.device_id,
                 created_at: session.created_at,
                 last_active_at,
                 user_agent: session.user_agent,
                 ip_address: session.ip_address,
                 is_current,
+                cohort_hash: session.cohort_hash,
             }
         })
         .collect();
 
-    GetDevicesResponses::Success(devices)
+    // The durable cohort map (slice `S-C13`): persists beyond session expiry so a reinstall
+    // groups with "a device you've used before". Advisory — a read failure degrades the
+    // listing gracefully (empty map) rather than failing the request.
+    let cohorts = match service::cohort::Query::for_user(&state.conn, &claims.sub).await {
+        Ok(observations) => observations.into_iter().map(DeviceCohort::from).collect(),
+        Err(e) => {
+            tracing::warn!("device-cohort map read failed (returning empty map): {e}");
+            Vec::new()
+        }
+    };
+
+    GetDevicesResponses::Success(SessionListingResponse { devices, cohorts })
 }

@@ -1,7 +1,8 @@
 import { createLazyFileRoute, Link, useNavigate } from '@tanstack/react-router';
-import { KeyRoundIcon, MountainIcon } from 'lucide-react';
+import { MountainIcon } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useState } from 'react';
+import { FormattedMessage, useIntl } from 'react-intl';
 import { Button } from '@/components/ui/button';
 import {
     Card,
@@ -13,15 +14,9 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-    ApiError,
-    login,
-    passkeyLoginFinish,
-    passkeyLoginStart,
-    verifyTotpLogin,
-} from '@/lib/api';
+import { ApiError, login, needsSecondFactor, verifyTotpLogin } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
-import { authenticateWithPasskey } from '@/lib/webauthn';
+import { APP_NAME } from '@/lib/constant';
 
 export const Route = createLazyFileRoute('/login')({
     component: Login,
@@ -30,6 +25,7 @@ export const Route = createLazyFileRoute('/login')({
 type LoginStep = 'credentials' | 'totp';
 
 function Login() {
+    const intl = useIntl();
     const { setTokens, isAuthenticated, isLoading } = useAuth();
     const navigate = useNavigate();
 
@@ -54,7 +50,9 @@ function Login() {
         setLoading(true);
         try {
             const result = await login({ email, password });
-            if ('mfa_required' in result && result.mfa_required) {
+            // `202 Accepted` — the password verified and the sign-in is not finished. No session
+            // exists yet, which is why there is nothing to store here.
+            if (needsSecondFactor(result)) {
                 setMfaToken(result.mfa_token);
                 setStep('totp');
             } else {
@@ -65,7 +63,7 @@ function Login() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'An unexpected error occurred.',
+                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
             );
         } finally {
             setLoading(false);
@@ -84,30 +82,8 @@ function Login() {
             setError(
                 err instanceof ApiError
                     ? err.message
-                    : 'An unexpected error occurred.',
+                    : intl.formatMessage({ id: 'auth.error.unexpected' }),
             );
-        } finally {
-            setLoading(false);
-        }
-    }
-
-    async function handlePasskeyLogin() {
-        setError(null);
-        setLoading(true);
-        try {
-            const options = await passkeyLoginStart(email || undefined);
-            const credential = await authenticateWithPasskey(options);
-            const tokens = await passkeyLoginFinish(credential);
-            setTokens(tokens);
-            navigate({ to: '/photos' });
-        } catch (err) {
-            if (err instanceof ApiError) {
-                setError(err.message);
-            } else if (err instanceof Error && err.name === 'NotAllowedError') {
-                setError('Passkey authentication was cancelled.');
-            } else {
-                setError('Passkey authentication failed.');
-            }
         } finally {
             setLoading(false);
         }
@@ -117,15 +93,19 @@ function Login() {
         <div className="flex flex-col items-center justify-center min-h-screen bg-muted/40 p-4">
             <Link to="/" className="mb-8 flex items-center gap-2">
                 <MountainIcon className="h-8 w-8 text-primary" />
-                <span className="text-2xl font-bold text-primary">Capsule</span>
+                <span className="text-2xl font-bold text-primary">
+                    {APP_NAME}
+                </span>
             </Link>
 
             {step === 'credentials' ? (
                 <Card className="w-full max-w-sm">
                     <CardHeader>
-                        <CardTitle className="text-2xl">Login</CardTitle>
+                        <CardTitle className="text-2xl">
+                            <FormattedMessage id="auth.login.title" />
+                        </CardTitle>
                         <CardDescription>
-                            Enter your email below to login to your account.
+                            <FormattedMessage id="auth.login.description" />
                         </CardDescription>
                     </CardHeader>
                     <form onSubmit={handleCredentialsSubmit}>
@@ -136,11 +116,15 @@ function Login() {
                                 </p>
                             )}
                             <div className="grid gap-2">
-                                <Label htmlFor="email">Email</Label>
+                                <Label htmlFor="email">
+                                    <FormattedMessage id="common.email" />
+                                </Label>
                                 <Input
                                     id="email"
                                     type="email"
-                                    placeholder="m@example.com"
+                                    placeholder={intl.formatMessage({
+                                        id: 'common.email_placeholder',
+                                    })}
                                     required
                                     value={email}
                                     onChange={(e) => setEmail(e.target.value)}
@@ -148,7 +132,9 @@ function Login() {
                                 />
                             </div>
                             <div className="grid gap-2">
-                                <Label htmlFor="password">Password</Label>
+                                <Label htmlFor="password">
+                                    <FormattedMessage id="common.password" />
+                                </Label>
                                 <Input
                                     id="password"
                                     type="password"
@@ -167,40 +153,23 @@ function Login() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Signing in…' : 'Sign in'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.signing_in" />
+                                ) : (
+                                    <FormattedMessage id="common.sign_in" />
+                                )}
                             </Button>
-                            <div className="relative w-full">
-                                <div className="absolute inset-0 flex items-center">
-                                    <span className="w-full border-t" />
-                                </div>
-                                <div className="relative flex justify-center text-xs uppercase">
-                                    <span className="bg-card px-2 text-muted-foreground">
-                                        or
-                                    </span>
-                                </div>
-                            </div>
-                            <Button
-                                variant="outline"
-                                className="w-full"
-                                type="button"
-                                disabled={loading}
-                                onClick={handlePasskeyLogin}
-                            >
-                                <KeyRoundIcon className="mr-2 h-4 w-4" />
-                                Sign in with Passkey
-                            </Button>
+                            {/* No passkey button: passkeys are not in v1 (`S-C56`), and the
+                                six operations behind this one could never authenticate. No
+                                "forgot password" link either: on an end-to-end-encrypted
+                                account there is no reset, because the server cannot re-wrap a
+                                master key it has never seen (`S-C54`). Recovery is the escrow
+                                blob, and it needs a screen of its own rather than a link that
+                                promises the wrong thing. */}
                             <p className="text-xs text-muted-foreground text-center">
-                                Don't have an account?{' '}
+                                <FormattedMessage id="auth.no_account" />{' '}
                                 <Link to="/register" className="underline">
-                                    Sign up
-                                </Link>
-                            </p>
-                            <p className="text-xs text-muted-foreground text-center">
-                                <Link
-                                    to="/forgot-password"
-                                    className="underline"
-                                >
-                                    Forgot password?
+                                    <FormattedMessage id="auth.sign_up" />
                                 </Link>
                             </p>
                         </CardFooter>
@@ -210,10 +179,10 @@ function Login() {
                 <Card className="w-full max-w-sm">
                     <CardHeader>
                         <CardTitle className="text-2xl">
-                            Two-Factor Auth
+                            <FormattedMessage id="auth.totp.title" />
                         </CardTitle>
                         <CardDescription>
-                            Enter the 6-digit code from your authenticator app.
+                            <FormattedMessage id="auth.totp.description" />
                         </CardDescription>
                     </CardHeader>
                     <form onSubmit={handleTotpSubmit}>
@@ -224,12 +193,16 @@ function Login() {
                                 </p>
                             )}
                             <div className="grid gap-2">
-                                <Label htmlFor="totp">Authenticator Code</Label>
+                                <Label htmlFor="totp">
+                                    <FormattedMessage id="auth.totp.code_label" />
+                                </Label>
                                 <Input
                                     id="totp"
                                     type="text"
                                     inputMode="numeric"
-                                    placeholder="123456"
+                                    placeholder={intl.formatMessage({
+                                        id: 'common.code_placeholder',
+                                    })}
                                     maxLength={6}
                                     required
                                     value={totpCode}
@@ -247,7 +220,11 @@ function Login() {
                                 type="submit"
                                 disabled={loading}
                             >
-                                {loading ? 'Verifying…' : 'Verify'}
+                                {loading ? (
+                                    <FormattedMessage id="auth.verifying" />
+                                ) : (
+                                    <FormattedMessage id="auth.verify" />
+                                )}
                             </Button>
                             <Button
                                 variant="ghost"
@@ -259,7 +236,7 @@ function Login() {
                                     setTotpCode('');
                                 }}
                             >
-                                Back
+                                <FormattedMessage id="common.back" />
                             </Button>
                         </CardFooter>
                     </form>

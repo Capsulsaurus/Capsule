@@ -10,7 +10,7 @@ use crate::config::AuthConfig;
 use crate::errors::{ClaimValidationError, LoginError, RegisterError};
 use crate::models::requests::RegisterRequest;
 use crate::models::responses::TokenResponse;
-use crate::session::SessionManager;
+use crate::session::{SessionContext, SessionManager};
 use crate::utils::hash::{hash_password, verify_password};
 use crate::validation::RegistrationValidator;
 
@@ -58,7 +58,10 @@ impl AuthService {
             name,
             email,
             password,
+            cohort_hash,
+            device_id,
         } = request;
+        let context = SessionContext::new(cohort_hash, device_id);
 
         // Check duplicates
         if let Ok(Some(_)) = UserService::Query::find_user_by_email(&self.conn, &email).await {
@@ -91,7 +94,7 @@ impl AuthService {
             }
         })?;
 
-        self.generate_token_pair(&user.id, session_manager)
+        self.generate_token_pair(&user.id, session_manager, context)
             .await
             .map_err(RegisterError::Unexpected)
     }
@@ -101,6 +104,7 @@ impl AuthService {
         session_manager: &SessionManager,
         email: &str,
         password: &SecretString,
+        context: SessionContext,
     ) -> Result<TokenResponse, LoginError> {
         let user = UserService::Query::find_user_by_email(&self.conn, email)
             .await
@@ -129,7 +133,7 @@ impl AuthService {
             if is_valid {
                 let _ = UserService::Mutation::track_login_success(&self.conn, &user.id).await;
                 return self
-                    .generate_token_pair(&user.id, session_manager)
+                    .generate_token_pair(&user.id, session_manager, context)
                     .await
                     .map_err(LoginError::Unexpected);
             }
@@ -145,13 +149,39 @@ impl AuthService {
         Err(LoginError::InvalidCredentials)
     }
 
+    /// Mint an access/refresh token pair for a fresh session.
+    ///
+    /// `context` is the ceremony's client-asserted [`SessionContext`] — the advisory
+    /// `cohort_hash` (slice `S-C13`) and the asserted directory `device_id` (slice `S-N3`).
+    /// Every login ceremony funnels through here, so a session opened by password login,
+    /// registration, the TOTP second factor, a passkey, or a token refresh records the same
+    /// provenance and groups identically in the devices view.
+    ///
+    /// Both values ride the session record for the listing surface, and the cohort is
+    /// additionally recorded in the durable `device_cohorts` map so a later reinstall groups
+    /// with "a device you've used before". Both are deliberately kept out of the JWT
+    /// [`Claims`] — no authorization path can read them — and recording the cohort is
+    /// best-effort: a store failure is logged, never propagated, so the ceremony behaves
+    /// identically whether the values are present, absent, or garbage.
     pub async fn generate_token_pair(
         &self,
         user_id: &str,
         session_manager: &SessionManager,
+        context: SessionContext,
     ) -> Result<TokenResponse, model::errors::InternalServerError> {
+        let context = context.normalized();
+        let cohort_hash = context.cohort_hash.clone();
+
+        // Advisory durable-map upsert: pin/bump the (user, cohort) sighting. A failure here
+        // must never fail login — it is legibility metadata, not a capability.
+        if let Some(ref cohort) = cohort_hash
+            && let Err(e) = service::cohort::Mutation::observe(&self.conn, user_id, cohort).await
+        {
+            tracing::warn!("advisory device-cohort observe failed (ignored): {e}");
+        }
+
         let sid = session_manager
-            .create_session(user_id.to_string(), None, None)
+            .create_session(user_id.to_string(), None, None, context)
             .await?;
 
         let (access_token, expires_by) = TokenService::create_access_token(
@@ -256,7 +286,7 @@ mod tests {
         let session_manager = SessionManager::new_with_storage(storage, Duration::from_secs(3600));
 
         let result = service
-            .generate_token_pair("user123", &session_manager)
+            .generate_token_pair("user123", &session_manager, SessionContext::default())
             .await;
         assert!(result.is_ok());
 

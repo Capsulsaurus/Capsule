@@ -6,7 +6,7 @@ status: draft
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class concern. This doc catalogues what can go wrong, how each failure is detected or contained, and the redundant, independent paths that restore a user's *entire* asset collection — including after catastrophic software bugs, not just key loss.
 
-It is a cross-cutting doc by nature: the failure-mode logic lives in many modules (key handling in `capsule-core::crypto::keys`, restore in `capsule-core::backup`, blob durability in `capsule-api`, etc.). The contract this doc owns is the **set of failures the system is required to survive** and the **independent paths that must each remain workable**. The closing [transport security](#transport-security) section is the one piece of crypto config that lives outside the application layer.
+It is a cross-cutting doc by nature: the failure-mode logic lives in many modules (key handling in `capsule-core::crypto::keys`, restore in `capsule-core::backup`, blob durability in `capsule-server`, etc.). The contract this doc owns is the **set of failures the system is required to survive** and the **independent paths that must each remain workable**. The closing [transport security](#transport-security) section is the one piece of crypto config that lives outside the application layer.
 
 ## Failure Mode Catalog
 
@@ -46,7 +46,7 @@ Restoring a complete asset collection does not depend on any single mechanism. T
 4. **Portable backup artifact.** A self-describing, versioned, encrypted archive, stored offline. *Survives: server data loss, account compromise, escrow-blob corruption.* See [Backup Artifact](/design/backup-recovery/#backup-artifact) for the container format.
 5. **Recovery-first filesystem rebuild.** CBOR sidecars are the canonical metadata store; the database is a rebuildable query cache. The idempotent `rebuild_index()` (`capsule-core::library::rebuild`) walks `.cbor` sidecars and reconstructs the index. *Survives: DB corruption and catastrophic bugs in the index/query layer.*
 6. **Content-addressed durability redundancy.** Ciphertext is addressed by the SHA-256 of its bytes, so any byte-identical copy — on another device or a [federated](/design/federation/) peer — is independently verifiable. This is a *durability* path: it restores ciphertext, not keys. *Survives: single-server data loss.*
-7. **Trash soft-delete window.** Deletes are soft first — `soft_delete()` / `purge_expired_trash()` (`capsule-core::library::trash`) give a reversal window before a hard purge. *Survives: erroneous deletes by a bug or user.*
+7. **Trash soft-delete window.** Deletes are soft first — `Workspace::soft_delete()` emits a signed `delete` record carrying a retention window (`capsule-core::lifecycle`), giving a reversal window (`Workspace::restore()`) before a hard purge. *Survives: erroneous deletes by a bug or user.*
 
 **Account-type coverage.** Registered accounts have all seven paths. [Delegated/sponsored accounts](/design/authentication/#account-types) are recovered via the sponsoring account's master key, since their keys derive from it — effectively **one** path class, routed entirely through the sponsor; the [sponsoree recovery matrix](/design/cryptography/keys/#delegatedsponsored-accounts) states the consequence (a sponsor who irrecoverably loses their master key loses every sponsoree's data with it). Non-registered ([share-link](/design/share-links/)) accounts hold no collection of their own — recovery is not applicable.
 

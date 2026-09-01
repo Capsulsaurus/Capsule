@@ -1,0 +1,19 @@
+[package]
+name = "capsule-wire"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "capsule_wire"
+path = "src/lib.rs"
+
+# Deliberately framework-free (slice `S-C27`). This crate carries the wire taxonomy the
+# server rebuild keeps, so it must not gain a dependency on any HTTP framework, OpenAPI
+# generator, or RPC stack — the adapter macros name those paths, they never link them.
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

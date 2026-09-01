@@ -19,6 +19,17 @@ hk = "1.48.0"
 # builds from source, working uniformly on every OS in CI and locally.
 "cargo:convco" = "0.6.4"
 "cargo:cargo-nextest" = "0.9"
+# wasm-bindgen CLI post-processes the `capsule-wasm` cdylib into the browser JS glue the web
+# share viewer + the `share-open` bun KAT load (slice S-E1, `build-wasm`). Pinned to EXACTLY the
+# `wasm-bindgen` crate version in `capsule-wasm/Cargo.toml` — the two must match or wasm-bindgen
+# aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
+# fetch of a version-matched wasm-bindgen) once the toolchain is installed.
+"cargo:wasm-bindgen-cli" = "0.2.100"
+# cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
+# implements is capsule-docs/.../design/licensing.md). Only `check licenses` is wired
+# up: the advisories check needs a network fetch of the RustSec database, which would
+# make the gate non-deterministic and break the offline build.
+"cargo:cargo-deny" = "0.19.8"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -73,11 +84,16 @@ run = ["mise run format-check", "mise run lint-check", "mise run test"]
 [tasks.check-rust]
 description = "Rust CI gate"
 run = [
-  "mise run architecture-check",
   "mise run format-check-rust",
   "mise run lint-check-rust",
   "mise run i18n-check",
+  "mise run i18n-guard",
+  "mise run openapi-check-kynos",
+  "mise run architecture-check",
+  "mise run license-check",
+  "mise run translate-readme-check",
   "mise run build-rust",
+  "mise run build-check-wasm",
   "mise run build-ffi",
   "mise run lint-check-ffi",
   "mise run gen-bindings",
@@ -126,6 +142,7 @@ run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 run = [
   "cargo nextest run --workspace",
   "cargo nextest run -p capsule-core --features ffi",
+  "cargo nextest run -p capsule-sdk --features ffi",
 ]
 
 [tasks.test-coverage-rust]
@@ -134,8 +151,32 @@ run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 [tasks.build-rust]
 run = "cargo build --workspace"
 
+# The wasm32 sealing build, type-checked. `build-rust` compiles the host triple only, so nothing
+# in any gate ever built `capsule-core --no-default-features` for wasm32 — which is how an ungated
+# `pub mod albumstore` (a filesystem-backed store, added by S-A10) silently broke the browser
+# sealing surface and, through `capsule-wasm`, `build-wasm` -> `build-web` -> `check-web`. `cargo
+# check` rather than `build-wasm` because this belongs in the Rust gate and must not need
+# wasm-bindgen-cli; `build-wasm` still produces the actual artifact.
+[tasks.build-check-wasm]
+description = "Type-check the wasm32 sealing surface (capsule-core no-default-features + capsule-wasm)"
+run = [
+  "cargo check -p capsule-core --target wasm32-unknown-unknown --no-default-features",
+  "cargo check -p capsule-wasm --target wasm32-unknown-unknown",
+]
+
+# Boundary gate for the retired architecture (Salvo, GraphQL/gRPC, Progenitor, the legacy
+# media stack). It rejects implicit workspace packages, retired dependencies, buildable
+# manifests under `legacy-review/`, and stale component references.
+#
+# **In `check-rust` since `S-C59`.** It was adopted as a report first, deliberately: the Salvo
+# server and the in-repo media stack were live and stayed that way until the Kynos rebuild reached
+# parity, because `legacy-review/`'s own charter is that code leaves quarantine only once its
+# replacement contract and tests exist — and retiring first would have left the tree with no
+# server, no CLI network commands and no end-to-end test for the whole rebuild. Its output was the
+# worklist: 63 violations at adoption, 0 now. It is a gate rather than a report from here, so the
+# boundary cannot quietly move back.
 [tasks.architecture-check]
-description = "Verify active Rust workspace and retired-component boundaries"
+description = "Verify active-workspace and retired-component boundaries"
 run = "cargo run -q -p xtask -- architecture-check"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
@@ -149,16 +190,72 @@ run = "cargo run -q -p xtask -- i18n"
 description = "Verify generated i18n is in sync with locales/"
 run = "cargo run -q -p xtask -- i18n --check"
 
+# S-I1 regression gate: fail on any hardcoded user-facing string literal in the
+# web (JSX), SwiftUI, or Compose surfaces that isn't a catalog key/allowlisted. This
+# is the ONE gate for all three surfaces — the Kotlin half runs here (not via Gradle,
+# which the migration cannot depend on) so it stays locally verifiable.
+[tasks.i18n-guard]
+description = "Fail on hardcoded user-facing literals (web/swift/compose)"
+run = "cargo run -q -p xtask -- i18n-guard"
+
+# Dependency-licence gate. Fails on any crate whose licence is not allowlisted in
+# deny.toml -- which denies GPL-*/LGPL-*/AGPL-* by omission, so a copyleft crate can
+# never reach a statically-linked release binary and quietly forfeit app-store
+# distribution. `--all-features` so wasm/UEFI-only crates are covered too.
+[tasks.license-check]
+description = "Verify every dependency licence is allowlisted in deny.toml"
+run = "cargo deny --all-features check licenses"
+
+# Dump the Kynos OpenAPI 3.2 document to the committed capsule-server/openapi.json that spargen
+# generates the typed REST client from (slices `S-C34`, `S-D28`). The dump is state-free — no
+# database, Valkey, or key material, because the router takes `App` only as a type parameter — so
+# it is deterministic and runs anywhere. Re-run and commit after any endpoint or model change.
+#
+# There were two documents and two drift guards while the rebuild ran, so a client had somewhere
+# to point at each stage. `S-C59` retired the Salvo one; this is now the contract, singular.
+[tasks.openapi-kynos]
+description = "Dump the Kynos OpenAPI 3.2 document to capsule-server/openapi.json"
+run = "cargo run -q -p capsule-server --bin gen_openapi"
+
+[tasks.openapi-check-kynos]
+description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
+run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
+
+# Regenerate the translated README.<lang>.md files from README.md and the committed
+# per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.
+[tasks.translate-readme]
+description = "Generate README.<lang>.md from README.md + translation data"
+run = "cargo run -q -p xtask -- translate-readme"
+
+# Structural drift gate for the README translations: fails when a source block changed
+# but the translations were not regenerated. Key-less and API-free (runs in CI).
+[tasks.translate-readme-check]
+description = "Verify README translations are in sync with README.md"
+run = "cargo run -q -p xtask -- translate-readme --check"
+
+# Scaffold/refresh a locale's translation-data file from the current README blocks.
+[tasks.translate-readme-extract]
+description = "Print README translatable blocks as a translation-data scaffold"
+run = "cargo run -q -p xtask -- translate-readme --extract"
+
 # ── FFI: uniffi bindings for Kotlin/Swift ────────────────────────────────────
-# capsule-core exposes a minimal `FfiWorkspace` over uniffi behind the `ffi`
-# feature; `gen-bindings` (a file task) emits the Kotlin/Swift sources from the
-# compiled cdylib. The `ffi-bindgen` feature adds uniffi's CLI for that generator.
+# Two uniffi surfaces behind their crates' `ffi` feature (one pinned uniffi 0.31.1
+# — the S-F1 consolidation): capsule-core's `FfiWorkspace` (offline lifecycle) and
+# capsule-sdk's `FfiCapsuleClient`/`FfiSession` (the S-D9 user-flow primitives:
+# login → upload → status → sync). `gen-bindings` emits the Kotlin/Swift sources for
+# both from the compiled cdylibs. The `ffi-bindgen` feature adds uniffi's CLI.
 
 [tasks.build-ffi]
-run = "cargo build -p capsule-core --features ffi"
+run = [
+  "cargo build -p capsule-core --features ffi",
+  "cargo build -p capsule-sdk --features ffi",
+]
 
 [tasks.lint-check-ffi]
-run = "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS"
+run = [
+  "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS",
+  "cargo clippy -p capsule-sdk --features ffi -- $CLIPPY_FLAGS",
+]
 
 # gen-bindings, verify-examples → mise-tasks/ (shebang scripts).
 
@@ -180,9 +277,9 @@ run = "cargo clippy -p capsule-core --features ffi -- $CLIPPY_FLAGS"
 # guards + toolchain checks). Run `mise run targets-add` first.
 
 [tasks.targets-add]
-description = "Add rustup targets + cargo-ndk for the mobile/desktop FFI builds"
+description = "Add rustup targets + cargo-ndk for the mobile/desktop/wasm FFI builds"
 run = [
-  "rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android",
+  "rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin x86_64-apple-darwin aarch64-linux-android armv7-linux-androideabi x86_64-linux-android i686-linux-android wasm32-unknown-unknown",
   "cargo install cargo-ndk",
 ]
 
@@ -199,45 +296,75 @@ run = ["mise run build-apple", "mise run build-android", "mise run build-linux-c
 
 [tasks.format-web]
 dir = "capsule-web"
-run = "bun x biome format --write ."
+run = "bunx biome format --write ."
 
 [tasks.format-check-web]
 dir = "capsule-web"
-run = "bun x biome format ."
+run = "bunx biome format ."
 
 [tasks.lint-web]
 dir = "capsule-web"
-run = "bun x biome check --write ."
+run = "bunx biome check --write ."
 
 [tasks.lint-check-web]
 dir = "capsule-web"
-run = "bun x biome check ."
+run = "bunx biome check ."
 
+# Build the `capsule-wasm` browser surface (slice S-E1) and post-process it into the JS glue the
+# web app + the `share-open` bun KAT import. Two deterministic, offline steps: a release wasm32
+# build, then `wasm-bindgen --target web` into the gitignored `capsule-web/src/generated/wasm/`
+# (build-time generation — no wasm binary is committed). Requires the `wasm32-unknown-unknown`
+# rustup target (see `targets-add`) and the pinned `wasm-bindgen-cli` tool.
+[tasks.build-wasm]
+description = "Build capsule-wasm and emit the browser JS glue for capsule-web"
+run = [
+  "cargo build -p capsule-wasm --target wasm32-unknown-unknown --release",
+  "wasm-bindgen target/wasm32-unknown-unknown/release/capsule_wasm.wasm --out-dir capsule-web/src/generated/wasm --target web",
+]
+
+# Generate the deterministic cross-language share-link KAT fixture the bun test reopens (Rust
+# seals via the real issuer crypto; wasm reopens — proving byte-identical interop). Written to the
+# gitignored capsule-web/src/generated/ tree.
+[tasks.share-kat]
+description = "Generate the share-link cross-language KAT fixture for the web bun test"
+run = "cargo run -q -p xtask -- share-kat"
+
+# Generate the deterministic cross-language guest-drop KAT fixture the bun test reproduces (slice
+# S-D3): the browser (WASM) seals, and this fixture pins the byte-identical Rust `seal_drop_derand`
+# output + the passphrase abuse-gate proof. Written to the gitignored capsule-web/src/generated/.
+[tasks.drop-kat]
+description = "Generate the guest-drop cross-language KAT fixture for the web bun test"
+run = "cargo run -q -p xtask -- drop-kat"
+
+# test-web loads the wasm module + both KAT fixtures, so all three are prerequisites.
 [tasks.test-web]
 dir = "capsule-web"
+depends = ["build-wasm", "share-kat", "drop-kat"]
 run = "bun test --pass-with-no-tests"
 
+# build-web bundles the guest share viewer, which imports the generated wasm glue.
 [tasks.build-web]
 dir = "capsule-web"
+depends = ["build-wasm"]
 run = "bun run build"
 
 # ── Docs ─────────────────────────────────────────────────────────────────────
 
 [tasks.format-docs]
 dir = "capsule-docs"
-run = "bun x biome format --write ."
+run = "bunx biome format --write ."
 
 [tasks.format-check-docs]
 dir = "capsule-docs"
-run = "bun x biome format ."
+run = "bunx biome format ."
 
 [tasks.lint-docs]
 dir = "capsule-docs"
-run = "bun x biome check --write ."
+run = "bunx biome check --write ."
 
 [tasks.lint-check-docs]
 dir = "capsule-docs"
-run = "bun x biome check ."
+run = "bunx biome check ."
 
 [tasks.build-docs]
 dir = "capsule-docs"
@@ -257,11 +384,16 @@ run = "./gradlew detekt"
 [tasks.lint-check-kotlin]
 run = "./gradlew detekt"
 
+# `-Pcapsule.wireFfi` turns on the S-F3 FFI-staging tasks in capsule-core-kotlin
+# (:core): generate the uniffi Kotlin bindings + build the per-ABI JNI libs as Gradle
+# build inputs, so a clean checkout compiles/packages without a manual staging step.
+# Needs a Rust toolchain (+ cargo-ndk & the Android NDK for the jniLibs). The lint-only
+# `check-kotlin` (ktlint/detekt) deliberately omits the flag — it needs no cargo.
 [tasks.test-kotlin]
-run = "./gradlew test"
+run = "./gradlew test -Pcapsule.wireFfi"
 
 [tasks.build-kotlin]
-run = "./gradlew build"
+run = "./gradlew build -Pcapsule.wireFfi"
 
 # ── Swift ────────────────────────────────────────────────────────────────────
 # Swift tooling is pinned in capsule-swift/mise.toml; capsule-core-swift reuses
@@ -298,10 +430,10 @@ run = "uv run ruff check && uv run ty check"
 # is both linter and fixer; globs/ignores live in .markdownlint-cli2.jsonc.
 
 [tasks.lint-md]
-run = "bun x markdownlint-cli2 --fix"
+run = "bunx markdownlint-cli2 --fix"
 
 [tasks.lint-check-md]
-run = "bun x markdownlint-cli2"
+run = "bunx markdownlint-cli2"
 
 # ── Commits / release ────────────────────────────────────────────────────────
 # convco enforces Conventional Commits (https://www.conventionalcommits.org).

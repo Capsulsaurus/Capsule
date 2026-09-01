@@ -15,3 +15,8 @@ dist/
 # graphql-codegen
 src/gql/
 src/schema.ts
+
+# Build-time generated (slice S-E1): the capsule-wasm JS glue (`mise run build-wasm`) and the
+# cross-language share-link KAT fixture (`mise run share-kat`). Never committed — regenerated
+# deterministically from Rust so the web build/test stay a pure function of the source crates.
+src/generated/
