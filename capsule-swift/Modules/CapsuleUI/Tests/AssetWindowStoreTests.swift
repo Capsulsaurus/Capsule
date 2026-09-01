@@ -286,6 +286,42 @@ struct AssetWindowStoreTests {
         await waitUntil("the retry succeeds") { store.element(at: 0) == 0 }
     }
 
+    @Test("a stationary viewport does not refetch a failed page on its own")
+    func stationaryViewportDoesNotStorm() async throws {
+        let source = ControlledPageSource()
+        await source.failNext(FetchFailure())
+        let store = makeStore(totalCount: 1000, source: source)
+
+        store.setVisibleRange(0 ..< 50, viewportItemCount: 50)
+        await waitUntil("the failure lands") { store.lastError != nil }
+        let afterFailure = await source.requestedOffsets.count
+
+        // The whole point of the early return: re-asserting the same range every
+        // frame must not put a failing fetch on every frame.
+        for _ in 0 ..< 20 {
+            store.setVisibleRange(0 ..< 50, viewportItemCount: 50)
+        }
+        #expect(await source.requestedOffsets.count == afterFailure)
+        #expect(store.element(at: 0) == nil)
+    }
+
+    @Test("retryFailedPages refetches without moving the viewport")
+    func explicitRetryRecoversInPlace() async throws {
+        let source = ControlledPageSource()
+        await source.failNext(FetchFailure())
+        let store = makeStore(totalCount: 1000, source: source)
+
+        store.setVisibleRange(0 ..< 50, viewportItemCount: 50)
+        await waitUntil("the failure lands") { store.lastError != nil }
+        #expect(store.element(at: 0) == nil)
+
+        // The recovery path for a viewport that never moves. `invalidate()` would
+        // also work, but it drops every resident page to repair one.
+        store.retryFailedPages()
+        #expect(store.lastError == nil)
+        await waitUntil("the retried page arrives") { store.element(at: 0) == 0 }
+    }
+
     @Test("invalidating drops resident rows and refetches what is on screen")
     func invalidateRefetches() async throws {
         let source = ControlledPageSource()

@@ -165,6 +165,25 @@ public final class AssetWindowStore<Element: Sendable & Equatable> {
 
     public func clearError() { lastError = nil }
 
+    /// Refetch the pages whose last fetch failed and that the viewport still needs.
+    ///
+    /// The store deliberately does not do this on its own. ``setVisibleRange(_:viewportItemCount:)``
+    /// no-ops on an unchanged range, so a viewport sitting still over a failed page
+    /// holds its placeholder until the user scrolls away and back — and the obvious
+    /// repair, refilling on every call, would re-issue a failing fetch every frame
+    /// for as long as the user looked at it. Neither is acceptable, so the retry is
+    /// explicit and belongs to whatever surfaces ``lastError``.
+    ///
+    /// Clears ``lastError`` first: a retry the user asked for should not leave the
+    /// previous failure on screen while it is in flight.
+    public func retryFailedPages() {
+        lastError = nil
+        for page in requiredPages where pages[page] == nil && inFlight[page] == nil && !exhausted.contains(page) {
+            startFetch(page)
+        }
+        bumpRevision()
+    }
+
     /// Stop every outstanding fetch — for a screen tearing down while a slow
     /// page is still in flight.
     public func cancelOutstandingFetches() {
@@ -186,6 +205,11 @@ public final class AssetWindowStore<Element: Sendable & Equatable> {
     ///
     /// Safe to call every frame: identical input is a no-op, so a scroll that
     /// stays within one page issues nothing.
+    ///
+    /// That no-op is total — it covers a page whose fetch *failed* as much as one
+    /// that succeeded. Recovering from a failure without moving the viewport is
+    /// ``retryFailedPages()``, and that is deliberate: retrying from here would put
+    /// a failing fetch on every frame.
     public func setVisibleRange(_ visible: Range<Int>, viewportItemCount: Int? = nil) {
         guard totalCount > 0 else { return }
 
@@ -304,8 +328,10 @@ public final class AssetWindowStore<Element: Sendable & Equatable> {
             }
             evictIfNeeded()
         case let .failure(error):
-            // Not marked exhausted: a failure is worth retrying when the page is
-            // next required, whereas a short read is not.
+            // Not marked exhausted: a failure is refetchable, whereas a short read
+            // is not. Refetching happens when the viewport next *moves* over the
+            // page, or on an explicit ``retryFailedPages()`` — never on its own from
+            // a stationary viewport, which would mean a fetch per frame.
             if !(error is CancellationError) { lastError = error }
         }
         bumpRevision()
