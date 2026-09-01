@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">Échec de la connexion : %s</string>
     <string name="cli_auth_login_in_progress">Connexion à Capsule…</string>
     <string name="cli_auth_login_password_prompt">Mot de passe</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">Connecté en tant que %s.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Déconnexion de Capsule…</string>
     <string name="cli_auth_logout_not_logged_in">Vous n\'êtes pas connecté.</string>
     <string name="cli_auth_logout_success">Déconnecté.</string>

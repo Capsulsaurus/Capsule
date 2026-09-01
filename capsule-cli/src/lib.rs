@@ -726,24 +726,46 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
         "{}",
         bundle.format(keys::AUTH_LOGIN_IN_PROGRESS, &[]).green()
     );
-    match remote::auth_login(&remote, &store, &email, &password).await {
-        Ok(()) => {
-            println!(
-                "{}",
-                bundle
-                    .format(keys::AUTH_LOGIN_SUCCESS, &[("email", Value::Str(&email))])
-                    .green()
-            );
-            Ok(())
-        }
+    let step = match remote::auth_login(&remote, &store, &email, &password).await {
+        Ok(step) => step,
         Err(error) => {
             let reason = describe_remote_error(&bundle, &error);
-            Err(eyre!(
+            return Err(eyre!(
                 "{}",
                 bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
-            ))
+            ));
+        }
+    };
+
+    // The password verified and the sign-in may not be finished (`S-C55`). The CLI is
+    // interactive, so it asks — a client that could not would have to report a second factor as
+    // a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
+    // deliberately not.
+    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
+        println!(
+            "{}",
+            bundle
+                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
+                .yellow()
+        );
+        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
+        if let Err(error) = remote::auth_verify_totp(&remote, &store, &mfa_token, code.trim()).await
+        {
+            let reason = describe_remote_error(&bundle, &error);
+            return Err(eyre!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
+            ));
         }
     }
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_SUCCESS, &[("email", Value::Str(&email))])
+            .green()
+    );
+    Ok(())
 }
 
 /// `capsule auth logout`: revoke the session over the SDK and clear local state.

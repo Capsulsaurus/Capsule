@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">Не удалось войти: %s</string>
     <string name="cli_auth_login_in_progress">Вход в Capsule…</string>
     <string name="cli_auth_login_password_prompt">Пароль</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">Выполнен вход как %s.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Выход из Capsule…</string>
     <string name="cli_auth_logout_not_logged_in">Вы не вошли в систему.</string>
     <string name="cli_auth_logout_success">Выход выполнен.</string>

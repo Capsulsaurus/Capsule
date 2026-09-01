@@ -124,6 +124,8 @@ async fn session(base_url: &str) -> capsule_sdk::auth::Session {
         .login(EMAIL, PASSWORD)
         .await
         .expect("the seeded account signs in")
+        .into_session()
+        .expect("the seeded account has no second factor")
 }
 
 // ===========================================================================================
@@ -233,4 +235,55 @@ async fn a_refresh_rotates_the_pair_and_closes_the_one_it_replaced() {
         .refresh()
         .await
         .expect_err("the session the rotation closed is closed");
+}
+
+/// The SDK reads a real `202` from a real server, and a real code finishes the sign-in.
+///
+/// The unit tests cover this against a mock; this covers it against the router that decides,
+/// over a socket, which is the one thing a mock cannot rule out — that the two ends disagree
+/// about which status carries the challenge.
+#[tokio::test]
+async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
+    let fixture = Fixture::working();
+    let base = serve(&fixture).await;
+    let bearer = fixture.bearer().await;
+
+    // Switch a second factor on through the served surface, exactly as a client would.
+    fixture
+        .client
+        .post("/v1/auth/totp/enroll")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    fixture
+        .client
+        .post("/v1/auth/totp/verify-enrollment")
+        .header("authorization", &bearer)
+        .json(&serde_json::json!({
+            "totp_code": support::totp_code(&fixture, &support::user()),
+        }))
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::NO_CONTENT);
+
+    let client = AuthClient::new(&format!("{base}/v1/auth")).expect("a base url");
+    let capsule_sdk::auth::LoginOutcome::SecondFactorRequired { mfa_token, .. } = client
+        .login(EMAIL, PASSWORD)
+        .await
+        .expect("the password verifies")
+    else {
+        panic!("an account with a confirmed second factor must not answer a token pair");
+    };
+
+    // A step on, so the confirming code is spent and gone.
+    fixture.clock.advance(jiff::SignedDuration::from_secs(
+        i64::try_from(capsule_server::auth::totp::STEP_SECONDS).expect("in range"),
+    ));
+    let session = client
+        .verify_second_factor(&mfa_token, &support::totp_code(&fixture, &support::user()))
+        .await
+        .expect("the code completes the sign-in");
+    assert!(session.is_authenticated().await);
 }

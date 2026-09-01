@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">लॉग इन विफल: %s</string>
     <string name="cli_auth_login_in_progress">Capsule में लॉग इन हो रहा है…</string>
     <string name="cli_auth_login_password_prompt">पासवर्ड</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">%s के रूप में लॉग इन किया गया।</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Capsule से लॉग आउट हो रहा है…</string>
     <string name="cli_auth_logout_not_logged_in">आप लॉग इन नहीं हैं।</string>
     <string name="cli_auth_logout_success">लॉग आउट कर दिया गया।</string>

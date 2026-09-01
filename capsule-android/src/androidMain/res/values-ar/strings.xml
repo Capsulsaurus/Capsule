@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">فشل تسجيل الدخول: %s</string>
     <string name="cli_auth_login_in_progress">جارٍ تسجيل الدخول إلى Capsule…</string>
     <string name="cli_auth_login_password_prompt">كلمة المرور</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">تم تسجيل الدخول باسم %s.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">جارٍ تسجيل الخروج من Capsule…</string>
     <string name="cli_auth_logout_not_logged_in">أنت لست مسجّل الدخول.</string>
     <string name="cli_auth_logout_success">تم تسجيل الخروج.</string>

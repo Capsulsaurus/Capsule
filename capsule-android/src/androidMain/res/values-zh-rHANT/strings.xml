@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">登入失敗：%s</string>
     <string name="cli_auth_login_in_progress">正在登入 Capsule…</string>
     <string name="cli_auth_login_password_prompt">密碼</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">已以 %s 身分登入。</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">正在從 Capsule 登出…</string>
     <string name="cli_auth_logout_not_logged_in">您尚未登入。</string>
     <string name="cli_auth_logout_success">已登出。</string>

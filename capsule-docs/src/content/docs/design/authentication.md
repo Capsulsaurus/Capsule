@@ -56,6 +56,8 @@ Slice `S-C55`. Password + TOTP is a first-class local auth path, and on the reti
 
 **A store outage fails a sign-in closed.** A login that proceeded because the enrollment store was unreachable would be a second factor an attacker turns off by loading that store.
 
+**Every client reads the `202` from the status** (slice `S-C63`). `capsule-sdk`'s `login` returns a `LoginOutcome` rather than a session, so a caller must decide what to do about a challenge instead of receiving one shaped like a failure; `capsule auth login` prompts for the code, and a caller that cannot prompt gets a typed `SecondFactorRequired`. The advisory `cohort_hash` rides the **completing** request in every client, because that is the one that opens the session.
+
 **`POST /v1/auth/reauthenticate` still takes a password alone.** The second factor guards *becoming* a session; re-authentication is performed by a session that already exists, and demanding a code there would protect nothing an attacker holding that session has not already got past.
 
 ### The Profile Surface

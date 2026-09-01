@@ -35,6 +35,8 @@ pub fn cli_bundle() -> Bundle {
 pub mod keys {
     pub const AUTH_LOGIN_EMAIL_PROMPT: &str = "cli.auth.login.email_prompt";
     pub const AUTH_LOGIN_PASSWORD_PROMPT: &str = "cli.auth.login.password_prompt";
+    pub const AUTH_LOGIN_TOTP_PROMPT: &str = "cli.auth.login.totp_prompt";
+    pub const AUTH_LOGIN_SECOND_FACTOR_REQUIRED: &str = "cli.auth.login.second_factor_required";
     pub const AUTH_LOGIN_IN_PROGRESS: &str = "cli.auth.login.in_progress";
     pub const AUTH_LOGIN_SUCCESS: &str = "cli.auth.login.success";
     pub const AUTH_LOGIN_FAILED: &str = "cli.auth.login.failed";

@@ -411,6 +411,14 @@
         "message": "Passwort",
         "context": "Machine-translated seed pending human review."
     },
+    "cli.auth.login.totp_prompt": {
+        "message": "Authenticator code",
+        "context": "CLI `capsule auth login` interactive prompt for the six-digit TOTP code, shown after the password verifies on an account with a second factor (slice S-C63)."
+    },
+    "cli.auth.login.second_factor_required": {
+        "message": "This account has two-factor authentication switched on.",
+        "context": "CLI `capsule auth login`, printed before the code prompt. The password verified and the sign-in is not finished — the server answered 202 rather than a token pair."
+    },
     "cli.auth.login.in_progress": {
         "message": "Anmeldung bei Capsule…",
         "context": "Machine-translated seed pending human review."

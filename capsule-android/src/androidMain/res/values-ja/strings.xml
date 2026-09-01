@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">ログインに失敗しました：%s</string>
     <string name="cli_auth_login_in_progress">Capsule にログインしています…</string>
     <string name="cli_auth_login_password_prompt">パスワード</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">%s としてログインしました。</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Capsule からログアウトしています…</string>
     <string name="cli_auth_logout_not_logged_in">ログインしていません。</string>
     <string name="cli_auth_logout_success">ログアウトしました。</string>

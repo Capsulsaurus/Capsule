@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">Error al iniciar sesión: %s</string>
     <string name="cli_auth_login_in_progress">Iniciando sesión en Capsule…</string>
     <string name="cli_auth_login_password_prompt">Contraseña</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">Sesión iniciada como %s.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Cerrando sesión en Capsule…</string>
     <string name="cli_auth_logout_not_logged_in">No has iniciado sesión.</string>
     <string name="cli_auth_logout_success">Sesión cerrada.</string>

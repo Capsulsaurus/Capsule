@@ -13,13 +13,14 @@ use std::collections::HashSet;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
-use capsule_sdk::auth::{AuthClient, AuthError, Session};
+use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use sea_orm::{ConnectionTrait, TransactionTrait};
+use secrecy::SecretString;
 use thiserror::Error;
 use tracing::instrument;
 
@@ -159,12 +160,60 @@ pub async fn auth_login(
     store: &SessionStore,
     email: &str,
     password: &str,
+) -> Result<LoginStep, RemoteError> {
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    match client.login(email, password).await? {
+        LoginOutcome::Session(session) => {
+            persist(store, session).await?;
+            tracing::info!("login persisted to the session store");
+            Ok(LoginStep::Complete)
+        }
+        // The password verified and the sign-in is not finished (`S-C55`). Nothing is persisted:
+        // there is no session yet, and writing a half-authentication to the store would leave a
+        // later command believing it was signed in.
+        LoginOutcome::SecondFactorRequired { mfa_token, .. } => {
+            tracing::info!("login needs a second factor");
+            Ok(LoginStep::SecondFactorRequired { mfa_token })
+        }
+    }
+}
+
+/// How far [`auth_login`] got.
+///
+/// The CLI is interactive, so it can finish the ceremony by asking for a code — which is why
+/// this is a value the caller acts on rather than an error it reports.
+#[derive(Debug)]
+pub enum LoginStep {
+    /// Signed in, and the session is in the store.
+    Complete,
+    /// The password verified; a code is needed.
+    SecondFactorRequired {
+        /// The challenge to hand to [`auth_verify_totp`]. Good once, and for five minutes.
+        mfa_token: SecretString,
+    },
+}
+
+/// Complete a sign-in with the code an authenticator app is showing, and persist the session.
+#[instrument(skip(store, mfa_token, totp_code))]
+pub async fn auth_verify_totp(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    mfa_token: &SecretString,
+    totp_code: &str,
 ) -> Result<(), RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.login(email, password).await?;
+    let session = client.verify_second_factor(mfa_token, totp_code).await?;
+    persist(store, session).await?;
+    tracing::info!("second factor accepted; session persisted");
+    Ok(())
+}
+
+/// Export a freshly opened session and write it to the store.
+///
+/// One place, so the two ways a sign-in can finish cannot persist differently.
+async fn persist(store: &SessionStore, session: Session) -> Result<(), RemoteError> {
     let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
     store.save(&persisted)?;
-    tracing::info!("login persisted to the session store");
     Ok(())
 }
 

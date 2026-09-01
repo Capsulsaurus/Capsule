@@ -277,6 +277,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C60 | The browser still speaks a transport nothing serves | sdk/clients | S-C2, S-C59 | M | RETIRED | done | 410 lines of hand-rolled Protobuf replaced by one `GET`; the store's rules are untouched |
 | S-C61 | The drop passphrase is provisioned and never checked | server | S-C5, S-C60 | S | RETIRED | done | a gated link admitted anyone holding the opaque id; the web client was posting to paths that no longer exist |
 | S-C62 | The web auth client speaks a surface that is gone | sdk/clients | S-C54, S-C55, S-C56, S-C60 | M | RETIRED | done | passkey and password-reset screens removed, login reads `202`, profile is the four fields the server keeps |
+| S-C63 | The SDK cannot read a second-factor challenge | sdk/clients | S-C55 | M | RETIRED | done | `login` returns an outcome, not a session; `capsule auth login` prompts for the code |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3527,6 +3528,54 @@ strings, and twenty keys describing a deleted screen are a liability in the mean
 - **Done when:** ✅ `mise run check-web` green; no `passkey`, `password-reset` or `mfa_required`
   reference left in `capsule-web/src`, and `lib/webauthn.ts` gone with its last consumer.
   **Tier:** Smoke.
+
+### S-C63 — the SDK cannot read a second-factor challenge
+
+- **Contract:** [Authentication — The Second Factor](capsule-docs/src/content/docs/design/authentication.md).
+- **Gap** (found 2026-09-01, auditing the clients after `S-C62`): `S-C55` made
+  `POST /v1/auth/login` able to answer `202` with a challenge, and `AuthClient::login` treats
+  every 2xx as a token pair. `read_tokens` would deserialize the challenge body into
+  `TokenResponseBody`, fail, and surface `MalformedResponse` — so a user with a second factor was
+  told their **server** had sent something broken.
+
+  The same defect one layer below `S-C62`, and it reaches further: the CLI and both native apps
+  go through this client, so switching on a second factor made every non-browser client
+  unusable with a misleading error.
+
+**`login` returns a `LoginOutcome`, not a `Session`.** Two variants, because the server has two
+outcomes and says so with a status. Neither is a failure — an account having a second factor is
+the system working — which is why this is a value rather than an `AuthError` variant. The
+distinction is read from the **status**, where the server puts it; a body flag would be a second
+place for the two ends to disagree, which is exactly what `S-C62` had to unwind on the web side.
+
+**`into_session()` is the escape hatch, and it returns an error rather than panicking.** A caller
+that genuinely cannot prompt — an automated one, a test against an account known to have no second
+factor — gets `AuthError::SecondFactorRequired`. "This account needs a code and I cannot ask for
+one" is a runtime condition, not a programming mistake.
+
+**The cohort moves to the completing request.** `verify_second_factor` carries `cohort_hash`
+because *that* is the request which opens the session; sent on the first leg it would describe a
+session that does not exist yet, and the sign-in would land in the devices view ungrouped — the
+`S-N3` defect, reintroduced through the back door.
+
+**`capsule auth login` prompts for the code**, because the CLI is interactive and can. A client
+that could not would have to report a second factor as a failure, which is what `into_session` is
+for and what the CLI deliberately does not do. Nothing is persisted at the `202`: there is no
+session yet, and writing a half-authentication to the store would leave a later command believing
+it was signed in.
+
+**The FFI gets an enum, not an optional handle.** `FfiLoginOutcome` is `Session { … }` or
+`SecondFactorRequired { … }`; a null handle beside an `mfaToken` string would let an app read one
+field while acting on the other.
+
+- **Owed:** nothing. The native harnesses (`S-P8`, and the Kotlin one) drive `login` and will need
+  a line each for the new shape — recorded on those slices, which are already blocked on a server
+  binary.
+- **Done when:** ✅ `a_202_login_is_a_second_factor_challenge`,
+  `a_code_completes_the_sign_in_and_carries_the_cohort`,
+  `into_session_refuses_a_challenge_it_cannot_answer`, and
+  `the_sdk_completes_a_real_second_factor_over_a_socket` — the last against the real router over
+  TCP, which is the one thing a mock cannot rule out. **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

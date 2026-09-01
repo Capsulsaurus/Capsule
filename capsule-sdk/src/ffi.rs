@@ -33,8 +33,9 @@
 use std::sync::Arc;
 
 use capsule_core::lifecycle::LifecycleError;
+use secrecy::{ExposeSecret as _, SecretString};
 
-use crate::auth::{AuthClient, AuthError, Session};
+use crate::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use crate::directory::{DirectoryClient, DirectoryError};
 use crate::recovery::{RecoveryClient, RecoveryError};
 use crate::sync::{
@@ -610,6 +611,27 @@ impl FfiCapsuleClient {
     }
 }
 
+/// What a password login answered with, across the FFI (`S-C63`).
+///
+/// An enum rather than an optional session handle: "signed in" and "needs a code" are different
+/// states an app renders differently, and a `null` handle beside a `mfaToken` string would let a
+/// caller read one while acting on the other.
+#[derive(uniffi::Enum)]
+pub enum FfiLoginOutcome {
+    /// The account has no second factor, and this is its session.
+    Session {
+        /// The authenticated session handle.
+        session: Arc<FfiSession>,
+    },
+    /// The password verified and a code is still needed.
+    SecondFactorRequired {
+        /// The challenge to hand to `verifySecondFactor`.
+        mfa_token: String,
+        /// The absolute Unix-seconds instant the challenge stops being honoured.
+        expires_by: u64,
+    },
+}
+
 #[uniffi::export(async_runtime = "tokio")]
 impl FfiCapsuleClient {
     /// Authenticate with email + password, returning an authenticated session handle.
@@ -617,8 +639,37 @@ impl FfiCapsuleClient {
         &self,
         email: String,
         password: String,
+    ) -> Result<FfiLoginOutcome, FfiError> {
+        match self.auth.login(&email, &password).await? {
+            LoginOutcome::Session(session) => Ok(FfiLoginOutcome::Session {
+                session: self.session_handle(session),
+            }),
+            // The password verified and the sign-in is not finished (`S-C55`). No session
+            // handle is produced, because there is no session — an app that got one here would
+            // hold a handle to a half-authentication.
+            LoginOutcome::SecondFactorRequired {
+                mfa_token,
+                expires_by,
+            } => Ok(FfiLoginOutcome::SecondFactorRequired {
+                mfa_token: mfa_token.expose_secret().to_owned(),
+                expires_by,
+            }),
+        }
+    }
+
+    /// Complete a sign-in with the code an authenticator app is showing (`S-C55`).
+    ///
+    /// `mfa_token` is what [`FfiLoginOutcome::SecondFactorRequired`] carried. It is good once
+    /// and for five minutes.
+    pub async fn verify_second_factor(
+        &self,
+        mfa_token: String,
+        totp_code: String,
     ) -> Result<Arc<FfiSession>, FfiError> {
-        let session = self.auth.login(&email, &password).await?;
+        let session = self
+            .auth
+            .verify_second_factor(&SecretString::from(mfa_token), &totp_code)
+            .await?;
         Ok(self.session_handle(session))
     }
 

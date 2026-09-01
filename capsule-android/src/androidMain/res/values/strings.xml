@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">Login failed: %s</string>
     <string name="cli_auth_login_in_progress">Logging in to Capsule…</string>
     <string name="cli_auth_login_password_prompt">Password</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">Logged in as %s.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Logging out from Capsule…</string>
     <string name="cli_auth_logout_not_logged_in">You are not logged in.</string>
     <string name="cli_auth_logout_success">Logged out.</string>

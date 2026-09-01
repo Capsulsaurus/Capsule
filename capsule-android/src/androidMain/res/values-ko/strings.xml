@@ -33,7 +33,9 @@
     <string name="cli_auth_login_failed">로그인 실패: %s</string>
     <string name="cli_auth_login_in_progress">Capsule에 로그인하는 중…</string>
     <string name="cli_auth_login_password_prompt">비밀번호</string>
+    <string name="cli_auth_login_second_factor_required">This account has two-factor authentication switched on.</string>
     <string name="cli_auth_login_success">%s 계정으로 로그인했습니다.</string>
+    <string name="cli_auth_login_totp_prompt">Authenticator code</string>
     <string name="cli_auth_logout_in_progress">Capsule에서 로그아웃하는 중…</string>
     <string name="cli_auth_logout_not_logged_in">로그인되어 있지 않습니다.</string>
     <string name="cli_auth_logout_success">로그아웃했습니다.</string>
