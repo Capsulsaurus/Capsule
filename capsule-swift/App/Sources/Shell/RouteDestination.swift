@@ -36,7 +36,8 @@ struct RouteDestination: View {
         case .memories, .duplicates: unbuilt
         case .trash: trashDestination
         case .hidden: hiddenDestination
-        case .viewer, .culling: unbuilt
+        case let .viewer(id, context): viewerDestination(id, context: context)
+        case .culling: unbuilt
 
         // MARK: Collections
         case .browse: BrowseIndexView()
@@ -100,6 +101,7 @@ extension RouteDestination {
             thumbnails: environment.thumbnails,
             mediaLoader: environment.mediaLoader,
             captionStore: environment.captionStore,
+            placeNames: environment.placeNames,
             importer: environment.importer,
             hiddenStore: environment.hiddenStore
         )
@@ -143,7 +145,8 @@ extension RouteDestination {
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,
             mediaLoader: environment.mediaLoader,
-            captionStore: environment.captionStore
+            captionStore: environment.captionStore,
+            placeNames: environment.placeNames
         )
     }
 
@@ -153,7 +156,8 @@ extension RouteDestination {
             albumProvider: environment.albumProvider,
             thumbnails: environment.thumbnails,
             mediaLoader: environment.mediaLoader,
-            captionStore: environment.captionStore
+            captionStore: environment.captionStore,
+            placeNames: environment.placeNames
         )
     }
 }

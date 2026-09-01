@@ -35,7 +35,10 @@ struct RouteDestinationTests {
         // worse answer than admitting there is none.
         UnbuiltRoute(.memories, "the generated memories shelf is not built"),
         UnbuiltRoute(.duplicates, "the duplicate-review surface is not built"),
-        UnbuiltRoute(.viewer(assetID, context: .library), "the full-screen viewer is not built"),
+        // `.viewer` over a *timeline* sequence is routed — that is what the
+        // `capsule://asset/…` deep link produces. Every other sequence needs its own
+        // collection query, and nothing pushes one yet.
+        UnbuiltRoute(.viewer(assetID, context: .album(albumID)), "a viewer over a non-timeline sequence has no query"),
         UnbuiltRoute(.culling(.library), "the keyboard cull pass is not built"),
         UnbuiltRoute(.albumMembers(albumID), "the participant list is not built"),
         UnbuiltRoute(.albumPolicy(albumID), "the sharing and retention editor is not built"),
@@ -234,6 +237,7 @@ extension RouteDestinationTests {
             .timeline(.all), .timeline(.years),
             .memories, .duplicates, .trash, .hidden,
             .viewer(assetID, context: .library),
+            .viewer(assetID, context: .album(albumID)),
             .culling(.library),
             .browse,
             .albums, .album(albumID), .albumMembers(albumID), .albumPolicy(albumID),
