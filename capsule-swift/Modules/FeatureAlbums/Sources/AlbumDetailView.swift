@@ -15,6 +15,7 @@ public struct AlbumDetailView: View {
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
     private let captionStore: (any CaptionStore)?
+    private let placeNames: any PlaceNameResolver
 
     public init(
         album: AlbumSummary,
@@ -22,7 +23,8 @@ public struct AlbumDetailView: View {
         assetProvider: any AssetProvider,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader,
-        captionStore: (any CaptionStore)? = nil
+        captionStore: (any CaptionStore)? = nil,
+        placeNames: any PlaceNameResolver = NoPlaceNameResolver()
     ) {
         _model = State(wrappedValue: AlbumDetailViewModel(album: album, albumProvider: albumProvider))
         self.album = album
@@ -31,6 +33,7 @@ public struct AlbumDetailView: View {
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
         self.captionStore = captionStore
+        self.placeNames = placeNames
     }
 
     public var body: some View {
@@ -45,7 +48,8 @@ public struct AlbumDetailView: View {
                     provider: assetProvider,
                     mediaLoader: mediaLoader,
                     albumProvider: albumProvider,
-                    captionStore: captionStore
+                    captionStore: captionStore,
+                    placeNames: placeNames
                 )
             }
     }

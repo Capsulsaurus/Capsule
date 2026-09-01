@@ -37,6 +37,7 @@ public struct PlacesMapView: View {
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
     private let captionStore: (any CaptionStore)?
+    private let placeNames: any PlaceNameResolver
 
     public init(
         places: any PlacesPort,
@@ -44,7 +45,8 @@ public struct PlacesMapView: View {
         albumProvider: any AlbumProvider,
         thumbnails: any ThumbnailProvider,
         mediaLoader: ViewerMediaLoader,
-        captionStore: (any CaptionStore)? = nil
+        captionStore: (any CaptionStore)? = nil,
+        placeNames: any PlaceNameResolver = NoPlaceNameResolver()
     ) {
         _model = State(wrappedValue: PlacesMapViewModel(places: places, assets: assetProvider))
         self.assetProvider = assetProvider
@@ -52,6 +54,7 @@ public struct PlacesMapView: View {
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
         self.captionStore = captionStore
+        self.placeNames = placeNames
     }
 
     public var body: some View {
@@ -73,7 +76,8 @@ public struct PlacesMapView: View {
                 albumProvider: albumProvider,
                 thumbnails: thumbnails,
                 mediaLoader: mediaLoader,
-                captionStore: captionStore
+                captionStore: captionStore,
+                placeNames: placeNames
             )
         }
     }
@@ -243,6 +247,7 @@ struct PlacesClusterGrid: View {
     let thumbnails: any ThumbnailProvider
     let mediaLoader: ViewerMediaLoader
     let captionStore: (any CaptionStore)?
+    let placeNames: any PlaceNameResolver
     @State private var viewerSelection: ClusterViewerSelection?
 
     var body: some View {
@@ -263,7 +268,8 @@ struct PlacesClusterGrid: View {
                 provider: assetProvider,
                 mediaLoader: mediaLoader,
                 albumProvider: albumProvider,
-                captionStore: captionStore
+                captionStore: captionStore,
+                placeNames: placeNames
             )
         }
     }

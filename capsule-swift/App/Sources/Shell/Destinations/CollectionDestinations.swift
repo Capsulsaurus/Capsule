@@ -26,7 +26,8 @@ extension RouteDestination {
                     assetProvider: environment.assetProvider,
                     thumbnails: environment.thumbnails,
                     mediaLoader: environment.mediaLoader,
-                    captionStore: environment.captionStore
+                    captionStore: environment.captionStore,
+                    placeNames: environment.placeNames
                 )
             }
         )

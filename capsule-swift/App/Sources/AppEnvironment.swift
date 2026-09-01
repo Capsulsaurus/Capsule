@@ -8,6 +8,7 @@ import CapsulePorts
 import FeatureAuth
 import FeatureSharing
 import FeatureTimeline
+import FeatureViewer
 import Foundation
 import ImagePipeline
 import ManagedStore
@@ -60,6 +61,15 @@ struct AppEnvironment {
     let mediaLoader: ViewerMediaLoader
     /// Reads and writes asset captions for the viewer's info panel.
     let captionStore: any CaptionStore
+    /// Turns a photo's coordinates into a place name for the viewer's info panel.
+    ///
+    /// Composed here rather than defaulted at the view, because the default is
+    /// `NoPlaceNameResolver` — deliberately, so a viewer built without an explicit
+    /// resolver cannot make a network call by accident. Somewhere has to make the
+    /// opposite choice explicitly, and a composition root is the only honest place
+    /// for it. The per-device opt-in is checked *inside* the resolver, so this stays
+    /// off until the user turns it on in Security & Privacy.
+    let placeNames: any PlaceNameResolver
     let importer: LibraryImporter
 
     /// The local-authentication gate in front of Trash and Hidden (*SR1*).
@@ -174,6 +184,7 @@ struct AppEnvironment {
             fallback: renderer,
             metadataSource: MockMetadataSource(locations: library)
         )
+        placeNames = SystemPlaceNameResolver()
         importer = Self.makeImporter()
 
         serverDiscovery = PreviewServerDiscovery(environment: mock)
