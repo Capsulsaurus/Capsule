@@ -56,7 +56,7 @@ struct CapsuleCatalogTests {
     func duplicateInsertThrows() async throws {
         let catalog = try FFIAssetCatalog.inMemory()
         try await catalog.insertAsset(makeAsset(id: "dup"))
-        await #expect(throws: CatalogError.self) {
+        await #expect(throws: CapsuleCatalog.CatalogError.self) {
             try await catalog.insertAsset(makeAsset(id: "dup"))
         }
     }

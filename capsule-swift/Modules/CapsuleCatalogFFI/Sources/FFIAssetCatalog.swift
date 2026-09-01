@@ -159,10 +159,21 @@ public actor FFIAssetCatalog: AssetCatalog {
 
     // MARK: Gated views
 
+    // These three are the only `AssetCatalog` requirements whose signatures name a
+    // type uniffi also generates, and they are module-qualified for that reason. A
+    // bare `GatedView` or `LocalAuthGate` here binds to the *generated* type —
+    // silently, because a same-module declaration outranks an imported one — and the
+    // conformance then fails without naming which requirement went missing.
+    //
+    // Written out rather than using `GateFFIBridge`'s `Native*` aliases: those are
+    // internal, and an internal type cannot appear in a public signature. Spelling
+    // the module here also puts the answer where a reader of the API meets the
+    // question.
+
     /// The grant lives in Rust, so the grace window is the core's `GateKeeper`'s
     /// and this adds no second clock of its own — a second one would make "five
     /// minutes" mean something else on each side of the boundary.
-    public func unlockView(_ view: GatedView, using gate: any LocalAuthGate) throws {
+    public func unlockView(_ view: CapsuleCatalog.GatedView, using gate: any CapsuleCatalog.LocalAuthGate) throws {
         CapsuleLog.catalog.debug("unlockView \(String(describing: view), privacy: .public)")
         do {
             try catalog.unlockView(view: view.ffiValue, auth: ForeignAuthGate(gate))
@@ -171,11 +182,11 @@ public actor FFIAssetCatalog: AssetCatalog {
         }
     }
 
-    public func isViewUnlocked(_ view: GatedView) -> Bool {
+    public func isViewUnlocked(_ view: CapsuleCatalog.GatedView) -> Bool {
         catalog.isViewUnlocked(view: view.ffiValue)
     }
 
-    public func relockView(_ view: GatedView) {
+    public func relockView(_ view: CapsuleCatalog.GatedView) {
         CapsuleLog.catalog.debug("relockView \(String(describing: view), privacy: .public)")
         catalog.relockView(view: view.ffiValue)
     }

@@ -3,6 +3,12 @@ import Testing
 
 import CapsuleCatalog
 
+// `FFISidecarCoder` lives here. Importing it also puts uniffi's generated
+// `CatalogError` in scope alongside `CapsuleCatalog`'s, and in a *test* module
+// neither outranks the other — so the bare name is ambiguous rather than
+// silently wrong, and every use below is qualified.
+@testable import CapsuleCatalogFFI
+
 @Suite("SidecarCodec — CBOR round-trip")
 struct SidecarCodecTests {
     private func makeSidecar() -> CatalogSidecar {
@@ -58,14 +64,14 @@ struct SidecarCodecTests {
     func invalidEnumRejected() {
         var sidecar = makeSidecar()
         sidecar.assetType = "not_a_real_type"
-        #expect(throws: CatalogError.self) {
+        #expect(throws: CapsuleCatalog.CatalogError.self) {
             try FFISidecarCoder().encode(sidecar)
         }
     }
 
     @Test("decoding malformed bytes throws rather than crashing")
     func malformedBytesRejected() {
-        #expect(throws: CatalogError.self) {
+        #expect(throws: CapsuleCatalog.CatalogError.self) {
             try FFISidecarCoder().decode(Data([0xFF, 0x00, 0x13, 0x37]))
         }
     }
