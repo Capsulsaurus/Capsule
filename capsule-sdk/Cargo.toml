@@ -2,6 +2,8 @@
 name = "capsule-sdk"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [lib]
 # `lib` (rlib) keeps the rest of the workspace linking capsule-sdk unchanged.
@@ -57,7 +59,7 @@ hex = { workspace = true }
 tokio = { version = "1", features = ["sync", "time", "net", "io-util"] }
 
 uuid = { version = "1.23.3", features = ["v7", "serde"] }
-reqwest = { version = "0.12", default-features = false, features = [
+reqwest = { version = "0.12.28", default-features = false, features = [
     "json",
     "rustls-tls",
     "stream",
@@ -75,30 +77,26 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 rcgen = { version = "0.13", default-features = false, features = ["ring", "crypto"] }
 
-# The key-free sync feed is gRPC (`capsule.sync.v1.SyncService`); the SDK compiles
-# the same in-tree proto (build.rs) into a client-only stub. rustls only — the
-# tonic transport's TLS rides `tls-ring` when a caller dials `https`.
-tonic = { workspace = true, features = ["transport"] }
-tonic-prost = { workspace = true }
-prost = { workspace = true }
+# Ranged blob fetch and the generated client's byte bodies. There is no gRPC here any
+# more: the sync feed is `GET /v1/sync` and rides the generated REST client like every
+# other operation (`S-D28`), so `tonic`, `tonic-prost` and `prost` are gone with it.
 bytes = { workspace = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Swift/Kotlin/Linux over the SDK's user-flow
 # primitives. Single pinned uniffi (0.31.1 — the S-F1 consolidation; do not add a
 # second). The `tokio` feature lets `#[uniffi::export(async_runtime = "tokio")]`
-# drive the async login/upload/sync flows on the tokio runtime reqwest/tonic need.
+# drive the async login/upload/sync flows on the tokio runtime reqwest needs.
 uniffi = { version = "0.31", features = ["tokio"], optional = true }
 
 [build-dependencies]
-tonic-prost-build = { workspace = true }
-# spargen (in-house) generates the typed REST client from the committed OpenAPI 3.1 schema
+# spargen (in-house) generates the typed REST client from the committed OpenAPI 3.2 schema
 # at build time (slice `S-D8`); see `build.rs`. `default-features = false` drops its `cli`
 # (clap) and the `uuid`/`time` `format`-mapping features — the current schema emits neither,
 # and disabling them keeps the SDK's build graph minimal. spargen is a *build*-dependency
 # only: its embedded runtime is emitted into the generated module, so spargen never appears
 # in the SDK's runtime dependency tree.
-spargen = { version = "0.1.0", default-features = false }
+spargen = { version = "0.4.0", default-features = false }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

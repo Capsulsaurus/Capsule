@@ -153,7 +153,16 @@ struct AppEnvironment {
         assetProvider = library
         captionStore = PortBackedCaptionStore(library: mock.library, organize: mock.organize)
         albumProvider = PortBackedAlbumProvider(albums: mock.albums, library: mock.library)
-        trashProvider = PortBackedTrashProvider(organize: mock.organize, library: mock.library)
+        // Constructed here rather than at its own assignment below because the
+        // trash adapter holds the SR1 gate and needs the same authenticator the
+        // Security screen reports on — two instances would be two gates.
+        let authenticator = MockLocalAuthenticator()
+        localAuthenticator = authenticator
+        trashProvider = PortBackedTrashProvider(
+            organize: mock.organize,
+            library: mock.library,
+            authenticator: authenticator
+        )
         hiddenStore = HiddenStore()
         let renderer = PortBackedThumbnailProvider(renderer: mock.thumbnails)
         thumbnails = renderer
@@ -174,8 +183,6 @@ struct AppEnvironment {
         let records = InMemoryModerationRecords()
         moderationRecords = records
         untrustedOriginPolicy = records
-
-        localAuthenticator = MockLocalAuthenticator()
 
         let consent = ConsentStore()
         consentStore = consent

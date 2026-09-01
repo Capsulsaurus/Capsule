@@ -152,8 +152,8 @@
     "target": "Composants :"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
-    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -200,8 +200,8 @@
     "target": "- `capsule-android` : Android Studio ou IntelliJ IDEA avec plugins"
   },
   {
-    "source": "- `capsule-api`: VS Code or similar",
-    "target": "- `capsule-api` : VS Code ou équivalent"
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server` : VS Code ou équivalent"
   },
   {
     "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
@@ -316,15 +316,15 @@
     "target": "### Contrat de licence de contributeur (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "Nous exigeons que tous les contributeurs signent un CLA. Cela garantit que le projet conserve la flexibilité juridique nécessaire pour obtenir un financement futur et une équipe de maintenance dédiée, assurant ainsi que le logiciel reste activement pris en charge et autosuffisant pendant des décennies à venir."
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "Nous demandons à tous les contributeurs d'accepter un [CLA](CLA.md). Les droits d'auteur de Capsule appartiennent à une seule personne, ce qui rend possible la distribution sur les magasins d'applications : les conditions de l'App Store sont incompatibles avec l'AGPL, si bien qu'une version destinée au magasin ne peut être qu'une concession distincte accordée par le titulaire des droits. En contrepartie, chaque publication publique du code source reste sous une licence approuvée par l'OSI."
   },
   {
     "source": "## License",
     "target": "## Licence"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsule est publié sous la [licence AGPL-3.0](LICENSE)."
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule est publié sous [AGPL-3.0-only](LICENSE). Les droits d'auteur appartiennent exclusivement à Justin Chung ; les mentions relatives aux tiers figurent dans [NOTICE](NOTICE). Le titulaire des droits peut également proposer Capsule selon des conditions commerciales distinctes, y compris les conditions propriétaires exigées par les magasins d'applications. Cela ne change rien à ce qui est déjà publié : toute version que vous recevez sous l'AGPL vous reste acquise sous l'AGPL, de façon permanente. La position complète est documentée dans le [document de conception sur les licences](https://capsule.justinchung.net/design/licensing/)."
   }
 ]

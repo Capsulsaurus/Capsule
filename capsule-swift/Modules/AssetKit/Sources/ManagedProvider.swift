@@ -15,10 +15,16 @@ public actor ManagedProvider: AssetProvider, TrashProvider {
     private static let timelineLimit = 10000
 
     private let library: ManagedLibrary
+    private let authGate: any LocalAuthGate
     private var observers: [UUID: AsyncStream<AssetChange>.Continuation] = [:]
 
-    public init(library: ManagedLibrary) {
+    /// - Parameter authGate: the SR1 fresh-local-auth adapter used to open the
+    ///   Recently Deleted view. Defaults to the real `LAContext` gate; tests and
+    ///   previews inject a scripted one, since no test can answer a Face ID
+    ///   sheet.
+    public init(library: ManagedLibrary, authGate: any LocalAuthGate = LocalAuthenticationGate()) {
         self.library = library
+        self.authGate = authGate
     }
 
     public func authorizationStatus() -> AssetAuthorizationStatus {
@@ -82,6 +88,16 @@ public actor ManagedProvider: AssetProvider, TrashProvider {
         let catalog = try await library.catalog()
         let rows = try await catalog.trash(offset: 0, limit: Self.timelineLimit)
         return rows.map(Asset.init(catalogAsset:))
+    }
+
+    public func unlockTrash() async throws {
+        let catalog = try await library.catalog()
+        try await catalog.unlockView(.recentlyDeleted, using: authGate)
+    }
+
+    public func isTrashUnlocked() async -> Bool {
+        guard let catalog = try? await library.catalog() else { return false }
+        return await catalog.isViewUnlocked(.recentlyDeleted)
     }
 
     public func restore(_ id: AssetID) async throws {

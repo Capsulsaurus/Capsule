@@ -80,4 +80,98 @@ struct MockCatalogTests {
         let expired = await catalog.expiredTrash(olderThanSeconds: 5000)
         #expect(expired.map(\.id) == ["stale"])
     }
+
+    // MARK: Gated views (SR1)
+
+    //
+    // These mirror the core's `gated_hidden_query_refuses_without_grant_and_serves_with_one`
+    // and `locked_until_opened_then_refuses_after_grace_expiry`. The mock is only useful to
+    // its consumers if it refuses the same reads the real catalog refuses.
+
+    @Test("the trash listing refuses without a grant and serves with one")
+    func trashRefusesWithoutGrant() async throws {
+        let catalog = MockCatalog()
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "gone"))
+        await catalog.softDeleteAsset(id: "gone", deletedAt: 100)
+
+        await #expect(throws: CatalogError.viewLocked) {
+            try await catalog.trash(offset: 0, limit: 10)
+        }
+
+        try await catalog.unlockView(.recentlyDeleted, using: MockLocalAuthGate())
+        #expect(try await catalog.trash(offset: 0, limit: 10).map(\.id) == ["gone"])
+    }
+
+    @Test("a refused challenge mints nothing and leaves the view locked")
+    func refusedChallengeMintsNothing() async throws {
+        let catalog = MockCatalog()
+        let gate = MockLocalAuthGate(refusingWith: .cancelled)
+
+        await #expect(throws: LocalAuthError.cancelled) {
+            try await catalog.unlockView(.recentlyDeleted, using: gate)
+        }
+        #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
+        await #expect(throws: CatalogError.viewLocked) {
+            try await catalog.trash(offset: 0, limit: 10)
+        }
+    }
+
+    @Test("a grant for one view is not a grant for the other")
+    func grantsDoNotCrossViews() async throws {
+        let catalog = MockCatalog()
+        try await catalog.unlockView(.hidden, using: MockLocalAuthGate())
+
+        #expect(await catalog.isViewUnlocked(.hidden))
+        #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
+        await #expect(throws: CatalogError.viewLocked) {
+            try await catalog.trash(offset: 0, limit: 10)
+        }
+    }
+
+    @Test("a grant is reused inside its grace window and expires at the end of it")
+    func grantExpiresAfterGrace() async throws {
+        let catalog = MockCatalog()
+        let gate = MockLocalAuthGate()
+        await catalog.setNow(1000)
+
+        try await catalog.unlockView(.recentlyDeleted, using: gate)
+        #expect(gate.challengeCount == 1)
+
+        // Re-entering inside the window reuses the grant — no second prompt — and
+        // does not slide the window forward: it runs from the original mint.
+        await catalog.setNow(1000 + MockCatalog.graceSeconds - 1)
+        try await catalog.unlockView(.recentlyDeleted, using: gate)
+        #expect(gate.challengeCount == 1)
+        #expect(await catalog.isViewUnlocked(.recentlyDeleted))
+
+        await catalog.setNow(1000 + MockCatalog.graceSeconds)
+        #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
+        try await catalog.unlockView(.recentlyDeleted, using: gate)
+        #expect(gate.challengeCount == 2)
+    }
+
+    @Test("relockView drops one grant and lockViews drops every grant")
+    func revocation() async throws {
+        let catalog = MockCatalog()
+        try await catalog.unlockView(.recentlyDeleted, using: MockLocalAuthGate())
+        try await catalog.unlockView(.hidden, using: MockLocalAuthGate())
+
+        await catalog.relockView(.recentlyDeleted)
+        #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
+        #expect(await catalog.isViewUnlocked(.hidden))
+
+        await catalog.lockViews()
+        #expect(await catalog.isViewUnlocked(.hidden) == false)
+    }
+
+    @Test("the retention sweep stays ungated")
+    func retentionSweepStaysUngated() async throws {
+        let catalog = MockCatalog()
+        await catalog.setNow(10000)
+        try await catalog.insertAsset(Fixtures.catalogAsset(id: "stale"))
+        await catalog.softDeleteAsset(id: "stale", deletedAt: 1000)
+
+        // No grant taken: the unattended purge job has no user to authenticate.
+        #expect(await catalog.expiredTrash(olderThanSeconds: 5000).map(\.id) == ["stale"])
+    }
 }

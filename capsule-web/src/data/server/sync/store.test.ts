@@ -5,9 +5,8 @@ import {
     SyncProtocolError,
     SyncRewindError,
     SyncStore,
-    SyncStructuralError,
 } from './store';
-import { ChangeKind, type SyncEntry } from './wire';
+import { BlobRole, ChangeKind, type SyncEntry } from './wire';
 
 const PROTOCOL = '2026-07-11';
 const ALBUM = 'album-a';
@@ -18,15 +17,17 @@ function entry(overrides: Partial<SyncEntry> & { syncSeq: bigint }): SyncEntry {
         protocolVersion: PROTOCOL,
         kind: ChangeKind.Created,
         assetId: `asset-${overrides.syncSeq}`,
-        manifestCbor: new Uint8Array(),
-        metadataBlob: new Uint8Array(),
+        manifestCbor: 'AQID',
+        metadataBlob: 'a'.repeat(64),
+        blobs: { derivatives: [] },
         originalHeld: true,
+        changedAt: '2026-09-01T00:00:00Z',
         ...overrides,
     };
 }
 
-function cursor(n: number): Uint8Array {
-    return new Uint8Array([n]);
+function cursor(n: number): string {
+    return `cursor-${n}`;
 }
 
 describe('applyPage — happy path', () => {
@@ -37,7 +38,7 @@ describe('applyPage — happy path', () => {
             cursor(2),
         );
         expect(store.listAssets()).toHaveLength(2);
-        expect([...store.cursor]).toEqual([2]);
+        expect(store.cursor).toBe(cursor(2));
     });
 
     test('orders listAssets newest change first (sync_seq desc)', () => {
@@ -71,7 +72,7 @@ describe('applyPage — happy path', () => {
                 entry({
                     syncSeq: 2n,
                     assetId: 'x',
-                    kind: ChangeKind.MetadataUpdated,
+                    kind: ChangeKind.Updated,
                     originalHeld: true,
                 }),
             ],
@@ -101,7 +102,7 @@ describe('anti-rewind (download-sync client rule)', () => {
         ).toThrow(SyncRewindError);
         // Store + cursor untouched by the rejected page.
         expect(store.listAssets()).toHaveLength(1);
-        expect([...store.cursor]).toEqual([5]);
+        expect(store.cursor).toBe(cursor(5));
     });
 
     test('equal sync_seq is a rewind (must strictly increase)', () => {
@@ -169,18 +170,12 @@ describe('forward-version rejection (download-sync client rule)', () => {
     });
 });
 
-describe('structural validation', () => {
-    test('an unspecified ChangeKind is rejected', () => {
-        const store = new SyncStore();
-        expect(() =>
-            store.applyPage(
-                [entry({ syncSeq: 1n, kind: ChangeKind.Unspecified })],
-                cursor(1),
-            ),
-        ).toThrow(SyncStructuralError);
-        expect(store.listAssets()).toHaveLength(0);
-    });
-});
+// The `ChangeKind.Unspecified` case this file used to cover is gone with the proto enum that
+// made it possible: a proto3 enum defaults to 0 when the field is absent, so an unset kind
+// arrived at the store looking like a value. On the REST feed the kind is a closed string enum
+// and an unknown one is refused by `decodeSyncResponse` at the transport boundary — see
+// `wire.test.ts`, `an unknown change kind or blob role is refused`. The guarantee moved
+// earlier; it did not go away.
 
 describe('album summaries', () => {
     test('counts live members and drops an album once emptied', () => {
@@ -240,8 +235,7 @@ describe('snapshot / restore', () => {
                     blobs: {
                         original: {
                             ciphertextHash: 'h',
-                            role: 'original',
-                            format: 'image/jpeg',
+                            role: BlobRole.Original,
                             size: 42n,
                         },
                         derivatives: [],
@@ -255,7 +249,7 @@ describe('snapshot / restore', () => {
         const restored = new SyncStore();
         restored.restore(snap);
         expect(restored.listAssets()).toHaveLength(2);
-        expect([...restored.cursor]).toEqual([9]);
+        expect(restored.cursor).toBe(cursor(9));
         expect(restored.getAlbum('a')?.assetCount).toBe(1);
         expect(
             restored.listAssets().find((a) => a.assetId === 'b1')?.original

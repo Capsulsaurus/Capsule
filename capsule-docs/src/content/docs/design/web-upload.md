@@ -10,7 +10,7 @@ This is the realization of the [Keys — Non-registered accounts](/design/crypto
 
 This doc **owns** the upload-link capability, the sealed **drop** wire object, the drop upload protocol, the adoption transition, and the **web client class**. The Drop Key's cryptographic shape and escrow are owned by [Keys — Non-registered accounts](/design/cryptography/keys/#non-registered-accounts); the in-place key-rewrap on adoption is owned by [Keys — Key Chain](/design/cryptography/keys/#key-chain) and [Encryption — Asset Key Derivation](/design/cryptography/encryption/#asset-key-derivation); the `key_mode`/`wrapped_file_key` manifest fields are owned by [Provenance — Asset Manifest](/design/cryptography/provenance/#asset-manifest). This doc references those declarations and restates none of them.
 
-Implementation will live in `capsule-core::drop` (drop sealing in WASM, link issuance, adoption rewrap), `capsule-api::drops` (drop store, the provisioning user's inbox, the adoption transition), and `capsule-web` (the browser/WASM client). The drop upload reuses the wire mechanics of [`capsule-api::upload`](/design/import/upload-protocol/); adoption is driven through `capsule-sdk`.
+Implementation will live in `capsule-core::drop` (drop sealing in WASM, link issuance, adoption rewrap), `capsule-server::drop` (drop store, the provisioning user's inbox, the adoption transition), and `capsule-web` (the browser/WASM client). The drop upload reuses the wire mechanics of [`capsule-server::upload`](/design/import/upload-protocol/); adoption is driven through `capsule-sdk`.
 
 ## Two Confidentiality Properties
 
@@ -40,12 +40,12 @@ Out of scope for v1 (deliberate non-goals):
 
 These are **normative** — the security-relevant decisions are committed; only UX presentation remains open.
 
-- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}`. `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
+- **Upload-link URL format.** `https://server.tld/u/{opaque-id}#{drop_pubkey}` — the *page* a guest opens, which is `capsule-web`'s route; the API endpoints it posts to are `/d/{opaque-id}` (see below). `{opaque-id}` follows the [share-link opaque-id rule](/design/share-links/#security-contract) exactly — a random ≥128-bit CSPRNG value, never a structured id — and is fully opaque, carrying no scope. `{drop_pubkey}` is the Drop Key public half, carried in the **fragment** so the server never receives it (see [Server-blind](#two-confidentiality-properties)).
 - **Drops never enter the library.** A drop is written only to the provisioning user's **inbox**; it is never an album asset, never appears in any album member's [sync feed](/design/import/download-sync/#discovering-what-changed), and is served only to the provisioning user's own authenticated devices. A drop carries **no `AssetManifest`** — no `device_sig`, no `write_sig`, no `album_id`, no provenance — and therefore never flows through [`verify_asset`](/design/cryptography/keys/#write-authorization). Library state is reachable only through adoption by a trusted client.
 - **Per-link caps are enforced server-side at the no-key layer.** Expiry, cumulative-byte cap, file-count cap, and per-file size cap are checked on every drop-session creation; an over-cap or expired/revoked link is refused. These bound a leaked link to *wasted quota and inbox space*, never to library corruption.
 - **Quota is charged to the provisioning user at drop-session creation.** A drop debits the link owner's quota at session creation — the single hard [enforcement point](/design/quota/#enforcement-points) — using the [`upload_user_id = owner_id` attribution](/design/quota/#accounting-model). A link cannot be used to push the owner past their hard limit.
 - **Serving-endpoint rate limits.** Drop-session creation is rate-limited **per source IP and per `{opaque-id}`** (two independent limiters), and a not-found, revoked, or expired link returns an **indistinguishable `404`** — never `410 Gone` — exactly as the [share-link serve path](/design/share-links/#security-contract), so probing reveals nothing.
-- **Optional passphrase is an abuse gate, not a confidentiality layer.** A link may carry an optional passphrase. Unlike a share-link passphrase — which wraps a *read* secret the client unwraps locally — this one gates a **write**, so the server must verify possession: the link record stores an [Argon2id](/design/cryptography/primitives/#password-based-kdf) **verifier** (salt + derived hash), and the guest proves possession at drop-session creation by submitting the Argon2id-derived proof. The passphrase itself is never transmitted, and the KDF cost rate-limits guessing on top of the per-IP/per-link limiters below. It limits *who may spend the owner's quota*; it adds no confidentiality, because the guest already encrypts every asset.
+- **Optional passphrase is an abuse gate, not a confidentiality layer.** A link may carry an optional passphrase. Unlike a share-link passphrase — which wraps a *read* secret the client unwraps locally — this one gates a **write**, so the server must verify possession: the link record stores an [Argon2id](/design/cryptography/primitives/#password-based-kdf) **verifier** (salt + derived hash), and the guest proves possession at drop-session creation by submitting the Argon2id-derived proof. The passphrase itself is never transmitted, and the KDF cost rate-limits guessing on top of the per-IP/per-link limiters below. It limits *who may spend the owner's quota*; it adds no confidentiality, because the guest already encrypts every asset. The proof travels as `passphrase_proof` on `POST /d/{opaque-id}`, base64 of the derived value, and is compared in constant time **before the link's caps are reserved** (slice `S-C61`) — a wrong passphrase that spent a cap on its way to being refused would let a guesser burn the link down, which is the one thing the gate exists to stop. A refusal is `403 error.drop.passphrase_required`, deliberately distinct from the indistinguishable `404`: the caller already holds the opaque id, so "this link needs a passphrase" discloses nothing, while answering `404` would send a guest with a typo away believing the link is dead.
 - **Home-server-only.** Like a [share link](/design/share-links/#security-contract), an upload link is served **only by the album owner's [home server](/design/federation/#album-ownership-v1-single-home-server)**; a federated peer never accepts a drop and returns a structured `{ home_server }` pointer the client resolves. This keeps revocation, rate-limiting, and quota at one authoritative point.
 - **Adopted bytes are external-origin.** No device authored a drop's plaintext, so an adopted asset is **never** "local-origin": every client (including the adopter, on preview) decodes its bytes only in the [sandboxed decoder](/design/clients/#sandboxed-decoder). A hostile or malformed guest file can at worst crash a sandbox; it cannot reach the host or be silently admitted.
 
@@ -129,13 +129,16 @@ trait DropAdopter {
 // in capsule-core::drop  (sealing; compiled to WASM for capsule-web)
 fn seal_drop(plaintext: impl Read, drop_pubkey: KemPublicKey, crypto_suite_id: u16) -> Result<SealedDrop, Error>;
 
-// in capsule-api::drops
-//   POST   /u/{opaque-id}/drop            → open a drop session (link-capability auth; quota + caps checked here)
-//   PATCH  /u/{opaque-id}/drop/{id}       → append a chunk (upload-protocol chunk rules verbatim:
+// in capsule-server::drop
+//   POST   /d/{opaque-id}                 → open a drop session (link-capability auth; passphrase
+//                                            proof, quota and caps all checked here)
+//   PATCH  /d/{opaque-id}/{upload-id}     → append a chunk (upload-protocol chunk rules verbatim:
 //                                            required X-Capsule-Checksum, application/octet-stream, alignment)
-//   GET    /drops                         → provisioning user's inbox (session-token auth)
-//   POST   /drops/{id}/adopt              → create-manifest write referencing the inbox blob; atomic promotion
-//   DELETE /drops/{id}                    → discard a pending drop
+//   POST   /v1/drops/links                → provision an upload link (session-token auth)
+//   DELETE /v1/drops/links/{opaque-id}    → revoke one
+//   GET    /v1/drops                      → provisioning user's inbox (session-token auth)
+//   POST   /v1/drops/{id}/adopt           → create-manifest write referencing the inbox blob; atomic promotion
+//   DELETE /v1/drops/{id}                 → discard a pending drop
 ```
 
 Concrete error variants are an implementation detail; the opaque-id entropy, fragment-delivered Drop Key, per-link caps, quota-at-creation, rate-limit, and no-library-injection policies are fixed by the [Security Contract](#security-contract).
@@ -150,7 +153,11 @@ Concrete error variants are an implementation detail; the opaque-id entropy, fra
 
 ## Validation
 
-The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store + inbox + adoption transition are planned in `capsule-api::drops`.
+The drop sealing and adoption rewrap live in `capsule-core::drop` (so they apply uniformly to the web client and native clients); the server drop store, the inbox and the adoption transition are **served today** by the Kynos surface, with slice `S-C5`.
+
+**Two qualifications, recorded rather than implied.** First, **adoption is a two-phase claim, not a transaction.** Invariant 32 asks that the inbox row be deleted and the album asset created together; across two ports that is not available, and the two failure directions are not equal — writing the asset first can duplicate a photo, taking the row first can lose one. So the row is *claimed*, the asset is written, and only then is the row settled; a refused write releases it back to the inbox. A crash in between leaves a row marked `adopting` in the owner's own inbox — recoverable, neither lost nor silently duplicated, and surfaced on the wire rather than hidden, because an owner who cannot see it cannot act on it. Real atomicity arrives with the Postgres adapter, where both are rows in one transaction.
+
+Second, **invariant 31's two rate limiters are absent.** They need the per-user counter port `S-C32` owns, so the `429` is deliberately *not declared* in the served contract rather than declared and unreachable. The per-link caps are enforced — decided and reserved in one store operation, so two concurrent guests cannot both take the last slot — but caps bound total damage, not request rate, and the two are not substitutes.
 
 - **Drop seal round-trip (unit).** Seal a plaintext under a random `K` to a Drop Key public half; decapsulate with the private half; STREAM-decrypt; assert byte-equality. Assert `kem_ct` length matches the suite.
 - **Opaque-id entropy (unit).** Assert generated upload-link ids are ≥128-bit and non-sequential, identical to the [share-link check](/design/share-links/#validation).

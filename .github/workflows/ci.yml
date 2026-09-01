@@ -41,6 +41,7 @@ jobs:
             rust:
               - 'Cargo.toml'
               - 'Cargo.lock'
+              - 'deny.toml'
               - 'rust-toolchain.toml'
               - 'Cross.toml'
               - 'mise.toml'
@@ -48,10 +49,11 @@ jobs:
               - '.config/nextest.toml'
               - 'hk.pkl'
               - '.cargo/**'
-              - 'capsule-api/**'
+              - 'capsule-server/**'
+              - 'capsule-wire/**'
+              - 'capsule-i18n/**'
               - 'capsule-cli/**'
               - 'capsule-core/**'
-              - 'capsule-media/**'
               - 'capsule-sdk/**'
               - 'xtask/**'
               - '.github/workflows/ci.yml'
@@ -124,10 +126,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: |
           rustup toolchain install
@@ -143,6 +141,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: nextest
+      # check-rust runs the dependency-licence gate via cargo-deny. mise is set up with
+      # install: false, so the [tools] pin does not put it on PATH here.
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Set up mise (task runner)
         uses: jdx/mise-action@v2
         with:
@@ -155,15 +159,13 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.rust == 'true' }}
     runs-on: ubuntu-latest
-    # Non-blocking: capsule-api integration tests use testcontainers (Docker),
-    # which is slower and flakier. Drop continue-on-error once stabilized.
-    continue-on-error: true
+    # Blocking as of `S-C59`. It was non-blocking because the Salvo auth crate's integration
+    # tests needed testcontainers (Docker), which is slower and flakier; that crate is now
+    # review material and no test in the workspace starts a container — every port has a
+    # deterministic in-memory adapter and Kynos's `TestClient` drives a built service
+    # in-process. A gate that is allowed to fail is not a gate.
     steps:
       - uses: actions/checkout@v4
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Rust toolchain
         run: rustup toolchain install
       - name: Cache cargo

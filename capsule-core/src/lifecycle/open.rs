@@ -17,7 +17,7 @@ use super::{
 use crate::cbor;
 use crate::crypto::CryptoError;
 use crate::crypto::keys::albumstore::AlbumStore;
-use crate::crypto::keys::directory::{DeviceEntry, DirectoryCore};
+use crate::crypto::keys::directory::{DekPublic, DeviceEntry, DirectoryCore};
 use crate::crypto::keys::{
     Account, AccountFile, DeviceDirectory, HardwareKeyAgreement, HybridVerifyingKey, Signer,
 };
@@ -302,8 +302,6 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            #[cfg(feature = "media")]
-            still_encoder: None,
         })
     }
 
@@ -316,19 +314,6 @@ impl Workspace {
     #[must_use]
     pub fn with_client_id(mut self, client_id: &str, semver: &str) -> Self {
         self.client_version = crate::client_build::client_version(client_id, semver);
-        self
-    }
-
-    /// Attach the per-platform [`StillEncoder`](crate::media::image::derivative::StillEncoder) so
-    /// signed imports generate thumbnail/preview derivatives + LQIP (S-B1 → S-B2). Without it,
-    /// imports are signed-original-only.
-    #[cfg(feature = "media")]
-    #[must_use]
-    pub fn with_still_encoder(
-        mut self,
-        encoder: Box<dyn crate::media::image::derivative::StillEncoder>,
-    ) -> Self {
-        self.still_encoder = Some(encoder);
         self
     }
 
@@ -443,8 +428,6 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            #[cfg(feature = "media")]
-            still_encoder: None,
         };
         // `S-A10`: album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.
@@ -616,19 +599,26 @@ impl Workspace {
             Err(e) => return Err(LifecycleError::Io(format!("metadata blob: {e}"))),
         };
 
-        // (6) Stack placement lives only in the queryable index.
-        let stack = self
-            .library
-            .db
-            .find_by_uuid(&asset_id.to_string())
-            .ok()
-            .flatten()
-            .and_then(|row| {
-                row.stack_id.map(|stack_id| StackPlacement {
-                    stack_id,
-                    hidden: row.is_stack_hidden,
-                })
-            });
+        // (6) Stack placement. Since `S-B15` the durable record is the sidecar's signed
+        // `stack_membership` register, so a written register is authoritative — `Some` is a
+        // placement, a stamped `None` an explicit departure from a stack. Reading the index is
+        // the compatibility path for an asset imported *before* that slice, whose placement was
+        // written only as `assets.stack_id` / `is_stack_hidden` and exists nowhere else.
+        let stack = match sidecar.stack_membership.get() {
+            Some(membership) => membership.as_ref().map(StackPlacement::from_membership),
+            None => self
+                .library
+                .db
+                .find_by_uuid(&asset_id.to_string())
+                .ok()
+                .flatten()
+                .and_then(|row| {
+                    row.stack_id.map(|stack_id| StackPlacement {
+                        stack_id,
+                        hidden: row.is_stack_hidden,
+                    })
+                }),
+        };
 
         Ok(AssetState {
             asset_id,
@@ -650,6 +640,11 @@ impl Workspace {
             devices: vec![DeviceEntry {
                 device_id: account.device.device_id,
                 dsk_public,
+                // The published half of this device's encryption key, so a peer can encapsulate
+                // to it using the directory alone. `public_bytes()` is the single seam for both
+                // compositions and the recipient tells them apart by length (S-F8), which is why
+                // nothing here says which one it is holding.
+                dek_public: Some(DekPublic(account.device.dek.public_bytes())),
                 added_at: DEVICE_ADDED_AT.into(),
                 revoked_at: None,
             }],

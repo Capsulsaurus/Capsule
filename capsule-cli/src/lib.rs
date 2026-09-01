@@ -7,7 +7,7 @@
 //! the real-server round-trip drive these command functions directly rather than
 //! spawning the binary.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use capitalize::Capitalize;
 use capsule_core::crypto::primitives::DeviceTier;
@@ -16,18 +16,19 @@ use capsule_core::import::scanner::scan as scan_files;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::import::{
     CancellationToken, DefaultAlbumContext, ImportConfig, ImportOutcome, ImportProgressEvent,
-    execute, plan,
+    ScanResult, SourceAdapter, SourceMetadataIndex, TakeoutAdapter, execute_with_source_metadata,
+    plan,
 };
 use capsule_core::library::{Library, LibraryError, init_library, open_library, rebuild_index};
 use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, LibraryCommands};
+use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
 
-use crate::i18n::{Value, keys};
+use crate::i18n::{Bundle, Value, keys};
 use crate::utils::directories::{
     get_cache_dir, get_config_dir, get_data_dir, get_session_file_path,
 };
@@ -54,6 +55,14 @@ pub const CLIENT_ID: &str = "capsule-cli";
 #[must_use]
 fn as_capsule_cli(ws: Workspace) -> Workspace {
     ws.with_client_id(CLIENT_ID, env!("CARGO_PKG_VERSION"))
+}
+
+/// Narrow a count for an ICU `{name}` argument. Counts here are bounded by the number of
+/// files in one import, so the saturating arm is unreachable in practice — but it keeps the
+/// conversion total rather than panicking on a value no user could produce.
+#[must_use]
+fn as_count(n: usize) -> i64 {
+    i64::try_from(n).unwrap_or(i64::MAX)
 }
 
 /// Resolve the persisted-session file path, erroring if the config directory
@@ -85,6 +94,79 @@ fn display_id(bytes: &[u8]) -> String {
     }
 }
 
+/// Render the import's source paths for the one line that names them: a single path verbatim,
+/// several parts comma-separated (a split export imported in one run).
+fn display_paths(paths: &[PathBuf]) -> String {
+    paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Phase 1 of `capsule import`: turn the source paths into the [`ScanResult`] the pure planner
+/// consumes, plus the folded exporter metadata the executor writes into each signed sidecar.
+///
+/// Both arms feed the *same* plan → execute path — there is one import implementation, not two.
+/// Without `--provider` this is the filesystem scanner and an empty metadata index, exactly as
+/// before. With `--provider takeout` the Google Takeout [source adapter] walks every named part
+/// into one pool instead: it pairs each media file with its JSON sidecar (reconciling Google's
+/// truncated names, `(1)` duplicate counters, `-edited` renditions, and sidecars that landed in
+/// a different part), reads the per-album `metadata.json` manifests, and folds the exporter's
+/// record under the pipeline's precedence rule before the planner sees anything. The planner and
+/// executor are unchanged by the choice; only what they are fed differs.
+///
+/// [source adapter]: capsule_core::import::importers
+fn read_import_source(
+    bundle: &Bundle,
+    provider: Option<ImportProviderArg>,
+    paths: &[PathBuf],
+) -> Result<(ScanResult, SourceMetadataIndex)> {
+    match provider {
+        None => {
+            let scanned = scan_files(paths).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_SCAN_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
+            Ok((scanned, SourceMetadataIndex::empty()))
+        }
+        Some(provider @ ImportProviderArg::Takeout) => {
+            println!(
+                "{}",
+                bundle
+                    .format(
+                        keys::IMPORT_PROVIDER_NOTICE,
+                        &[("provider", Value::Str(provider.display_name()))],
+                    )
+                    .cyan()
+            );
+            let extracted = TakeoutAdapter::new().extract(paths).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_EXTRACT_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
+            let index = SourceMetadataIndex::from_extracted(&extracted);
+            tracing::info!(
+                provider = "takeout",
+                parts = paths.len(),
+                entries = extracted.entries.len(),
+                covered_files = index.len(),
+                "import: source adapter extraction complete"
+            );
+            Ok((extracted.to_scan_result(), index))
+        }
+    }
+}
+
 /// Parse the CLI arguments and dispatch the matching command.
 pub async fn run() -> Result<()> {
     let cli = <Cli as clap::Parser>::parse();
@@ -99,10 +181,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Auth { command } => match command {
             AuthCommands::Register {
                 email,
-                username,
-                name,
                 password_stdin,
-            } => auth_register(email, username, name, password_stdin).await?,
+            } => auth_register(email, password_stdin).await?,
             AuthCommands::Login {
                 email,
                 password_stdin,
@@ -164,7 +244,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
         // ── Import ────────────────────────────────────────────────────────
         Commands::Import {
-            path,
+            paths,
+            provider,
             library,
             r#move,
             force,
@@ -172,30 +253,40 @@ async fn dispatch(cli: Cli) -> Result<()> {
             push,
             staged,
         } => {
+            let bundle = i18n::cli_bundle();
             println!(
                 "{}",
-                format!(
-                    "Importing {} into library {}...",
-                    path.to_string_lossy().blue(),
-                    library.to_string_lossy().blue()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_IN_PROGRESS,
+                        &[
+                            ("paths", Value::Str(&display_paths(&paths))),
+                            ("library", Value::Str(&library.to_string_lossy())),
+                        ],
+                    )
+                    .green()
             );
 
             let mut ws = open_workspace(&library, passphrase_stdin)?;
 
-            // Phase 1: Scan
-            println!("{}", "Scanning source files...".cyan());
-            let scan_result = scan_files(&[path]).map_err(|e| eyre!("Scan failed: {e}"))?;
+            // Phase 1: Scan (plain tree) or extract (third-party export, S-B11).
+            println!("{}", bundle.format(keys::IMPORT_SCANNING, &[]).cyan());
+            let (scan_result, source_metadata) = read_import_source(&bundle, provider, &paths)?;
 
             println!(
                 "{}",
-                format!(
-                    "Found {} candidates ({} files total)",
-                    scan_result.candidates.len(),
-                    scan_result.total_files()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_CANDIDATES_FOUND,
+                        &[
+                            (
+                                "candidates",
+                                Value::Int(as_count(scan_result.candidates.len()))
+                            ),
+                            ("files", Value::Int(as_count(scan_result.total_files()))),
+                        ],
+                    )
+                    .green()
             );
 
             // Phase 2: Plan
@@ -212,22 +303,46 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 ..Default::default()
             };
 
-            let plan_result =
-                plan(&scan_result, ws.db(), &config).map_err(|e| eyre!("Planning failed: {e}"))?;
+            let plan_result = plan(&scan_result, ws.db(), &config).map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_PLAN_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
 
             println!(
                 "{}",
-                format!(
-                    "Plan: {} to import, {} duplicates skipped, {} unsupported/errors",
-                    plan_result.counts.to_import,
-                    plan_result.counts.duplicates,
-                    plan_result.counts.unsupported + plan_result.counts.errors,
-                )
-                .cyan()
+                bundle
+                    .format(
+                        keys::IMPORT_PLAN_SUMMARY,
+                        &[
+                            (
+                                "to_import",
+                                Value::Int(as_count(plan_result.counts.to_import))
+                            ),
+                            (
+                                "duplicates",
+                                Value::Int(as_count(plan_result.counts.duplicates)),
+                            ),
+                            (
+                                "unsupported",
+                                Value::Int(as_count(
+                                    plan_result.counts.unsupported + plan_result.counts.errors,
+                                )),
+                            ),
+                        ],
+                    )
+                    .cyan()
             );
 
             if plan_result.counts.to_import == 0 {
-                println!("{}", "Nothing to import.".yellow());
+                println!(
+                    "{}",
+                    bundle.format(keys::IMPORT_NOTHING_TO_IMPORT, &[]).yellow()
+                );
                 // `--push` is still honored: an unchanged library is exactly the
                 // re-runnable case push exists to make cheap.
                 if push {
@@ -237,13 +352,17 @@ async fn dispatch(cli: Cli) -> Result<()> {
             }
 
             // Phase 3: Execute
-            println!("{}", "Importing...".cyan());
+            println!("{}", bundle.format(keys::IMPORT_EXECUTING, &[]).cyan());
             let token = CancellationToken::new();
 
-            let summary = execute(
+            // The one execute path: a plain filesystem import reaches it with an empty index
+            // and behaves exactly as it always has; a `--provider` import reaches it with the
+            // adapter's folded metadata, which lands inside each signed sidecar (`S-B10`).
+            let summary = execute_with_source_metadata(
                 &plan_result,
                 &mut ws,
                 &config,
+                &source_metadata,
                 |event| {
                     if let ImportProgressEvent::CandidateCompleted { outcomes, .. } = event {
                         for (path, outcome) in &outcomes {
@@ -253,13 +372,40 @@ async fn dispatch(cli: Cli) -> Result<()> {
                                     println!("{}", format!("✓ {msg}").green());
                                 }
                                 ImportOutcome::DuplicateSkipped { .. } => {
-                                    println!("{}", format!("= {msg} (duplicate)").yellow());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_DUPLICATE,
+                                                &[("path", Value::Str(&msg))],
+                                            )
+                                            .yellow()
+                                    );
                                 }
                                 ImportOutcome::CorruptTransfer => {
-                                    println!("{}", format!("✗ {msg} (corrupt transfer)").red());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_CORRUPT_TRANSFER,
+                                                &[("path", Value::Str(&msg))],
+                                            )
+                                            .red()
+                                    );
                                 }
                                 ImportOutcome::CorruptUnreadable(e) => {
-                                    println!("{}", format!("✗ {msg} (unreadable: {e})").red());
+                                    println!(
+                                        "{}",
+                                        bundle
+                                            .format(
+                                                keys::IMPORT_OUTCOME_UNREADABLE,
+                                                &[
+                                                    ("path", Value::Str(&msg)),
+                                                    ("reason", Value::Str(e)),
+                                                ],
+                                            )
+                                            .red()
+                                    );
                                 }
                                 _ => {
                                     println!("{}", format!("- {msg}").dimmed());
@@ -270,17 +416,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 },
                 &token,
             )
-            .map_err(|e| eyre!("Import execution failed: {e}"))?;
+            .map_err(|e| {
+                eyre!(
+                    "{}",
+                    bundle.format(
+                        keys::IMPORT_EXECUTE_FAILED,
+                        &[("reason", Value::Str(&e.to_string()))],
+                    )
+                )
+            })?;
 
             println!(
                 "{}",
-                format!(
-                    "Done: {} imported, {} duplicates, {} errors",
-                    summary.imported_count(),
-                    summary.duplicate_count(),
-                    summary.error_count()
-                )
-                .green()
+                bundle
+                    .format(
+                        keys::IMPORT_DONE,
+                        &[
+                            ("imported", Value::Int(as_count(summary.imported_count()))),
+                            (
+                                "duplicates",
+                                Value::Int(as_count(summary.duplicate_count()))
+                            ),
+                            ("errors", Value::Int(as_count(summary.error_count()))),
+                        ],
+                    )
+                    .green()
             );
 
             // `--push` is sugar only: import itself never touches the network (its
@@ -504,23 +664,16 @@ fn read_password(from_stdin: bool, prompt: String) -> Result<String> {
 }
 
 /// `capsule auth register`: create an account over the SDK and persist the session.
-async fn auth_register(
-    email: Option<String>,
-    username: Option<String>,
-    name: Option<String>,
-    password_stdin: bool,
-) -> Result<()> {
+async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
+    // An address and a password, and nothing else. The server takes nothing else (`S-C53`): a
+    // display name is a fact about a person, and the profile surface that would hold one is
+    // owed rather than assumed. Prompting for a value the server discards would be worse than
+    // not asking.
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
-    let username = flag_or_prompt(
-        username,
-        bundle.format(keys::AUTH_REGISTER_USERNAME_PROMPT, &[]),
-    )?;
-    // The display name is cosmetic; defaulting it keeps the non-interactive form to two flags.
-    let name = name.unwrap_or_else(|| username.clone());
     let password = read_password(
         password_stdin,
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
@@ -530,7 +683,7 @@ async fn auth_register(
         "{}",
         bundle.format(keys::AUTH_REGISTER_IN_PROGRESS, &[]).green()
     );
-    match remote::auth_register(&remote, &store, &username, &name, &email, &password).await {
+    match remote::auth_register(&remote, &store, &email, &password).await {
         Ok(()) => {
             println!(
                 "{}",
@@ -573,24 +726,46 @@ async fn auth_login(email: Option<String>, password_stdin: bool) -> Result<()> {
         "{}",
         bundle.format(keys::AUTH_LOGIN_IN_PROGRESS, &[]).green()
     );
-    match remote::auth_login(&remote, &store, &email, &password).await {
-        Ok(()) => {
-            println!(
-                "{}",
-                bundle
-                    .format(keys::AUTH_LOGIN_SUCCESS, &[("email", Value::Str(&email))])
-                    .green()
-            );
-            Ok(())
-        }
+    let step = match remote::auth_login(&remote, &store, &email, &password).await {
+        Ok(step) => step,
         Err(error) => {
             let reason = describe_remote_error(&bundle, &error);
-            Err(eyre!(
+            return Err(eyre!(
                 "{}",
                 bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
-            ))
+            ));
+        }
+    };
+
+    // The password verified and the sign-in may not be finished (`S-C55`). The CLI is
+    // interactive, so it asks — a client that could not would have to report a second factor as
+    // a failure, which is what the SDK's `LoginOutcome::into_session` is for and what this is
+    // deliberately not.
+    if let remote::LoginStep::SecondFactorRequired { mfa_token } = step {
+        println!(
+            "{}",
+            bundle
+                .format(keys::AUTH_LOGIN_SECOND_FACTOR_REQUIRED, &[])
+                .yellow()
+        );
+        let code = flag_or_prompt(None, bundle.format(keys::AUTH_LOGIN_TOTP_PROMPT, &[]))?;
+        if let Err(error) = remote::auth_verify_totp(&remote, &store, &mfa_token, code.trim()).await
+        {
+            let reason = describe_remote_error(&bundle, &error);
+            return Err(eyre!(
+                "{}",
+                bundle.format(keys::AUTH_LOGIN_FAILED, &[("reason", Value::Str(&reason))])
+            ));
         }
     }
+
+    println!(
+        "{}",
+        bundle
+            .format(keys::AUTH_LOGIN_SUCCESS, &[("email", Value::Str(&email))])
+            .green()
+    );
+    Ok(())
 }
 
 /// `capsule auth logout`: revoke the session over the SDK and clear local state.

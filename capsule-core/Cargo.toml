@@ -2,6 +2,7 @@
 name = "capsule-core"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 publish.workspace = true
 
 [lib]
@@ -43,32 +44,36 @@ mls = [
 # uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["native", "dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
-# `media` exposes the decode/encode + media-metadata utilities (the former standalone
-# `capsule-media` crate) as `capsule_core::media`. Non-default so the default library
-# build (crypto data plane, CLI, FFI, future WASM) never compiles the media stack;
-# `capsule-api-upload` opts in.
-media = [
-    "native",
-    "dep:base64",
-    "dep:file-format",
-    "dep:jpeg-encoder",
-    "dep:memmap2",
-    "dep:num-rational",
-    "dep:thumbhash",
-    "dep:tokio",
-    "dep:zune-core",
-    "dep:zune-jpeg",
-]
 # `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
 # `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
 # TPM-capable host with `--features tpm`.
 tpm = ["dep:tss-esapi"]
+# `inference` gates the real per-platform model runners behind the `ml::ModelRunner` seam
+# (`ml/runner.rs`, `ml/orchestrator.rs`). It is **empty today and enables nothing** — that is
+# deliberate rather than an oversight. Four doc comments already describe the runners as riding a
+# "default-off, weight-fetching `inference` feature", and until this line existed that sentence
+# was simply untrue: `--features inference` was a hard cargo error, so the seam it names could not
+# be gated on even to test the claim. Declaring it makes the documentation honest and gives the
+# post-v1 CLIP runner something to attach to without a manifest change in the same commit as the
+# implementation. Nothing in the tree is `#[cfg(feature = "inference")]` yet; the first real runner
+# adds both the cfg and the `dep:` entries here. No model weights ship in git regardless.
+inference = []
 
 [dependencies]
 ciborium = "0.2"
 half = "2"               # IEEE-754 f16 for RFC 8949 §4.2 shortest-float canonical CBOR
 globset = "0.4.18"
+# The LQIP placeholder codec (SSoT: Thumbnails — LQIP; slice S-B14). **Not optional and not
+# feature-gated**: `capsule_core::lqip` is linked identically by the CLI, the uniffi FFI and
+# `capsule-wasm`, so a photo's placeholder never depends on which client imported it. Safe to
+# keep unconditional because chromahash has zero runtime dependencies and builds for
+# `wasm32-unknown-unknown` (it ships a `simd128` backend alongside AVX2/SSE2 and NEON).
+# `default-features = false` drops `spec-vectors`, which only compiles the crate's own
+# integration test; `simd` is kept because every backend replays the scalar path op-for-op
+# and is byte-identical — it changes speed, never output. Imported **directly** rather than
+# through Rawshift, which AGENTS.md forbids from wrapping it.
+chromahash = { version = "0.7.1", default-features = false, features = ["simd"] }
 indexmap = { workspace = true }
 jiff = { workspace = true }
 kamadak-exif = "0.5"
@@ -112,20 +117,10 @@ getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 
-# ── Media (optional; `media` feature) — decode/encode + media metadata ──────
-base64 = { workspace = true, optional = true }
-file-format = { workspace = true, optional = true }
-jpeg-encoder = { version = "0.6", optional = true }
-memmap2 = { version = "0.9.10", optional = true }
-num-rational = { workspace = true, optional = true }
-thumbhash = { version = "0.1.0", optional = true }
-tokio = { workspace = true, optional = true }
 # Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
 # events, and the WASM sealing build links only the facade (no subscriber), which is free.
 tracing = { workspace = true }
-zune-core = { version = "0.5.1", optional = true }
-zune-jpeg = { version = "0.5.15", optional = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
@@ -191,18 +186,6 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 # `uuid` also needs an explicit wasm randomness source; route it through getrandom (whose
 # wasm backend is configured above) so the drop id / file-id draws work in the browser.
 uuid = { workspace = true, features = ["rng-getrandom"] }
-
-[[example]]
-name = "extract_metadata"
-required-features = ["media"]
-
-[[example]]
-name = "generate_derivative"
-required-features = ["media"]
-
-[[example]]
-name = "generate_lqip"
-required-features = ["media"]
 
 [dev-dependencies]
 tempfile = "3"

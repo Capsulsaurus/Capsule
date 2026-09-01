@@ -30,6 +30,19 @@ use super::*;
 // shared with the upload, push, album, and directory client tests.
 use crate::testmock::{MockRequest, MockResponse, MockServer};
 
+/// The session handle from a login that finished.
+///
+/// Panics rather than returning a `Result`: a fixture that answers a second-factor challenge
+/// when it meant to answer a token pair has nothing left for the case to assert.
+fn finished(outcome: FfiLoginOutcome) -> Arc<FfiSession> {
+    match outcome {
+        FfiLoginOutcome::Session { session } => session,
+        FfiLoginOutcome::SecondFactorRequired { .. } => {
+            panic!("the fixture answered a second-factor challenge")
+        }
+    }
+}
+
 const PROTOCOL: &str = "2026-07-10";
 
 // ─── Fixtures ────────────────────────────────────────────────────────────────
@@ -129,10 +142,12 @@ async fn ffi_login_upload_status_round_trip() {
     .unwrap();
 
     // login → session handle (tokens stay inside the handle).
-    let session = client
-        .login("a@example.com".into(), "pw".into())
-        .await
-        .unwrap();
+    let session = finished(
+        client
+            .login("a@example.com".into(), "pw".into())
+            .await
+            .unwrap(),
+    );
     assert!(session.is_authenticated().await);
 
     // upload file through the handle.
@@ -182,10 +197,12 @@ async fn ffi_upload_surfaces_duplicate_blob_merge() {
         None,
     )
     .unwrap();
-    let session = client
-        .login("a@example.com".into(), "pw".into())
-        .await
-        .unwrap();
+    let session = finished(
+        client
+            .login("a@example.com".into(), "pw".into())
+            .await
+            .unwrap(),
+    );
 
     let outcome = session
         .upload(ffi_request(4096), vec![7u8; 4096])
@@ -380,6 +397,7 @@ async fn ffi_enroll_album_seal_upload_sync_apply_round_trip() {
     .unwrap()
     .login("a@example.com".into(), "pw".into())
     .await
+    .map(finished)
     .unwrap();
 
     let blobs = workspace.upload_blobs(asset.clone()).unwrap();
@@ -521,6 +539,7 @@ async fn ffi_escrow_and_device_directory_round_trip() {
     .unwrap()
     .login("a@example.com".into(), "pw".into())
     .await
+    .map(finished)
     .unwrap();
     let api_base = format!("{}/api", server.base_url());
 

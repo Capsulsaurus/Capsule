@@ -87,11 +87,11 @@ public enum TimelineSectioning {
     /// A human header for a day — `Today` / `Yesterday`, else a written date.
     static func dayTitle(_ day: Date, calendar: Calendar, referenceDate: Date) -> String {
         if calendar.isDate(day, inSameDayAs: referenceDate) {
-            return "Today"
+            return String(localized: "app.timeline.section.today")
         }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: referenceDate),
            calendar.isDate(day, inSameDayAs: yesterday) {
-            return "Yesterday"
+            return String(localized: "app.timeline.section.yesterday")
         }
         let sameYear = calendar.component(.year, from: day)
             == calendar.component(.year, from: referenceDate)

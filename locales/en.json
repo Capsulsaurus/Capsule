@@ -55,6 +55,10 @@
     "message": "New Album",
     "context": "iOS new-album alert title and the toolbar + button accessibility label."
   },
+  "app.albums.photo_count": {
+    "message": "{count, plural, one {# Photo} other {# Photos}}",
+    "context": "iOS album cover-card subtitle counting the album's photos. {count} is the photo count."
+  },
   "app.albums.section.my_albums": {
     "message": "My Albums",
     "context": "iOS section header over the user's own albums (Collections and Albums screens)."
@@ -66,6 +70,10 @@
   "app.albums.title": {
     "message": "Albums",
     "context": "iOS Albums screen navigation title."
+  },
+  "app.albums.untitled": {
+    "message": "Album",
+    "context": "iOS fallback name for a system album that reports no title."
   },
   "app.asset.sync.awaiting_original": {
     "message": "Original still on the device that took it",
@@ -2183,6 +2191,14 @@
     "message": "Imports",
     "context": "iOS Imports screen navigation title (managed-store imported photos)."
   },
+  "app.infoplist.face_id_usage": {
+    "message": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
+    "context": "iOS NSFaceIDUsageDescription — system permission prompt explaining why Capsule uses Face ID."
+  },
+  "app.infoplist.photo_library_usage": {
+    "message": "Capsule shows and organizes the photos and videos in your library.",
+    "context": "iOS NSPhotoLibraryUsageDescription — system permission prompt explaining why Capsule reads the photo library."
+  },
   "app.media.live_photo": {
     "message": "Live Photo",
     "context": "Name of a Live Photo asset. 'Live Photo' is Apple's product name and stays English on Apple platforms."
@@ -2552,8 +2568,8 @@
     "context": "iOS Places map empty-state title."
   },
   "app.places.preview.accessibility": {
-    "message": "{count, plural, one {# photo} other {# photos}} at this place",
-    "context": "VoiceOver label for the fanned photo preview shown for a map pin."
+    "message": "{count, plural, one {# photo at this place} other {# photos at this place}}",
+    "context": "VoiceOver label for the fanned photo preview shown for a map pin. A whole-message plural: the trailing phrase is inside each arm because a language that inflects it with the count cannot be served by appending a fixed suffix, and because the generator compiles only whole-message plurals to a native plural resource."
   },
   "app.places.preview.open": {
     "message": "Open",
@@ -2951,6 +2967,10 @@
     "message": "Used",
     "context": "Row label for how much server storage is in use. The value is a formatted size."
   },
+  "app.recently_deleted.auth.reason": {
+    "message": "View your recently deleted photos.",
+    "context": "iOS Face ID / passcode prompt reason shown when opening Recently Deleted (SR1 view gate)."
+  },
   "app.recently_deleted.empty.description": {
     "message": "Deleted Capsule photos appear here for recovery.",
     "context": "iOS Recently Deleted empty-state description."
@@ -2959,6 +2979,10 @@
     "message": "No Recently Deleted",
     "context": "iOS Recently Deleted empty-state title."
   },
+  "app.recently_deleted.locked.description": {
+    "message": "Authenticate to view your recently deleted photos.",
+    "context": "iOS Recently Deleted locked-state description prompting biometric auth."
+  },
   "app.recently_deleted.recover": {
     "message": "Recover",
     "context": "iOS swipe-action button restoring a deleted photo."
@@ -2966,6 +2990,10 @@
   "app.recently_deleted.title": {
     "message": "Recently Deleted",
     "context": "iOS Recently Deleted screen navigation title."
+  },
+  "app.recently_deleted.unlock": {
+    "message": "Unlock",
+    "context": "iOS button to authenticate and unlock the Recently Deleted view."
   },
   "app.recovery.passphrase.continue": {
     "message": "I've Written It Down",
@@ -3362,6 +3390,10 @@
   "app.scaffold.title": {
     "message": "Not built yet",
     "context": "Heading on a placeholder screen that is reachable by navigation but has no implementation yet."
+  },
+  "app.search.clear_facet": {
+    "message": "Clear {facet}",
+    "context": "iOS Search accessibility label on the button clearing one active filter chip. {facet} is that chip's label."
   },
   "app.search.clear_recents": {
     "message": "Clear",
@@ -5883,6 +5915,14 @@
     "message": "Settings",
     "context": "iOS main tab bar item and the settings screen navigation title."
   },
+  "app.timeline.delete_selected.confirm": {
+    "message": "{count, plural, one {Delete # Item} other {Delete # Items}}",
+    "context": "iOS Library delete confirmation destructive button. {count} is how many items are selected."
+  },
+  "app.timeline.delete_selected.title": {
+    "message": "{count, plural, one {Delete # Item?} other {Delete # Items?}}",
+    "context": "iOS Library delete confirmation dialog title. {count} is how many items are selected."
+  },
   "app.timeline.empty.description": {
     "message": "Tap the import button to add photos to Capsule.",
     "context": "iOS timeline empty-state description."
@@ -5911,6 +5951,22 @@
     "message": "Import Photos",
     "context": "iOS timeline import toolbar button accessibility label."
   },
+  "app.timeline.import.duplicates": {
+    "message": "{count, plural, one {# already in your library.} other {# already in your library.}}",
+    "context": "iOS import-summary line counting skipped duplicates. {count} is how many were already present."
+  },
+  "app.timeline.import.failed": {
+    "message": "{count, plural, one {# couldn't be imported.} other {# couldn't be imported.}}",
+    "context": "iOS import-summary line counting failures. {count} is how many files failed."
+  },
+  "app.timeline.import.imported": {
+    "message": "{count, plural, one {# imported into Capsule.} other {# imported into Capsule.}}",
+    "context": "iOS import-summary line counting newly imported files. {count} is how many were imported."
+  },
+  "app.timeline.import.nothing": {
+    "message": "Nothing to import.",
+    "context": "iOS import-summary shown when the import produced no imports, duplicates, or failures."
+  },
   "app.timeline.import_complete.title": {
     "message": "Import Complete",
     "context": "iOS timeline alert title shown after an import finishes."
@@ -5931,6 +5987,10 @@
     "message": "Years",
     "context": "iOS timeline zoom-level segment: group by year."
   },
+  "app.timeline.load_failed.description": {
+    "message": "Couldn't load your photo library.",
+    "context": "iOS Library load-failure description, under the load_failed title."
+  },
   "app.timeline.load_failed.title": {
     "message": "Couldn't Load Photos",
     "context": "iOS timeline failure-state title when the library can't be loaded."
@@ -5947,9 +6007,25 @@
     "message": "Photo Access Needed",
     "context": "iOS timeline permission-prompt title when photo access is not granted."
   },
+  "app.timeline.section.today": {
+    "message": "Today",
+    "context": "iOS Library day-section header for the current day."
+  },
+  "app.timeline.section.yesterday": {
+    "message": "Yesterday",
+    "context": "iOS Library day-section header for the previous day."
+  },
   "app.timeline.select": {
     "message": "Select",
     "context": "iOS timeline toolbar button entering multi-select mode."
+  },
+  "app.timeline.selection.count": {
+    "message": "{count, plural, one {# Selected} other {# Selected}}",
+    "context": "iOS Library multi-select toolbar title. {count} is how many items are selected."
+  },
+  "app.timeline.selection.empty": {
+    "message": "Select Items",
+    "context": "iOS Library multi-select toolbar title before anything is selected."
   },
   "app.timeline.view_picker": {
     "message": "View",
@@ -6683,10 +6759,6 @@
     "message": "Forgot Password",
     "context": "Forgot-password card title."
   },
-  "auth.forgot_password_link": {
-    "message": "Forgot password?",
-    "context": "Login link to the forgot-password page."
-  },
   "auth.login.description": {
     "message": "Enter your email below to login to your account.",
     "context": "Login card description."
@@ -6702,58 +6774,6 @@
   "auth.no_account": {
     "message": "Don't have an account?",
     "context": "Login prompt preceding the sign-up link."
-  },
-  "auth.or": {
-    "message": "or",
-    "context": "Divider text between password login and passkey login."
-  },
-  "auth.passkey.cancelled": {
-    "message": "Passkey authentication was cancelled.",
-    "context": "Login error when the user cancels the passkey prompt."
-  },
-  "auth.passkey.failed": {
-    "message": "Passkey authentication failed.",
-    "context": "Login error when passkey authentication fails."
-  },
-  "auth.reset.description": {
-    "message": "Enter your new password.",
-    "context": "Reset-password card description."
-  },
-  "auth.reset.invalid_body": {
-    "message": "This password reset link is invalid or has expired.",
-    "context": "Reset-password invalid-link description."
-  },
-  "auth.reset.invalid_title": {
-    "message": "Invalid Link",
-    "context": "Reset-password card title when the token is missing/invalid."
-  },
-  "auth.reset.mismatch": {
-    "message": "Passwords do not match.",
-    "context": "Reset-password validation error."
-  },
-  "auth.reset.request_new": {
-    "message": "Request a new reset link",
-    "context": "Reset-password link to request a new reset link."
-  },
-  "auth.reset.resetting": {
-    "message": "Resetting…",
-    "context": "Reset-password submit button while resetting."
-  },
-  "auth.reset.submit": {
-    "message": "Reset password",
-    "context": "Reset-password submit button label."
-  },
-  "auth.reset.success_desc": {
-    "message": "Your password has been reset.",
-    "context": "Reset-password description after success."
-  },
-  "auth.reset.title": {
-    "message": "Reset Password",
-    "context": "Reset-password card title."
-  },
-  "auth.sign_in_passkey": {
-    "message": "Sign in with Passkey",
-    "context": "Login button to authenticate with a passkey."
   },
   "auth.sign_up": {
     "message": "Sign up",
@@ -6803,9 +6823,17 @@
     "message": "Password",
     "context": "CLI `capsule auth login` interactive prompt for the account password."
   },
+  "cli.auth.login.second_factor_required": {
+    "message": "This account has two-factor authentication switched on.",
+    "context": "CLI `capsule auth login`, printed before the code prompt. The password verified and the sign-in is not finished — the server answered 202 rather than a token pair."
+  },
   "cli.auth.login.success": {
     "message": "Logged in as {email}.",
     "context": "CLI success line after `capsule auth login`. {email} is the account email."
+  },
+  "cli.auth.login.totp_prompt": {
+    "message": "Authenticator code",
+    "context": "CLI `capsule auth login` interactive prompt for the six-digit TOTP code, shown after the password verifies on an account with a second factor (slice S-C63)."
   },
   "cli.auth.logout.in_progress": {
     "message": "Logging out from Capsule…",
@@ -6834,10 +6862,6 @@
   "cli.auth.register.success": {
     "message": "Account created. Signed in as {email}.",
     "context": "CLI success line after `capsule auth register`. {email} is the account email."
-  },
-  "cli.auth.register.username_prompt": {
-    "message": "Username",
-    "context": "CLI `capsule auth register` interactive prompt for the login handle."
   },
   "cli.cull.failed": {
     "message": "Cull failed: {reason}",
@@ -6886,6 +6910,66 @@
   "cli.cull.view": {
     "message": "Cull view: {pick} pick, {neutral} neutral, {reject} reject.",
     "context": "CLI summary line from `capsule cull` counting the live (non-trashed) assets carrying each culling flag."
+  },
+  "cli.import.candidates_found": {
+    "message": "Found {candidates} candidate(s) ({files} file(s) total).",
+    "context": "CLI summary after `capsule import` finishes scanning. {candidates} is the number of importable items found; {files} is the total number of files seen, including sidecars and non-media files. Both are counts."
+  },
+  "cli.import.done": {
+    "message": "Done: {imported} imported, {duplicates} duplicate(s), {errors} error(s).",
+    "context": "CLI summary after `capsule import` finishes. All three placeholders are counts."
+  },
+  "cli.import.execute_failed": {
+    "message": "The import failed: {reason}",
+    "context": "CLI error when `capsule import` fails while writing assets into the library. {reason} is an English technical detail."
+  },
+  "cli.import.executing": {
+    "message": "Importing…",
+    "context": "CLI status line printed when `capsule import` begins writing assets into the library, after planning."
+  },
+  "cli.import.extract_failed": {
+    "message": "Reading the export failed: {reason}",
+    "context": "CLI error when `capsule import --provider` cannot read the third-party export. {reason} is an English technical detail."
+  },
+  "cli.import.in_progress": {
+    "message": "Importing {paths} into library {library}…",
+    "context": "CLI status line printed when `capsule import` starts. {paths} is the list of source paths given on the command line; {library} is the destination library path."
+  },
+  "cli.import.nothing_to_import": {
+    "message": "Nothing to import.",
+    "context": "CLI notice when the `capsule import` plan contains no new assets — every candidate was already in the library or was unsupported. Not an error."
+  },
+  "cli.import.outcome.corrupt_transfer": {
+    "message": "✗ {path} (corrupt transfer)",
+    "context": "CLI per-file result line from `capsule import`: the copy into the library did not match the source, so the file was not committed. {path} is the source file path."
+  },
+  "cli.import.outcome.duplicate": {
+    "message": "= {path} (duplicate)",
+    "context": "CLI per-file result line from `capsule import`: the file was already in the library and was skipped. {path} is the source file path."
+  },
+  "cli.import.outcome.unreadable": {
+    "message": "✗ {path} (unreadable: {reason})",
+    "context": "CLI per-file result line from `capsule import`: the source file could not be read. {path} is the source file path; {reason} is an English technical detail from the operating system."
+  },
+  "cli.import.plan_failed": {
+    "message": "Planning the import failed: {reason}",
+    "context": "CLI error when `capsule import` cannot build a plan from the scanned candidates. {reason} is an English technical detail."
+  },
+  "cli.import.plan_summary": {
+    "message": "Plan: {to_import} to import, {duplicates} duplicate(s) skipped, {unsupported} unsupported or errored.",
+    "context": "CLI summary of the `capsule import` plan, printed before anything is written. All three placeholders are counts."
+  },
+  "cli.import.provider_notice": {
+    "message": "Reading the source as a {provider} export.",
+    "context": "CLI notice printed when `capsule import --provider` reads the source through a third-party export adapter instead of as a plain directory tree. {provider} is a product name shown verbatim in every locale (e.g. \"Google Takeout\")."
+  },
+  "cli.import.scan_failed": {
+    "message": "Scanning the source files failed: {reason}",
+    "context": "CLI error when `capsule import` cannot walk the source paths. {reason} is an English technical detail."
+  },
+  "cli.import.scanning": {
+    "message": "Scanning source files…",
+    "context": "CLI status line printed while `capsule import` walks the source paths, before any file is planned."
   },
   "cli.list.empty": {
     "message": "No assets have synced yet.",
@@ -6983,6 +7067,10 @@
     "message": "Delete",
     "context": "Asset context-menu delete action."
   },
+  "common.display_name": {
+    "message": "Display name",
+    "context": "Form label for the optional display name in profile settings (slice S-C54). It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
+  },
   "common.email": {
     "message": "Email",
     "context": "Form label for the email field (login, forgot-password, settings)."
@@ -7042,10 +7130,6 @@
   "common.upload": {
     "message": "Upload",
     "context": "Upload action label (header sr-only, upload dialog button)."
-  },
-  "common.username": {
-    "message": "Username",
-    "context": "Form label for the username field in profile settings."
   },
   "dashboard.col_activity": {
     "message": "Activity",
@@ -7231,29 +7315,117 @@
     "message": "This album isn't available on your account.",
     "context": "HTTP 403 on POST /v1/albums (album provisioning, S-C25): the submitted album id cannot be bound to the caller. Deliberately identical whatever the reason, so the endpoint never reveals whether another account already holds that id."
   },
+  "error.album.unavailable": {
+    "message": "Capsule couldn't set up that album. Please try again.",
+    "context": "HTTP 500 on POST /v1/albums (slice S-C25): the album store could not answer, so nothing was provisioned. Retryable, and it says nothing about whether the id is available."
+  },
+  "error.album.upgrade_in_flight": {
+    "message": "This album is already being upgraded.",
+    "context": "HTTP 409 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): only one upgrade may be in flight per album. Carries the live intent_id so a proposer can tell which ceremony it is losing to."
+  },
+  "error.album.upgrade_malformed": {
+    "message": "Capsule couldn't read that album upgrade request.",
+    "context": "HTTP 400 on POST/DELETE /v1/albums/{id}/upgrade (slice S-C24): the body is not a signed UpgradeIntent, is past the size ceiling, or the intent_id is not a UUID."
+  },
+  "error.album.upgrade_not_found": {
+    "message": "That album isn't yours, or doesn't exist.",
+    "context": "HTTP 404 on the album-upgrade surface (slice S-C24): no such album, or one filed under a different account. One answer for both — an album id is client-derived, so a guess must buy nothing."
+  },
+  "error.album.upgrade_proposer": {
+    "message": "Only an admin device on this account can upgrade an album.",
+    "context": "HTTP 403 on POST /v1/albums/{id}/upgrade (slice S-C24): the intent's proposer signature does not verify against the account's published device directory, or no directory is published. Without this check anyone holding a token could freeze an album by posting a struct."
+  },
+  "error.auth.account_locked": {
+    "message": "This account is locked after too many failed sign-in attempts.",
+    "context": "HTTP 423 on POST /v1/auth/login: the account is refusing attempts after too many failures, so a correct password is refused too. Distinct from `error.auth.invalid_credentials` precisely because retrying the password cannot help — the user needs to know the account, not the password, is the problem."
+  },
+  "error.auth.current_password_invalid": {
+    "message": "That is not your current password.",
+    "context": "HTTP 403 on POST /v1/auth/password (slice S-C54): the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
+  },
   "error.auth.invalid_credentials": {
     "message": "Invalid email or password.",
     "context": "High-level error for HTTP 401 on login. Server sends code `error.auth.invalid_credentials`."
+  },
+  "error.auth.password_invalid": {
+    "message": "That password cannot be used.",
+    "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
+  },
+  "error.auth.profile_invalid": {
+    "message": "That display name cannot be used.",
+    "context": "HTTP 400 on PATCH /v1/auth/profile (slice S-C54): the submitted display name is past the 128-character ceiling or carries control characters. Refused rather than silently rewritten — a name that renders as something other than what was typed is worse than one the server declines."
+  },
+  "error.auth.profile_not_found": {
+    "message": "That account no longer exists.",
+    "context": "HTTP 404 on GET/PATCH /v1/auth/profile and POST /v1/auth/password (slice S-C54): the presented credential is valid and names an account the directory no longer holds — a session outlives the account row it names when the account is deleted mid-session. The server is working correctly; the account is gone."
   },
   "error.auth.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "High-level error for HTTP 429. Server sends code `error.auth.rate_limited`."
   },
+  "error.auth.registration_invalid": {
+    "message": "That email or password can't be used. Passwords need at least 12 characters.",
+    "context": "HTTP 400 on POST /v1/auth/register (slice S-C53): the address is not usable or the password is under the length floor. A length floor and no composition rule — the password authenticates a session, not the master key, and composition rules push people towards shorter, more guessable passwords."
+  },
   "error.auth.revoke_proof_invalid": {
     "message": "That didn't confirm as you. Nothing was logged out.",
-    "context": "HTTP 401 on POST /logout/all (slice S-C23): a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory to anchor the identity key; a key that does not sign that directory; or a bad signature. Every reason is surfaced identically so the endpoint is not an oracle, and no session is revoked."
+    "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): a proof was presented but did not verify — an unknown, spent, or expired challenge; an account with no published device directory, and so no identity anchor (S-C42) to check against; or a signature that does not verify under that anchor. Every reason is surfaced identically so the endpoint is not an oracle over which accounts have published a directory, and no session is revoked."
   },
   "error.auth.revoke_proof_required": {
     "message": "Confirm with your account key to log out of all devices.",
-    "context": "HTTP 401 on POST /logout/all (slice S-C23): no readable master-key proof was presented. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
+    "context": "HTTP 401 on POST /v1/auth/logout/all (slice S-C23): no readable master-key proof was presented — the field was absent, not base64, or not a decodable hybrid signature. The global revoke is authenticated by an identity-key signature over a server-issued challenge, never by a session token, so a request without one revokes nothing at all — there is no partial success and nothing for the client to clear locally."
+  },
+  "error.auth.session_expired": {
+    "message": "Your session has ended. Please sign in again.",
+    "context": "HTTP 401 on POST /v1/auth/refresh: the presented refresh token did not verify, had expired, was the wrong kind of token, or named a session the server no longer holds. Every reason is surfaced identically so the endpoint is not an oracle; in all of them the client must re-authenticate interactively."
+  },
+  "error.auth.session_not_found": {
+    "message": "That device is already signed out.",
+    "context": "HTTP 404 on DELETE /v1/auth/devices/{session_id} (slice S-C13): no live session of this account has that id. One answer for never-existed, already-closed, expired, and belonging to another account — distinguishing the last would make the endpoint an oracle over whether a guessed session id belongs to somebody else."
+  },
+  "error.auth.totp_already_active": {
+    "message": "Two-factor authentication is already switched on.",
+    "context": "HTTP 409 on POST /v1/auth/totp/enroll (slice S-C55): the account already has a confirmed second factor. Refused rather than silently replaced — an enroll that overwrote an active secret would let a stolen session swap the factor for one the attacker holds, without ever presenting a code."
+  },
+  "error.auth.totp_challenge_invalid": {
+    "message": "That sign-in has expired. Enter your password again.",
+    "context": "HTTP 401 on POST /v1/auth/login/verify-totp (slice S-C55): the half-finished sign-in token did not verify, had expired, or was another kind of token. One answer for all three — a client can act on none of the distinctions and every one of them means starting the sign-in again."
+  },
+  "error.auth.totp_invalid_code": {
+    "message": "That code is not right. Check your authenticator app and try again.",
+    "context": "HTTP 403 on the authenticated TOTP operations and 401 on POST /v1/auth/login/verify-totp (slice S-C55): the six-digit code did not verify, or it verified and had already been used. One answer for both — telling a caller that a code was correct but replayed would confirm they had the right code."
+  },
+  "error.auth.totp_not_enrolled": {
+    "message": "Two-factor authentication is not switched on for this account.",
+    "context": "HTTP 409 on POST /v1/auth/totp/disable (slice S-C55): there is no confirmed second factor to remove."
+  },
+  "error.auth.totp_not_pending": {
+    "message": "There is no two-factor setup waiting to be confirmed.",
+    "context": "HTTP 409 on POST /v1/auth/totp/verify-enrollment (slice S-C55): nothing is pending for this account — either enrolment was never started, or it was already confirmed."
+  },
+  "error.auth.unavailable": {
+    "message": "Capsule couldn't reach your account just now. Please try again.",
+    "context": "HTTP 500 on the /v1/auth surface: the account directory or the session store could not answer, so the request neither succeeded nor was refused. Retryable, unlike every other failure on these routes."
   },
   "error.auth.user_already_exists": {
     "message": "An account with these details already exists.",
     "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."
   },
+  "error.blob.gone": {
+    "message": "That photo file is no longer available.",
+    "context": "HTTP 410 on GET /v1/blob/{hash} (slice S-C10): the address is referenced but not retrievable per policy — the asset was deleted, or the reference is dangling. Permanent: the client degrades to a representation it already holds rather than retrying. Distinct from the transient error.blob.pending_upload."
+  },
+  "error.blob.not_found": {
+    "message": "That photo file isn't on the server.",
+    "context": "HTTP 404 on GET /v1/blob/{hash} (slice S-C10): no live asset references the content address, or the path is not a content address at all. Both answer identically on purpose — a distinguishable malformed-address response would turn the route into an oracle over guesses."
+  },
   "error.blob.pending_upload": {
     "message": "The original photo hasn't been uploaded from its device yet.",
     "context": "Transient state, not a durability loss: an asset visible in the sync feed whose original blob has not been uploaded yet (staged uploads / awaiting-original). Distinct from 410 Gone."
+  },
+  "error.blob.unavailable": {
+    "message": "Capsule couldn't reach that photo file. Please try again.",
+    "context": "HTTP 500 on GET /v1/blob/{hash} (slice S-C10): the asset index or the blob store could not answer, so the server decided nothing. Retryable; it says nothing about whether the blob exists."
   },
   "error.client.unclassified": {
     "message": "Something went wrong.",
@@ -7263,21 +7435,61 @@
     "message": "Capsule ran into an unexpected problem.",
     "context": "Client-side code for an error the app never expected to see (something other than a typed Capsule error was thrown). Presented as a defect: offer a support report rather than a retry."
   },
+  "error.directory.identity_mismatch": {
+    "message": "This device list is signed by a different account key.",
+    "context": "HTTP 403 on POST /v1/auth/devices/directory (slice S-C42, threat-model invariant 23): the document is well-formed and correctly signed, but under a key that is not this account's identity anchor. The anchor is established by the account's first published directory and is immutable after it. The refusal deliberately says nothing about the stored anchor."
+  },
   "error.directory.malformed": {
     "message": "The device list could not be read.",
     "context": "HTTP 400 on device-directory publish: the request body is not a decodable signed DeviceDirectory document (bad CBOR, or a directory_version outside the representable range)."
+  },
+  "error.directory.not_published": {
+    "message": "This account hasn't published a device list yet.",
+    "context": "HTTP 404 on GET /v1/auth/devices/directory/{user_id} (slice S-C9): the account has never published a signed DeviceDirectory. Not an error state for the caller so much as a fact about the target — a client that cannot resolve a device key cannot verify that account's manifests, and this says why."
+  },
+  "error.directory.unavailable": {
+    "message": "Capsule couldn't reach the device list. Please try again.",
+    "context": "HTTP 500 on the device-directory surface (slice S-C9): the store could not answer, so nothing was published or read. Retryable, and it says nothing about whether a directory exists."
+  },
+  "error.directory.unsupported_media_type": {
+    "message": "That device list couldn't be read.",
+    "context": "HTTP 415 on POST /v1/auth/devices/directory (slice S-C9): the body was not sent as application/cbor. The signed device directory travels as canonical CBOR — the encoding it was signed in — so any other media type is a client that has misunderstood what it is sending."
   },
   "error.directory.version_conflict": {
     "message": "This device list is out of date. Capsule will refresh it before continuing.",
     "context": "HTTP 409 on device-directory publish (threat-model invariant 23): the submitted DeviceDirectory's directory_version does not strictly advance the version already stored for the user. A non-advancing or regressing publish is refused so the server cannot roll back a revocation."
   },
+  "error.drop.adoption_refused": {
+    "message": "That upload could not be added to the album.",
+    "context": "HTTP 400 on POST /v1/drops/{drop-id}/adopt (slice S-C5, threat-model invariant 32): the signed create manifest was refused — a key_mode outside its closed enum, a manifest naming a different blob or size than the drop, no write capability for the album, an unknown device, or a failure of invariants 1-8. Nothing is written and the drop returns to the inbox."
+  },
   "error.drop.cap_exceeded": {
     "message": "This upload link is full.",
     "context": "HTTP 409 on POST /u/{opaque-id}/drop (web-upload, invariant 26): a cumulative per-link cap (total bytes or file count) is already exhausted for an otherwise-live link."
   },
+  "error.drop.cap_exhausted": {
+    "message": "This upload link is full. Ask for a new one.",
+    "context": "HTTP 409 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 26): a cumulative cap — total bytes or file count — on an otherwise-live link. Deliberately NOT the indistinguishable 404 the link's own liveness gets: the guest was handed a real link by somebody who wants their photos and needs to be told to ask for a new one rather than conclude the link never existed."
+  },
+  "error.drop.chunk_refused": {
+    "message": "That part of the upload could not be accepted. It will be retried.",
+    "context": "HTTP 409 on PATCH /d/{opaque-id}/{upload-id} (slice S-C5, threat-model invariants 9-12): the chunk is at the wrong offset, carries different bytes for an offset already accepted, is unaligned, or would exceed the declared size. The same rules the album chunk path runs, through the same function."
+  },
+  "error.drop.file_too_large": {
+    "message": "That file is larger than this link accepts.",
+    "context": "HTTP 413 on POST /d/{opaque-id} (slice S-C5, threat-model invariant 28): the single file exceeds the link's max_file_size. Answered before the cumulative caps, so a guest is told to shrink the file rather than to ask for a new link."
+  },
+  "error.drop.malformed": {
+    "message": "That upload could not be accepted.",
+    "context": "HTTP 400 on POST /d/{opaque-id} and its chunk path (slice S-C5, threat-model invariants 27 and 30): the declaration is not a usable drop — a zero size, a malformed ciphertext hash, an empty kem_ct, a missing content type, or a body carrying a field a drop may not have (an album id, a manifest, provenance). `deny_unknown_fields` is what makes the absence clause a rejection rather than a silently ignored field, because ignoring it would let a guest believe they had written into an album."
+  },
   "error.drop.malformed_descriptor": {
     "message": "This upload couldn't be accepted.",
     "context": "HTTP 400 on POST /u/{opaque-id}/drop (web-upload, invariant 30): the DropDescriptor is structurally malformed, its kem_ct length is wrong for the link's crypto suite, or the request carried an album/manifest/provenance field a drop must never carry."
+  },
+  "error.drop.not_found": {
+    "message": "That upload is no longer in your inbox.",
+    "context": "HTTP 404 on the inbox operations (slice S-C5): no pending drop of this account has that id. One answer for unknown, for another account's, and for one already held by a concurrent adoption, so the endpoint is not an oracle over guessed drop ids."
   },
   "error.drop.not_in_inbox": {
     "message": "This drop is no longer available to adopt.",
@@ -7290,6 +7502,10 @@
   "error.drop.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "HTTP 429 on POST /u/{opaque-id}/drop (web-upload, invariant 31): the per-{opaque-id} or per-source-IP drop-session rate limit engaged."
+  },
+  "error.drop.unavailable": {
+    "message": "Capsule couldn't reach the upload service. Please try again.",
+    "context": "HTTP 500 on the drop surface (slice S-C5): a store could not answer. Retryable; a drop session that failed to open has its link reservation refunded so an outage does not burn a guest's link down."
   },
   "error.enrollment.channel_not_found": {
     "message": "This device-add session has ended. Start again.",
@@ -7315,6 +7531,14 @@
     "message": "The recovery backup could not be saved.",
     "context": "HTTP 400 on master-key escrow store (slice S-C12): the request body failed the coarse size sanity bound (empty, or larger than any legitimate wrapped master key). The server keeps the blob opaque and never inspects the wrap format; the recovery-secret entropy floor is enforced client-side in core, not here."
   },
+  "error.escrow.not_stored": {
+    "message": "No recovery backup is saved for this account.",
+    "context": "HTTP 404 on GET /v1/auth/escrow (slice S-C12): this account has never stored a wrapped master key. Distinct from a store failure so a client can tell \"you have no recovery backup\" from \"we could not read it\" — the first is a setup prompt and the second is a retry."
+  },
+  "error.escrow.unavailable": {
+    "message": "Capsule couldn't reach the recovery backup. Please try again.",
+    "context": "HTTP 500 on the master-key escrow surface (slice S-C12): the store could not answer, so nothing was written or read. Retryable, and it says nothing about whether an escrow exists."
+  },
   "error.federation.audience_mismatch": {
     "message": "This access grant is for a different album.",
     "context": "HTTP 403 on a federation pull (slice S-E2, threat-model invariant 19): the capability's aud (an urn:capsule:album:UUID) does not match the album the peer is pulling. The aud is matched against the album, never against the verifying server (a deliberate RFC 7519 deviation)."
@@ -7339,6 +7563,10 @@
     "message": "This source has reached its request limit. Please wait and try again.",
     "context": "HTTP 429 on a federation pull (slice S-E2, threat-model invariant 21): the peer exceeded one of its per-peer transfer budgets — events/hour, bytes/hour, or CPU/hour. Each peer is its own blast-radius boundary; a busy or hostile peer cannot starve good ones."
   },
+  "error.federation.revocations_unavailable": {
+    "message": "Capsule couldn't read the revocation list. Please try again.",
+    "context": "HTTP 503 on GET /.well-known/capsule/revoked-jti (slice S-C18): this server's own revocation list could not be read, so it makes no claim about what is revoked. Deliberately not an empty list — an empty list is the strongest claim the record can make, and serving it on a storage failure would silently un-revoke every token a peer holds."
+  },
   "error.federation.scope_insufficient": {
     "message": "This access grant does not cover the requested content.",
     "context": "HTTP 403 on a federation blob fetch (slice S-E2, threat-model invariant 19): a read-derivative-only capability tried to fetch a blob whose server-visible role is 'original'. Scope is enforced structurally against each blob's role."
@@ -7359,6 +7587,10 @@
     "message": "This server is blocked from federating with us.",
     "context": "HTTP 403 (federation pull / report intake, slice S-C8): the requesting peer server is on this server's blocklist, so its federated request — a pull or a moderation report — is refused at the federation-capability layer."
   },
+  "error.moderation.unavailable": {
+    "message": "Capsule couldn't reach your account record. Please try again.",
+    "context": "HTTP 500 on GET /v1/moderation/record (slice S-C8): the moderation store could not answer, so neither the account's standing nor its history could be read. Retryable, and it says nothing about whether anything is on record."
+  },
   "error.protocol.version_unsupported": {
     "message": "This version of Capsule is no longer supported. Please update the app.",
     "context": "HTTP 426 from the universal protocol handshake (invariant 1): the client's X-Capsule-Protocol date falls outside the server's accepted window."
@@ -7375,9 +7607,61 @@
     "message": "This source has reached its caching limit on your account.",
     "context": "HTTP 403 when a federated blob cached on a user's behalf would cross the per-(receiving_user, source_peer) caching budget (default 25% of the receiver's hard quota per source peer). Bounds how much one user can pull from any single peer."
   },
+  "error.quota.unavailable": {
+    "message": "Capsule couldn't check your storage use. Please try again.",
+    "context": "HTTP 500 on GET /v1/quota (slice S-C6): the quota ledger could not answer, so no snapshot was produced. Read-only and retryable; it says nothing about how full the account is."
+  },
+  "error.request.failed": {
+    "message": "Something went wrong with that request.",
+    "context": "The fallback the coded-problem interceptor (slice S-C36) attaches when a framework rejection renders a status the mapping does not name. Reaching it means the surface grew a status nobody localized, so it is deliberately vague and deliberately rare."
+  },
+  "error.request.forbidden": {
+    "message": "That credential isn't enough for this action.",
+    "context": "HTTP 403 (slice S-C36): a valid credential that is insufficient — presenting a refresh token where an access token is required. Distinct from 401: re-presenting the same credential will not help."
+  },
+  "error.request.malformed": {
+    "message": "Capsule couldn't read that request.",
+    "context": "HTTP 400 (slice S-C36): a framework-level rejection — a path segment, query value or header the request line could not be decoded into the shape the operation declares. Attached by the server's coded-problem interceptor, because the framework's own rejection types carry no extension member."
+  },
+  "error.request.method_not_allowed": {
+    "message": "Capsule couldn't handle that request.",
+    "context": "HTTP 405 (slice S-C36): the path exists and the method does not. Not a state a well-formed client reaches; carried so no response on the surface is codeless."
+  },
+  "error.request.not_acceptable": {
+    "message": "Capsule couldn't produce that response format.",
+    "context": "HTTP 406 (slice S-C36): the `Accept` header names no representation the operation can produce."
+  },
+  "error.request.too_large": {
+    "message": "That request was too large to accept.",
+    "context": "HTTP 413 (slice S-C36): the request body passed the server's transport backstop and was abandoned before a handler saw it. Distinct from error.upload.chunk_too_large, which is the upload protocol's own bound and tells a client its chunking is wrong."
+  },
+  "error.request.unauthenticated": {
+    "message": "Please sign in again.",
+    "context": "HTTP 401 (slice S-C36): no credential was presented, the credential did not verify, or the session it named is no longer open. One code for all three on purpose — which check failed is exactly what an attacker probing a token would like to be told."
+  },
+  "error.request.unprocessable": {
+    "message": "Some of that request didn't make sense.",
+    "context": "HTTP 422 (slice S-C36): the body parsed as its media type but did not match the shape the operation declares — a field of the wrong type, or a required one missing."
+  },
+  "error.request.unsupported_media_type": {
+    "message": "Capsule couldn't read that content type.",
+    "context": "HTTP 415 (slice S-C36): the body's `Content-Type` is not one the operation accepts."
+  },
+  "error.share.malformed": {
+    "message": "That share link could not be created.",
+    "context": "HTTP 400 on POST /v1/shares (slice S-C4): the record is not a usable share link — an opaque id that is not 32 lowercase hex characters, a malformed content address, a `serves` set that omits the metadata blob, an unparseable expiry, or a non-base64 wrapped secret. The owner's own operation, so the detail is specific; the public serve path never distinguishes anything."
+  },
   "error.share.rate_limited": {
     "message": "Too many attempts. Please wait and try again.",
     "context": "HTTP 429 on the public share serve path (slice S-C4): the per-source-IP or per-{opaque-id} serve rate limit engaged. Both limiters are charged on every /s/{opaque-id} request (metadata, blob, wrapped-secret) to throttle link enumeration; a not-found/revoked/expired link is an indistinguishable bodyless 404, never a distinct code."
+  },
+  "error.share.unavailable": {
+    "message": "Capsule couldn't reach that share. Please try again.",
+    "context": "HTTP 500 on the share surface (slice S-C4): a store could not answer. Deliberately distinct from the public path's 404 — fail-closed means a serving process that cannot confirm a link is live refuses, and answering 404 would tell a client the link was revoked when it is perfectly good."
+  },
+  "error.storage.asset_not_found": {
+    "message": "That item was not found.",
+    "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts (slice S-C58): no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
   },
   "error.storage.deep_rate_limited": {
     "message": "Too many deep storage checks. Please wait and try again.",
@@ -7387,13 +7671,21 @@
     "message": "The storage-verification request was malformed.",
     "context": "HTTP 400 from POST /storage/verify (slice S-C3): a declared blob hash is not 64-char lowercase hex, or an asset_id is empty. Structural rejection before any verdict is computed."
   },
+  "error.storage.unavailable": {
+    "message": "Capsule couldn't check whether your photos are safely stored. Please try again.",
+    "context": "HTTP 500 on POST /v1/storage/verify (slice S-C3): the asset index or the blob store could not answer, so no durability verdict was reached. Deliberately not a durable=false verdict — a client told \"not durable\" keeps its local copy and is safe, so conflating an outage with a real finding would train users to ignore the state that matters. Retryable."
+  },
   "error.sync.cursor_invalid": {
     "message": "The sync session is out of date. Capsule will resync from the start.",
-    "context": "gRPC INVALID_ARGUMENT (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, or lifted from another context. The client discards it and resyncs from an empty cursor."
+    "context": "HTTP 400 on GET /v1/sync (threat-model invariant 22): the opaque sync cursor failed its server MAC — forged, mutated, issued to another owner, or minted under a rotated key. The client discards it and resyncs from an empty cursor."
   },
   "error.sync.unauthenticated": {
     "message": "Please sign in again to continue syncing.",
-    "context": "gRPC UNAUTHENTICATED on the sync feed: the request carried no valid access token in the `authorization` call metadata."
+    "context": "HTTP 401 on the sync feed: the request carried no valid access token. Currently unused — the framework renders the 401 and carries no error code on it (slice S-C36)."
+  },
+  "error.sync.unavailable": {
+    "message": "Capsule could not reach the server to sync. It will try again.",
+    "context": "HTTP 500 on GET /v1/sync (slice S-C2): the asset index or the blob store could not answer, so the page was neither served nor refused on its merits. Transient by nature — the client retries with backoff and keeps its cursor, which is still valid."
   },
   "error.unexpected": {
     "message": "Something went wrong during this transfer.",
@@ -7402,6 +7694,10 @@
   "error.upload.album_access_denied": {
     "message": "You don't have permission to add photos to this album.",
     "context": "HTTP 403, invariant 6: album missing, no write capability, or album protocol version drift."
+  },
+  "error.upload.album_quiescing": {
+    "message": "This album is being upgraded. Your photos will upload once it's done.",
+    "context": "HTTP 409 on POST /v1/upload (slice S-C24): the album is in upgrade quiescence and this session did not name the ceremony's intent_id — a stale client that never saw the UpgradeIntent trying to write past the freeze. Transient: the ceremony completes and the client writes into the fork, or its deadline passes on the server's clock and the album returns to normal operation."
   },
   "error.upload.amk_regressed": {
     "message": "This change references an older album key than the server has recorded.",
@@ -7471,6 +7767,10 @@
     "message": "The upload's declared size is invalid.",
     "context": "HTTP 400, invariant 4: declared size is zero or negative."
   },
+  "error.upload.invalid_status_filter": {
+    "message": "That is not an upload status.",
+    "context": "HTTP 400 on GET /v1/upload/sessions (slice S-C57): the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
+  },
   "error.upload.malformed_request": {
     "message": "The upload request was malformed.",
     "context": "HTTP 400 on POST /upload: unknown or missing JSON fields. The transport JSON is strict (deny unknown fields)."
@@ -7495,6 +7795,10 @@
     "message": "The upload hasn't finished, so its storage receipt isn't available yet.",
     "context": "HTTP 409, invariant 33: GET /upload/{id}/receipt before the session reached Completed. The receipt is signed inside the finalization transaction; the client retries after Completed."
   },
+  "error.upload.replace_incomplete": {
+    "message": "Capsule is still receiving this photo's new version. It'll finish on its own.",
+    "context": "HTTP 409 on PATCH /v1/upload/{id} (slice S-C43): a replace's signed manifest finalized before the original or metadata blob it commits to had landed. A replace mutates an asset that is already visible, so it is applied as one act when its manifest lands — which makes the manifest the member that lands last. Transient: retrying the manifest once the rest of the bundle has committed succeeds."
+  },
   "error.upload.session_not_active": {
     "message": "This upload has already finished.",
     "context": "HTTP 409: PATCH/DELETE against a session that is finalizing or terminal. The outcome is read via HEAD."
@@ -7518,6 +7822,10 @@
   "error.upload.timestamp_out_of_range": {
     "message": "Your device's clock appears to be wrong. Check its date and time.",
     "context": "HTTP 400, invariant 8: envelope timestamp outside the gross-drift sanity window (default ±30 days)."
+  },
+  "error.upload.unavailable": {
+    "message": "The upload couldn't be completed. Please try again.",
+    "context": "HTTP 500: a collaborator the upload needs — the session store, the blob store, or the album/device authority — could not answer. Server-side, never the client's fault; the client retries the same request."
   },
   "error.upload.unknown_crypto_suite": {
     "message": "This app version uses an encryption suite the server doesn't recognize.",
@@ -7614,38 +7922,6 @@
   "library.trash.empty_button": {
     "message": "Empty Trash",
     "context": "Trash page button to empty the trash."
-  },
-  "mfa.passkey.already_registered": {
-    "message": "A passkey for this device is already registered.",
-    "context": "Error when a passkey already exists for the device."
-  },
-  "mfa.passkey.create": {
-    "message": "Create Passkey",
-    "context": "Passkey registration submit button label."
-  },
-  "mfa.passkey.description": {
-    "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
-    "context": "Passkey registration form description."
-  },
-  "mfa.passkey.name_label": {
-    "message": "Passkey Name (optional)",
-    "context": "Passkey name input label."
-  },
-  "mfa.passkey.name_placeholder": {
-    "message": "My MacBook",
-    "context": "Example passkey name hint text."
-  },
-  "mfa.passkey.reg_cancelled": {
-    "message": "Passkey registration was cancelled.",
-    "context": "Error when the user cancels passkey registration."
-  },
-  "mfa.passkey.reg_failed": {
-    "message": "Passkey registration failed.",
-    "context": "Generic passkey registration failure."
-  },
-  "mfa.passkey.registering": {
-    "message": "Registering…",
-    "context": "Passkey create button while registering."
   },
   "mfa.totp.code_label": {
     "message": "Verification Code",
@@ -7767,14 +8043,6 @@
     "message": "Added: {date}",
     "context": "Passkey added-on timestamp line."
   },
-  "security.delete_passkey_confirm": {
-    "message": "Delete passkey \"{name}\"?",
-    "context": "Confirm dialog before deleting a passkey."
-  },
-  "security.delete_passkey_failed": {
-    "message": "Failed to delete passkey.",
-    "context": "Error when deleting a passkey fails."
-  },
   "security.deleting": {
     "message": "Deleting…",
     "context": "Passkey remove button while deleting."
@@ -7782,26 +8050,6 @@
   "security.last_active": {
     "message": "Last active: {date}",
     "context": "Device last-active timestamp line."
-  },
-  "security.passkeys.add_button": {
-    "message": "Add passkey",
-    "context": "Button to start registering a new passkey."
-  },
-  "security.passkeys.description": {
-    "message": "Sign in using your device's biometrics or PIN.",
-    "context": "Passkeys card description."
-  },
-  "security.passkeys.empty": {
-    "message": "No passkeys registered.",
-    "context": "Empty state for the passkeys list."
-  },
-  "security.passkeys.loading": {
-    "message": "Loading passkeys…",
-    "context": "Loading state for the passkeys list."
-  },
-  "security.passkeys.title": {
-    "message": "Passkeys",
-    "context": "Security card title for passkeys."
   },
   "security.profile_link": {
     "message": "← Profile settings",

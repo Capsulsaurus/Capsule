@@ -152,8 +152,8 @@
     "target": "元件:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
-    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -200,8 +200,8 @@
     "target": "- `capsule-android`:Android Studio 或搭配外掛的 IntelliJ IDEA"
   },
   {
-    "source": "- `capsule-api`: VS Code or similar",
-    "target": "- `capsule-api`:VS Code 或類似工具"
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`:VS Code 或類似工具"
   },
   {
     "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
@@ -316,15 +316,15 @@
     "target": "### 貢獻者授權合約(CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "我們要求所有貢獻者簽署 CLA。這能確保專案保有必要的法律彈性,以爭取未來的資金與專職維護團隊,保障這套軟體在未來數十年內持續獲得積極支援並自給自足。"
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "我們要求所有貢獻者同意 [CLA](CLA.md)。Capsule 的著作權由一個人持有，正是這一點使應用程式商店散布成為可能：App Store 的條款與 AGPL 不相容，因此面向商店的建置只能是著作權人另行作出的授權。作為回報，每一次公開的原始碼發布都將維持在 OSI 認可的授權條款之下。"
   },
   {
     "source": "## License",
     "target": "## 授權"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsule 採用 [AGPL-3.0 授權](LICENSE)。"
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule 以 [AGPL-3.0-only](LICENSE) 發布。著作權由 Justin Chung 單獨持有；第三方聲明請見 [NOTICE](NOTICE)。著作權人亦可在另行約定的商業條款下提供 Capsule，包括應用程式商店所要求的專有條款。這不影響已經發布的內容：你在 AGPL 下取得的任何版本，將永久地在 AGPL 下屬於你。完整立場記錄於[授權設計文件](https://capsule.justinchung.net/design/licensing/)。"
   }
 ]

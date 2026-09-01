@@ -19,7 +19,7 @@ Kynos server
   ├─ auth and structural validation
   ├─ Capsule upload/sync state machines
   ├─ Postgres key-free index
-  ├─ optional Valkey hot state
+  ├─ Valkey volatile state (required)
   └─ Capsule-owned opaque blob store
 ```
 

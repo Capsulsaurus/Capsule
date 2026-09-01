@@ -171,7 +171,7 @@ public final class TimelineViewModel {
         } catch {
             CapsuleLog.interface.error("timeline load failed: \(String(describing: error), privacy: .public)")
             Diagnostics.shared.recordError(operation: .timelineLoad)
-            state = .failed("Couldn't load your photo library.")
+            state = .failed(String(localized: "app.timeline.load_failed.description"))
         }
     }
 

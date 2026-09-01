@@ -28,7 +28,8 @@ extension CatalogAsset {
             albumID: record.albumId,
             rating: record.rating,
             isDeleted: record.isDeleted,
-            deletedAt: record.deletedAt
+            deletedAt: record.deletedAt,
+            isHidden: record.isHidden
         )
     }
 
@@ -51,7 +52,8 @@ extension CatalogAsset {
             albumId: albumID,
             rating: rating,
             isDeleted: isDeleted,
-            deletedAt: deletedAt
+            deletedAt: deletedAt,
+            isHidden: isHidden
         )
     }
 }

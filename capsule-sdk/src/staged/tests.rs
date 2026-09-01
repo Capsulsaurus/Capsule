@@ -329,16 +329,15 @@ fn feed_entry(id: &str, original_held: bool, with_original_ref: bool) -> FeedEnt
             original: with_original_ref.then(|| BlobRef {
                 ciphertext_hash: format!("{id}-orig"),
                 role: "original".to_string(),
-                format: "image/jpeg".to_string(),
                 size: 4_000_000,
             }),
             derivatives: vec![BlobRef {
                 ciphertext_hash: format!("{id}-thumb"),
                 role: "derivative".to_string(),
-                format: "image/avif".to_string(),
                 size: 8_000,
             }],
         },
         original_held,
+        changed_at: "1970-01-01T00:00:00Z".to_string(),
     }
 }

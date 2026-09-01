@@ -26,8 +26,6 @@ export interface Asset {
     width: number;
     /** Intrinsic pixel height, for justified layout. */
     height: number;
-    /** ThumbHash (base64) for an instant blurred placeholder. */
-    thumbhash: string;
     /**
      * Awaiting-original: the server has the manifest + metadata but not yet the original
      * blob (staged uploads; download-sync design doc). Derived key-free from the feed's

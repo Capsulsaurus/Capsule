@@ -317,6 +317,7 @@ mod tests {
                 devices: vec![DeviceEntry {
                     device_id: Uuid::from_u128(DEVICE),
                     dsk_public: device.verifying_key(),
+                    dek_public: None,
                     added_at: "2026-05-30T00:00:00Z".into(),
                     revoked_at: None,
                 }],
@@ -361,6 +362,7 @@ mod tests {
                 timestamp: "2026-05-31T12:00:00Z".into(),
                 action,
                 prior_provenance_hash: prior,
+                upgraded_from: None,
                 retention_until: None,
             }
         }
@@ -556,6 +558,7 @@ mod tests {
             devices: vec![DeviceEntry {
                 device_id: Uuid::from_u128(DEVICE),
                 dsk_public: device.verifying_key(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],
@@ -669,6 +672,7 @@ mod tests {
             devices: vec![DeviceEntry {
                 device_id: Uuid::from_u128(DEVICE),
                 dsk_public: device.verifying_key(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],

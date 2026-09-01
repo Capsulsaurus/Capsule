@@ -308,6 +308,7 @@ impl crate::drop::DropAdopter for Workspace {
             timestamp: now_rfc3339(),
             action: Action::Create,
             prior_provenance_hash: None,
+            upgraded_from: None,
             retention_until: None,
         };
         let manifest = core

@@ -33,7 +33,7 @@ mise run hooks-install # installs the git hooks (hk)
 
 | Task | Contents |
 | --- | --- |
-| `mise run check-rust` | `format-check-rust`, `lint-check-rust`, `i18n-check`, `i18n-guard`, `openapi-check`, `translate-readme-check`, `build-rust`, `build-ffi`, `lint-check-ffi`, `gen-bindings`, `verify-examples` — sequential, because they all contend on one `target/` lock |
+| `mise run check-rust` | `format-check-rust`, `lint-check-rust`, `i18n-check`, `i18n-guard`, `openapi-check-kynos`, `architecture-check`, `license-check`, `translate-readme-check`, `build-rust`, `build-check-wasm`, `build-ffi`, `lint-check-ffi`, `gen-bindings`, `verify-examples` — sequential, because they all contend on one `target/` lock |
 | `mise run check-web` | `format-check-web`, `lint-check-web`, `test-web`, `build-web` |
 | `mise run check-docs` | `format-check-docs`, `lint-check-docs`, `build-docs` (a real Astro build — a broken internal link fails it) |
 | `mise run check-md` | `lint-check-md` (markdownlint over every `.md` in the repo) |
@@ -46,28 +46,32 @@ mise run hooks-install # installs the git hooks (hk)
 - **Web:** `format-web` / `lint-web` (biome), `test-web` (bun; depends on `build-wasm`, `share-kat`, and `drop-kat`, which generate the WASM glue and the cross-language KAT fixtures the tests load), `build-web`.
 - **Docs:** `format-docs` / `lint-docs` (biome over `capsule-docs`), `build-docs` (Astro/Starlight).
 - **Markdown:** `lint-md` / `lint-check-md`.
-- **Codegen gates:** `i18n` and `i18n-check` (compile `locales/` into the per-platform catalogs), `i18n-guard` (fails on hardcoded user-facing literals in web/Swift/Compose), `openapi` and `openapi-check` (dump/verify `capsule-sdk/openapi.json`), `translate-readme` and `translate-readme-check` (regenerate/verify the translated READMEs).
+- **Codegen gates:** `i18n` and `i18n-check` (compile `locales/` into the per-platform catalogs), `i18n-guard` (fails on hardcoded user-facing literals in web/Swift/Compose), `openapi-kynos` and `openapi-check-kynos` (dump/verify `capsule-server/openapi.json`), `translate-readme` and `translate-readme-check` (regenerate/verify the translated READMEs).
 - **FFI and cross-compilation:** `targets-add` first, then `build-ffi`, `gen-bindings` (uniffi Kotlin/Swift sources), `build-apple`, `build-android`, `build-linux-cross`, `build-windows`, `build-targets`. On macOS, `setup-swift` builds the FFI xcframework and generates the Xcode workspace.
 
 ## Running a server locally
 
-The current `capsule-api` server is being rebuilt on [Kynos](/development/architecture/) as a single REST/OpenAPI surface; until that rebuild reaches parity the existing server is what runs locally, and `serve-api` keeps working unchanged.
+**There is no local server today, and that is a known gap rather than a missing instruction.**
 
-One command:
+`mise run serve-api` and the compose stack behind it went with the Salvo tree in slice `S-C59`. The Kynos server that replaces it is complete as a *surface* — fifty-nine operations, a committed OpenAPI 3.2 document, and a test suite that drives the real router — and it has **no binary, no configuration loading and no Postgres or Valkey adapter**. Nothing reads `JWT_ED25519_DER`, `SYNC_CURSOR_MAC_KEY` or `ATTESTATION_KEY_SEED` yet.
+
+That ordering is deliberate: every port in `capsule-server` has a deterministic in-memory adapter and a conformance suite, because the suite is what a real adapter is written *against*, and a port with two implementations before it has one suite is a port whose implementations will disagree. Until those adapters land, the way to exercise the server is the way its own tests do — in process, with no container:
 
 ```bash
-mise run serve-api
+cargo nextest run -p capsule-server
 ```
 
-It brings up the server's two external services from `capsule-api/compose.yaml` — **PostgreSQL** and **Valkey**, which are all it needs; there is no object store, because ciphertext blobs are files under `UPLOAD_DIR`. It then seeds `capsule-api/.env` if absent and tops up any required variable that is missing, minting a `JWT_ED25519_DER` via `mise run keygen` (no `openssl` required — the generator lives beside the parser that reads the key, so a minted key is provably one the server accepts). Finally it waits for both services to answer and runs the server on `http://127.0.0.1:3000`.
+`kynos::test::TestClient` drives a built `Service` directly: no socket, no port, no runtime flavour. One test (`tests/sdk_client.rs`) does bind an ephemeral port, because the property it proves — that the **generated** SDK client round-trips the real router over TCP — is the one an in-process client cannot.
 
-Point a client at it with `export CAPSULE_ENDPOINT=http://127.0.0.1:3000`.
+To read the served contract without running anything:
 
-Debug builds run the Sea-ORM migrations automatically at startup, so a fresh database needs no extra step locally. A release build does **not** — see [Self-Hosting](/guides/self-hosting/). That is also why `serve-api` never passes `--release`.
+```bash
+mise run openapi-kynos      # regenerate capsule-server/openapi.json
+```
 
-To drive it by hand, note that `dotenvy` searches the *current* directory, so `cargo run -p capsule-api` from the repo root will not see `capsule-api/.env` — either `cd capsule-api` first, or export the file yourself as `serve-api` does.
+### Nothing here needs a container any more
 
-Tests that need a real database use testcontainers rather than the compose stack. Under podman that requires a Docker-compatible socket (`systemctl --user enable --now podman.socket`); see `capsule-api/README.md` for the platform notes.
+The testcontainers section this page used to carry is gone with the crate that needed it. No test in the workspace starts a container, so `mise run test-rust` has no podman prerequisite and cannot leak one. (The `containers` nextest group is kept, empty, for the first real adapter — the one-thread rule it encodes was learned by watching CI flake, and that is the expensive way to learn it.)
 
 ## Git hooks
 

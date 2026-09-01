@@ -13,6 +13,12 @@ import Foundation
 ///
 /// - Important: ``init(openingCatalogAt:)`` runs schema migration synchronously;
 ///   construct it off the main actor (e.g. inside a `Task`).
+/// - Important: ``unlockView(_:using:)`` occupies this actor for as long as the
+///   platform's authentication prompt is on screen — the gate seam is a
+///   synchronous callback, so there is no way to yield while it waits. Catalog
+///   reads queue behind it. That is the point of the actor (the prompt runs off
+///   the main thread and the UI keeps rendering), but do not issue a gate
+///   challenge on a path that also needs a concurrent catalog read.
 public actor FFIAssetCatalog: AssetCatalog {
     private let catalog: Catalog
 
@@ -149,6 +155,34 @@ public actor FFIAssetCatalog: AssetCatalog {
         } catch {
             throw nativeCatalogError(error)
         }
+    }
+
+    // MARK: Gated views
+
+    /// The grant lives in Rust, so the grace window is the core's `GateKeeper`'s
+    /// and this adds no second clock of its own — a second one would make "five
+    /// minutes" mean something else on each side of the boundary.
+    public func unlockView(_ view: GatedView, using gate: any LocalAuthGate) throws {
+        CapsuleLog.catalog.debug("unlockView \(String(describing: view), privacy: .public)")
+        do {
+            try catalog.unlockView(view: view.ffiValue, auth: ForeignAuthGate(gate))
+        } catch {
+            throw nativeLocalAuthError(error)
+        }
+    }
+
+    public func isViewUnlocked(_ view: GatedView) -> Bool {
+        catalog.isViewUnlocked(view: view.ffiValue)
+    }
+
+    public func relockView(_ view: GatedView) {
+        CapsuleLog.catalog.debug("relockView \(String(describing: view), privacy: .public)")
+        catalog.relockView(view: view.ffiValue)
+    }
+
+    public func lockViews() {
+        CapsuleLog.catalog.debug("lockViews")
+        catalog.lockViews()
     }
 
     // MARK: Stacks

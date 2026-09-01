@@ -1,44 +1,44 @@
 /**
- * Wire codec for the `capsule.sync.v1.SyncService` feed — proto-mirror types plus a
- * minimal Protobuf + gRPC-web framing implementation.
+ * Wire types for `GET /v1/sync` — the Kynos REST sync feed.
  *
- * The feed is gRPC (tonic behind the salvo bridge, api-surfaces design doc). Browsers
- * cannot speak native gRPC, so the web client speaks **gRPC-web** — the sanctioned
- * browser carriage of the same proto contract — against `POST
- * {base}/capsule.sync.v1.SyncService/Sync` with `content-type
- * application/grpc-web+proto`.
+ * This module used to be a hand-rolled Protobuf + gRPC-web codec: 410 lines of varint and
+ * length-delimited framing, written because browsers cannot speak native gRPC and pulling a
+ * `protobuf-es`/`connect-web` toolchain into the bun build to read a handful of fields was not
+ * worth it. The feed is REST/JSON now (`S-C2`, `S-D28`) and the whole codec is gone — the
+ * server's own OpenAPI document is the contract, `JSON.parse` is the parser, and the framing
+ * problem does not exist.
  *
- * The message set is small and frozen (a handful of fields), so we hand-roll the exact
- * subset of Protobuf wire types the feed uses (varint + length-delimited) rather than
- * pulling a full `protobuf-es`/`connect-web` toolchain and its codegen into the bun
- * build. The codec is pure (`Uint8Array` in/out) and golden-tested in `wire.test.ts`; if
- * the proto grows past this subset, swap this module for generated code behind the same
- * types (see the S-D6 report).
+ * What is kept is the **shape** these types present to `store.ts`, so the store's validation
+ * rules — forward-version rejection and per-album anti-rewind — are unchanged by the transport
+ * swap. That was the point of the seam.
  *
- * INVARIANT — the signed `AssetManifest` (`manifestCbor`) and the encrypted
- * `metadataBlob` travel as OPAQUE bytes and are never decoded here: the browser holds no
- * album keys (gateway.ts). The server serializes the id / hash "bytes" fields as the
- * UTF-8 bytes of their string form (see `capsule-api-sync::feed::map_entry`), so this
- * codec surfaces them as strings — matching what is actually on the wire.
+ * INVARIANT — the signed `AssetManifest` (`manifestCbor`) and the encrypted metadata blob travel
+ * as OPAQUE values and are never decoded here: the browser holds no album keys (`gateway.ts`).
  */
 
-/** What changed for an asset. Closed enum, mirrors `capsule.sync.v1.ChangeKind`. */
+/** What changed for an asset, as `WireChangeKind` spells it on the wire. */
 export enum ChangeKind {
-    Unspecified = 0,
-    Created = 1,
-    MetadataUpdated = 2,
-    Deleted = 3,
+    Created = 'created',
+    Updated = 'updated',
+    Deleted = 'deleted',
+}
+
+/** A blob's role in its asset bundle, as `WireBlobRole` spells it on the wire. */
+export enum BlobRole {
+    Original = 'original',
+    Derivative = 'derivative',
+    Metadata = 'metadata',
+    Provenance = 'provenance',
+    Backup = 'backup',
 }
 
 /** A content-addressed blob reference (never blob bytes). */
 export interface BlobRef {
-    /** Ciphertext content address (server sends the hash string's UTF-8 bytes). */
+    /** Ciphertext content address, lowercase hex. */
     ciphertextHash: string;
-    /** `original | metadata | derivative | provenance`. */
-    role: string;
-    /** MIME/format string, for derivatives. */
-    format: string;
-    /** Ciphertext size in bytes. */
+    /** The blob's role in the bundle. */
+    role: BlobRole;
+    /** Ciphertext size in bytes, so a client can budget a fetch before issuing one. */
     size: bigint;
 }
 
@@ -48,363 +48,213 @@ export interface BlobManifest {
     derivatives: BlobRef[];
 }
 
-/** One feed entry — a single change to a single asset. */
+/** One change in the feed. */
 export interface SyncEntry {
-    /** Album this entry belongs to (UUID string). */
-    albumId: string;
-    /** Per-album strictly-increasing sequence — the anti-rewind high-water mark. */
-    syncSeq: bigint;
-    /** Album protocol pin this entry conforms to (`YYYY-MM-DD`). */
-    protocolVersion: string;
-    /** What changed. */
-    kind: ChangeKind;
-    /** Asset id (UUID string). */
+    /** The asset that changed. */
     assetId: string;
-    /** Signed `AssetManifest` as opaque canonical CBOR — never decoded key-free. */
-    manifestCbor: Uint8Array;
-    /** Encrypted metadata blob — empty for deletes; never decoded key-free. */
-    metadataBlob: Uint8Array;
-    /** Per-role blob content addresses. */
-    blobs?: BlobManifest;
-    /** Whether the original blob is finalized server-side (staged uploads). */
+    /** The album it belongs to; the store keeps its anti-rewind high-water mark per album. */
+    albumId: string;
+    /** The album's pinned protocol date (`YYYY-MM-DD`). */
+    protocolVersion: string;
+    /** The entry's position. Strictly increasing within a page. */
+    syncSeq: bigint;
+    /** What this is, relative to the client that asked. */
+    kind: ChangeKind;
+    /**
+     * The signed manifest — base64 of the provenance blob's exact bytes. Opaque here.
+     *
+     * Absent on a tombstone, and absent when the index names a provenance blob the store
+     * cannot produce (the server logs loudly in that case).
+     */
+    manifestCbor?: string;
+    /** The encrypted metadata blob's content address. Opaque here. */
+    metadataBlob?: string;
+    /** The asset's blobs, by role. */
+    blobs: BlobManifest;
+    /** Whether the original has landed. */
     originalHeld: boolean;
+    /** When the change happened, RFC 3339. */
+    changedAt: string;
 }
 
-/** A `Sync` request: an opaque resumption cursor and a page-size hint. */
-export interface SyncRequest {
-    cursor: Uint8Array;
-    pageSize: number;
-}
-
-/** A `Sync` response page. */
+/** A page of the feed. */
 export interface SyncResponse {
     entries: SyncEntry[];
-    nextCursor: Uint8Array;
+    /**
+     * The cursor that resumes after the last entry.
+     *
+     * Always present, including on an empty page, where the server re-mints the position the
+     * client arrived with — so a client never has to decide whether to keep its old cursor.
+     */
+    nextCursor: string;
+    /** Whether the server holds changes beyond this page. */
+    hasMore: boolean;
 }
 
-const textDecoder = new TextDecoder();
-const textEncoder = new TextEncoder();
+/** A request for one page. */
+export interface SyncRequest {
+    /** The opaque cursor a previous page returned; absent means "from the beginning". */
+    cursor?: string;
+    /** How many entries to ask for. The server clamps it into the range it serves. */
+    pageSize?: number;
+}
 
-// ── Protobuf wire types we use ───────────────────────────────────────────────
-const WIRE_VARINT = 0;
-const WIRE_LEN = 2;
+/** The document's `SyncBlobRef`, before it is grouped by role. */
+interface WireBlobRef {
+    role: string;
+    hash: string;
+    size: number;
+}
 
-/** A malformed wire buffer (framing or Protobuf). */
-export class WireError extends Error {
+/** The document's `SyncEntry`. */
+interface WireSyncEntry {
+    asset_id: string;
+    album_id: string;
+    protocol_version: string;
+    sync_seq: number;
+    change: string;
+    manifest_cbor?: string | null;
+    metadata_blob?: string | null;
+    blobs: WireBlobRef[];
+    original_held: boolean;
+    changed_at: string;
+}
+
+/** The document's `SyncPageResponse`. */
+interface WireSyncPage {
+    entries: WireSyncEntry[];
+    next_cursor: string;
+    has_more: boolean;
+}
+
+/** A page body that is not the shape the contract promises. */
+export class SyncDecodeError extends Error {
     constructor(message: string) {
         super(message);
-        this.name = 'WireError';
+        this.name = 'SyncDecodeError';
     }
 }
 
-/** A cursor over a Protobuf message body. */
-class Reader {
-    private pos = 0;
-
-    constructor(private readonly buf: Uint8Array) {}
-
-    eof(): boolean {
-        return this.pos >= this.buf.length;
-    }
-
-    /** Read a base-128 varint as a `bigint` (covers `u64` without precision loss). */
-    varint(): bigint {
-        let result = 0n;
-        let shift = 0n;
-        for (;;) {
-            if (this.pos >= this.buf.length) {
-                throw new WireError('truncated varint');
-            }
-            const byte = this.buf[this.pos++];
-            result |= BigInt(byte & 0x7f) << shift;
-            if ((byte & 0x80) === 0) {
-                break;
-            }
-            shift += 7n;
-        }
-        return result;
-    }
-
-    /** A field tag: `(fieldNumber << 3) | wireType`. */
-    tag(): { field: number; wire: number } {
-        const tag = Number(this.varint());
-        return { field: tag >>> 3, wire: tag & 0x7 };
-    }
-
-    /** A length-delimited byte slice (bytes / string / embedded message). */
-    bytes(): Uint8Array {
-        const len = Number(this.varint());
-        if (this.pos + len > this.buf.length) {
-            throw new WireError('truncated length-delimited field');
-        }
-        const slice = this.buf.subarray(this.pos, this.pos + len);
-        this.pos += len;
-        return slice;
-    }
-
-    string(): string {
-        return textDecoder.decode(this.bytes());
-    }
-
-    /** Skip a field of unknown number so forward-compatible fields don't break decode. */
-    skip(wire: number): void {
-        switch (wire) {
-            case WIRE_VARINT:
-                this.varint();
-                break;
-            case WIRE_LEN:
-                this.bytes();
-                break;
-            case 5: // fixed32
-                this.pos += 4;
-                break;
-            case 1: // fixed64
-                this.pos += 8;
-                break;
-            default:
-                throw new WireError(`unsupported wire type ${wire}`);
-        }
+/** Read a wire role, refusing one the closed enum does not name. */
+function decodeRole(role: string): BlobRole {
+    switch (role) {
+        case 'original':
+            return BlobRole.Original;
+        case 'derivative':
+            return BlobRole.Derivative;
+        case 'metadata':
+            return BlobRole.Metadata;
+        case 'provenance':
+            return BlobRole.Provenance;
+        case 'backup':
+            return BlobRole.Backup;
+        default:
+            throw new SyncDecodeError(
+                `unknown blob role ${JSON.stringify(role)}`,
+            );
     }
 }
 
-/** An append-only Protobuf message writer. */
-class Writer {
-    private readonly parts: number[] = [];
-
-    private varint(value: bigint): void {
-        let v = value;
-        for (;;) {
-            const byte = Number(v & 0x7fn);
-            v >>= 7n;
-            if (v === 0n) {
-                this.parts.push(byte);
-                break;
-            }
-            this.parts.push(byte | 0x80);
-        }
-    }
-
-    tag(field: number, wire: number): void {
-        this.varint(BigInt((field << 3) | wire));
-    }
-
-    varintField(field: number, value: number | bigint): void {
-        this.tag(field, WIRE_VARINT);
-        this.varint(BigInt(value));
-    }
-
-    bytesField(field: number, value: Uint8Array): void {
-        this.tag(field, WIRE_LEN);
-        this.varint(BigInt(value.length));
-        for (const b of value) {
-            this.parts.push(b);
-        }
-    }
-
-    finish(): Uint8Array {
-        return Uint8Array.from(this.parts);
+/** Read a wire change kind, refusing one the closed enum does not name. */
+function decodeChange(change: string): ChangeKind {
+    switch (change) {
+        case 'created':
+            return ChangeKind.Created;
+        case 'updated':
+            return ChangeKind.Updated;
+        case 'deleted':
+            return ChangeKind.Deleted;
+        default:
+            throw new SyncDecodeError(
+                `unknown change kind ${JSON.stringify(change)}`,
+            );
     }
 }
 
-// ── Message decoders ─────────────────────────────────────────────────────────
-
-function decodeBlobRef(buf: Uint8Array): BlobRef {
-    const r = new Reader(buf);
-    const ref: BlobRef = {
-        ciphertextHash: '',
-        role: '',
-        format: '',
-        size: 0n,
-    };
-    while (!r.eof()) {
-        const { field, wire } = r.tag();
-        switch (field) {
-            case 1:
-                ref.ciphertextHash = r.string();
-                break;
-            case 2:
-                ref.role = r.string();
-                break;
-            case 3:
-                ref.format = r.string();
-                break;
-            case 4:
-                ref.size = r.varint();
-                break;
-            default:
-                r.skip(wire);
-        }
-    }
-    return ref;
-}
-
-function decodeBlobManifest(buf: Uint8Array): BlobManifest {
-    const r = new Reader(buf);
+/**
+ * Group an entry's blob list by role.
+ *
+ * The REST feed serves one flat list; the store wants the original separately from the
+ * derivatives, because "is the original held" is the state it renders. Metadata, provenance and
+ * backup blobs are addressed elsewhere in the entry or are not the browser's business, so they
+ * are dropped here rather than carried into a shape that has nowhere to put them.
+ */
+function groupBlobs(blobs: WireBlobRef[]): BlobManifest {
     const manifest: BlobManifest = { derivatives: [] };
-    while (!r.eof()) {
-        const { field, wire } = r.tag();
-        switch (field) {
-            case 1:
-                manifest.original = decodeBlobRef(r.bytes());
-                break;
-            case 2:
-                manifest.derivatives.push(decodeBlobRef(r.bytes()));
-                break;
-            default:
-                r.skip(wire);
+    for (const blob of blobs) {
+        const ref: BlobRef = {
+            ciphertextHash: blob.hash,
+            role: decodeRole(blob.role),
+            size: BigInt(blob.size),
+        };
+        if (ref.role === BlobRole.Original) {
+            manifest.original = ref;
+        } else if (ref.role === BlobRole.Derivative) {
+            manifest.derivatives.push(ref);
         }
     }
     return manifest;
 }
 
-function decodeSyncEntry(buf: Uint8Array): SyncEntry {
-    const r = new Reader(buf);
-    const entry: SyncEntry = {
-        albumId: '',
-        syncSeq: 0n,
-        protocolVersion: '',
-        kind: ChangeKind.Unspecified,
-        assetId: '',
-        manifestCbor: new Uint8Array(),
-        metadataBlob: new Uint8Array(),
-        originalHeld: false,
+/**
+ * Decode one page body.
+ *
+ * Structural rather than trusting: a body missing a required field is a `SyncDecodeError` and
+ * not `undefined` propagating into the store, because the store's anti-rewind check compares
+ * sequence numbers and `undefined` compares false against everything.
+ */
+export function decodeSyncResponse(body: unknown): SyncResponse {
+    const page = body as WireSyncPage;
+    if (
+        !page ||
+        !Array.isArray(page.entries) ||
+        typeof page.next_cursor !== 'string'
+    ) {
+        throw new SyncDecodeError(
+            'sync page is missing `entries` or `next_cursor`',
+        );
+    }
+
+    return {
+        entries: page.entries.map((entry) => {
+            if (
+                typeof entry.asset_id !== 'string' ||
+                typeof entry.album_id !== 'string' ||
+                typeof entry.protocol_version !== 'string' ||
+                typeof entry.sync_seq !== 'number' ||
+                typeof entry.changed_at !== 'string'
+            ) {
+                throw new SyncDecodeError(
+                    `sync entry is missing a required field: ${JSON.stringify(entry)}`,
+                );
+            }
+            return {
+                assetId: entry.asset_id,
+                albumId: entry.album_id,
+                protocolVersion: entry.protocol_version,
+                syncSeq: BigInt(entry.sync_seq),
+                kind: decodeChange(entry.change),
+                manifestCbor: entry.manifest_cbor ?? undefined,
+                metadataBlob: entry.metadata_blob ?? undefined,
+                blobs: groupBlobs(entry.blobs ?? []),
+                originalHeld: entry.original_held === true,
+                changedAt: entry.changed_at,
+            };
+        }),
+        nextCursor: page.next_cursor,
+        hasMore: page.has_more === true,
     };
-    while (!r.eof()) {
-        const { field, wire } = r.tag();
-        switch (field) {
-            case 1:
-                entry.albumId = r.string();
-                break;
-            case 2:
-                entry.syncSeq = r.varint();
-                break;
-            case 3:
-                entry.protocolVersion = r.string();
-                break;
-            case 4:
-                entry.kind = Number(r.varint()) as ChangeKind;
-                break;
-            case 5:
-                entry.assetId = r.string();
-                break;
-            case 6:
-                entry.manifestCbor = r.bytes().slice();
-                break;
-            case 7:
-                entry.metadataBlob = r.bytes().slice();
-                break;
-            case 8:
-                entry.blobs = decodeBlobManifest(r.bytes());
-                break;
-            case 9:
-                entry.originalHeld = r.varint() !== 0n;
-                break;
-            default:
-                r.skip(wire);
-        }
+}
+
+/** The query string for one page request. */
+export function encodeSyncRequest(request: SyncRequest): string {
+    const params = new URLSearchParams();
+    if (request.cursor !== undefined) {
+        params.set('cursor', request.cursor);
     }
-    return entry;
-}
-
-/** Decode a `SyncResponse` Protobuf message body. */
-export function decodeSyncResponse(buf: Uint8Array): SyncResponse {
-    const r = new Reader(buf);
-    const response: SyncResponse = {
-        entries: [],
-        nextCursor: new Uint8Array(),
-    };
-    while (!r.eof()) {
-        const { field, wire } = r.tag();
-        switch (field) {
-            case 1:
-                response.entries.push(decodeSyncEntry(r.bytes()));
-                break;
-            case 2:
-                response.nextCursor = r.bytes().slice();
-                break;
-            default:
-                r.skip(wire);
-        }
+    if (request.pageSize !== undefined) {
+        params.set('page_size', String(request.pageSize));
     }
-    return response;
-}
-
-/** Encode a `SyncRequest` Protobuf message body (proto3 omits default-valued fields). */
-export function encodeSyncRequest(req: SyncRequest): Uint8Array {
-    const w = new Writer();
-    if (req.cursor.length > 0) {
-        w.bytesField(1, req.cursor);
-    }
-    if (req.pageSize > 0) {
-        w.varintField(2, req.pageSize);
-    }
-    return w.finish();
-}
-
-// ── gRPC-web framing ─────────────────────────────────────────────────────────
-// Length-Prefixed-Message: 1 flag byte (0x00 data, 0x80 trailer) + 4-byte big-endian
-// length + payload. Trailers ride the response body as an HTTP/1.1-style block.
-
-const FLAG_TRAILER = 0x80;
-
-/** Frame a single Protobuf message for a gRPC-web request body. */
-export function frameRequest(message: Uint8Array): Uint8Array {
-    const out = new Uint8Array(5 + message.length);
-    out[0] = 0x00;
-    new DataView(out.buffer).setUint32(1, message.length, false);
-    out.set(message, 5);
-    return out;
-}
-
-/** A decoded gRPC-web response body: data messages plus the parsed trailer block. */
-export interface GrpcWebFrames {
-    messages: Uint8Array[];
-    trailers: Map<string, string>;
-}
-
-/** Split a gRPC-web response body into its data messages and trailer metadata. */
-export function parseResponseFrames(body: Uint8Array): GrpcWebFrames {
-    const messages: Uint8Array[] = [];
-    let trailers = new Map<string, string>();
-    const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
-    let pos = 0;
-    while (pos + 5 <= body.length) {
-        const flag = body[pos];
-        const len = view.getUint32(pos + 1, false);
-        pos += 5;
-        if (pos + len > body.length) {
-            throw new WireError('truncated gRPC-web frame');
-        }
-        const payload = body.subarray(pos, pos + len);
-        pos += len;
-        if ((flag & FLAG_TRAILER) !== 0) {
-            trailers = parseTrailers(textDecoder.decode(payload));
-        } else {
-            messages.push(payload.slice());
-        }
-    }
-    return { messages, trailers };
-}
-
-/** Parse an HTTP/1.1-style trailer block (`key: value` lines) into a lowercased map. */
-export function parseTrailers(block: string): Map<string, string> {
-    const map = new Map<string, string>();
-    for (const line of block.split(/\r?\n/)) {
-        if (line.length === 0) {
-            continue;
-        }
-        const idx = line.indexOf(':');
-        if (idx === -1) {
-            continue;
-        }
-        const key = line.slice(0, idx).trim().toLowerCase();
-        const value = line.slice(idx + 1).trim();
-        map.set(key, value);
-    }
-    return map;
-}
-
-/** Encode a UTF-8 string to bytes (request framing + test helper surface). */
-export function utf8(value: string): Uint8Array {
-    return textEncoder.encode(value);
+    const query = params.toString();
+    return query.length > 0 ? `?${query}` : '';
 }

@@ -38,11 +38,44 @@ pub mod error_codes {
     /// `error.album.not_available`
     pub const ALBUM_NOT_AVAILABLE: &str = "error.album.not_available";
 
+    /// `error.album.unavailable`
+    pub const ALBUM_UNAVAILABLE: &str = "error.album.unavailable";
+
+    /// `error.album.upgrade_in_flight`
+    pub const ALBUM_UPGRADE_IN_FLIGHT: &str = "error.album.upgrade_in_flight";
+
+    /// `error.album.upgrade_malformed`
+    pub const ALBUM_UPGRADE_MALFORMED: &str = "error.album.upgrade_malformed";
+
+    /// `error.album.upgrade_not_found`
+    pub const ALBUM_UPGRADE_NOT_FOUND: &str = "error.album.upgrade_not_found";
+
+    /// `error.album.upgrade_proposer`
+    pub const ALBUM_UPGRADE_PROPOSER: &str = "error.album.upgrade_proposer";
+
+    /// `error.auth.account_locked`
+    pub const AUTH_ACCOUNT_LOCKED: &str = "error.auth.account_locked";
+
+    /// `error.auth.current_password_invalid`
+    pub const AUTH_CURRENT_PASSWORD_INVALID: &str = "error.auth.current_password_invalid";
+
     /// `error.auth.invalid_credentials`
     pub const AUTH_INVALID_CREDENTIALS: &str = "error.auth.invalid_credentials";
 
+    /// `error.auth.password_invalid`
+    pub const AUTH_PASSWORD_INVALID: &str = "error.auth.password_invalid";
+
+    /// `error.auth.profile_invalid`
+    pub const AUTH_PROFILE_INVALID: &str = "error.auth.profile_invalid";
+
+    /// `error.auth.profile_not_found`
+    pub const AUTH_PROFILE_NOT_FOUND: &str = "error.auth.profile_not_found";
+
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";
+
+    /// `error.auth.registration_invalid`
+    pub const AUTH_REGISTRATION_INVALID: &str = "error.auth.registration_invalid";
 
     /// `error.auth.revoke_proof_invalid`
     pub const AUTH_REVOKE_PROOF_INVALID: &str = "error.auth.revoke_proof_invalid";
@@ -50,11 +83,44 @@ pub mod error_codes {
     /// `error.auth.revoke_proof_required`
     pub const AUTH_REVOKE_PROOF_REQUIRED: &str = "error.auth.revoke_proof_required";
 
+    /// `error.auth.session_expired`
+    pub const AUTH_SESSION_EXPIRED: &str = "error.auth.session_expired";
+
+    /// `error.auth.session_not_found`
+    pub const AUTH_SESSION_NOT_FOUND: &str = "error.auth.session_not_found";
+
+    /// `error.auth.totp_already_active`
+    pub const AUTH_TOTP_ALREADY_ACTIVE: &str = "error.auth.totp_already_active";
+
+    /// `error.auth.totp_challenge_invalid`
+    pub const AUTH_TOTP_CHALLENGE_INVALID: &str = "error.auth.totp_challenge_invalid";
+
+    /// `error.auth.totp_invalid_code`
+    pub const AUTH_TOTP_INVALID_CODE: &str = "error.auth.totp_invalid_code";
+
+    /// `error.auth.totp_not_enrolled`
+    pub const AUTH_TOTP_NOT_ENROLLED: &str = "error.auth.totp_not_enrolled";
+
+    /// `error.auth.totp_not_pending`
+    pub const AUTH_TOTP_NOT_PENDING: &str = "error.auth.totp_not_pending";
+
+    /// `error.auth.unavailable`
+    pub const AUTH_UNAVAILABLE: &str = "error.auth.unavailable";
+
     /// `error.auth.user_already_exists`
     pub const AUTH_USER_ALREADY_EXISTS: &str = "error.auth.user_already_exists";
 
+    /// `error.blob.gone`
+    pub const BLOB_GONE: &str = "error.blob.gone";
+
+    /// `error.blob.not_found`
+    pub const BLOB_NOT_FOUND: &str = "error.blob.not_found";
+
     /// `error.blob.pending_upload`
     pub const BLOB_PENDING_UPLOAD: &str = "error.blob.pending_upload";
+
+    /// `error.blob.unavailable`
+    pub const BLOB_UNAVAILABLE: &str = "error.blob.unavailable";
 
     /// `error.client.unclassified`
     pub const CLIENT_UNCLASSIFIED: &str = "error.client.unclassified";
@@ -62,17 +128,47 @@ pub mod error_codes {
     /// `error.client.unexpected`
     pub const CLIENT_UNEXPECTED: &str = "error.client.unexpected";
 
+    /// `error.directory.identity_mismatch`
+    pub const DIRECTORY_IDENTITY_MISMATCH: &str = "error.directory.identity_mismatch";
+
     /// `error.directory.malformed`
     pub const DIRECTORY_MALFORMED: &str = "error.directory.malformed";
+
+    /// `error.directory.not_published`
+    pub const DIRECTORY_NOT_PUBLISHED: &str = "error.directory.not_published";
+
+    /// `error.directory.unavailable`
+    pub const DIRECTORY_UNAVAILABLE: &str = "error.directory.unavailable";
+
+    /// `error.directory.unsupported_media_type`
+    pub const DIRECTORY_UNSUPPORTED_MEDIA_TYPE: &str = "error.directory.unsupported_media_type";
 
     /// `error.directory.version_conflict`
     pub const DIRECTORY_VERSION_CONFLICT: &str = "error.directory.version_conflict";
 
+    /// `error.drop.adoption_refused`
+    pub const DROP_ADOPTION_REFUSED: &str = "error.drop.adoption_refused";
+
     /// `error.drop.cap_exceeded`
     pub const DROP_CAP_EXCEEDED: &str = "error.drop.cap_exceeded";
 
+    /// `error.drop.cap_exhausted`
+    pub const DROP_CAP_EXHAUSTED: &str = "error.drop.cap_exhausted";
+
+    /// `error.drop.chunk_refused`
+    pub const DROP_CHUNK_REFUSED: &str = "error.drop.chunk_refused";
+
+    /// `error.drop.file_too_large`
+    pub const DROP_FILE_TOO_LARGE: &str = "error.drop.file_too_large";
+
+    /// `error.drop.malformed`
+    pub const DROP_MALFORMED: &str = "error.drop.malformed";
+
     /// `error.drop.malformed_descriptor`
     pub const DROP_MALFORMED_DESCRIPTOR: &str = "error.drop.malformed_descriptor";
+
+    /// `error.drop.not_found`
+    pub const DROP_NOT_FOUND: &str = "error.drop.not_found";
 
     /// `error.drop.not_in_inbox`
     pub const DROP_NOT_IN_INBOX: &str = "error.drop.not_in_inbox";
@@ -82,6 +178,9 @@ pub mod error_codes {
 
     /// `error.drop.rate_limited`
     pub const DROP_RATE_LIMITED: &str = "error.drop.rate_limited";
+
+    /// `error.drop.unavailable`
+    pub const DROP_UNAVAILABLE: &str = "error.drop.unavailable";
 
     /// `error.enrollment.channel_not_found`
     pub const ENROLLMENT_CHANNEL_NOT_FOUND: &str = "error.enrollment.channel_not_found";
@@ -101,6 +200,12 @@ pub mod error_codes {
     /// `error.escrow.malformed`
     pub const ESCROW_MALFORMED: &str = "error.escrow.malformed";
 
+    /// `error.escrow.not_stored`
+    pub const ESCROW_NOT_STORED: &str = "error.escrow.not_stored";
+
+    /// `error.escrow.unavailable`
+    pub const ESCROW_UNAVAILABLE: &str = "error.escrow.unavailable";
+
     /// `error.federation.audience_mismatch`
     pub const FEDERATION_AUDIENCE_MISMATCH: &str = "error.federation.audience_mismatch";
 
@@ -119,6 +224,9 @@ pub mod error_codes {
     /// `error.federation.rate_budget_exceeded`
     pub const FEDERATION_RATE_BUDGET_EXCEEDED: &str = "error.federation.rate_budget_exceeded";
 
+    /// `error.federation.revocations_unavailable`
+    pub const FEDERATION_REVOCATIONS_UNAVAILABLE: &str = "error.federation.revocations_unavailable";
+
     /// `error.federation.scope_insufficient`
     pub const FEDERATION_SCOPE_INSUFFICIENT: &str = "error.federation.scope_insufficient";
 
@@ -134,6 +242,9 @@ pub mod error_codes {
     /// `error.moderation.server_blocked`
     pub const MODERATION_SERVER_BLOCKED: &str = "error.moderation.server_blocked";
 
+    /// `error.moderation.unavailable`
+    pub const MODERATION_UNAVAILABLE: &str = "error.moderation.unavailable";
+
     /// `error.protocol.version_unsupported`
     pub const PROTOCOL_VERSION_UNSUPPORTED: &str = "error.protocol.version_unsupported";
 
@@ -146,8 +257,47 @@ pub mod error_codes {
     /// `error.quota.peer_budget_exceeded`
     pub const QUOTA_PEER_BUDGET_EXCEEDED: &str = "error.quota.peer_budget_exceeded";
 
+    /// `error.quota.unavailable`
+    pub const QUOTA_UNAVAILABLE: &str = "error.quota.unavailable";
+
+    /// `error.request.failed`
+    pub const REQUEST_FAILED: &str = "error.request.failed";
+
+    /// `error.request.forbidden`
+    pub const REQUEST_FORBIDDEN: &str = "error.request.forbidden";
+
+    /// `error.request.malformed`
+    pub const REQUEST_MALFORMED: &str = "error.request.malformed";
+
+    /// `error.request.method_not_allowed`
+    pub const REQUEST_METHOD_NOT_ALLOWED: &str = "error.request.method_not_allowed";
+
+    /// `error.request.not_acceptable`
+    pub const REQUEST_NOT_ACCEPTABLE: &str = "error.request.not_acceptable";
+
+    /// `error.request.too_large`
+    pub const REQUEST_TOO_LARGE: &str = "error.request.too_large";
+
+    /// `error.request.unauthenticated`
+    pub const REQUEST_UNAUTHENTICATED: &str = "error.request.unauthenticated";
+
+    /// `error.request.unprocessable`
+    pub const REQUEST_UNPROCESSABLE: &str = "error.request.unprocessable";
+
+    /// `error.request.unsupported_media_type`
+    pub const REQUEST_UNSUPPORTED_MEDIA_TYPE: &str = "error.request.unsupported_media_type";
+
+    /// `error.share.malformed`
+    pub const SHARE_MALFORMED: &str = "error.share.malformed";
+
     /// `error.share.rate_limited`
     pub const SHARE_RATE_LIMITED: &str = "error.share.rate_limited";
+
+    /// `error.share.unavailable`
+    pub const SHARE_UNAVAILABLE: &str = "error.share.unavailable";
+
+    /// `error.storage.asset_not_found`
+    pub const STORAGE_ASSET_NOT_FOUND: &str = "error.storage.asset_not_found";
 
     /// `error.storage.deep_rate_limited`
     pub const STORAGE_DEEP_RATE_LIMITED: &str = "error.storage.deep_rate_limited";
@@ -155,17 +305,26 @@ pub mod error_codes {
     /// `error.storage.invalid_request`
     pub const STORAGE_INVALID_REQUEST: &str = "error.storage.invalid_request";
 
+    /// `error.storage.unavailable`
+    pub const STORAGE_UNAVAILABLE: &str = "error.storage.unavailable";
+
     /// `error.sync.cursor_invalid`
     pub const SYNC_CURSOR_INVALID: &str = "error.sync.cursor_invalid";
 
     /// `error.sync.unauthenticated`
     pub const SYNC_UNAUTHENTICATED: &str = "error.sync.unauthenticated";
 
+    /// `error.sync.unavailable`
+    pub const SYNC_UNAVAILABLE: &str = "error.sync.unavailable";
+
     /// `error.unexpected`
     pub const UNEXPECTED: &str = "error.unexpected";
 
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";
+
+    /// `error.upload.album_quiescing`
+    pub const UPLOAD_ALBUM_QUIESCING: &str = "error.upload.album_quiescing";
 
     /// `error.upload.amk_regressed`
     pub const UPLOAD_AMK_REGRESSED: &str = "error.upload.amk_regressed";
@@ -218,6 +377,9 @@ pub mod error_codes {
     /// `error.upload.invalid_size`
     pub const UPLOAD_INVALID_SIZE: &str = "error.upload.invalid_size";
 
+    /// `error.upload.invalid_status_filter`
+    pub const UPLOAD_INVALID_STATUS_FILTER: &str = "error.upload.invalid_status_filter";
+
     /// `error.upload.malformed_request`
     pub const UPLOAD_MALFORMED_REQUEST: &str = "error.upload.malformed_request";
 
@@ -236,6 +398,9 @@ pub mod error_codes {
     /// `error.upload.receipt_not_available`
     pub const UPLOAD_RECEIPT_NOT_AVAILABLE: &str = "error.upload.receipt_not_available";
 
+    /// `error.upload.replace_incomplete`
+    pub const UPLOAD_REPLACE_INCOMPLETE: &str = "error.upload.replace_incomplete";
+
     /// `error.upload.session_not_active`
     pub const UPLOAD_SESSION_NOT_ACTIVE: &str = "error.upload.session_not_active";
 
@@ -253,6 +418,9 @@ pub mod error_codes {
 
     /// `error.upload.timestamp_out_of_range`
     pub const UPLOAD_TIMESTAMP_OUT_OF_RANGE: &str = "error.upload.timestamp_out_of_range";
+
+    /// `error.upload.unavailable`
+    pub const UPLOAD_UNAVAILABLE: &str = "error.upload.unavailable";
 
     /// `error.upload.unknown_crypto_suite`
     pub const UPLOAD_UNKNOWN_CRYPTO_SUITE: &str = "error.upload.unknown_crypto_suite";

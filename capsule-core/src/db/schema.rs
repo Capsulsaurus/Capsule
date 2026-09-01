@@ -1,8 +1,16 @@
-/// SQLite catalog schema version.
+/// SQLite catalog schema version, stamped into the database's `PRAGMA user_version`.
+///
+/// This DDL is the shape of a **fresh** catalog only. An existing catalog is brought here by
+/// the forward-only stepwise migrator in [`crate::db::migrate`], which also carries the
+/// authoritative version-by-version history (reconstructed from git; the list below is a
+/// summary and the migrator's table is the SSoT where they disagree).
 ///
 /// v2: `assets.hash_blake3` renamed to `hash_sha256` — the project moved from
 ///     BLAKE3 to SHA-256 (hardware-accelerated on Apple and modern CPUs).
 ///     Added the client-side `albums` table for user-defined album metadata.
+///     (The rename actually shipped *inside* v1 and `albums` arrived from a branch that had
+///     independently stamped 2 — see [`crate::db::migrate`]; both steps are conditional
+///     because of it.)
 /// v3: added the `embeddings` provenance companion table (S-H1) — the per-task
 ///     `sqlite-vec` `vec0` tables are created at runtime from the model registry
 ///     (their vector dimension is registry-declared), so they are not in this DDL.
@@ -10,6 +18,9 @@
 ///     LWW register. Hidden assets are excluded from every default view and are reachable
 ///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
 ///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.
+///
+/// **Bumping this constant requires appending a step to [`crate::db::migrate::STEPS`]** —
+/// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
 pub const SCHEMA_VERSION: u32 = 4;
 
 pub const DDL: &str = r"

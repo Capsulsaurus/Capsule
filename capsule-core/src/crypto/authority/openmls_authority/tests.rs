@@ -57,6 +57,7 @@ impl Device {
             devices: vec![DeviceEntry {
                 device_id: self.device_id,
                 dsk_public: self.dsk.verifying_key(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],
@@ -100,6 +101,7 @@ fn directory_for(user: Uuid, device_id: Uuid, device: &HybridSigningKey) -> Devi
         devices: vec![DeviceEntry {
             device_id,
             dsk_public: device.verifying_key(),
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],
@@ -128,6 +130,7 @@ fn create_manifest_core(album: Uuid, epoch: AmkVersion, user: Uuid, device: Uuid
         timestamp: "2026-05-31T12:00:00Z".into(),
         action: Action::Create,
         prior_provenance_hash: None,
+        upgraded_from: None,
         retention_until: None,
     }
 }
@@ -539,6 +542,7 @@ fn leaf_binding_is_enforced_against_the_device_directory() {
         devices: vec![DeviceEntry {
             device_id: bob.device_id,
             dsk_public: wrong_dsk.verifying_key(), // not the key that signed the binding
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],
@@ -1098,6 +1102,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
         devices: vec![DeviceEntry {
             device_id: admin_dev.device_id,
             dsk_public: wrong_dsk.verifying_key(),
+            dek_public: None,
             added_at: "2026-05-30T00:00:00Z".into(),
             revoked_at: None,
         }],
@@ -1105,7 +1110,7 @@ fn upgrade_intent_signature_and_single_flight_are_enforced() {
     .sign(&HybridSigningKey::from_seed_bytes(&[7; 32], &[7; 32]));
     assert!(matches!(
         proposal.signed_intent.verify(&tampered_dir),
-        Err(OpenMlsAuthorityError::Upgrade(_))
+        Err(crate::crypto::upgrade::UpgradeError::Proposer(_))
     ));
     assert!(
         proposal

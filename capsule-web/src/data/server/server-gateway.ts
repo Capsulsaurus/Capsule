@@ -11,7 +11,7 @@
  * album ids, per-album membership and counts, the derived awaiting-original state, blob
  * content addresses, and change recency (`sync_seq`). What lives in encrypted metadata and
  * is therefore ABSENT: display titles, cover art, capture dates, pixel dimensions, LQIP
- * thumbhashes, locations, durations, and any renderable imagery (blobs are ciphertext with
+ * placeholders, locations, durations, and any renderable imagery (blobs are ciphertext with
  * no in-browser decrypt path yet — gateway.ts defers that wasm boundary). Those display
  * fields are filled with safe placeholders and documented in the S-D6 report; they light up
  * once a wasm decode/verify boundary lands beneath this gateway. S-G1 (retirement of the
@@ -30,21 +30,21 @@ import {
     SyncStore,
 } from './sync/store';
 import {
-    GrpcWebSyncTransport,
+    RestSyncTransport,
     type SyncTransport,
     SyncTransportError,
 } from './sync/transport';
 
-const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';
 /**
- * The deployed sync feed base — the gRPC service path is appended by the transport.
+ * The API origin. The transport appends `/v1/sync`.
  *
- * The service mounts at the server ROOT, not under `/v1`: gRPC addresses a method by its
- * fully-qualified path, and native tonic clients discard any path on the endpoint URI, so a
- * prefixed mount is unreachable from them. Versioning rides the proto package
- * (`capsule.sync.v1`), not the URL.
+ * It used to be the server *root* rather than a versioned prefix, because gRPC addresses a
+ * method by its fully-qualified path and native tonic clients discard any path on the endpoint
+ * URI — so a prefixed mount was unreachable from them, and versioning rode the proto package
+ * (`capsule.sync.v1`) instead of the URL. With the feed on REST (`S-C2`) the version is back in
+ * the path, where a person reading a request log can see it.
  */
-const SYNC_BASE = API_BASE;
+const API_BASE = import.meta.env.PUBLIC_API_URL ?? 'http://localhost:3000';
 /** Page size requested from the feed (the server clamps to its own max). */
 const PAGE_SIZE = 256;
 /** Bound the initial catch-up so a hostile/huge feed cannot spin forever in one pass. */
@@ -143,7 +143,7 @@ export class ServerGateway implements CapsuleGateway {
         } catch (err) {
             if (err instanceof SyncTransportError) {
                 console.warn(
-                    `sync feed unavailable (gRPC ${err.grpcStatus}${err.errorCode ? ` / ${err.errorCode}` : ''}): ${err.message}`,
+                    `sync feed unavailable (HTTP ${err.httpStatus}${err.errorCode ? ` / ${err.errorCode}` : ''}): ${err.message}`,
                 );
                 return;
             }
@@ -170,8 +170,6 @@ function toAsset(record: AssetRecord): Asset {
         // Pixel dimensions live in encrypted metadata; 1×1 keeps justified layout finite.
         width: 1,
         height: 1,
-        // LQIP thumbhash lives in the encrypted metadata blob — absent key-free.
-        thumbhash: '',
         pending: record.originalHeld ? undefined : true,
     };
 }
@@ -189,13 +187,19 @@ function toAlbum(summary: AlbumSummary): Album {
     };
 }
 
-/** Best-effort media kind from the (envelope-visible) blob format strings. */
-function deriveType(record: AssetRecord): Asset['type'] {
-    const formats = [
-        record.original?.format ?? '',
-        ...record.derivatives.map((d) => d.format),
-    ];
-    return formats.some((f) => f.startsWith('video/')) ? 'video' : 'image';
+/**
+ * The media kind, which a key-free client cannot know.
+ *
+ * This used to guess from the gRPC feed's per-blob `format` string. The REST feed does not carry
+ * one, and its absence is the point rather than an omission: a MIME type is plaintext media
+ * metadata about an encrypted blob, and a key-free server holding it is exactly what the upload
+ * envelope contract forbids. So the guess is gone with the field it read.
+ *
+ * Everything therefore renders as the neutral shell until a key-holding client decrypts the
+ * metadata blob and says otherwise. A wrong badge on a video is a worse answer than no badge.
+ */
+function deriveType(_record: AssetRecord): Asset['type'] {
+    return 'image';
 }
 
 /** Parse an album protocol pin (`YYYY-MM-DD`) to a UTC date; epoch on a malformed pin. */
@@ -205,15 +209,15 @@ function protocolDate(protocolVersion: string): Date {
 }
 
 /**
- * Build the browser-backed gateway: gRPC-web transport → in-memory store → IndexedDB
+ * Build the browser-backed gateway: REST transport → in-memory store → IndexedDB
  * persistence, with the bearer token pulled from the auth token store. Called from
  * `../index.ts`; all DOM/network access is lazy, so import + construction are side-effect
  * free.
  */
 export function createBrowserServerGateway(): ServerGateway {
     return new ServerGateway({
-        transport: new GrpcWebSyncTransport({
-            baseUrl: SYNC_BASE,
+        transport: new RestSyncTransport({
+            baseUrl: API_BASE,
             protocol: CLIENT_MAX_PROTOCOL,
             accessToken: getAccessToken,
         }),

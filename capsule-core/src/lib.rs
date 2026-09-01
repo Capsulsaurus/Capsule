@@ -19,6 +19,14 @@ pub mod sharing;
 /// build-embedded git commit (S-D15). Always compiled: pure string formatting, no native deps.
 pub mod client_build;
 
+/// LQIP — the chromahash placeholder carried in the signed sidecar's `lqip` field (S-B14).
+/// Always compiled, and deliberately so: the placeholder is produced by the import pipeline,
+/// read by the apps through the uniffi FFI, and read by the browser through `capsule-wasm`, so
+/// there is exactly one implementation and every surface links it. `chromahash` has zero
+/// runtime dependencies and targets `wasm32-unknown-unknown`. The one `native`-gated part is
+/// [`lqip::sidecar`], because [`sidecar`] itself is.
+pub mod lqip;
+
 // ── Native surface (`native`, default) ──────────────────────────────────────
 // Everything below drives the on-device library, import, and lifecycle — it links SQLite,
 // the filesystem, and the media stack, none of which the browser sealing path needs. Gated
@@ -46,8 +54,6 @@ pub mod import;
 pub mod library;
 #[cfg(feature = "native")]
 pub mod lifecycle;
-#[cfg(feature = "media")]
-pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]
@@ -58,7 +64,11 @@ pub mod models;
 pub mod sidecar;
 #[cfg(feature = "native")]
 pub mod utils;
-#[cfg(feature = "native")]
+// Deliberately **not** `native`-gated: these are pure, key-less structural checks over
+// `crypto::{encryption, hash, primitives, provenance}` and nothing else. Gating them behind
+// `native` forced `capsule-server` — a key-free server that touches no SQLite and no MLS — to link
+// `rusqlite`, `sqlite-vec`, OpenMLS and libcrux in order to call the refuse-by-default invariants
+// it exists to enforce.
 pub mod validation;
 
 /// uniffi-generated bindings surface for Kotlin/Swift (`ffi` feature). The exported API is a

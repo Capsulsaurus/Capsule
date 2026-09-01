@@ -70,13 +70,17 @@ impl MockServer {
         let addr = listener.local_addr().unwrap();
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
+            // Connections live in a `JoinSet` owned by this task, so aborting it on drop aborts
+            // them too. Detached `tokio::spawn` tasks would outlive the abort holding their
+            // sockets — a leak `nextest` only reports under a loaded parallel run (`S-D27`).
+            let mut connections = tokio::task::JoinSet::new();
             loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => break,
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
                 };
+                while connections.try_join_next().is_some() {}
                 let handler = handler.clone();
-                tokio::spawn(async move { handle_conn(stream, handler).await });
+                connections.spawn(async move { handle_conn(stream, handler).await });
             }
         });
         MockServer { addr, handle }
@@ -126,10 +130,10 @@ where
     // Drain the declared body so the client's write completes cleanly.
     let mut content_length = 0usize;
     for line in lines {
-        if let Some((k, v)) = line.split_once(':') {
-            if k.trim().eq_ignore_ascii_case("content-length") {
-                content_length = v.trim().parse().unwrap_or(0);
-            }
+        if let Some((k, v)) = line.split_once(':')
+            && k.trim().eq_ignore_ascii_case("content-length")
+        {
+            content_length = v.trim().parse().unwrap_or(0);
         }
     }
     let mut body = buf[header_end + 4..].to_vec();

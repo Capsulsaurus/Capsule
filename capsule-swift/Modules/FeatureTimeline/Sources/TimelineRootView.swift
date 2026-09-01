@@ -120,14 +120,11 @@ public struct TimelineRootView: View {
                     levelPicker
                 }
             }
-            .confirmationDialog(
-                "Delete \(selectedIDs.count) Items?",
-                isPresented: $isDeleteConfirmPresented,
-                titleVisibility: .visible
+            .deleteSelectionConfirmation(
+                count: selectedIDs.count,
+                isPresented: $isDeleteConfirmPresented
             ) {
-                Button("Delete \(selectedIDs.count) Items", role: .destructive) {
-                    Task { await deleteSelected() }
-                }
+                Task { await deleteSelected() }
             }
             .confirmationDialog(
                 "app.add_to_album.title",
@@ -312,7 +309,12 @@ private extension TimelineRootView {
     }
 
     var selectionTitle: String {
-        selectedIDs.isEmpty ? "Select Items" : "\(selectedIDs.count) Selected"
+        selectedIDs.isEmpty
+            ? String(localized: "app.timeline.selection.empty")
+            : String(
+                localized: "app.timeline.selection.count",
+                defaultValue: "\(selectedIDs.count) Selected"
+            )
     }
 
     var selectionActionBar: some View {

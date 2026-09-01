@@ -66,7 +66,14 @@ impl MockResponse {
     }
 }
 
-/// A dropped mock server aborts its accept loop.
+/// A dropped mock server aborts its accept loop **and every connection it spawned**.
+///
+/// The second half is the part that is easy to get wrong and was (slice `S-D27`). Aborting only
+/// the accept loop leaves detached per-connection tasks running with their sockets open, which
+/// `nextest` reports as a leaked test — but only under a loaded parallel run, so it does not
+/// reproduce when anyone investigates it directly. Connections therefore live in a `JoinSet` owned
+/// by the accept task: aborting that task drops the set, and dropping a `JoinSet` aborts everything
+/// in it.
 pub(crate) struct MockServer {
     addr: SocketAddr,
     handle: tokio::task::JoinHandle<()>,
@@ -87,13 +94,16 @@ impl MockServer {
         let addr = listener.local_addr().unwrap();
         let handler = Arc::new(handler);
         let handle = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
             loop {
-                let (stream, _) = match listener.accept().await {
-                    Ok(pair) => pair,
-                    Err(_) => break,
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
                 };
+                // Reap finished connections so a long test does not accumulate handles. This is
+                // bookkeeping only — the abort-on-drop above is what bounds their lifetime.
+                while connections.try_join_next().is_some() {}
                 let handler = handler.clone();
-                tokio::spawn(async move {
+                connections.spawn(async move {
                     handle_conn(stream, handler).await;
                 });
             }

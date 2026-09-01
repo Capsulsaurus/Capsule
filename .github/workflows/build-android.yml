@@ -69,12 +69,6 @@ jobs:
         if: steps.ndk.outputs.ndk-path != ''
         run: echo "ANDROID_NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
 
-      # capsule-sdk (built by gen-bindings) links protobuf-generated code.
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Install Rust toolchain
         run: |
           rustup toolchain install

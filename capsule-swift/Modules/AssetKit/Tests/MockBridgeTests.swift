@@ -308,43 +308,6 @@ struct PortBackedChangeTests {
     }
 }
 
-// MARK: - Trash bridging
-
-@Suite("Port-backed trash provider")
-struct PortBackedTrashTests {
-    @Test("the trash slice lists only deleted assets, and restore returns them")
-    func listsAndRestores() async throws {
-        let assets = BridgeFixtures.libraryAssets(count: 3)
-        let library = FakeLibrary(assets: assets)
-        let trash = PortBackedTrashProvider(organize: library, library: library)
-
-        let empty = try await trash.trashedAssets()
-        #expect(empty.isEmpty)
-
-        try await library.moveToTrash([assets[0].id], retentionDays: nil)
-        let trashed = try await trash.trashedAssets()
-        #expect(trashed.map(\.id) == [assets[0].id])
-
-        try await trash.restore(assets[0].id)
-        let restored = try await trash.trashedAssets()
-        #expect(restored.isEmpty)
-    }
-
-    @Test("purge removes the asset outright")
-    func purges() async throws {
-        let assets = BridgeFixtures.libraryAssets(count: 2)
-        let library = FakeLibrary(assets: assets)
-        let trash = PortBackedTrashProvider(organize: library, library: library)
-
-        try await library.moveToTrash([assets[0].id], retentionDays: nil)
-        try await trash.purge(assets[0].id)
-        let remaining = try await trash.trashedAssets()
-        #expect(remaining.isEmpty)
-        let gone = try await library.asset(for: assets[0].id)
-        #expect(gone == nil)
-    }
-}
-
 // MARK: - Helpers
 
 /// Wait until the adapter's relay has actually registered on the library's

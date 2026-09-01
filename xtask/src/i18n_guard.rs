@@ -20,10 +20,53 @@
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
 //!   A migrated call passes a catalog KEY (`Text("app.settings.title")`); a literal
-//!   (`Text("Settings")`) is not a key, so it fails.
+//!   (`Text("Settings")`) is not a key, so it fails. Slice `S-I4` added two more Swift
+//!   detectors: *interpolated* literals in those same positions (`Text("Delete \(n)")`),
+//!   which `S-I1` had to skip because they had no catalog mechanism yet, and the key
+//!   argument of `String(localized:)`, the mechanism for strings outside a
+//!   `LocalizedStringKey` position.
 //! - **Compose** (`capsule-android/src/**/*.kt`): the string argument of `Text("…")`
 //!   and `contentDescription = "…"`. Migrated code uses
 //!   `stringResource(R.string.…)`; a bare literal is not a key, so it fails.
+//! - **CLI** (`capsule-cli/src/**/*.rs`, slice `S-I5`): string literals anywhere in the
+//!   argument list of a terminal-output or error macro. See the rule below — the CLI is
+//!   the one Rust surface that renders prose to a human, and it had never been scanned,
+//!   which is how the entire `capsule import` arm printed hardcoded English for months.
+//!
+//! ## What counts as user-facing in a Rust binary
+//!
+//! A Rust crate mixes three audiences in one file, so "is it a string literal?" is the
+//! wrong question. The rule is **who reads it**:
+//!
+//! 1. **The user reads it → translatable.** Two syntactic positions carry prose to a
+//!    terminal, and both are scanned:
+//!    - `print!` / `println!` / `eprint!` / `eprintln!` — anything written to stdout/stderr.
+//!      Every literal in the argument list is examined, not just the format string: the
+//!      migrated shape is `println!("{}", bundle.format(keys::X, &[]))`, so the prose in
+//!      unmigrated code hides in the *arguments* (`println!("{}", "Nothing to import.")`)
+//!      as often as in the format string.
+//!    - `eyre!` / `bail!` **in this binary** — the CLI's error path ends at `color_eyre`,
+//!      which prints the message to the user's terminal. A CLI's printed error is user
+//!      output, not a developer diagnostic.
+//! 2. **An operator reads it → not translatable.** `tracing::{trace,debug,info,warn,error}!`
+//!    is telemetry: structured, queryable, and grepped by whoever is holding the pager. The
+//!    i18n design doc makes the same call for the server ("the English detail stays
+//!    English"), so log messages are deliberately *not* scanned.
+//! 3. **A developer reads it → not translatable.** `#[error("…")]` on a `thiserror` type in
+//!    a *library* crate is a `Display` impl consumed by callers, and `#[cfg(test)]` modules
+//!    are not shipped. Test modules are cut before scanning; library error types are simply
+//!    outside the scanned root.
+//!
+//! Two carve-outs keep the rule at zero false positives without weakening it: a literal
+//! whose text is empty once escapes and `{…}` placeholders are removed is punctuation or a
+//! format skeleton, not prose (`println!("{}", …)`, `println!("\n  {} {}", …)`); and a
+//! literal in the ICU **argument-name** position (`("email", Value::Str(&email))`) names a
+//! placeholder rather than displaying it.
+//!
+//! **Known blind spot:** clap's `--help` output. Usage text comes from doc comments and
+//! `#[arg(...)]` attributes that clap renders itself, with no catalog mechanism to render
+//! a key through; localizing it is a separate slice, not something an allowlist entry per
+//! flag would express honestly. It is recorded here rather than silently omitted.
 //!
 //! The Swift/Compose surfaces are anchored to the catalog: a captured string passes
 //! only if it exactly matches a key in `locales/en.json`. The web surface has no
@@ -103,6 +146,16 @@ pub(crate) fn run(root: &Path) -> Result<()> {
         &|text| keys.contains(text),
         &mut violations,
     )?;
+    scan_surface(
+        root,
+        &["capsule-cli/src"],
+        "rs",
+        &|content| rust_cli_findings(content),
+        // A migrated CLI call site passes `keys::SOME_CONST`, never a quoted key, so a
+        // captured literal is a violation without consulting the catalog (as for web).
+        &|_text| false,
+        &mut violations,
+    )?;
 
     violations.retain(|v| !allowlist.contains(&(v.file.clone(), v.text.clone())));
 
@@ -111,7 +164,9 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     check_swift_error_codes(root, &keys)?;
 
     if violations.is_empty() {
-        println!("i18n-guard: no hardcoded user-facing literals found across web/swift/compose.");
+        println!(
+            "i18n-guard: no hardcoded user-facing literals found across web/swift/compose/cli."
+        );
         return Ok(());
     }
 
@@ -251,8 +306,19 @@ fn normalize_ws(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Detect string-literal arguments to user-facing SwiftUI APIs.
+/// Detect hardcoded user-facing strings in a SwiftUI source: plain literals in a watched
+/// API position, *interpolated* literals in the same positions, and the key argument of
+/// `String(localized:)`.
 pub(crate) fn swift_findings(content: &str) -> Vec<Finding> {
+    let mut findings = swift_literal_findings(content);
+    findings.extend(swift_interpolation_findings(content));
+    findings.extend(swift_localized_key_findings(content));
+    findings.sort_by_key(|f| f.line);
+    findings
+}
+
+/// Detect string-literal arguments to user-facing SwiftUI APIs.
+fn swift_literal_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
     // `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
     // `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
@@ -382,6 +448,41 @@ fn brace_body(content: &str, open: usize) -> Option<&str> {
     None
 }
 
+/// Detect *interpolated* literals in the same watched positions — `Text("Delete \(n)")`.
+///
+/// Slice `S-I1` had to skip these: with no way to pass ICU arguments from a catalog key,
+/// an interpolated string had nowhere to go, so [`swift_literal_findings`]'s `[^"\\]*`
+/// deliberately walks past a `\(`. Slice `S-I4` gave them a mechanism
+/// (`String(localized:defaultValue:)` against an ICU catalog message), so the blind spot
+/// closes. Every hit is a violation without consulting the catalog: a key can never
+/// contain an interpolation, and a migrated call site passes `String(...)`, not a literal.
+fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(
+            r#"(?:^|[^A-Za-z0-9_])(?:Text|Label|Button|Section|Toggle|navigationTitle|accessibilityLabel|accessibilityHint|alert|confirmationDialog)\(\s*"([^"]*\\\([^"]*)""#,
+        )
+        .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-interpolation")
+}
+
+/// Detect the key argument of `String(localized:)`, the mechanism outside SwiftUI's
+/// `LocalizedStringKey` positions (`LAContext` reasons, view-model strings, enum labels).
+///
+/// The capture is the *key*, checked against the catalog by the runner, so
+/// `String(localized: "Photos")` fails while `String(localized: "app.media.photo")`
+/// passes. The `defaultValue:` argument is deliberately not captured — it is the English
+/// source text the ICU arguments hang off, and is expected to be a literal.
+fn swift_localized_key_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"String\(\s*localized:\s*"([^"\\]*[A-Za-z][^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-localized-key")
+}
+
 /// Detect string-literal arguments to user-facing Compose APIs.
 pub(crate) fn kotlin_findings(content: &str) -> Vec<Finding> {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -392,6 +493,231 @@ pub(crate) fn kotlin_findings(content: &str) -> Vec<Finding> {
             .expect("static regex is valid")
     });
     matched_findings(content, re, "compose-literal")
+}
+
+/// Macros whose arguments are written to the user's terminal.
+const RUST_OUTPUT_MACROS: &[&str] = &["print", "println", "eprint", "eprintln"];
+
+/// Macros that build the CLI's *printed* error message. `color_eyre` renders these to
+/// stderr as the process's failure output, so they are user-facing, not diagnostics.
+const RUST_ERROR_MACROS: &[&str] = &["eyre", "bail"];
+
+/// Detect hardcoded user-facing strings in a `capsule-cli` Rust source.
+///
+/// See the module doc for the audience rule. In short: every string literal in the
+/// argument list of a [`RUST_OUTPUT_MACROS`] or [`RUST_ERROR_MACROS`] invocation, minus
+/// the two carve-outs ([`is_prose`] and [`is_icu_argument_name`]). `tracing::*!` is
+/// deliberately absent from both lists.
+pub(crate) fn rust_cli_findings(content: &str) -> Vec<Finding> {
+    let source = strip_test_modules(content);
+    let mut findings = Vec::new();
+    for (open, kind) in rust_macro_calls(source) {
+        for (start, end) in macro_string_literals(source, open) {
+            let text = &source[start..end];
+            if !is_prose(text) || is_icu_argument_name(source, start, end) {
+                continue;
+            }
+            findings.push(Finding {
+                line: line_of(source, start),
+                // Rust literals wrap across lines with a trailing `\`; collapsing
+                // whitespace keeps a finding on one line so it is allowlistable.
+                text: normalize_ws(text),
+                kind,
+            });
+        }
+    }
+    findings.sort_by_key(|f| f.line);
+    findings
+}
+
+/// Cut the source at the first `#[cfg(test)]` at column 0. Test modules live last in this
+/// tree's Rust files and their strings ship to nobody.
+fn strip_test_modules(content: &str) -> &str {
+    match content.find("\n#[cfg(test)]") {
+        Some(i) => &content[..i],
+        None => content,
+    }
+}
+
+/// Locate watched macro invocations: `(offset_of_open_paren, kind)`.
+///
+/// The `!` is what separates a macro from a same-named function, and the leading
+/// non-identifier byte keeps `my_println!` and `capsule::eyre!`-style suffixes out.
+fn rust_macro_calls(content: &str) -> Vec<(usize, &'static str)> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?:^|[^A-Za-z0-9_])(print|println|eprint|eprintln|eyre|bail)!\s*\(")
+            .expect("static regex is valid")
+    });
+    let mut calls = Vec::new();
+    for caps in re.captures_iter(content) {
+        let name = caps.get(1).expect("group 1 exists");
+        let whole = caps.get(0).expect("group 0 exists");
+        let kind = if RUST_OUTPUT_MACROS.contains(&name.as_str()) {
+            "cli-print"
+        } else if RUST_ERROR_MACROS.contains(&name.as_str()) {
+            "cli-error"
+        } else {
+            continue;
+        };
+        // The match ends on the `(` itself.
+        calls.push((whole.end() - 1, kind));
+    }
+    calls
+}
+
+/// Collect `(start, end)` byte ranges of the *contents* of every string literal inside the
+/// argument list whose opening `(` sits at `open`, including literals nested in an inner
+/// call such as `format!(…)`.
+///
+/// This is a small lexer rather than a regex because finding the matching `)` requires
+/// knowing which brackets are inside a string. It understands ordinary and raw string
+/// literals, char literals (so a `'}'` cannot unbalance the scan), lifetimes, and comments.
+fn macro_string_literals(content: &str, open: usize) -> Vec<(usize, usize)> {
+    let b = content.as_bytes();
+    let mut literals = Vec::new();
+    let mut depth = 1usize;
+    let mut i = open + 1;
+    while i < b.len() && depth > 0 {
+        match b[i] {
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                i += 1;
+            }
+            b'"' => {
+                let start = i + 1;
+                let mut j = start;
+                while j < b.len() && b[j] != b'"' {
+                    j += if b[j] == b'\\' { 2 } else { 1 };
+                }
+                let end = j.min(b.len());
+                literals.push((start, end));
+                i = end + 1;
+            }
+            b'r' if matches!(b.get(i + 1), Some(b'"' | b'#'))
+                && (i == 0 || !is_ident_byte(b[i - 1])) =>
+            {
+                match raw_string_literal(b, i) {
+                    Some((start, end, next)) => {
+                        literals.push((start, end));
+                        i = next;
+                    }
+                    None => i += 1,
+                }
+            }
+            b'\'' => i += char_literal_len(b, i),
+            b'/' if b.get(i + 1) == Some(&b'/') => {
+                i = b[i..]
+                    .iter()
+                    .position(|&c| c == b'\n')
+                    .map_or(b.len(), |n| i + n + 1);
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = content[i + 2..]
+                    .find("*/")
+                    .map_or(b.len(), |n| i + 2 + n + 2);
+            }
+            _ => i += 1,
+        }
+    }
+    literals
+}
+
+fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Parse a raw string starting at `i` (`r`, `r#"`, `r##"`, …), returning the content range
+/// and the offset just past the closing delimiter.
+fn raw_string_literal(b: &[u8], i: usize) -> Option<(usize, usize, usize)> {
+    let mut hashes = 0usize;
+    let mut j = i + 1;
+    while b.get(j) == Some(&b'#') {
+        hashes += 1;
+        j += 1;
+    }
+    if b.get(j) != Some(&b'"') {
+        return None;
+    }
+    let start = j + 1;
+    let mut k = start;
+    while k < b.len() {
+        if b[k] == b'"'
+            && b[k + 1..]
+                .iter()
+                .take(hashes)
+                .filter(|&&c| c == b'#')
+                .count()
+                == hashes
+        {
+            return Some((start, k, k + 1 + hashes));
+        }
+        k += 1;
+    }
+    Some((start, b.len(), b.len()))
+}
+
+/// Bytes to skip past a `'` at `i`: a char literal (`'a'`, `'\n'`) is consumed whole so its
+/// contents cannot unbalance the bracket scan; a lifetime (`'a`) advances by one.
+fn char_literal_len(b: &[u8], i: usize) -> usize {
+    if b.get(i + 1) == Some(&b'\\') {
+        // `'\n'`, `'\''`, … — the shortest form is four bytes.
+        if b.get(i + 3) == Some(&b'\'') {
+            return 4;
+        }
+    } else if b.get(i + 2) == Some(&b'\'') {
+        return 3;
+    }
+    1
+}
+
+/// Whether a literal's *source text* still says something once formatting is removed.
+///
+/// Escape sequences and `{…}` placeholders are stripped, then at least one ASCII letter
+/// must remain. This is what separates `"Nothing to import."` from `"{}"`, `"\n  {} {}"`,
+/// and `"{metadata:#?}"` — the last of which reads like prose only because a *variable
+/// name* sits inside the braces.
+fn is_prose(raw: &str) -> bool {
+    let mut unescaped = String::with_capacity(raw.len());
+    let mut chars = raw.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            chars.next();
+        } else {
+            unescaped.push(c);
+        }
+    }
+    let doubled = unescaped.replace("{{", "").replace("}}", "");
+    let mut depth = 0usize;
+    let mut visible = String::with_capacity(doubled.len());
+    for c in doubled.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth = depth.saturating_sub(1),
+            _ if depth == 0 => visible.push(c),
+            _ => {}
+        }
+    }
+    visible.chars().any(|c| c.is_ascii_alphabetic())
+}
+
+/// Whether the literal at `start..end` is an ICU **argument name** rather than displayed
+/// text — the `"email"` in `bundle.format(key, &[("email", Value::Str(&email))])`. The
+/// shape is exact: an opening `(` before it and `, Value::` after it.
+fn is_icu_argument_name(content: &str, start: usize, end: usize) -> bool {
+    let before = content[..start.saturating_sub(1)].trim_end();
+    if !before.ends_with('(') {
+        return false;
+    }
+    let after = content.get(end + 1..).unwrap_or("").trim_start();
+    let Some(rest) = after.strip_prefix(',') else {
+        return false;
+    };
+    rest.trim_start().starts_with("Value::")
 }
 
 fn matched_findings(content: &str, re: &Regex, kind: &'static str) -> Vec<Finding> {
@@ -642,13 +968,54 @@ mod tests {
     #[test]
     fn swift_ignores_helper_names_ending_in_a_watched_name() {
         // `barButton` ends in `Button` but is a custom helper taking an SF Symbol
-        // name — the word boundary keeps it out. Interpolations (`\(count)`) are a
-        // documented blind spot and must not match either.
+        // name — the word boundary keeps it out, for the interpolation detector as
+        // much as for the literal one.
         let src = r#"barButton("square.and.arrow.up", action: share)
             myText("not.matched")
-            Button("Delete \(count) Items", role: .destructive) {}
+            barButton("Delete \(count) Items", role: .destructive) {}
         "#;
         assert_eq!(swift_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_flags_an_interpolated_literal_in_a_watched_position() {
+        // The `S-I1` blind spot, closed by `S-I4`.
+        let src = r#"Text("Delete \(count) Items")
+            .confirmationDialog("Delete \(count) Items?", isPresented: $flag) {}
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&r"Delete \(count) Items"), "{t:?}");
+        assert!(t.contains(&r"Delete \(count) Items?"), "{t:?}");
+    }
+
+    #[test]
+    fn swift_ignores_a_migrated_interpolated_call_site() {
+        // The migrated shape passes `String(localized:defaultValue:)`, so the watched
+        // position holds no literal at all and the `defaultValue:` text is not captured.
+        let src = r#"Button(
+                String(
+                    localized: "app.timeline.delete_selected.confirm",
+                    defaultValue: "Delete \(count) Items"
+                ),
+                role: .destructive
+            ) {}
+        "#;
+        let f = swift_findings(src);
+        // Only the catalog key is captured; the runner then matches it against the catalog.
+        assert_eq!(texts(&f), vec!["app.timeline.delete_selected.confirm"]);
+    }
+
+    #[test]
+    fn swift_flags_a_string_localized_key_that_is_not_a_catalog_key() {
+        let src = r#"String(localized: "Photos")
+            String(localized: "app.media.photo")
+        "#;
+        let f = swift_findings(src);
+        let t = texts(&f);
+        // Both are captured; the runner keeps only the one that is not a catalog key.
+        assert!(t.contains(&"Photos"));
+        assert!(t.contains(&"app.media.photo"));
     }
 
     #[test]
@@ -703,6 +1070,173 @@ mod tests {
             }
         "#;
         assert!(swift_findings(src).is_empty());
+    }
+
+    #[test]
+    fn rust_flags_prose_in_every_print_macro() {
+        let src = r#"
+            println!("{}", "Nothing to import.".yellow());
+            print!("Enter a value: ");
+            eprintln!("Import failed");
+            eprint!("{}", "partial".red());
+        "#;
+        let f = rust_cli_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&"Nothing to import."), "{t:?}");
+        assert!(t.contains(&"Enter a value:"), "{t:?}");
+        assert!(t.contains(&"Import failed"), "{t:?}");
+        assert!(t.contains(&"partial"), "{t:?}");
+    }
+
+    #[test]
+    fn rust_flags_prose_in_the_format_string_and_in_the_arguments() {
+        // Unmigrated CLI code hides prose in both positions, so both are scanned.
+        let src = r#"
+            println!("  Name:            {}", cfg.library_name);
+            println!("  {} {}", "Status:".dimmed(), "Not logged in".red());
+        "#;
+        let f = rust_cli_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&"Name: {}"), "{t:?}");
+        assert!(t.contains(&"Status:"), "{t:?}");
+        assert!(t.contains(&"Not logged in"), "{t:?}");
+    }
+
+    #[test]
+    fn rust_flags_a_literal_nested_in_an_inner_format_call() {
+        let src = r#"println!("{}", format!("Error checking auth status: {e}").red());"#;
+        assert_eq!(
+            texts(&rust_cli_findings(src)),
+            vec!["Error checking auth status: {e}"]
+        );
+    }
+
+    #[test]
+    fn rust_flags_printed_errors_but_not_library_error_attributes() {
+        // `eyre!`/`bail!` in the binary end at `color_eyre`, which prints them to the
+        // user. `#[error(...)]` is a `Display` impl for developers.
+        let src = r#"
+            let x = plan(..).map_err(|e| eyre!("Planning failed: {e}"))?;
+            bail!("Library version mismatch. Upgrade required.");
+            #[error("workspace is sealed")]
+            SealedWorkspace,
+        "#;
+        let f = rust_cli_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&"Planning failed: {e}"), "{t:?}");
+        assert!(
+            t.contains(&"Library version mismatch. Upgrade required."),
+            "{t:?}"
+        );
+        assert!(!t.contains(&"workspace is sealed"), "{t:?}");
+    }
+
+    #[test]
+    fn rust_ignores_tracing_because_logs_are_operator_telemetry() {
+        let src = r#"
+            tracing::info!("import: source adapter extraction complete");
+            tracing::debug!(count = n, "planned the import");
+            tracing::warn!("the library lock is stale");
+            tracing::error!("failed to open the library: {e}");
+            tracing::trace!("Parsed CLI arguments: {:#?}", cli);
+        "#;
+        assert_eq!(rust_cli_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn rust_ignores_a_migrated_call_site() {
+        // The migrated shape: the format string is a skeleton, the prose comes from the
+        // catalog, and the only literal left is an ICU argument NAME.
+        let src = r#"
+            println!(
+                "{}",
+                bundle
+                    .format(keys::IMPORT_DONE, &[("imported", Value::Int(n))])
+                    .green()
+            );
+        "#;
+        assert_eq!(rust_cli_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn rust_ignores_format_skeletons_with_no_prose_left() {
+        let src = r#"
+            println!("{}", value);
+            println!("\n{} {}", a, b);
+            println!("{metadata:#?}");
+            println!("  {} {}", x, y);
+            println!("{{}}");
+            println!();
+        "#;
+        assert_eq!(rust_cli_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn rust_ignores_test_modules() {
+        let src = "println!(\"Shipped prose\");\n#[cfg(test)]\nmod tests {\n    println!(\"Test-only prose\");\n}\n";
+        let f = rust_cli_findings(src);
+        let t = texts(&f);
+        assert_eq!(t, vec!["Shipped prose"]);
+    }
+
+    #[test]
+    fn rust_ignores_helper_macros_and_functions_that_merely_end_in_a_watched_name() {
+        let src = r#"
+            my_println!("Hello");
+            let s = println("not a macro");
+            capsule_eyre!("nope");
+        "#;
+        assert_eq!(rust_cli_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn rust_survives_char_literals_and_raw_strings_in_the_argument_list() {
+        // A `'}'` char literal must not unbalance the bracket scan, or every literal
+        // after it in the file would be missed.
+        let src = concat!(
+            "println!(\"{}\", s.replace('}', \"\").trim());\n",
+            "println!(\"{}\", r#\"Raw prose\"#);\n",
+            "println!(\"Trailing prose\");\n",
+        );
+        let f = rust_cli_findings(src);
+        let t = texts(&f);
+        assert!(t.contains(&"Raw prose"), "{t:?}");
+        assert!(t.contains(&"Trailing prose"), "{t:?}");
+    }
+
+    #[test]
+    fn rust_collapses_a_wrapped_literal_onto_one_line_so_it_is_allowlistable() {
+        let src =
+            "eyre!(\"No directories specified. Use --all or one of \\\n    --config, --data.\")";
+        assert_eq!(
+            texts(&rust_cli_findings(src)),
+            vec!["No directories specified. Use --all or one of \\ --config, --data."]
+        );
+    }
+
+    #[test]
+    fn rust_line_numbers_point_at_the_literal_not_the_macro() {
+        let src = "fn f() {\n    println!(\n        \"{}\",\n        \"Prose here\"\n    );\n}\n";
+        let f = rust_cli_findings(src);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].line, 4);
+        assert_eq!(f[0].kind, "cli-print");
+    }
+
+    #[test]
+    fn the_committed_allowlist_parses_and_covers_only_known_files() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask lives in the workspace root");
+        let entries = load_allowlist(root).expect("the committed allowlist parses");
+        assert!(!entries.is_empty(), "S-I5 left CLI debt on the allowlist");
+        for (file, _) in &entries {
+            assert!(
+                root.join(file).exists(),
+                "allowlist references a file that no longer exists: {file} \
+                 (delete the entry when the file goes away)"
+            );
+        }
     }
 
     #[test]

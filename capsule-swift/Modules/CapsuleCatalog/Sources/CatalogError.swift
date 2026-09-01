@@ -18,6 +18,10 @@ public enum CatalogError: Error, Sendable, Equatable {
     case sidecar(message: String)
     /// A caller passed a value the catalog cannot accept.
     case invalidArgument(message: String)
+    /// A gated view (*Local Gallery — SR1*) was read without a live fresh-auth
+    /// grant. Carries no message: the refusal is the whole fact, and the caller
+    /// answers it by taking a grant, not by reading a string.
+    case viewLocked
 
     /// The human-readable detail, which — per the i18n contract — stays English;
     /// clients localize the high-level message from the catalog key instead.
@@ -25,6 +29,8 @@ public enum CatalogError: Error, Sendable, Equatable {
         switch self {
         case let .database(message), let .sidecar(message), let .invalidArgument(message):
             message
+        case .viewLocked:
+            "view is locked: fresh local authentication is required"
         }
     }
 }
@@ -35,6 +41,7 @@ extension CatalogError: LocalizedError {
         case let .database(message): "database error: \(message)"
         case let .sidecar(message): "sidecar error: \(message)"
         case let .invalidArgument(message): "invalid argument: \(message)"
+        case .viewLocked: "view is locked: fresh local authentication is required"
         }
     }
 }

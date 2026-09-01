@@ -1,14 +1,29 @@
-# i18n-guard allowlist (slice S-I1)
+# i18n-guard allowlist (slices S-I1, S-I5)
 #
 # The `xtask i18n-guard` gate fails the build when it finds a hardcoded, user-facing
-# string literal in the web (JSX), SwiftUI, or Compose surfaces that is not a catalog
-# key. This file lists the rare, intentionally-untranslated exceptions so the gate
-# stays at zero false positives.
+# string literal in the web (JSX), SwiftUI, Compose, or CLI (Rust) surfaces that is not
+# a catalog key. This file lists the exceptions so the gate stays at zero false
+# positives.
 #
 # Format: one exception per line, `<repo-relative-path>\t<exact captured string>`
 # (TAB separated). `#` comments and blank lines are ignored. Prefer migrating a
 # string to a `locales/en.json` key over allowlisting it — only allowlist text that
 # is genuinely not translatable (brand names shown verbatim, sample data, etc.).
+#
+# ## The CLI block below is DEBT, not exemption
+#
+# Slice `S-I5` widened the guard to `capsule-cli/src/**` — a binary that prints prose to
+# a terminal and had never been scanned — and migrated the `capsule import` arm onto the
+# `cli.import.*` namespace. The guard immediately found 124 more literals (107 distinct
+# strings) across three other command surfaces. They are listed here rather than hidden
+# by a narrower rule,
+# because an allowlist entry is a visible debt and a narrowed rule is an invisible one:
+# every line below is a string a user reads in English regardless of their locale, and
+# deleting a line is the definition of done for the follow-up slice that migrates it.
+#
+# Do NOT add a CLI line here to make a new command pass. New CLI output goes straight
+# into `locales/en.json` under `cli.<command>.*`; the mechanism already exists
+# (`capsule_cli::i18n::keys`) and the import arm is the worked example.
 #
 # Keep this list SHORT and justify each entry with a comment above it.
 
@@ -16,3 +31,126 @@
 # `forKey:` is a Key-Value Coding key here, not a catalog key — the guard matches
 # the `…Key:` argument label and cannot tell the two apart.
 capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
+
+# `capsule demo` — the offline showcase command (`S-A10`). Every one of these is a
+# terse `eyre!` step label ("shamir: {e}") written for whoever is watching the demo run,
+# not a message a photo-library user would ever hit. It is the weakest case for
+# translation in the tree and the strongest candidate for staying English — but that is a
+# call for a slice to make explicitly, not for the guard to assume.
+capsule-cli/src/demo.rs	Capsule offline data-plane showcase (real crypto, no network)
+capsule-cli/src/demo.rs	create workspace: {e}
+capsule-cli/src/demo.rs	create album: {e}
+capsule-cli/src/demo.rs	import: {e}
+capsule-cli/src/demo.rs	asset missing
+capsule-cli/src/demo.rs	verify: {e}
+capsule-cli/src/demo.rs	unexpected verify outcome: {other:?}
+capsule-cli/src/demo.rs	tag: {e}
+capsule-cli/src/demo.rs	caption: {e}
+capsule-cli/src/demo.rs	delete: {e}
+capsule-cli/src/demo.rs	restore: {e}
+capsule-cli/src/demo.rs	cull: {e}
+capsule-cli/src/demo.rs	sweep: {e}
+capsule-cli/src/demo.rs	export: {e}
+capsule-cli/src/demo.rs	create fresh: {e}
+capsule-cli/src/demo.rs	import backup: {e}
+capsule-cli/src/demo.rs	read src: {e}
+capsule-cli/src/demo.rs	read restored: {e}
+capsule-cli/src/demo.rs	restored plaintext differs from source
+capsule-cli/src/demo.rs	bogus ws: {e}
+capsule-cli/src/demo.rs	reject ws: {e}
+capsule-cli/src/demo.rs	untrusted exporter backup was wrongly accepted
+capsule-cli/src/demo.rs	shamir: {e}
+capsule-cli/src/demo.rs	shamir reconstruction failed
+capsule-cli/src/demo.rs	\n{} Every layer of the design exercised offline with real cryptography.
+capsule-cli/src/demo.rs	DONE.
+capsule-cli/src/demo.rs	Inspect the on-disk artifacts under {}
+
+# `capsule library`, `capsule status`, `capsule match-metadata`, `capsule reset`, and the
+# shared workspace/prompt/database helpers. Real user-facing prose, unmigrated only
+# because `S-I5` scoped itself to the import arm. Each line here is a `cli.*` key waiting
+# to be written.
+capsule-cli/src/lib.rs	Failed to resolve config directory
+capsule-cli/src/lib.rs	Checking authentication status...
+capsule-cli/src/lib.rs	Error checking auth status: {e}
+capsule-cli/src/lib.rs	Creating library '{}' at {}...
+capsule-cli/src/lib.rs	Failed to create library: {e}
+capsule-cli/src/lib.rs	Library created at {}
+capsule-cli/src/lib.rs	Failed to close library: {e}
+capsule-cli/src/lib.rs	Library info:
+capsule-cli/src/lib.rs	Name: {}
+capsule-cli/src/lib.rs	Schema version: {}
+capsule-cli/src/lib.rs	Last opened: {}
+capsule-cli/src/lib.rs	Last scrubbed: {}
+capsule-cli/src/lib.rs	never
+capsule-cli/src/lib.rs	Rebuilding index for {}...
+capsule-cli/src/lib.rs	Rebuild failed: {e}
+capsule-cli/src/lib.rs	Index rebuilt successfully.
+capsule-cli/src/lib.rs	Checking Capsule status...
+capsule-cli/src/lib.rs	Error collecting status: {e}
+capsule-cli/src/lib.rs	Matching metadata for file: {}
+capsule-cli/src/lib.rs	File does not exist: {}
+capsule-cli/src/lib.rs	Path is not a file: {}
+capsule-cli/src/lib.rs	File metadata:
+capsule-cli/src/lib.rs	Failed to get file metadata: {}
+capsule-cli/src/lib.rs	No directories specified for reset. Use --all or specify at least one of \ --config, --data, --cache.
+capsule-cli/src/lib.rs	Resetting all local CLI data...
+capsule-cli/src/lib.rs	Failed to get config directory
+capsule-cli/src/lib.rs	Failed to get data directory
+capsule-cli/src/lib.rs	Failed to get cache directory
+capsule-cli/src/lib.rs	Removing {label} directory...
+capsule-cli/src/lib.rs	Successfully removed {label} directory
+capsule-cli/src/lib.rs	Failed to remove {label} directory: {e}
+capsule-cli/src/lib.rs	Skipping {label} directory
+capsule-cli/src/lib.rs	{} directory {} does not exist, skipping...
+capsule-cli/src/lib.rs	Failed to read input: {e}
+capsule-cli/src/lib.rs	Failed to read password from stdin: {e}
+capsule-cli/src/lib.rs	--password-stdin was given but stdin was empty
+capsule-cli/src/lib.rs	Failed to read password: {e}
+capsule-cli/src/lib.rs	Failed to open local database: {e}
+capsule-cli/src/lib.rs	Failed to open signed workspace: {e}
+capsule-cli/src/lib.rs	Failed to resolve the default album: {e}
+capsule-cli/src/lib.rs	Library at {} has a corrupt version file: {}
+capsule-cli/src/lib.rs	Library at {} is locked by PID {} on {}. Is another Capsule instance running?
+capsule-cli/src/lib.rs	Library version mismatch: found {found}, expected {expected}. Upgrade required.
+capsule-cli/src/lib.rs	Failed to open library at {}: {other}
+
+# `capsule status` — the whole status report: section headings, field labels, and the
+# state words ("Connected", "Never", "Unknown") they pair with. The largest single block
+# of untranslated CLI prose in the tree (48 findings, 34 distinct strings), and the most
+# mechanical to migrate: labels and state words, no logic.
+capsule-cli/src/status.rs	=== Capsule CLI Status ===
+capsule-cli/src/status.rs	Authentication Status:
+capsule-cli/src/status.rs	Status:
+capsule-cli/src/status.rs	Not logged in
+capsule-cli/src/status.rs	Logged in
+capsule-cli/src/status.rs	Access token:
+capsule-cli/src/status.rs	Valid
+capsule-cli/src/status.rs	Expired (refreshes on next use)
+capsule-cli/src/status.rs	Expires:
+capsule-cli/src/status.rs	Local Environment Status:
+capsule-cli/src/status.rs	Config Directory:
+capsule-cli/src/status.rs	Not found
+capsule-cli/src/status.rs	Data Directory:
+capsule-cli/src/status.rs	Cache Directory:
+capsule-cli/src/status.rs	Available Space:
+capsule-cli/src/status.rs	Server/API Status:
+capsule-cli/src/status.rs	API Endpoint:
+capsule-cli/src/status.rs	Connection:
+capsule-cli/src/status.rs	Connected
+capsule-cli/src/status.rs	Disconnected
+capsule-cli/src/status.rs	Unknown
+capsule-cli/src/status.rs	Error: {err}
+capsule-cli/src/status.rs	API Version:
+capsule-cli/src/status.rs	{} {}ms
+capsule-cli/src/status.rs	Response Time:
+capsule-cli/src/status.rs	Server Health:
+capsule-cli/src/status.rs	Failed to open the local sync store: {e}
+capsule-cli/src/status.rs	Sync Status:
+capsule-cli/src/status.rs	Last Sync:
+capsule-cli/src/status.rs	Never
+capsule-cli/src/status.rs	Pending Uploads:
+capsule-cli/src/status.rs	Pending Downloads:
+capsule-cli/src/status.rs	Sync Conflicts:
+capsule-cli/src/status.rs	None
+capsule-cli/src/status.rs	Local Files:
+capsule-cli/src/status.rs	Remote Files:

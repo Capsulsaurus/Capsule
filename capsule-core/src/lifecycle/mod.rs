@@ -26,8 +26,6 @@
 
 mod album;
 mod backup;
-#[cfg(feature = "media")]
-mod derivatives;
 mod drops;
 mod groups;
 mod import;
@@ -67,7 +65,7 @@ use crate::federation::AlbumGroupAssertion;
 use crate::library::Library;
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
-use crate::sidecar::sidecar_v1::SidecarV1;
+use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
 
 /// Errors from lifecycle operations.
 #[derive(Debug, Error)]
@@ -197,9 +195,15 @@ pub struct AssetState {
     pub stack: Option<StackPlacement>,
 }
 
-/// Placement of a signed asset within an import stack. The executor mints one `stack_id` per
-/// multi-file [`ImportCandidate`](crate::import::scan::ImportCandidate) and marks every
-/// non-primary member `hidden`, so the primary alone surfaces in the timeline.
+/// The **index projection** of an asset's stack membership: the two `assets` columns
+/// (`stack_id`, `is_stack_hidden`) that keep a non-primary member out of the timeline.
+///
+/// Since `S-B15` this is a *derived* value, not a source of truth: the durable record is the
+/// sidecar's signed `stack_membership` register, which both the importer and
+/// [`Workspace::set_stack_membership`] write. It survives here for the one case the register
+/// cannot serve — an asset imported **before** `S-B15`, whose placement was written only to the
+/// index and therefore exists nowhere else (see [`Workspace::open`] step (6) and
+/// [`library::rebuild`](crate::library::rebuild)).
 #[derive(Debug, Clone)]
 pub struct StackPlacement {
     /// The shared stack id (the `asset_stacks` row id the members belong to).
@@ -208,8 +212,56 @@ pub struct StackPlacement {
     pub hidden: bool,
 }
 
-/// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack)
-/// reproduce the standalone [`Workspace::import_asset`] behaviour.
+impl StackPlacement {
+    /// The index projection of a signed [`StackMembership`] — the one mapping the write path and
+    /// [`library::rebuild`](crate::library::rebuild) must agree on: a member is suppressed from
+    /// the timeline exactly when it is not the stack's primary.
+    pub(crate) fn from_membership(m: &StackMembership) -> Self {
+        Self {
+            stack_id: m.stack_id.to_string(),
+            hidden: m.role != StackRole::Primary,
+        }
+    }
+}
+
+/// Out-of-band metadata a third-party [source adapter](crate::import::importers) folded for one
+/// media file, in the shape the signed sidecar stores it (slice `S-B10`).
+///
+/// The [precedence rule] is resolved in two places, and this type is what keeps the two halves
+/// apart:
+///
+/// - [`capture_time`](Self::capture_time) and [`gps`](Self::gps) are **fallbacks**. The file's
+///   own embedded EXIF wins wherever it yields a value; these are consulted only where it does
+///   not. Because the adapter already folded EXIF-over-exporter at extraction, the value carried
+///   here is the *winner* of that fold — so an EXIF capture time the write site cannot resolve
+///   to a UTC instant by itself (a floating `DateTimeOriginal` carrying no offset) still beats
+///   the exporter's record instead of silently losing to it.
+/// - [`caption`](Self::caption), [`rating`](Self::rating) and [`tags`](Self::tags) are
+///   **exporter-authoritative** — constructs the file bytes never carried — so they are written
+///   unconditionally, stamped `(now, device_id)` like any other register write.
+///
+/// Every field left empty writes nothing, so an import carrying no exporter record produces a
+/// sidecar byte-identical to a plain filesystem import's. The provider-specific mapping that
+/// fills this in lives in [`import::enrichment`](crate::import::enrichment).
+///
+/// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SidecarEnrichment {
+    /// The adapter's folded capture time — used only when the file's own EXIF resolves none.
+    pub capture_time: Option<Timestamp>,
+    /// The adapter's folded GPS fix — used only when the file's own EXIF carries none.
+    pub gps: Option<Gps>,
+    /// The exporter's user-typed description, bounded to the schema's caption limit.
+    pub caption: Option<String>,
+    /// The exporter's favorite/star flag, already mapped onto the sidecar's star scale.
+    pub rating: Option<u8>,
+    /// Exporter-authoritative user tags (Takeout's album membership); each becomes one
+    /// `tags_user` OR-set add with its own `add_id`.
+    pub tags: Vec<String>,
+}
+
+/// Options for a signed import driven by the import executor. Defaults (`Copy` mode, no stack,
+/// no exporter metadata) reproduce the standalone [`Workspace::import_asset`] behaviour.
 #[derive(Debug, Clone, Default)]
 pub struct SignedImportOptions {
     /// Delete the source file after a durable commit (Move mode).
@@ -220,8 +272,16 @@ pub struct SignedImportOptions {
     /// the source is the only copy until the *server* durably holds it; left `false` for a
     /// plain offline import, which releases after the self-verified local commit.
     pub defer_source_release: bool,
-    /// Stack placement for a multi-file candidate member.
-    pub stack: Option<StackPlacement>,
+    /// Signed stack membership for a multi-file candidate member (`S-B15`). Written into the
+    /// sidecar's `stack_membership` LWW register — the same durable write
+    /// [`Workspace::set_stack_membership`] performs — and projected from there onto the index
+    /// row. `None` imports a standalone asset and leaves the register wire-absent.
+    pub stack: Option<StackMembership>,
+    /// Folded third-party exporter metadata for this file (`S-B10`), attached by the
+    /// [executor](crate::import::executor::execute_with_source_metadata) when the import came
+    /// from a [source adapter](crate::import::importers). `None` — a plain filesystem import —
+    /// leaves every enriched field exactly as it was before the slice.
+    pub enrichment: Option<SidecarEnrichment>,
 }
 
 /// Whether an imported asset got thumbnail/preview derivatives — and if not, **why**
@@ -370,19 +430,12 @@ pub struct Workspace {
     /// [Web Upload]: https://docs/design/web-upload/
     upload_links: HashMap<UploadLinkId, IssuedLink>,
     /// Pending guest drops in this user's inbox, keyed by drop id. Models the server's
-    /// staging store (`capsule-api-media::drops`, S-C5) so the offline core can drive the
+    /// staging store (the server's drop module, `S-C5`) so the offline core can drive the
     /// full seal → stage → adopt path; a real client fills it from server responses.
     ///
     /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
-    /// The per-platform still-derivative byte encoder (the `capsule-sdk` codec seam). When set
-    /// (behind the `media` feature), a signed import additionally decodes the still, computes its
-    /// LQIP, and generates + signs thumbnail/preview [`DerivativeManifest`]s per S-B1's pipeline.
-    /// `None` leaves imports at signed-original-only, so the default library build stays free of
-    /// the media stack.
-    #[cfg(feature = "media")]
-    still_encoder: Option<Box<dyn crate::media::image::derivative::StillEncoder>>,
 }
 
 fn now_rfc3339() -> String {

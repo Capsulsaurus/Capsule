@@ -375,7 +375,6 @@ const AssetCard = ({
                 >
                     <LazyImage
                         src={asset.url}
-                        thumbhash={asset.thumbhash}
                         alt={intl.formatMessage({ id: 'assets.alt' })}
                         className={`transition-transform duration-300 group-hover:scale-105 ${selected ? 'scale-105' : ''}`}
                     />

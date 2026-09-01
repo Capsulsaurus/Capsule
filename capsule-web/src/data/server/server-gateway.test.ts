@@ -5,7 +5,12 @@ import { MemoryPersistence } from './sync/persistence';
 import { SyncStore } from './sync/store';
 import type { SyncTransport } from './sync/transport';
 import { SyncTransportError } from './sync/transport';
-import { ChangeKind, type SyncEntry, type SyncResponse } from './sync/wire';
+import {
+    BlobRole,
+    ChangeKind,
+    type SyncEntry,
+    type SyncResponse,
+} from './sync/wire';
 
 const PROTOCOL = '2026-07-11';
 
@@ -15,9 +20,11 @@ function entry(overrides: Partial<SyncEntry> & { syncSeq: bigint }): SyncEntry {
         protocolVersion: PROTOCOL,
         kind: ChangeKind.Created,
         assetId: `asset-${overrides.syncSeq}`,
-        manifestCbor: new Uint8Array(),
-        metadataBlob: new Uint8Array(),
+        manifestCbor: 'AQID',
+        metadataBlob: 'a'.repeat(64),
+        blobs: { derivatives: [] },
         originalHeld: true,
+        changedAt: '2026-09-01T00:00:00Z',
         ...overrides,
     };
 }
@@ -30,7 +37,7 @@ class ScriptedTransport implements SyncTransport {
         this.calls += 1;
         const page = this.pages.shift();
         return Promise.resolve(
-            page ?? { entries: [], nextCursor: new Uint8Array() },
+            page ?? { entries: [], nextCursor: '', hasMore: false },
         );
     }
 }
@@ -39,7 +46,11 @@ class ScriptedTransport implements SyncTransport {
 class FailingTransport implements SyncTransport {
     sync(): Promise<SyncResponse> {
         return Promise.reject(
-            new SyncTransportError(14, 'error.sync.unavailable', 'unavailable'),
+            new SyncTransportError(
+                503,
+                'error.sync.unavailable',
+                'unavailable',
+            ),
         );
     }
 }
@@ -71,15 +82,15 @@ describe('ServerGateway — key-free shells', () => {
                             blobs: {
                                 original: {
                                     ciphertextHash: 'h',
-                                    role: 'original',
-                                    format: 'video/mp4',
+                                    role: BlobRole.Original,
                                     size: 10n,
                                 },
                                 derivatives: [],
                             },
                         }),
                     ],
-                    nextCursor: new Uint8Array([1]),
+                    nextCursor: 'cursor-1',
+                    hasMore: false,
                 },
             ]),
         );
@@ -90,11 +101,12 @@ describe('ServerGateway — key-free shells', () => {
         expect(asset.id).toBe('photo');
         // Key-free: no renderable URL, no LQIP, placeholder dimensions.
         expect(asset.url).toBe('');
-        expect(asset.thumbhash).toBe('');
         expect(asset.width).toBe(1);
         expect(asset.height).toBe(1);
-        // Real key-free facts: media kind from blob format, awaiting-original, protocol date.
-        expect(asset.type).toBe('video');
+        // The media kind is *not* a key-free fact any more, and that is the REST feed being
+        // stricter than the gRPC one: a MIME type is plaintext metadata about an encrypted
+        // blob, so the field the old guess read is gone and everything is the neutral shell.
+        expect(asset.type).toBe('image');
         expect(asset.pending).toBe(true);
         expect(asset.date.getTime()).toBe(Date.parse('2026-07-11T00:00:00Z'));
     });
@@ -108,7 +120,8 @@ describe('ServerGateway — key-free shells', () => {
                         entry({ syncSeq: 2n, albumId: 'a', assetId: 'a2' }),
                         entry({ syncSeq: 3n, albumId: 'b', assetId: 'b1' }),
                     ],
-                    nextCursor: new Uint8Array([3]),
+                    nextCursor: 'cursor-3',
+                    hasMore: false,
                 },
             ]),
         );
@@ -133,7 +146,8 @@ describe('ServerGateway — persistence', () => {
             new ScriptedTransport([
                 {
                     entries: [entry({ syncSeq: 1n, assetId: 'x' })],
-                    nextCursor: new Uint8Array([1]),
+                    nextCursor: 'cursor-1',
+                    hasMore: false,
                 },
             ]),
             shared,
@@ -159,7 +173,8 @@ describe('ServerGateway — resilience', () => {
         const transport = new ScriptedTransport([
             {
                 entries: [entry({ syncSeq: 1n })],
-                nextCursor: new Uint8Array([1]),
+                nextCursor: 'cursor-1',
+                hasMore: false,
             },
         ]);
         const { gateway } = makeGateway(transport);

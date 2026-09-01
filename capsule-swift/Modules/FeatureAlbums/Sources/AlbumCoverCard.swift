@@ -24,9 +24,12 @@ struct AlbumCoverCard: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .lineLimit(1)
-            Text("^[\(album.count) Photo](inflect: true)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text(String(
+                localized: "app.albums.photo_count",
+                defaultValue: "\(album.count) Photo"
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
         .task(id: album.id) { await loadCover() }
     }

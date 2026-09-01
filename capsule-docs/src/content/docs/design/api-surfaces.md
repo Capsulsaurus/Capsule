@@ -4,27 +4,31 @@ description: The Kynos REST/OpenAPI server surface and its negotiation and rejec
 status: draft
 ---
 
-Capsule exposes one public server transport: **Kynos REST with a checked-in OpenAPI 3.1
-contract**. This document owns the surface-to-module map and the HTTP carriage of the
+Capsule exposes one public server transport: **Kynos REST with a checked-in OpenAPI 3.2
+contract**. This document owns the surface-to-module map, the document model that contract is
+served under, and the HTTP carriage of the
 [universal handshake](/design/threat-model/validation/#protocol-and-capability-negotiation).
 Handshake rules remain owned by Threat Model — Validation, and stable error-code identity by
 [Internationalization](/design/i18n/#server-error-codes).
+
+How these surfaces are published as developer reference — the artifact each is generated from and
+the gate that keeps it current — is [Developer Documentation](/design/developer-docs/).
 
 ## Surface ↔ Transport Map
 
 | Surface | Transport | Planned module | Owner doc |
 | --- | --- | --- | --- |
-| Authentication (sessions, passkeys, TOTP, OIDC) | REST | `capsule-api::auth` | [Authentication](/design/authentication/) |
-| Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-api::upload` | [Upload Protocol](/design/import/upload-protocol/) |
-| Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-api::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
-| Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-api::blob` | [Download & Sync](/design/import/download-sync/) |
-| Sync feed (change discovery after a cursor) | REST | `capsule-api::sync` | [Download & Sync](/design/import/download-sync/) |
-| Federation pull | REST | `capsule-api::federation` | [Federation](/design/federation/) |
-| Share serving (`/s/{opaque-id}`) | REST | `capsule-api::shares` | [Share Links](/design/share-links/) |
-| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption) | REST | `capsule-api::drops` | [Web Upload](/design/web-upload/) |
-| Storage verification (`POST /storage/verify`) | REST | `capsule-api::blob` | [Storage Verification](/design/import/storage-verification/) |
-| Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-api::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
-| Version/handshake | REST | `capsule-api` | [Threat Model — Validation](/design/threat-model/validation/) |
+| Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
+| Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
+| Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-server::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
+| Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
+| Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Share serving (`/s/{opaque-id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
+| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
+| Storage verification (`POST /storage/verify`) | REST | `capsule-server::blob` | [Storage Verification](/design/import/storage-verification/) |
+| Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-server::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
+| Version/handshake | REST | `capsule-server` | [Threat Model — Validation](/design/threat-model/validation/) |
 | Library queries (timeline, albums, search) | none — client-side over `library.sqlite` | `capsule-core::library` + `db` | [Organization](/design/organization/#system--smart-albums-views) |
 
 Blob bytes use ranged HTTP. The sync feed carries only small opaque envelopes, encrypted metadata,
@@ -38,9 +42,44 @@ the guest drop and the share-link viewer.
 
 ## Why REST/OpenAPI Only
 
-The checked-in OpenAPI **3.1** document is the public contract and the input to Spargen. Kynos owns
+The checked-in OpenAPI **3.2** document is the public contract and the input to Spargen. Kynos owns
 routing, middleware composition, and deterministic schema emission. Capsule owns authentication,
 protocol headers, error bodies, encrypted-upload state, blob storage ports, and business rules.
+
+### The Document Is 3.2, and Its Version Is Pinned
+
+3.2 is not a floor the document may drift above; it is the version the document declares.
+`capsule-server::openapi()` calls `router().openapi_as(SpecVersion::V3_2)` rather than the plain
+`router().openapi()`, because the plain emitter returns the *lowest* version that expresses the API
+without loss — a sound default for a document produced on demand, and the wrong one for a contract
+that is committed to the repository and generated from. Left to follow the API, the committed
+contract would flip 3.1 → 3.2 the day the first streamed response landed, churning the schema gate
+and regenerating the SDK for a change nobody asked for.
+
+Enabling Kynos's `openapi32` feature is a *different* thing and does not by itself produce a 3.2
+document; why the emitted version is deliberately not keyed on a feature flag belongs to the Kynos
+row in [Dependencies](/design/dependencies/#rust). What matters here is the consequence:
+`openapi_as` targets rather than downgrades, so a construct 3.2 cannot express is an error naming
+what blocks it, never a document with operations quietly missing.
+
+### What Is Generated, and What Is Not
+
+The line is **parsing and serialization versus orchestration**, and with Spargen's two gaps closed
+it now falls in exactly one place.
+
+*Generated from the contract*: every request and response body, every typed parameter, and the
+byte-serving endpoints. The blob-fetch and asset-serve tree — `GET /blob/{hash}` with `Range`, and
+the derivative reads beside it — is back in the generated client, because textual and binary
+response decoding and typed parameter serialization both work now. A hand-written byte path is no
+longer justified by a generator limitation, and adding one back would be a second parser for a
+surface the contract already describes.
+
+*Hand-written*: the resumable upload state machine (slice `S-D1`) — chunk scheduling, offset
+resumption after an interruption, retry laddering, and the connection-class budget. None of that is
+parsing. It is orchestration **over** the generated calls, driven by conditions an OpenAPI document
+cannot express, which is why it was never a generator gap and does not close with one. This is the
+existing contract with the gaps removed, not a new one; the Spargen pin and its history are the
+codegen row in [Dependencies](/design/dependencies/#rust).
 
 One transport keeps negotiation, observability, error handling, streaming, cancellation, and test
 harnesses consistent. GraphQL and gRPC are retired architecture, not compatibility surfaces.
@@ -52,9 +91,20 @@ the Salvo server: sync and federation pull are REST operations on the same OpenA
 the signed manifest still travelling as opaque canonical CBOR (never re-modelled as wire fields —
 re-encoding would detach it from its signatures).
 
+**The browser followed** (slice `S-C60`). `capsule-web` spoke gRPC-web through a hand-rolled
+Protobuf codec — 410 lines of varint and length-delimited framing, written to avoid pulling a
+`protobuf-es`/`connect-web` toolchain in to read a handful of fields — and now issues one
+`GET /v1/sync` and parses JSON. The store's client rules are untouched: forward-version rejection
+and per-album anti-rewind were always behind a transport seam, which is what a seam is for.
+
+Two things the browser can no longer see, and both are the REST feed being *stricter*: a blob's
+MIME type, which was plaintext metadata about an encrypted blob and is simply not a field any
+more, and an "unspecified" change kind, which existed only because a proto3 enum defaults to zero
+when a field is absent.
+
 ## Legacy: GraphQL (removed)
 
-The `capsule-api-library` crate exposed an `async-graphql` schema at `/v1/library`. It predated the
+A now-deleted crate exposed an `async-graphql` schema at `/v1/library`. It predated the
 E2EE key-free server model and was **removed** in slice S-G1 (repo-root `SLICES.md`); no GraphQL
 surface exists. It was never evolving, for reasons that also foreclose reviving it:
 
@@ -105,8 +155,10 @@ Clients switch on the code, never on status alone.
 
 - Drive every fail-closed handshake rule through representative routes in each module and assert
   the same headers, status, and `error.*` code.
-- Generate the OpenAPI contract twice and assert byte-identical output; generate the Spargen client
-  from the checked-in contract and fail CI on drift.
+- Generate the OpenAPI contract twice and assert byte-identical output, and assert the emitted
+  document declares OpenAPI **3.2** — a contract that silently reverted to 3.1 would still be
+  valid, still generate, and no longer be the committed decision. Generate the Spargen client from
+  the checked-in contract and fail CI on drift, byte-serving operations included.
 - Exercise streaming upload and ranged download with cancellation, backpressure, retry, and body
   limits without live infrastructure.
 - Present valid and invalid federation capabilities through REST and assert compartmentalized,

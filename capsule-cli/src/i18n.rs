@@ -1,12 +1,18 @@
 //! Localized CLI output over `capsule-i18n`.
 //!
-//! Every user-facing string the CLI's networked commands print is a key in the
-//! canonical `locales/` catalogs (namespace `cli.*`), rendered through a [`Bundle`]
-//! negotiated from the process locale. This module centralizes the bundle and the
-//! key constants so a typo is a compile error, not a silently-missing message.
+//! Every user-facing string the CLI prints is a key in the canonical `locales/`
+//! catalogs (namespace `cli.*`), rendered through a [`Bundle`] negotiated from the
+//! process locale. This module centralizes the bundle and the key constants so a typo
+//! is a compile error, not a silently-missing message.
+//!
+//! "User-facing" here means what `xtask i18n-guard` enforces for this crate: terminal
+//! output (`println!`/`eprintln!`) and the errors `color_eyre` prints. `tracing::*!` is
+//! operator telemetry and stays English. Commands migrated so far: the networked ones
+//! (`auth`, `sync`, `list`, `push` — `S-D5`), `cull` (`S-D16`), and `import` (`S-I5`);
+//! the rest are carried as visible debt in `locales/i18n-guard-allowlist.txt`.
 
-use capsule_i18n::{Bundle, negotiate, supported_locales};
-pub use capsule_i18n::{Value, error_codes};
+pub use capsule_i18n::{Bundle, Value, error_codes};
+use capsule_i18n::{negotiate, supported_locales};
 
 /// Build the CLI's message bundle from the POSIX locale environment, falling back
 /// to the source locale. `LC_ALL` wins, then `LC_MESSAGES`, then `LANG`.
@@ -29,10 +35,11 @@ pub fn cli_bundle() -> Bundle {
 pub mod keys {
     pub const AUTH_LOGIN_EMAIL_PROMPT: &str = "cli.auth.login.email_prompt";
     pub const AUTH_LOGIN_PASSWORD_PROMPT: &str = "cli.auth.login.password_prompt";
+    pub const AUTH_LOGIN_TOTP_PROMPT: &str = "cli.auth.login.totp_prompt";
+    pub const AUTH_LOGIN_SECOND_FACTOR_REQUIRED: &str = "cli.auth.login.second_factor_required";
     pub const AUTH_LOGIN_IN_PROGRESS: &str = "cli.auth.login.in_progress";
     pub const AUTH_LOGIN_SUCCESS: &str = "cli.auth.login.success";
     pub const AUTH_LOGIN_FAILED: &str = "cli.auth.login.failed";
-    pub const AUTH_REGISTER_USERNAME_PROMPT: &str = "cli.auth.register.username_prompt";
     pub const AUTH_REGISTER_IN_PROGRESS: &str = "cli.auth.register.in_progress";
     pub const AUTH_REGISTER_SUCCESS: &str = "cli.auth.register.success";
     pub const AUTH_REGISTER_FAILED: &str = "cli.auth.register.failed";
@@ -59,6 +66,23 @@ pub mod keys {
     pub const PUSH_COMPLETE: &str = "cli.push.complete";
     pub const PUSH_DRY_RUN_COMPLETE: &str = "cli.push.dry_run_complete";
     pub const PUSH_FAILED: &str = "cli.push.failed";
+    // `capsule import` — the local import arm (slice `S-I5`). Import never touches the
+    // network, but every line it prints and every error it surfaces still reaches a human.
+    pub const IMPORT_IN_PROGRESS: &str = "cli.import.in_progress";
+    pub const IMPORT_SCANNING: &str = "cli.import.scanning";
+    pub const IMPORT_PROVIDER_NOTICE: &str = "cli.import.provider_notice";
+    pub const IMPORT_CANDIDATES_FOUND: &str = "cli.import.candidates_found";
+    pub const IMPORT_PLAN_SUMMARY: &str = "cli.import.plan_summary";
+    pub const IMPORT_NOTHING_TO_IMPORT: &str = "cli.import.nothing_to_import";
+    pub const IMPORT_EXECUTING: &str = "cli.import.executing";
+    pub const IMPORT_OUTCOME_DUPLICATE: &str = "cli.import.outcome.duplicate";
+    pub const IMPORT_OUTCOME_CORRUPT_TRANSFER: &str = "cli.import.outcome.corrupt_transfer";
+    pub const IMPORT_OUTCOME_UNREADABLE: &str = "cli.import.outcome.unreadable";
+    pub const IMPORT_DONE: &str = "cli.import.done";
+    pub const IMPORT_SCAN_FAILED: &str = "cli.import.scan_failed";
+    pub const IMPORT_EXTRACT_FAILED: &str = "cli.import.extract_failed";
+    pub const IMPORT_PLAN_FAILED: &str = "cli.import.plan_failed";
+    pub const IMPORT_EXECUTE_FAILED: &str = "cli.import.execute_failed";
     // `capsule cull` — the standalone culling command (slice `S-D16`).
     pub const CULL_FLAGGED: &str = "cli.cull.flagged";
     pub const CULL_VIEW: &str = "cli.cull.view";

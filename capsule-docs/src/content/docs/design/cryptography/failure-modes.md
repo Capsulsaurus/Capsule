@@ -6,7 +6,7 @@ status: draft
 
 Capsule treats loss of data — and loss of the keys that decrypt it — as a first-class concern. This doc catalogues what can go wrong, how each failure is detected or contained, and the redundant, independent paths that restore a user's *entire* asset collection — including after catastrophic software bugs, not just key loss.
 
-It is a cross-cutting doc by nature: the failure-mode logic lives in many modules (key handling in `capsule-core::crypto::keys`, restore in `capsule-core::backup`, blob durability in `capsule-api`, etc.). The contract this doc owns is the **set of failures the system is required to survive** and the **independent paths that must each remain workable**. The closing [transport security](#transport-security) section is the one piece of crypto config that lives outside the application layer.
+It is a cross-cutting doc by nature: the failure-mode logic lives in many modules (key handling in `capsule-core::crypto::keys`, restore in `capsule-core::backup`, blob durability in `capsule-server`, etc.). The contract this doc owns is the **set of failures the system is required to survive** and the **independent paths that must each remain workable**. The closing [transport security](#transport-security) section is the one piece of crypto config that lives outside the application layer.
 
 ## Failure Mode Catalog
 

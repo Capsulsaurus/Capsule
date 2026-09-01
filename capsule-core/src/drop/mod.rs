@@ -10,7 +10,7 @@
 //!
 //! This module owns the client-side halves: link issuance, drop sealing (compiled to WASM
 //! for `capsule-web`), and adoption. The server halves (drop store, inbox, atomic
-//! inbox→album promotion) live in `capsule-api-media::drops`.
+//! inbox→album promotion) live in the server's drop module.
 //!
 //! [Web Upload]: https://docs/design/web-upload/
 //! [`KeyMode::Wrapped`]: crate::crypto::provenance::KeyMode
@@ -436,6 +436,7 @@ mod tests {
                 devices: vec![DeviceEntry {
                     device_id,
                     dsk_public: device.verifying_key(),
+                    dek_public: None,
                     added_at: "2026-05-30T00:00:00Z".into(),
                     revoked_at: None,
                 }],
@@ -502,6 +503,7 @@ mod tests {
             timestamp: "2026-05-31T12:00:00Z".into(),
             action: Action::Create,
             prior_provenance_hash: None,
+            upgraded_from: None,
             retention_until: None,
         };
         let manifest = core.sign(&f.device, &f.write).unwrap();

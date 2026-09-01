@@ -11,9 +11,10 @@ designed. There is currently no supported Capsule server deployment. Sources und
 
 The supported server will expose one REST/OpenAPI API and require:
 
-- PostgreSQL for the authoritative key-free index and default upload-session state.
+- PostgreSQL for the authoritative key-free index.
 - A Capsule-owned filesystem blob store for opaque content-addressed ciphertext.
-- Valkey only for the measured high-concurrency profile; it is not a default requirement.
+- Valkey for volatile session state — upload sessions and auth sessions. It is required at every
+  size of deployment, not a scaling option; see [Valkey is required](#valkey-is-required) below.
 - A TLS-terminating ingress or Kynos-native TLS configuration appropriate to the deployment.
 
 Clients perform media processing, metadata extraction, derivative generation, encryption, signing,
@@ -31,8 +32,9 @@ deliberately overturn). They are recorded here because this guide is the only pl
 ### Blob tree must be one filesystem
 
 The whole blob tree must live on a **single** filesystem, so that finalization renames chunks staged
-under the upload directory into `blobs/{hash}.bin` atomically. Any POSIX filesystem meeting that
-holds; no particular filesystem is certified. It rules out fanning the blob root across volumes —
+under the upload directory into their [sharded content address](/design/filesystem/server/#blob-store-layout)
+under `blobs/` atomically. Any POSIX filesystem meeting that holds; no particular filesystem is
+certified. It rules out fanning the blob root across volumes —
 including across Kubernetes PersistentVolumes. See
 [Filesystem — Server](/design/filesystem/server/) and
 [Filesystem — Maintenance](/design/filesystem/maintenance/#atomic-writes-and-crash-recovery).
@@ -77,11 +79,14 @@ server does.
 
 See [Filesystem — Maintenance](/design/filesystem/maintenance/) for what each check means.
 
-### Open contradiction: is Valkey required?
+### Valkey is required
 
-The planned profile above states Valkey is needed *only* for the measured high-concurrency profile
-and **is not a default requirement**. The shipped server contradicts that: `VALKEY_URL` was a
-**required** startup variable, and Valkey held upload-session state, not just cache. The Kynos
-design must re-decide this deliberately — either Postgres becomes a first-class
-`UploadSessionStore` adapter so a single-node deployment needs no Valkey, or Valkey stays required
-and the planned profile above is corrected. This is recorded as an open question, not resolved here.
+Settled, and the operator-facing consequence is blunt: a single-node deployment runs Valkey too.
+`VALKEY_URL` is a required startup variable — the server refuses to boot without it — and Valkey
+holds upload-session and auth-session records, not a cache whose absence merely costs speed. The
+in-memory adapter is a test double and is never a deployment mode. The alternative, a Postgres-backed
+session store so a small deployment could skip Valkey, was rejected: it means emulating TTL and
+expiry in SQL, for a second implementation of a contract the server already has exactly one of. The
+earlier profile text here claimed Valkey was needed only for a measured high-concurrency profile;
+that was the outlier, and the code never agreed with it. The full split is owned by
+[Filesystem — Server: Required Services](/design/filesystem/server/#required-services).

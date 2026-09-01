@@ -184,6 +184,14 @@ pub enum OpenMlsAuthorityError {
     BlockSelf(Uuid),
 }
 
+impl From<crate::crypto::upgrade::UpgradeError> for OpenMlsAuthorityError {
+    /// The ceremony's wire vocabulary is ungated (`S-C24`), so its errors arrive from outside
+    /// this module and are folded into the one variant that already names this ceremony.
+    fn from(error: crate::crypto::upgrade::UpgradeError) -> Self {
+        Self::Upgrade(error.to_string())
+    }
+}
+
 type Result<T> = std::result::Result<T, OpenMlsAuthorityError>;
 
 /// Per-epoch write authority + content key.

@@ -25,6 +25,11 @@ hk = "1.48.0"
 # aborts. Bump both together. Chosen over wasm-pack so the gate stays fully offline (no runtime
 # fetch of a version-matched wasm-bindgen) once the toolchain is installed.
 "cargo:wasm-bindgen-cli" = "0.2.100"
+# cargo-deny enforces the dependency-licence allowlist in deny.toml (the policy it
+# implements is capsule-docs/.../design/licensing.md). Only `check licenses` is wired
+# up: the advisories check needs a network fetch of the RustSec database, which would
+# make the gate non-deterministic and break the offline build.
+"cargo:cargo-deny" = "0.19.8"
 
 [env]
 # Curated clippy lint set, applied `--workspace` so every crate gets identical rules
@@ -83,7 +88,9 @@ run = [
   "mise run lint-check-rust",
   "mise run i18n-check",
   "mise run i18n-guard",
-  "mise run openapi-check",
+  "mise run openapi-check-kynos",
+  "mise run architecture-check",
+  "mise run license-check",
   "mise run translate-readme-check",
   "mise run build-rust",
   "mise run build-check-wasm",
@@ -161,15 +168,15 @@ run = [
 # media stack). It rejects implicit workspace packages, retired dependencies, buildable
 # manifests under `legacy-review/`, and stale component references.
 #
-# DELIBERATELY NOT IN `check-rust` YET. The Salvo server, the Rust SDK, and the in-repo
-# media stack are still live on this branch and stay that way until the Kynos rebuild
-# reaches parity — `legacy-review/`'s own charter is that code leaves quarantine only once
-# its replacement contract and tests exist, and retiring first would leave the tree with no
-# server, no CLI network commands, and no end-to-end test for the whole rebuild. Until then
-# this runs as a report: its output is the exact worklist the rebuild must clear. Wire it
-# into `check-rust` in the same commit that moves those trees into `legacy-review/`.
+# **In `check-rust` since `S-C59`.** It was adopted as a report first, deliberately: the Salvo
+# server and the in-repo media stack were live and stayed that way until the Kynos rebuild reached
+# parity, because `legacy-review/`'s own charter is that code leaves quarantine only once its
+# replacement contract and tests exist — and retiring first would have left the tree with no
+# server, no CLI network commands and no end-to-end test for the whole rebuild. Its output was the
+# worklist: 63 violations at adoption, 0 now. It is a gate rather than a report from here, so the
+# boundary cannot quietly move back.
 [tasks.architecture-check]
-description = "Report active-workspace and retired-component boundary violations"
+description = "Verify active-workspace and retired-component boundaries"
 run = "cargo run -q -p xtask -- architecture-check"
 
 # Compile the canonical locales/ catalogs into each platform's native i18n format
@@ -191,28 +198,28 @@ run = "cargo run -q -p xtask -- i18n --check"
 description = "Fail on hardcoded user-facing literals (web/swift/compose)"
 run = "cargo run -q -p xtask -- i18n-guard"
 
-# Dump the server's OpenAPI 3.1 schema (salvo-oapi) to the committed capsule-sdk/openapi.json
-# that spargen generates the typed REST client from (slice S-D8). The dump is state-free
-# (capsule_api::openapi_router) — no database, Valkey, or key material — so it is deterministic
-# and runs anywhere. Re-run and commit after any REST endpoint/model change.
-[tasks.openapi]
-description = "Dump the server OpenAPI 3.1 schema to capsule-sdk/openapi.json"
-run = "cargo run -q -p capsule-api --bin gen_openapi"
+# Dependency-licence gate. Fails on any crate whose licence is not allowlisted in
+# deny.toml -- which denies GPL-*/LGPL-*/AGPL-* by omission, so a copyleft crate can
+# never reach a statically-linked release binary and quietly forfeit app-store
+# distribution. `--all-features` so wasm/UEFI-only crates are covered too.
+[tasks.license-check]
+description = "Verify every dependency licence is allowlisted in deny.toml"
+run = "cargo deny --all-features check licenses"
 
-# Mint a JWT_ED25519_DER signing key for a local or self-hosted server (slice S-P7). The key
-# comes from the same `capsule-api-environment` module that parses it at boot, so anything this
-# prints is guaranteed to be accepted. `serve-api` calls this automatically on first run; use
-# it directly when provisioning a real deployment.
-[tasks.keygen]
-description = "Mint a JWT_ED25519_DER signing key for a Capsule server"
-run = "cargo run -q -p capsule-api --bin keygen"
+# Dump the Kynos OpenAPI 3.2 document to the committed capsule-server/openapi.json that spargen
+# generates the typed REST client from (slices `S-C34`, `S-D28`). The dump is state-free — no
+# database, Valkey, or key material, because the router takes `App` only as a type parameter — so
+# it is deterministic and runs anywhere. Re-run and commit after any endpoint or model change.
+#
+# There were two documents and two drift guards while the rebuild ran, so a client had somewhere
+# to point at each stage. `S-C59` retired the Salvo one; this is now the contract, singular.
+[tasks.openapi-kynos]
+description = "Dump the Kynos OpenAPI 3.2 document to capsule-server/openapi.json"
+run = "cargo run -q -p capsule-server --bin gen_openapi"
 
-# Verify the committed schema still matches the server (CI drift gate; mirrors i18n-check).
-# The spargen-generated client is regenerated from this schema on every build, so this guards
-# the one drift the build cannot: the committed schema falling behind the server surface.
-[tasks.openapi-check]
-description = "Verify the committed OpenAPI schema matches the server"
-run = "cargo run -q -p capsule-api --bin gen_openapi -- --check"
+[tasks.openapi-check-kynos]
+description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
+run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.

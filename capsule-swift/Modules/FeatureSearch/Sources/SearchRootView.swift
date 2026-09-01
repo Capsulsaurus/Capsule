@@ -144,7 +144,10 @@ public struct SearchRootView: View {
             Button(action: onClear) {
                 Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
             }
-            .accessibilityLabel("Clear \(title)")
+            .accessibilityLabel(String(
+                localized: "app.search.clear_facet",
+                defaultValue: "Clear \(title)"
+            ))
         }
         .padding(.horizontal, CapsuleTheme.Spacing.medium)
         .padding(.vertical, CapsuleTheme.Spacing.xSmall)

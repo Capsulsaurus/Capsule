@@ -88,6 +88,55 @@ impl Workspace {
         ids
     }
 
+    // ── Hidden assets (S-D19/S-D25) ─────────────────────────────────────────────
+    //
+    // Hiding is metadata, never a copy or a move: the `hidden` LWW register is written into the
+    // signed sidecar as a `metadata-update`, so it is durable, reversible, and survives a
+    // `rebuild_index`. Every default projection excludes a hidden asset; the gated Hidden view
+    // ([`GateKeeper::query_hidden`](crate::library::auth_gate::GateKeeper::query_hidden)) is the
+    // only surface that serves it (owner: [Organization — Hidden Assets]).
+    //
+    // [Organization — Hidden Assets]: https://docs/design/organization/#hidden-assets
+
+    /// Hide (`true`) or unhide (`false`) an asset: write the `hidden` LWW register and emit a
+    /// `metadata-update`. Stamped with this device id + now, so concurrent writes from two
+    /// devices converge under the LWW `(ts, device_id)` rule.
+    ///
+    /// The index row is refreshed by the same `append_lifecycle` write, so the asset leaves the
+    /// default projections and enters the gated Hidden view immediately — no rebuild required.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id))]
+    pub fn set_hidden(&mut self, asset_id: &Uuid, hidden: bool) -> Result<()> {
+        let device = self.account.device.device_id;
+        let ts = now_rfc3339();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            s.hidden.set(hidden, ts, device);
+        })
+    }
+
+    /// Whether an asset is currently hidden — `false` if never written or the asset is unknown
+    /// (the wire-absent default is *visible*).
+    pub fn is_hidden(&self, asset_id: &Uuid) -> bool {
+        self.assets
+            .get(asset_id)
+            .and_then(|a| a.sidecar.hidden.get().copied())
+            .unwrap_or_default()
+    }
+
+    /// Apply a peer device's `hidden` register into the local one (the CRDT sync-apply path) and
+    /// emit a `metadata-update`. The merge is the [`Lww`] merge, so the flag converges to the
+    /// same value regardless of which device's write arrives first.
+    pub fn apply_remote_hidden(&mut self, asset_id: &Uuid, remote: &Lww<bool>) -> Result<()> {
+        let remote = remote.clone();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _| {
+            s.hidden.merge(&remote);
+        })
+    }
+
+    /// The current `hidden` register for an asset (for driving a sync/merge with a peer replica).
+    pub fn hidden_register(&self, asset_id: &Uuid) -> Option<&Lww<bool>> {
+        self.assets.get(asset_id).map(|a| &a.sidecar.hidden)
+    }
+
     /// Set (or clear, with `None`) this asset's stack membership (LWW register) and emit a
     /// `metadata-update`. The companion write to [`group_cull_state`](Self::group_cull_state):
     /// a stack is the set of assets sharing a `stack_id`, and grouping converges under the same
@@ -292,6 +341,205 @@ mod tests {
         assert_eq!(ws.cull_flag(&asset), CullFlag::Reject);
         // The merged sidecar is still signed and verifies through the chokepoint.
         assert_eq!(ws.verify(&asset).unwrap(), VerifyOutcome::Accept);
+    }
+
+    // ── Hidden assets (S-D25) ───────────────────────────────────────────────────
+
+    /// A [`LocalAuthGate`] that always grants — the platform adapter's decision is not what is
+    /// under test here; what the Hidden view *contains* is.
+    struct AllowGate;
+    impl crate::library::auth_gate::LocalAuthGate for AllowGate {
+        fn authenticate(
+            &self,
+            _view: crate::library::auth_gate::GatedView,
+        ) -> std::result::Result<(), crate::library::auth_gate::LocalAuthError> {
+            Ok(())
+        }
+    }
+
+    /// **The `S-D25` acceptance case.** Hiding an asset through the public API takes it out of
+    /// every default projection, puts it in the gated Hidden view, and — because the register
+    /// is written into the signed sidecar, not just the index — it is *still* hidden after the
+    /// index is deleted and rebuilt from disk.
+    ///
+    /// Before this slice there was no `set_hidden` at all: the column, the gate and the
+    /// projections all read a register nothing wrote.
+    #[test]
+    fn hidden_written_through_the_api_leaves_default_views_and_survives_rebuild() {
+        use crate::library::auth_gate::{GateKeeper, GatedView};
+        use crate::library::{open_library, rebuild_index};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let root = lib.path().to_path_buf();
+
+        let mut ws = fast_workspace(&root);
+        let album = ws.create_album("Shoot").unwrap();
+        let [secret, visible, _] = import_trio(&mut ws, album, src.path());
+
+        // Both start visible: the wire-absent default.
+        assert!(!ws.is_hidden(&secret));
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 3);
+
+        ws.set_hidden(&secret, true).unwrap();
+
+        // The register is written into the signed sidecar, which still verifies.
+        assert!(ws.is_hidden(&secret));
+        assert!(!ws.is_hidden(&visible));
+        assert_eq!(ws.verify(&secret).unwrap(), VerifyOutcome::Accept);
+        assert_eq!(
+            ws.asset(&secret)
+                .unwrap()
+                .chain
+                .records()
+                .last()
+                .unwrap()
+                .manifest
+                .core
+                .action,
+            Action::MetadataUpdate
+        );
+
+        // Immediately — no rebuild — the default projection drops it and the gated Hidden view
+        // serves it. `append_lifecycle` re-indexes the row as part of the same write.
+        let timeline: Vec<String> = ws
+            .db()
+            .query_timeline(0, 100)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+        assert_eq!(timeline.len(), 2);
+        assert!(!timeline.contains(&secret.to_string()));
+
+        let mut gk = GateKeeper::new();
+        gk.open(GatedView::Hidden, &AllowGate).unwrap();
+        let hidden = gk.query_hidden(ws.db(), 0, 100).unwrap();
+        assert_eq!(hidden.len(), 1);
+        assert_eq!(hidden[0].uuid, secret.to_string());
+
+        // Recovery: lose the whole index and rebuild it from the artifacts on disk.
+        drop(ws);
+        fs::remove_file(root.join("index/library.sqlite")).unwrap();
+        let library = open_library(&root).unwrap();
+        rebuild_index(&library).unwrap();
+
+        let row = library
+            .db
+            .find_by_uuid(&secret.to_string())
+            .unwrap()
+            .expect("the hidden asset is back in the index");
+        assert!(row.is_hidden, "the sidecar `hidden` register survived");
+        let timeline: Vec<String> = library
+            .db
+            .query_timeline(0, 100)
+            .unwrap()
+            .into_iter()
+            .map(|r| r.uuid)
+            .collect();
+        assert_eq!(timeline.len(), 2);
+        assert!(!timeline.contains(&secret.to_string()));
+
+        let mut gk = GateKeeper::new();
+        gk.open(GatedView::Hidden, &AllowGate).unwrap();
+        assert_eq!(gk.query_hidden(&library.db, 0, 100).unwrap().len(), 1);
+    }
+
+    /// Hiding is fully reversible and never touches asset bytes: unhiding writes `false` into
+    /// the same register and the asset returns to the default projections.
+    #[test]
+    fn unhiding_returns_the_asset_to_the_default_views() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Shoot").unwrap();
+        let [a, _, _] = import_trio(&mut ws, album, src.path());
+
+        let bytes = ws.read_plaintext(&a).unwrap();
+        ws.set_hidden(&a, true).unwrap();
+        assert!(ws.db().query_hidden(0, 100).unwrap().len() == 1);
+
+        ws.set_hidden(&a, false).unwrap();
+        assert!(!ws.is_hidden(&a));
+        // An explicit un-hide is a *written* `false`, not the absent default — it must beat a
+        // stale remote `true` on merge, which an absent register could not.
+        assert_eq!(ws.hidden_register(&a).unwrap().get(), Some(&false));
+        assert!(ws.db().query_hidden(0, 100).unwrap().is_empty());
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 3);
+        assert_eq!(ws.read_plaintext(&a).unwrap(), bytes, "bytes untouched");
+        assert_eq!(ws.verify(&a).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The sync-apply arm: a peer's `hidden` register merges under the same `(ts, device_id)`
+    /// rule as `cull`, so two devices converge regardless of arrival order.
+    #[test]
+    fn remote_hidden_register_merges_and_converges() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Shoot").unwrap();
+        let [a, _, _] = import_trio(&mut ws, album, src.path());
+
+        // A peer hid it at 11:00; the local device un-hid it at 10:00. Later write wins.
+        let mut early: Lww<bool> = Lww::new();
+        early.set(false, "2026-08-29T10:00:00Z", Uuid::from_u128(0xA));
+        let mut late: Lww<bool> = Lww::new();
+        late.set(true, "2026-08-29T11:00:00Z", Uuid::from_u128(0xB));
+
+        ws.apply_remote_hidden(&a, &early).unwrap();
+        ws.apply_remote_hidden(&a, &late).unwrap();
+        assert!(ws.is_hidden(&a));
+        // Re-applying the stale register changes nothing (idempotent convergence).
+        ws.apply_remote_hidden(&a, &early).unwrap();
+        assert!(ws.is_hidden(&a));
+        assert_eq!(ws.db().query_hidden(0, 100).unwrap().len(), 1);
+        assert_eq!(ws.verify(&a).unwrap(), VerifyOutcome::Accept);
+    }
+
+    /// The manual stacking path writes through to the index the same way the importer does
+    /// (`S-B15`): the `assets` stack columns are a projection of the signed register, so
+    /// `set_stack_membership` immediately suppresses a non-primary member from the timeline,
+    /// and leaving the stack (a stamped `None`) puts it back.
+    #[test]
+    fn set_stack_membership_projects_onto_the_index_both_ways() {
+        use crate::domain::StackType;
+        use crate::sidecar::sidecar_v1::StackRole;
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("Shoot").unwrap();
+        let [a, b, _] = import_trio(&mut ws, album, src.path());
+
+        let stack_id = Uuid::now_v7();
+        for (id, role, index) in [(a, StackRole::Primary, 0), (b, StackRole::Member, 1)] {
+            ws.set_stack_membership(
+                &id,
+                Some(StackMembership {
+                    stack_id,
+                    stack_type: StackType::Burst,
+                    role,
+                    member_index: Some(index),
+                }),
+            )
+            .unwrap();
+        }
+
+        let row = ws.db().find_by_uuid(&b.to_string()).unwrap().unwrap();
+        assert_eq!(row.stack_id.as_deref(), Some(stack_id.to_string().as_str()));
+        assert!(
+            row.is_stack_hidden,
+            "a non-primary member leaves the timeline"
+        );
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 2);
+
+        // Leaving the stack is a *stamped* `None`, and the register stays authoritative: the
+        // columns clear rather than falling back to a stale placement.
+        ws.set_stack_membership(&b, None).unwrap();
+        let row = ws.db().find_by_uuid(&b.to_string()).unwrap().unwrap();
+        assert_eq!(row.stack_id, None);
+        assert!(!row.is_stack_hidden);
+        assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 3);
     }
 
     /// S-D13: a stack/group's cull state is *derived* from its members (all-rejected → any-pick

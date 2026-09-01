@@ -14,23 +14,24 @@
 //!   refreshed once and replayed, so a token that expired between the pre-flight
 //!   check and the wire is transparently recovered.
 //!
-//! It is hand-rolled over `reqwest` (rustls only) against the real
-//! [`capsule-api-auth`] endpoints (`POST /login`, `/refresh`, `/logout`); the typed
-//! REST client (spargen, `S-D8`) is still parked, so this slice does not depend on
-//! it. Auth requests are [`crate::net::RetryClass::Interactive`]; the full backoff
+//! It is hand-rolled over `reqwest` (rustls only) against the server's own
+//! `/v1/auth/{register,login,refresh,logout}`. It does not
+//! route through the generated client, but the reason is no longer that spargen is
+//! parked — spargen ships and `S-D8` generates the typed surface today. What lives here
+//! is token *orchestration*: the pre-flight refresh, the `401`-retry-once replay, and
+//! the session store they mutate. That is deliberately outside generated code, which
+//! owns parsing and serialization and nothing else. Auth requests are [`crate::net::RetryClass::Interactive`]; the full backoff
 //! ladder lands with `S-D10`, but the `401`-retry-once and pre-flight refresh here
 //! are the parts the session store owns.
 //!
 //! ## Testing
 //!
 //! The wire flows (login/refresh/logout, `401` recovery, error mapping) are proven
-//! against a focused in-process mock HTTP server rather than a booted
-//! `capsule-api-auth`: booting the real server from this crate would drag the
-//! Postgres and Valkey testcontainers, sea-orm migrations, salvo and webauthn in as
-//! SDK dev-dependencies, and salvo's in-memory `TestClient` is not a TCP server, so
-//! a real `reqwest` round-trip would need the router bound to a socket regardless.
-//! Per the repo's mocking guidance, a dependency-light mock is the deterministic
-//! choice. The pre-flight and single-flight guarantees are proven with an injected
+//! against a focused in-process mock HTTP server rather than a booted server: booting one
+//! from this crate would invert the dependency — the *server* dev-depends on this crate, not
+//! the other way round (`S-D28`) — and a mock keeps every wire case deterministic. The round
+//! trip against the real router, over a real socket, lives where the dependency points:
+//! `capsule-server/tests/sdk_client.rs`. The pre-flight and single-flight guarantees are proven with an injected
 //! [`Clock`] — no sleeps, no wall-clock dependence.
 
 use std::sync::Arc;
@@ -104,6 +105,13 @@ pub enum AuthError {
     /// An authenticated operation was attempted with no active session.
     #[error("no active session; call login() first")]
     NotAuthenticated,
+
+    /// A code is needed and this caller cannot ask for one.
+    ///
+    /// Only produced by [`LoginOutcome::into_session`]: the login itself answers a
+    /// [`LoginOutcome`], because a second factor is the system working rather than a failure.
+    #[error("this account requires a second factor; complete the sign-in with a code")]
+    SecondFactorRequired,
     /// A server response the client does not model.
     #[error("unexpected {status} response from {endpoint}: {detail}")]
     Unexpected {
@@ -147,6 +155,7 @@ impl AuthError {
 enum Endpoint {
     Register,
     Login,
+    VerifyTotp,
     Refresh,
     Logout,
 }
@@ -156,6 +165,7 @@ impl Endpoint {
         match self {
             Self::Register => "register",
             Self::Login => "login",
+            Self::VerifyTotp => "login/verify-totp",
             Self::Refresh => "refresh",
             Self::Logout => "logout",
         }
@@ -167,7 +177,12 @@ impl Endpoint {
             // Registration does not authenticate an existing session, so a `401` from
             // it is not a real ceremony outcome; treat it as a credential rejection.
             Self::Register | Self::Login => AuthError::InvalidCredentials,
-            Self::Refresh | Self::Logout => AuthError::SessionExpired,
+            // `VerifyTotp` is here rather than beside `Login`, and it is not an oversight that
+            // it reads the same as a refresh: a `401` completing a second factor means the
+            // challenge expired or the code did not verify, and both send the caller back to
+            // the password — which is what `SessionExpired` says. Neither is a *credential*
+            // rejection, because the password already verified to get this far.
+            Self::VerifyTotp | Self::Refresh | Self::Logout => AuthError::SessionExpired,
         }
     }
 }
@@ -185,16 +200,35 @@ struct LoginRequestBody<'a> {
     cohort_hash: Option<&'a str>,
 }
 
-/// The registration body. The SDK mirrors the server's `RegisterRequest`
-/// (`capsule-api-auth`) and lets the same advisory cohort ride account creation.
+/// The registration body: an address and a password, and nothing else.
+///
+/// It carried a username, a display name and the advisory cohort hash until `S-C53`. The server
+/// takes none of them and its body is **strict**, so a field kept for old times' sake would be a
+/// `422` rather than a value quietly ignored.
 #[derive(Serialize)]
 struct RegisterRequestBody<'a> {
-    username: &'a str,
-    name: &'a str,
     email: &'a str,
     password: &'a str,
+}
+
+/// The body that completes a sign-in with a code (`S-C55`).
+///
+/// The advisory cohort rides **here** rather than on the login, because this is the request that
+/// opens the session: a second-factor sign-in that sent its cohort on the first leg would attach
+/// it to a session that does not exist yet, and would land in the devices view ungrouped.
+#[derive(Serialize)]
+struct VerifyTotpRequestBody<'a> {
+    mfa_token: &'a str,
+    totp_code: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     cohort_hash: Option<&'a str>,
+}
+
+/// The `202 Accepted` body: a half-finished sign-in.
+#[derive(Deserialize)]
+struct SecondFactorChallengeBody {
+    mfa_token: String,
+    expires_by: u64,
 }
 
 #[derive(Serialize)]
@@ -202,7 +236,7 @@ struct RefreshRequestBody<'a> {
     refresh_token: &'a str,
 }
 
-/// The server's `TokenResponse` (`capsule-api-auth`). `token_type` and any other
+/// The server's `TokenResponse`. `token_type` and any other
 /// fields are ignored; `expires_by` is the **absolute** Unix-seconds expiry of the
 /// access token.
 #[derive(Deserialize)]
@@ -267,6 +301,7 @@ pub struct PersistedSession {
 struct AuthEndpoints {
     register: String,
     login: String,
+    verify_totp: String,
     refresh: String,
     logout: String,
 }
@@ -283,9 +318,55 @@ impl AuthEndpoints {
         Ok(Self {
             register: format!("{trimmed}/register"),
             login: format!("{trimmed}/login"),
+            verify_totp: format!("{trimmed}/login/verify-totp"),
             refresh: format!("{trimmed}/refresh"),
             logout: format!("{trimmed}/logout"),
         })
+    }
+}
+
+/// What a password login answered with (`S-C55`).
+///
+/// Two variants because the server has two outcomes and says so with a status: `200` with a
+/// token pair, `202` with a challenge. Neither is a failure — an account having a second factor
+/// is the system working — which is why this is a value rather than an `AuthError` variant.
+///
+/// A caller that only supports passwords should match on this and say so, rather than treating
+/// the challenge as an error it cannot describe.
+///
+/// No `Debug`. [`Session`] holds live tokens and deliberately has none, and the challenge here is
+/// a credential in its own right — deriving one would put half a sign-in in any log line that
+/// formatted the value.
+pub enum LoginOutcome {
+    /// The account has no second factor, and this is its session.
+    Session(Session),
+    /// The password verified and a code is still needed.
+    SecondFactorRequired {
+        /// The challenge to present to
+        /// [`verify_second_factor`](AuthClient::verify_second_factor). Good once, and for five
+        /// minutes.
+        mfa_token: SecretString,
+        /// The absolute Unix-seconds instant the challenge stops being honoured.
+        expires_by: u64,
+    },
+}
+
+impl LoginOutcome {
+    /// The session, if the sign-in finished.
+    ///
+    /// A convenience for the callers that genuinely cannot prompt — an automated one, or a test
+    /// against an account known to have no second factor. It returns an error rather than
+    /// panicking, because "this account needs a code and I cannot ask for one" is a runtime
+    /// condition rather than a programming mistake.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthError::SecondFactorRequired`] when a code is needed.
+    pub fn into_session(self) -> Result<Session, AuthError> {
+        match self {
+            Self::Session(session) => Ok(session),
+            Self::SecondFactorRequired { .. } => Err(AuthError::SecondFactorRequired),
+        }
     }
 }
 
@@ -363,7 +444,7 @@ impl AuthClient {
     /// If a cohort hash is configured ([`with_cohort_hash`](AuthClient::with_cohort_hash))
     /// it rides the request body; otherwise the field is omitted entirely.
     #[instrument(skip_all)]
-    pub async fn login(&self, email: &str, password: &str) -> Result<Session, AuthError> {
+    pub async fn login(&self, email: &str, password: &str) -> Result<LoginOutcome, AuthError> {
         tracing::info!(
             cohort_emitted = self.cohort().is_some(),
             "authenticating via password login"
@@ -378,8 +459,56 @@ impl AuthClient {
             })
             .send()
             .await?;
+
+        // `202 Accepted` — the password verified and the sign-in is not finished. Read from the
+        // **status**, which is where the server puts the distinction; a body flag would be a
+        // second place for the two to disagree. Before `S-C63` this fell through to
+        // `read_tokens` and surfaced as `MalformedResponse`, which told a user with a second
+        // factor that their server was broken.
+        if response.status() == reqwest::StatusCode::ACCEPTED {
+            let challenge: SecondFactorChallengeBody =
+                response
+                    .json()
+                    .await
+                    .map_err(|e| AuthError::MalformedResponse {
+                        endpoint: Endpoint::Login.name(),
+                        reason: e.to_string(),
+                    })?;
+            tracing::info!("login needs a second factor");
+            return Ok(LoginOutcome::SecondFactorRequired {
+                mfa_token: SecretString::from(challenge.mfa_token),
+                expires_by: challenge.expires_by,
+            });
+        }
+
         let tokens = read_tokens(Endpoint::Login, response).await?;
         tracing::info!("login succeeded; session established");
+        Ok(LoginOutcome::Session(self.session_with_tokens(tokens)))
+    }
+
+    /// Complete a sign-in with the code an authenticator app is showing (`S-C55`).
+    ///
+    /// `mfa_token` is the challenge [`LoginOutcome::SecondFactorRequired`] carried. It is good
+    /// once and for five minutes; a code is good once, full stop, so a retry after a wrong code
+    /// re-uses the same challenge and a retry after a *right* one has to start from the password.
+    #[instrument(skip_all)]
+    pub async fn verify_second_factor(
+        &self,
+        mfa_token: &SecretString,
+        totp_code: &str,
+    ) -> Result<Session, AuthError> {
+        let response = self
+            .http
+            .post(&self.base.verify_totp)
+            .json(&VerifyTotpRequestBody {
+                mfa_token: mfa_token.expose_secret(),
+                totp_code,
+                cohort_hash: self.cohort(),
+            })
+            .send()
+            .await?;
+        let tokens = read_tokens(Endpoint::VerifyTotp, response).await?;
+        tracing::info!("second factor accepted; session established");
         Ok(self.session_with_tokens(tokens))
     }
 
@@ -387,13 +516,7 @@ impl AuthClient {
     /// issues tokens on registration). The configured cohort hash rides the body
     /// under the same advisory contract as [`login`](AuthClient::login).
     #[instrument(skip_all)]
-    pub async fn register(
-        &self,
-        username: &str,
-        name: &str,
-        email: &str,
-        password: &str,
-    ) -> Result<Session, AuthError> {
+    pub async fn register(&self, email: &str, password: &str) -> Result<Session, AuthError> {
         tracing::info!(
             cohort_emitted = self.cohort().is_some(),
             "registering a new account"
@@ -401,13 +524,7 @@ impl AuthClient {
         let response = self
             .http
             .post(&self.base.register)
-            .json(&RegisterRequestBody {
-                username,
-                name,
-                email,
-                password,
-                cohort_hash: self.cohort(),
-            })
+            .json(&RegisterRequestBody { email, password })
             .send()
             .await?;
         let tokens = read_tokens(Endpoint::Register, response).await?;
@@ -889,10 +1006,22 @@ mod tests {
 
     /// Extract the error from a login result whose `Ok` type ([`Session`]) is not
     /// `Debug`, so `unwrap_err` cannot be used directly.
-    fn expect_login_err(result: Result<Session, AuthError>) -> AuthError {
+    fn expect_login_err(result: Result<LoginOutcome, AuthError>) -> AuthError {
         match result {
             Ok(_) => panic!("expected login to fail"),
             Err(error) => error,
+        }
+    }
+
+    /// The session from a login that finished, for the cases that are not about the second
+    /// factor. Panics rather than returning a `Result`: a test whose fixture answers `202` when
+    /// it meant to answer `200` has nothing left to assert.
+    fn finished(outcome: LoginOutcome) -> Session {
+        match outcome {
+            LoginOutcome::Session(session) => session,
+            LoginOutcome::SecondFactorRequired { .. } => {
+                panic!("the fixture answered a second-factor challenge")
+            }
         }
     }
 
@@ -945,7 +1074,7 @@ mod tests {
 
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         assert!(session.is_authenticated().await);
         assert_eq!(stored_access(&session).await, "access-1");
@@ -988,7 +1117,7 @@ mod tests {
         let dyn_clock: Arc<dyn Clock> = clock.clone();
         let http = reqwest::Client::builder().build().unwrap();
         let client = AuthClient::from_parts(&server.base_url, dyn_clock, http, 30).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         // now = BASE, expiry = BASE+100, skew 30 → BASE+30 < BASE+100 → no refresh.
         assert_eq!(
@@ -1050,7 +1179,7 @@ mod tests {
         let dyn_clock: Arc<dyn Clock> = clock.clone();
         let http = reqwest::Client::builder().build().unwrap();
         let client = AuthClient::from_parts(&server.base_url, dyn_clock, http, 30).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         let mut handles = Vec::new();
         for _ in 0..8 {
@@ -1112,7 +1241,7 @@ mod tests {
 
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         let base = server.base_url.clone();
         let response = session
@@ -1155,7 +1284,7 @@ mod tests {
 
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         let base = server.base_url.clone();
         let response = session
@@ -1166,6 +1295,117 @@ mod tests {
         assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
         assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
         assert_eq!(protected_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// A `202` is a second-factor challenge, not a malformed token pair (`S-C55`, `S-C63`).
+    ///
+    /// Before this, `read_tokens` treated every 2xx as a pair and the challenge body failed to
+    /// deserialize — so a user with a second factor was told their server had sent a malformed
+    /// response.
+    #[tokio::test]
+    async fn a_202_login_is_a_second_factor_challenge() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/login" => MockResponse::json(
+                        202,
+                        r#"{"mfa_token":"challenge-1","expires_by":1893456000}"#,
+                    ),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+        let outcome = client.login("a@example.com", "pw").await.unwrap();
+
+        let LoginOutcome::SecondFactorRequired {
+            mfa_token,
+            expires_by,
+        } = outcome
+        else {
+            panic!("a 202 is a challenge, not a session");
+        };
+        assert_eq!(mfa_token.expose_secret(), "challenge-1");
+        assert_eq!(expires_by, 1_893_456_000);
+    }
+
+    /// The challenge and a code complete the sign-in, and the cohort rides *this* request.
+    #[tokio::test]
+    async fn a_code_completes_the_sign_in_and_carries_the_cohort() {
+        let bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&bodies);
+        let handler: Handler = Arc::new(move |req| {
+            let seen = Arc::clone(&seen);
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/login" => MockResponse::json(
+                        202,
+                        r#"{"mfa_token":"challenge-1","expires_by":1893456000}"#,
+                    ),
+                    "/login/verify-totp" => {
+                        seen.lock().await.push(req.body.clone());
+                        MockResponse::json(200, token_json("access-1", "refresh-1", 2_000_000_000))
+                    }
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url)
+            .unwrap()
+            .with_cohort_hash("a-particular-machine".to_owned());
+
+        let LoginOutcome::SecondFactorRequired { mfa_token, .. } =
+            client.login("a@example.com", "pw").await.unwrap()
+        else {
+            panic!("expected a challenge");
+        };
+        let session = client
+            .verify_second_factor(&mfa_token, "123456")
+            .await
+            .unwrap();
+        assert!(session.is_authenticated().await);
+
+        // The session is opened by the *completing* request, so the advisory cohort belongs
+        // there — sent on the first leg it would describe a session that does not exist.
+        let body = bodies.lock().await[0].clone();
+        assert!(body.contains("a-particular-machine"), "{body}");
+        assert!(body.contains("challenge-1"), "{body}");
+    }
+
+    /// A caller that cannot prompt gets a typed refusal rather than a confusing one.
+    #[tokio::test]
+    async fn into_session_refuses_a_challenge_it_cannot_answer() {
+        let handler: Handler = Arc::new(move |req| {
+            Box::pin(async move {
+                match req.path.as_str() {
+                    "/login" => MockResponse::json(
+                        202,
+                        r#"{"mfa_token":"challenge-1","expires_by":1893456000}"#,
+                    ),
+                    _ => MockResponse::json(404, r#"{"error":"x"}"#),
+                }
+            })
+        });
+
+        let server = start_mock(handler).await;
+        let client = AuthClient::new(&server.base_url).unwrap();
+        // `expect_err` needs `Debug` on the ok arm, and `Session` deliberately has none — it
+        // holds live tokens.
+        let error = match client
+            .login("a@example.com", "pw")
+            .await
+            .unwrap()
+            .into_session()
+        {
+            Ok(_) => panic!("a challenge is not a session"),
+            Err(error) => error,
+        };
+
+        assert!(matches!(error, AuthError::SecondFactorRequired));
     }
 
     /// Login `401` maps to a typed error carrying the localizable catalog code.
@@ -1240,7 +1480,7 @@ mod tests {
 
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
         let error = session.refresh().await.unwrap_err();
 
         assert!(matches!(error, AuthError::SessionExpired));
@@ -1262,7 +1502,7 @@ mod tests {
 
         let server = start_mock(handler).await;
         let client = AuthClient::new(&server.base_url).unwrap();
-        let session = client.login("a@example.com", "pw").await.unwrap();
+        let session = finished(client.login("a@example.com", "pw").await.unwrap());
 
         let persisted = session.export().await.unwrap();
         assert_eq!(persisted.access_token.expose_secret(), "access-1");
@@ -1326,7 +1566,7 @@ mod tests {
         let client = AuthClient::new(&server.base_url)
             .unwrap()
             .with_cohort_hash("deadbeef".to_string());
-        client.login("a@example.com", "pw").await.unwrap();
+        finished(client.login("a@example.com", "pw").await.unwrap());
 
         let body = captured
             .lock()
@@ -1340,27 +1580,34 @@ mod tests {
         );
     }
 
-    /// The same emission rides account registration (session creation on `/register`).
+    /// Registration sends an address and a password, and **nothing else**.
+    ///
+    /// It used to send a username, a display name and the advisory cohort hash. The server takes
+    /// none of them (`S-C53`), and its body is strict — so a field this client added for
+    /// old times' sake would be a `422` rather than a value quietly ignored. Asserted as an
+    /// exact key set, because the failure mode here is a field creeping back in.
     #[tokio::test]
-    async fn cohort_hash_rides_register_body() {
+    async fn registration_sends_only_an_address_and_a_password() {
         let captured = Arc::new(std::sync::Mutex::new(None));
         let server = start_mock(capturing_handler(captured.clone())).await;
 
         let client = AuthClient::new(&server.base_url)
             .unwrap()
             .with_cohort_hash("cafef00d".to_string());
-        client
-            .register("johndoe", "John Doe", "john@example.com", "pw")
-            .await
-            .unwrap();
+        client.register("john@example.com", "pw").await.unwrap();
 
         let body = captured
             .lock()
             .unwrap()
             .clone()
             .expect("register body captured");
-        assert_eq!(body["username"], "johndoe");
-        assert_eq!(body["cohort_hash"], "cafef00d");
+        let keys: Vec<&str> = body
+            .as_object()
+            .expect("a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["email", "password"]);
     }
 
     /// Absent stays legal: with no cohort configured, the field is **omitted entirely**
@@ -1371,7 +1618,7 @@ mod tests {
         let server = start_mock(capturing_handler(captured.clone())).await;
 
         let client = AuthClient::new(&server.base_url).unwrap();
-        client.login("a@example.com", "pw").await.unwrap();
+        finished(client.login("a@example.com", "pw").await.unwrap());
 
         let body = captured
             .lock()

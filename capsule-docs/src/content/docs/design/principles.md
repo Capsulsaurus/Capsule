@@ -58,6 +58,7 @@ The owner docs are:
 | Stacking taxonomy + trash retention semantics                         | [Asset Organization](/design/organization/)                         |
 | Lifecycle action set                                                  | [Authorization](/design/authorization/)                             |
 | Damage scenarios + client class taxonomy + containment shells         | [Threat Model](/design/threat-model/)                               |
+| Outbound licence + dependency-licence policy + linkage rules           | [Licensing](/design/licensing/)                                     |
 | Server- + client-side refuse-by-default validation invariants         | [Threat Model — Validation](/design/threat-model/validation/)       |
 | Schema evolution rules, forbidden behaviors, deprecation policy       | [Threat Model — Schema Rules](/design/threat-model/schema-rules/)   |
 | Share links + public-share serving                                    | [Share Links](/design/share-links/)                                 |
@@ -68,6 +69,7 @@ The owner docs are:
 | Translation catalog format + locale resolution + error-code scheme + supported language set + README translation | [Internationalization](/design/i18n/) |
 | Code module → design doc mapping + bounded E2E test surface           | [Module Map](/design/module-map/)                                   |
 | API surface ↔ transport map + cross-transport negotiation/rejection mapping | [API Surfaces](/design/api-surfaces/)                          |
+| Developer-reference generation contract + reference IA                | [Developer Documentation](/design/developer-docs/)                 |
 | Storage durability verdict + verify-before-destroy rule               | [Import — Storage Verification](/design/import/storage-verification/) |
 | Canonical dependency + tooling pins (non-crypto libraries per platform) | [Dependencies](/design/dependencies/)                             |
 | Tethered camera import (PTP/IP source adapter)                        | [Import — Camera Import](/design/import/camera-import/)             |

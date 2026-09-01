@@ -53,18 +53,33 @@ struct ImportProgressOverlay: View {
 // MARK: - Result
 
 /// What an import did, as the sentence the completion alert shows.
+///
+/// Each clause is a catalog plural rather than an interpolated English sentence:
+/// the count agreement is the translator's to make, and a language that inflects
+/// the noun cannot be served by concatenating a number onto a fixed string.
 enum ImportSummary {
     static func text(for result: ImportResult) -> String {
         var lines: [String] = []
         if result.importedCount > 0 {
-            lines.append("\(result.importedCount) imported into Capsule.")
+            lines.append(String(
+                localized: "app.timeline.import.imported",
+                defaultValue: "\(result.importedCount) imported into Capsule."
+            ))
         }
         if result.duplicateCount > 0 {
-            lines.append("\(result.duplicateCount) already in your library.")
+            lines.append(String(
+                localized: "app.timeline.import.duplicates",
+                defaultValue: "\(result.duplicateCount) already in your library."
+            ))
         }
         if result.failureCount > 0 {
-            lines.append("\(result.failureCount) couldn't be imported.")
+            lines.append(String(
+                localized: "app.timeline.import.failed",
+                defaultValue: "\(result.failureCount) couldn't be imported."
+            ))
         }
-        return lines.isEmpty ? "Nothing to import." : lines.joined(separator: "\n")
+        return lines.isEmpty
+            ? String(localized: "app.timeline.import.nothing")
+            : lines.joined(separator: "\n")
     }
 }

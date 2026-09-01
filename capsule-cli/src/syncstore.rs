@@ -64,7 +64,7 @@ fn decode_id(value: &str) -> Result<Vec<u8>, SyncStoreError> {
 fn kind_label(kind: ChangeKind) -> &'static str {
     match kind {
         ChangeKind::Created => "created",
-        ChangeKind::MetadataUpdated => "metadata_updated",
+        ChangeKind::Updated => "metadata_updated",
         ChangeKind::Deleted => "deleted",
     }
 }
@@ -219,6 +219,7 @@ mod tests {
             metadata_blob: Vec::new(),
             blobs: BlobManifest::default(),
             original_held: true,
+            changed_at: "1970-01-01T00:00:00Z".to_string(),
         }
     }
 
@@ -226,6 +227,7 @@ mod tests {
         SyncPage {
             entries,
             next_cursor: SyncCursor::from_bytes(vec![cursor_tag; 41]),
+            has_more: false,
         }
     }
 
@@ -277,10 +279,7 @@ mod tests {
 
         let p1 = page(vec![entry(&album, b"x", 1, ChangeKind::Created)], 0x21);
         persist_page(&db, &p1).await.unwrap();
-        let p2 = page(
-            vec![entry(&album, b"x", 2, ChangeKind::MetadataUpdated)],
-            0x22,
-        );
+        let p2 = page(vec![entry(&album, b"x", 2, ChangeKind::Updated)], 0x22);
         persist_page(&db, &p2).await.unwrap();
 
         // One row (upserted), now at seq 2.

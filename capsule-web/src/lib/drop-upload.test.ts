@@ -1,6 +1,7 @@
-// Guest-drop uploader (slice S-D3): chunking, checksums, progress, and failure classification,
-// driven against a mocked fetch. No crypto here — the seal is exercised by the cross-language KAT;
-// this pins the HTTP protocol the bare drop `#[handler]`s require.
+// Guest-drop uploader (slices S-D3, S-C61): chunking, checksums, progress, and failure
+// classification, driven against a mocked fetch. No crypto here — the seal is exercised by the
+// cross-language KAT; this pins the HTTP protocol `capsule-server`'s drop routes require, and it
+// is what caught the paths and the body going stale when the Salvo tree retired.
 
 import { describe, expect, test } from 'bun:test';
 
@@ -52,10 +53,16 @@ function mockFetch(handler: (call: Call) => Response) {
 }
 
 const created = () =>
-    new Response(JSON.stringify({ drop_id: 'drop-123' }), {
-        status: 201,
-        headers: { 'Content-Type': 'application/json' },
-    });
+    new Response(
+        JSON.stringify({
+            upload_id: 'upload-123',
+            suggested_chunk_size: 1 << 20,
+        }),
+        {
+            status: 201,
+            headers: { 'Content-Type': 'application/json' },
+        },
+    );
 
 const chunkOk = (newOffset: number) =>
     new Response(null, {
@@ -86,12 +93,12 @@ describe('uploadDrop — chunking & progress', () => {
 
         // One create + two chunk PATCHes.
         expect(calls[0].method).toBe('POST');
-        expect(calls[0].url).toBe('/u/opaque-abc/drop');
+        expect(calls[0].url).toBe('/d/opaque-abc');
         const patches = calls.filter((c) => c.method === 'PATCH');
         expect(patches.length).toBe(2);
 
         // First chunk: offset 0, exactly 1 MiB (4 KiB-aligned), octet-stream, correct checksum.
-        expect(patches[0].url).toBe('/u/opaque-abc/drop/drop-123');
+        expect(patches[0].url).toBe('/d/opaque-abc/upload-123');
         expect(patches[0].headers.get('Content-Type')).toBe(
             'application/octet-stream',
         );
@@ -114,7 +121,7 @@ describe('uploadDrop — chunking & progress', () => {
         expect(progress.length).toBe(2);
     });
 
-    test('sends the passphrase proof in the create body, null when absent', async () => {
+    test('sends the declaration the server asks for, with the proof only when there is one', async () => {
         const { impl, calls } = mockFetch((call) =>
             call.method === 'POST' ? created() : chunkOk(fakeSealed(10).size),
         );
@@ -128,7 +135,11 @@ describe('uploadDrop — chunking & progress', () => {
         const body = JSON.parse(calls[0].body as string);
         expect(body.passphrase_proof).toBe('deadbeef');
         expect(body.size).toBe(10);
-        expect(body.descriptor.content_type).toBe('image/jpeg');
+        expect(body.content_type).toBe('image/jpeg');
+        expect(body.ciphertext_hash).toBe('a'.repeat(64));
+        expect(body.kem_ct).toBe('AAAA');
+        expect(body.suggested_filename).toBe('photo.jpg');
+        expect(body.descriptor).toBeUndefined();
 
         const { impl: impl2, calls: calls2 } = mockFetch((call) =>
             call.method === 'POST' ? created() : chunkOk(10),
@@ -139,9 +150,11 @@ describe('uploadDrop — chunking & progress', () => {
             sealed: fakeSealed(10),
             fetchImpl: impl2,
         });
-        expect(
-            JSON.parse(calls2[0].body as string).passphrase_proof,
-        ).toBeNull();
+        // Absent, not present-null: the server's body is strict, and a present-null is a value
+        // it would have to decide what to do with.
+        expect('passphrase_proof' in JSON.parse(calls2[0].body as string)).toBe(
+            false,
+        );
     });
 });
 
@@ -195,15 +208,32 @@ describe('uploadDrop — failure classification', () => {
             coded(403, 'error.drop.passphrase_required'),
             'passphrase',
         );
-        await expectCreateFailure(coded(409, 'error.drop.cap_exceeded'), 'cap');
+        await expectCreateFailure(
+            coded(409, 'error.drop.cap_exhausted'),
+            'cap',
+        );
+        await expectCreateFailure(
+            coded(413, 'error.drop.file_too_large'),
+            'too_large',
+        );
         await expectCreateFailure(
             coded(400, 'error.upload.unsupported_content_type'),
             'unsupported_type',
         );
         await expectCreateFailure(
-            coded(400, 'error.drop.malformed_descriptor'),
+            coded(400, 'error.drop.malformed'),
             'generic',
         );
+    });
+
+    test('a refused passphrase is not read as an exhausted quota', async () => {
+        // Both are 403. Switching on the status alone would turn "retype your passphrase" into
+        // "this link's owner is out of space", which is unactionable and wrong.
+        await expectCreateFailure(
+            coded(403, 'error.drop.passphrase_required'),
+            'passphrase',
+        );
+        await expectCreateFailure(coded(403, 'error.quota.exceeded'), 'quota');
     });
 
     test('a mid-upload chunk failure surfaces that chunk’s class', async () => {

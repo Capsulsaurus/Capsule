@@ -1,0 +1,135 @@
+Capsule
+Copyright (C) 2024-2026 Justin Chung
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3 only, as
+published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program, in the file `LICENSE`. If not, see
+<https://www.gnu.org/licenses/>.
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+Copyright in Capsule is held solely by Justin Chung. The AGPL-3.0-only grant
+above is the license under which Capsule is published; it is not the only
+license under which the copyright holder may offer it. See the "License"
+section of `README.md` for the full position, and `CLA.md` for the terms under
+which contributions are accepted.
+
+
+================================================================================
+THIRD-PARTY NOTICES
+================================================================================
+
+Capsule links third-party components. The list below records every dependency
+whose license carries an attribution, notice, or source-availability obligation
+that Capsule must discharge when it distributes a binary, plus the license
+elections Capsule makes where a dependency is offered under a choice of terms.
+
+It is not a complete dependency inventory. Permissively licensed dependencies
+whose obligations are satisfied by shipping this file (MIT, Apache-2.0,
+BSD-2-Clause, BSD-3-Clause, ISC, Zlib, BSL-1.0, Unicode-3.0, CC0-1.0, 0BSD,
+MIT-0, Unlicense, and the various OR-combinations of these) are not enumerated
+individually; their license texts are reproducible from the dependency tree with
+`cargo metadata`. The machine-checked policy that governs which licenses may
+enter this tree at all is `deny.toml`, and the rationale is
+capsule-docs/src/content/docs/design/licensing.md.
+
+--------------------------------------------------------------------------------
+tzf-rel — Open Database License v1.0 (ODbL-1.0)
+--------------------------------------------------------------------------------
+
+Capsule embeds the `tzf-rel` timezone boundary database (reached through the
+MIT-licensed `tzf-rs` crate) in every distributed binary: the `capsule` CLI, the
+server binaries, the iOS static library, the Android shared library, and the
+WebAssembly bundle.
+
+  Contains information from the Timezone Boundary Builder database, which is
+  made available under the Open Database License (ODbL) v1.0.
+  <https://opendatacommons.org/licenses/odbl/1-0/>
+
+  Upstream database: <https://github.com/evansiroky/timezone-boundary-builder>
+  Rust packaging:    <https://github.com/ringsaturn/tzf-rel>
+
+Capsule redistributes this database unmodified and creates no Derivative
+Database. The ODbL share-alike obligation attaches to the database, not to
+Capsule's own source code. The unmodified database is available from the
+upstream sources above under the ODbL.
+
+--------------------------------------------------------------------------------
+jpeg-encoder — Independent JPEG Group license (IJG)
+--------------------------------------------------------------------------------
+
+`jpeg-encoder` is licensed `(MIT OR Apache-2.0) AND IJG`. The IJG term is a
+conjunctive requirement that cannot be elected away, and it requires the
+following notice:
+
+  This software is based in part on the work of the Independent JPEG Group.
+
+Capsule elects MIT for the disjunctive portion.
+
+--------------------------------------------------------------------------------
+webpki-roots — Community Data License Agreement, Permissive, v2.0
+--------------------------------------------------------------------------------
+
+`webpki-roots` redistributes the Mozilla CA certificate trust store under
+CDLA-Permissive-2.0, which requires that this notice accompany the data.
+
+  This product includes data from the Mozilla Included CA Certificate List,
+  redistributed by the `webpki-roots` project under the Community Data License
+  Agreement - Permissive - Version 2.0.
+  <https://cdla.dev/permissive-2-0/>
+
+--------------------------------------------------------------------------------
+Mozilla Public License 2.0 components
+--------------------------------------------------------------------------------
+
+The following dependencies are licensed under the MPL-2.0. The MPL is a
+file-level copyleft: the obligation is to make the source of these files
+available, and it is satisfied because Capsule links them unmodified from
+their published upstream releases. Source for each is available from crates.io
+and from the upstream repository named in its own package metadata.
+
+  base64urlsafedata, colored, hpke-rs, hpke-rs-crypto, hpke-rs-libcrux,
+  hpke-rs-rust-crypto, option-ext, uniffi, uniffi_bindgen, uniffi_core,
+  uniffi_internal_macros, uniffi_macros, uniffi_meta, uniffi_pipeline,
+  uniffi_udl, webauthn-attestation-ca, webauthn-rs, webauthn-rs-core,
+  webauthn-rs-proto
+
+--------------------------------------------------------------------------------
+Conjunctive-license components
+--------------------------------------------------------------------------------
+
+These dependencies combine several licenses with AND, so every listed term
+applies simultaneously and Capsule complies with all of them:
+
+  ring          Apache-2.0 AND ISC
+  aws-lc-rs     ISC AND (Apache-2.0 OR ISC)
+  aws-lc-sys    ISC AND (Apache-2.0 OR ISC) AND Apache-2.0 AND MIT AND
+                BSD-3-Clause AND (Apache-2.0 OR ISC OR MIT) AND
+                (Apache-2.0 OR ISC OR MIT-0)
+  brotli        BSD-3-Clause AND MIT
+  encoding_rs   (Apache-2.0 OR MIT) AND BSD-3-Clause
+  matchit       MIT AND BSD-3-Clause
+  unicode-ident (MIT OR Apache-2.0) AND Unicode-3.0
+
+--------------------------------------------------------------------------------
+License elections
+--------------------------------------------------------------------------------
+
+Where a dependency is offered under a choice of licenses, Capsule elects a
+permissive term. One election is worth recording explicitly:
+
+  r-efi   Offered as `MIT OR Apache-2.0 OR LGPL-2.1-or-later`. Capsule elects
+          MIT. Capsule does not accept the LGPL-2.1-or-later arm, and no
+          copyleft obligation arises from this dependency. `r-efi` is reached
+          only through `getrandom`/`wasi` and is compiled only for UEFI and
+          wasm32 targets.
+
+For every other multi-licensed dependency Capsule elects MIT where offered, and
+otherwise the first permissive term listed in its SPDX expression.

@@ -152,8 +152,8 @@
     "target": "Componenti:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
-    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -200,8 +200,8 @@
     "target": "- `capsule-android`: Android Studio o IntelliJ IDEA con plugin"
   },
   {
-    "source": "- `capsule-api`: VS Code or similar",
-    "target": "- `capsule-api`: VS Code o simili"
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`: VS Code o simili"
   },
   {
     "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
@@ -316,15 +316,15 @@
     "target": "### Contratto di licenza per collaboratori (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "Richiediamo a tutti i collaboratori di firmare una CLA. Questo garantisce che il progetto mantenga la flessibilità legale necessaria per ottenere finanziamenti futuri e un team di manutenzione dedicato, assicurando che il software continui a essere supportato attivamente e sia autosufficiente per i decenni a venire."
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "Richiediamo che tutti i collaboratori accettino un [CLA](CLA.md). Il copyright di Capsule è detenuto da una sola persona, ed è questo che rende possibile la distribuzione tramite gli app store: i termini dell'App Store sono incompatibili con la AGPL, quindi una build per lo store può essere solo una concessione separata da parte del titolare del copyright. In cambio, ogni rilascio pubblico del codice sorgente resta sotto una licenza approvata dalla OSI."
   },
   {
     "source": "## License",
     "target": "## Licenza"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsule è distribuita sotto la [licenza AGPL-3.0](LICENSE)."
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule è pubblicato sotto [AGPL-3.0-only](LICENSE). Il copyright appartiene esclusivamente a Justin Chung; gli avvisi relativi a terze parti si trovano in [NOTICE](NOTICE). Il titolare del copyright può inoltre offrire Capsule a condizioni commerciali separate, comprese le condizioni proprietarie richieste dagli app store. Ciò non incide su quanto già pubblicato: qualsiasi versione ricevuta sotto la AGPL resta tua sotto la AGPL, in modo permanente. La posizione completa è documentata nel [documento di progettazione sulle licenze](https://capsule.justinchung.net/design/licensing/)."
   }
 ]

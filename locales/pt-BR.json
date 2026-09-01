@@ -51,6 +51,10 @@
     "message": "New Album",
     "context": "Machine-translated seed pending human review."
   },
+  "app.albums.photo_count": {
+    "message": "{count, plural, one {# Photo} other {# Photos}}",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.albums.section.my_albums": {
     "message": "My Albums",
     "context": "Machine-translated seed pending human review."
@@ -61,6 +65,10 @@
   },
   "app.albums.title": {
     "message": "Albums",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.albums.untitled": {
+    "message": "Album",
     "context": "Machine-translated seed pending human review."
   },
   "app.collections.section.media_types": {
@@ -155,6 +163,14 @@
     "message": "Imports",
     "context": "Machine-translated seed pending human review."
   },
+  "app.infoplist.face_id_usage": {
+    "message": "Capsule uses Face ID to unlock your Hidden and Recently Deleted photos.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.infoplist.photo_library_usage": {
+    "message": "Capsule shows and organizes the photos and videos in your library.",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.places.empty.description": {
     "message": "Photos with location data will appear here.",
     "context": "Machine-translated seed pending human review."
@@ -167,6 +183,10 @@
     "message": "Places",
     "context": "Machine-translated seed pending human review."
   },
+  "app.recently_deleted.auth.reason": {
+    "message": "View your recently deleted photos.",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.recently_deleted.empty.description": {
     "message": "Deleted Capsule photos appear here for recovery.",
     "context": "Machine-translated seed pending human review."
@@ -175,12 +195,24 @@
     "message": "No Recently Deleted",
     "context": "Machine-translated seed pending human review."
   },
+  "app.recently_deleted.locked.description": {
+    "message": "Authenticate to view your recently deleted photos.",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.recently_deleted.recover": {
     "message": "Recover",
     "context": "Machine-translated seed pending human review."
   },
   "app.recently_deleted.title": {
     "message": "Recently Deleted",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.recently_deleted.unlock": {
+    "message": "Unlock",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.search.clear_facet": {
+    "message": "Clear {facet}",
     "context": "Machine-translated seed pending human review."
   },
   "app.search.clear_recents": {
@@ -271,6 +303,14 @@
     "message": "Settings",
     "context": "Machine-translated seed pending human review."
   },
+  "app.timeline.delete_selected.confirm": {
+    "message": "{count, plural, one {Delete # Item} other {Delete # Items}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.delete_selected.title": {
+    "message": "{count, plural, one {Delete # Item?} other {Delete # Items?}}",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.timeline.empty.description": {
     "message": "Tap the import button to add photos to Capsule.",
     "context": "Machine-translated seed pending human review."
@@ -299,6 +339,22 @@
     "message": "Import Photos",
     "context": "Machine-translated seed pending human review."
   },
+  "app.timeline.import.duplicates": {
+    "message": "{count, plural, one {# already in your library.} other {# already in your library.}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.import.failed": {
+    "message": "{count, plural, one {# couldn't be imported.} other {# couldn't be imported.}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.import.imported": {
+    "message": "{count, plural, one {# imported into Capsule.} other {# imported into Capsule.}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.import.nothing": {
+    "message": "Nothing to import.",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.timeline.import_complete.title": {
     "message": "Import Complete",
     "context": "Machine-translated seed pending human review."
@@ -319,6 +375,10 @@
     "message": "Years",
     "context": "Machine-translated seed pending human review."
   },
+  "app.timeline.load_failed.description": {
+    "message": "Couldn't load your photo library.",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.timeline.load_failed.title": {
     "message": "Couldn't Load Photos",
     "context": "Machine-translated seed pending human review."
@@ -335,8 +395,24 @@
     "message": "Photo Access Needed",
     "context": "Machine-translated seed pending human review."
   },
+  "app.timeline.section.today": {
+    "message": "Today",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.section.yesterday": {
+    "message": "Yesterday",
+    "context": "Machine-translated seed pending human review."
+  },
   "app.timeline.select": {
     "message": "Select",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.selection.count": {
+    "message": "{count, plural, one {# Selected} other {# Selected}}",
+    "context": "Machine-translated seed pending human review."
+  },
+  "app.timeline.selection.empty": {
+    "message": "Select Items",
     "context": "Machine-translated seed pending human review."
   },
   "app.timeline.view_picker": {
@@ -491,10 +567,6 @@
     "message": "Forgot Password",
     "context": "Machine-translated seed pending human review."
   },
-  "auth.forgot_password_link": {
-    "message": "Forgot password?",
-    "context": "Machine-translated seed pending human review."
-  },
   "auth.login.description": {
     "message": "Enter your email below to login to your account.",
     "context": "Machine-translated seed pending human review."
@@ -509,58 +581,6 @@
   },
   "auth.no_account": {
     "message": "Don't have an account?",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.or": {
-    "message": "or",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.passkey.cancelled": {
-    "message": "Passkey authentication was cancelled.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.passkey.failed": {
-    "message": "Passkey authentication failed.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.description": {
-    "message": "Enter your new password.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.invalid_body": {
-    "message": "This password reset link is invalid or has expired.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.invalid_title": {
-    "message": "Invalid Link",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.mismatch": {
-    "message": "Passwords do not match.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.request_new": {
-    "message": "Request a new reset link",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.resetting": {
-    "message": "Resetting…",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.submit": {
-    "message": "Reset password",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.success_desc": {
-    "message": "Your password has been reset.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.reset.title": {
-    "message": "Reset Password",
-    "context": "Machine-translated seed pending human review."
-  },
-  "auth.sign_in_passkey": {
-    "message": "Sign in with Passkey",
     "context": "Machine-translated seed pending human review."
   },
   "auth.sign_up": {
@@ -611,9 +631,17 @@
     "message": "Senha",
     "context": "Machine-translated seed pending human review."
   },
+  "cli.auth.login.second_factor_required": {
+    "message": "This account has two-factor authentication switched on.",
+    "context": "CLI `capsule auth login`, printed before the code prompt. The password verified and the sign-in is not finished — the server answered 202 rather than a token pair."
+  },
   "cli.auth.login.success": {
     "message": "Conectado como {email}.",
     "context": "Machine-translated seed pending human review."
+  },
+  "cli.auth.login.totp_prompt": {
+    "message": "Authenticator code",
+    "context": "CLI `capsule auth login` interactive prompt for the six-digit TOTP code, shown after the password verifies on an account with a second factor (slice S-C63)."
   },
   "cli.auth.logout.in_progress": {
     "message": "Saindo do Capsule…",
@@ -695,6 +723,10 @@
     "message": "Delete",
     "context": "Machine-translated seed pending human review."
   },
+  "common.display_name": {
+    "message": "Display name",
+    "context": "Form label for the optional display name in profile settings (slice S-C54). It replaced 'Username': the server no longer stores a username, and a display name is the one name a person chooses for themselves."
+  },
   "common.email": {
     "message": "Email",
     "context": "Machine-translated seed pending human review."
@@ -753,10 +785,6 @@
   },
   "common.upload": {
     "message": "Upload",
-    "context": "Machine-translated seed pending human review."
-  },
-  "common.username": {
-    "message": "Username",
     "context": "Machine-translated seed pending human review."
   },
   "dashboard.col_activity": {
@@ -904,24 +932,84 @@
   "drop.upload_only_badge": {
     "message": "Upload only"
   },
+  "error.auth.current_password_invalid": {
+    "message": "That is not your current password.",
+    "context": "HTTP 403 on POST /v1/auth/password (slice S-C54): the current password presented to authorize the change did not match. 403 and not 401 — the caller is authenticated, and a 401 would send a client to a sign-in its live session does not need."
+  },
   "error.auth.invalid_credentials": {
     "message": "E-mail ou senha inválidos.",
     "context": "Machine-translated seed pending human review."
+  },
+  "error.auth.password_invalid": {
+    "message": "That password cannot be used.",
+    "context": "HTTP 400 on POST /v1/auth/password (slice S-C54): the proposed new password is under the 12-character floor, or is the password already in use. The second case matters because a change that changes nothing leaves the caller believing a leaked credential has been rotated."
+  },
+  "error.auth.profile_invalid": {
+    "message": "That display name cannot be used.",
+    "context": "HTTP 400 on PATCH /v1/auth/profile (slice S-C54): the submitted display name is past the 128-character ceiling or carries control characters. Refused rather than silently rewritten — a name that renders as something other than what was typed is worse than one the server declines."
+  },
+  "error.auth.profile_not_found": {
+    "message": "That account no longer exists.",
+    "context": "HTTP 404 on GET/PATCH /v1/auth/profile and POST /v1/auth/password (slice S-C54): the presented credential is valid and names an account the directory no longer holds — a session outlives the account row it names when the account is deleted mid-session. The server is working correctly; the account is gone."
   },
   "error.auth.rate_limited": {
     "message": "Muitas tentativas. Aguarde e tente novamente.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.auth.totp_already_active": {
+    "message": "Two-factor authentication is already switched on.",
+    "context": "HTTP 409 on POST /v1/auth/totp/enroll (slice S-C55): the account already has a confirmed second factor. Refused rather than silently replaced — an enroll that overwrote an active secret would let a stolen session swap the factor for one the attacker holds, without ever presenting a code."
+  },
+  "error.auth.totp_challenge_invalid": {
+    "message": "That sign-in has expired. Enter your password again.",
+    "context": "HTTP 401 on POST /v1/auth/login/verify-totp (slice S-C55): the half-finished sign-in token did not verify, had expired, or was another kind of token. One answer for all three — a client can act on none of the distinctions and every one of them means starting the sign-in again."
+  },
+  "error.auth.totp_invalid_code": {
+    "message": "That code is not right. Check your authenticator app and try again.",
+    "context": "HTTP 403 on the authenticated TOTP operations and 401 on POST /v1/auth/login/verify-totp (slice S-C55): the six-digit code did not verify, or it verified and had already been used. One answer for both — telling a caller that a code was correct but replayed would confirm they had the right code."
+  },
+  "error.auth.totp_not_enrolled": {
+    "message": "Two-factor authentication is not switched on for this account.",
+    "context": "HTTP 409 on POST /v1/auth/totp/disable (slice S-C55): there is no confirmed second factor to remove."
+  },
+  "error.auth.totp_not_pending": {
+    "message": "There is no two-factor setup waiting to be confirmed.",
+    "context": "HTTP 409 on POST /v1/auth/totp/verify-enrollment (slice S-C55): nothing is pending for this account — either enrolment was never started, or it was already confirmed."
+  },
   "error.auth.user_already_exists": {
     "message": "Já existe uma conta com estes dados.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.blob.gone": {
+    "message": "Esse arquivo de foto não está mais disponível.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.blob.not_found": {
+    "message": "Esse arquivo de foto não está no servidor.",
     "context": "Machine-translated seed pending human review."
   },
   "error.blob.pending_upload": {
     "message": "A foto original ainda não foi enviada do dispositivo dela.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.blob.unavailable": {
+    "message": "O Capsule não conseguiu acessar esse arquivo de foto. Tente novamente.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.directory.malformed": {
     "message": "Não foi possível ler a lista de dispositivos.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.directory.not_published": {
+    "message": "Esta conta ainda não publicou uma lista de dispositivos.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.directory.unavailable": {
+    "message": "O Capsule não conseguiu acessar a lista de dispositivos. Tente novamente.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.directory.unsupported_media_type": {
+    "message": "Não foi possível ler essa lista de dispositivos.",
     "context": "Machine-translated seed pending human review."
   },
   "error.directory.version_conflict": {
@@ -1032,9 +1120,17 @@
     "message": "Esta fonte atingiu o limite de cache na sua conta.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.quota.unavailable": {
+    "message": "O Capsule não conseguiu verificar seu uso de armazenamento. Tente novamente.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.share.rate_limited": {
     "message": "Muitas tentativas. Aguarde e tente novamente.",
     "context": "Machine-translated seed pending human review."
+  },
+  "error.storage.asset_not_found": {
+    "message": "That item was not found.",
+    "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts (slice S-C58): no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
   },
   "error.storage.deep_rate_limited": {
     "message": "Muitas verificações profundas de armazenamento. Aguarde e tente novamente.",
@@ -1044,12 +1140,20 @@
     "message": "A solicitação de verificação de armazenamento está malformada.",
     "context": "Machine-translated seed pending human review."
   },
+  "error.storage.unavailable": {
+    "message": "O Capsule não conseguiu verificar se suas fotos estão armazenadas com segurança. Tente novamente.",
+    "context": "Machine-translated seed pending human review."
+  },
   "error.sync.cursor_invalid": {
     "message": "A sessão de sincronização está desatualizada. O Capsule vai sincronizar novamente do início.",
     "context": "Machine-translated seed pending human review."
   },
   "error.sync.unauthenticated": {
     "message": "Faça login novamente para continuar a sincronização.",
+    "context": "Machine-translated seed pending human review."
+  },
+  "error.sync.unavailable": {
+    "message": "Capsule could not reach the server to sync. It will try again.",
     "context": "Machine-translated seed pending human review."
   },
   "error.upload.album_access_denied": {
@@ -1123,6 +1227,10 @@
   "error.upload.invalid_size": {
     "message": "O tamanho declarado para o envio é inválido.",
     "context": "Machine-translated seed pending human review."
+  },
+  "error.upload.invalid_status_filter": {
+    "message": "That is not an upload status.",
+    "context": "HTTP 400 on GET /v1/upload/sessions (slice S-C57): the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
   },
   "error.upload.malformed_request": {
     "message": "A solicitação de envio está malformada.",
@@ -1268,38 +1376,6 @@
     "message": "Empty Trash",
     "context": "Machine-translated seed pending human review."
   },
-  "mfa.passkey.already_registered": {
-    "message": "A passkey for this device is already registered.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.create": {
-    "message": "Create Passkey",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.description": {
-    "message": "Passkeys use your device's biometrics or PIN to sign in securely without a password.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.name_label": {
-    "message": "Passkey Name (optional)",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.name_placeholder": {
-    "message": "My MacBook",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.reg_cancelled": {
-    "message": "Passkey registration was cancelled.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.reg_failed": {
-    "message": "Passkey registration failed.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "mfa.passkey.registering": {
-    "message": "Registering…",
-    "context": "Machine-translated seed pending human review."
-  },
   "mfa.totp.code_label": {
     "message": "Verification Code",
     "context": "Machine-translated seed pending human review."
@@ -1420,40 +1496,12 @@
     "message": "Added: {date}",
     "context": "Machine-translated seed pending human review."
   },
-  "security.delete_passkey_confirm": {
-    "message": "Delete passkey \"{name}\"?",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.delete_passkey_failed": {
-    "message": "Failed to delete passkey.",
-    "context": "Machine-translated seed pending human review."
-  },
   "security.deleting": {
     "message": "Deleting…",
     "context": "Machine-translated seed pending human review."
   },
   "security.last_active": {
     "message": "Last active: {date}",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.passkeys.add_button": {
-    "message": "Add passkey",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.passkeys.description": {
-    "message": "Sign in using your device's biometrics or PIN.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.passkeys.empty": {
-    "message": "No passkeys registered.",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.passkeys.loading": {
-    "message": "Loading passkeys…",
-    "context": "Machine-translated seed pending human review."
-  },
-  "security.passkeys.title": {
-    "message": "Passkeys",
     "context": "Machine-translated seed pending human review."
   },
   "security.profile_link": {

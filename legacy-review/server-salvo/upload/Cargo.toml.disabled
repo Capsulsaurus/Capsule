@@ -1,0 +1,68 @@
+[package]
+name = "capsule-api-upload"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "upload"
+path = "src/lib.rs"
+
+[dependencies]
+capsule-api-auth = { path = "../auth" }
+capsule-api-entity = { path = "../entity" }
+capsule-api-environment = { path = "../environment", features = ["upload"] }
+capsule-api-model = { path = "../model" }
+capsule-api-service = { path = "../service" }
+capsule-core = { path = "../../capsule-core", features = ["media"] }
+capsule-i18n = { path = "../../capsule-i18n" }
+capsule-wire = { path = "../../capsule-wire" }
+bb8-redis = { workspace = true }
+eyre = { workspace = true }
+futures-util = { workspace = true }
+salvo = { workspace = true }
+sea-orm = { workspace = true, features = [
+    "sqlx-postgres",
+    "runtime-tokio-rustls",
+    "debug-print",
+] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+jiff = { workspace = true }
+ring = { workspace = true }
+base64 = { workspace = true }
+secrecy = { workspace = true }
+nanoid = { workspace = true }
+indexmap = { workspace = true }
+bytes = { workspace = true }
+jsonwebtoken = { workspace = true }
+
+[dev-dependencies]
+# The S-D1 cross-module case: the real SDK upload client driving this server.
+capsule-sdk = { path = "../../capsule-sdk" }
+# The SDK client is a genuine reqwest client; the integration test hands it a
+# plain rustls-only Client (mirrors capsule-sdk's own pin).
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "rustls-tls",
+] }
+migration = { path = "../migration", package = "capsule-api-migration" }
+# The S-D18 CLI push round trip: the real `capsule-cli` command functions driving the auth +
+# upload + sync services on one origin. The CLI is the leaf client, so it is a dev-dep here
+# (not the reverse) — the same placement S-D1/S-D2/S-D5 use, keeping the server stack out of
+# the CLI's own dev-deps. `sync` serves the feed the push resumes from; `cli-migration`
+# provisions the CLI's sync-fed SQLite store.
+capsule-cli = { path = "../../capsule-cli" }
+cli-migration = { path = "../../capsule-cli/migration", package = "capsule-cli-migration" }
+sync = { path = "../sync", package = "capsule-api-sync" }
+tempfile = "3"
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sea-orm-migration = { workspace = true }
+tracing-subscriber = { workspace = true }
+salvo = { workspace = true, features = ["test"] }

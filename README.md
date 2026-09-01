@@ -79,7 +79,7 @@ This is a personal choice but if you're happy with existing services like Google
 
 Components:
 
-- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined
+- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`
 - [Capsule Web](capsule-web/README.md) (WIP): Web client in React
 - [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
 - [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
@@ -101,7 +101,7 @@ Blob storage is implemented behind a Capsule-owned backend contract; it does not
 Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:
 
 - `capsule-android`: Android Studio or IntelliJ IDEA with plugins
-- `capsule-api`: VS Code or similar
+- `capsule-server`: VS Code or similar
 - `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
 - `capsule-docs`: VS Code or similar
 - `capsule-swift`: Xcode
@@ -157,8 +157,8 @@ Capsule primarily benefits from active contributions and feedback! Rather than a
 
 ### Contributor License Agreement (CLA)
 
-We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.
+We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.
 
 ## License
 
-Capsule is licensed under the [AGPL-3.0 License](LICENSE).
+Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).

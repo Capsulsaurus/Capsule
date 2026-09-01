@@ -46,7 +46,7 @@ public struct PhotoKitAlbumProvider: AlbumProvider {
                 guard assetCount > 0 else { continue }
                 summaries.append(AlbumSummary(
                     id: .smart(localIdentifier: collection.localIdentifier),
-                    title: collection.localizedTitle ?? "Album",
+                    title: collection.localizedTitle ?? String(localized: "app.albums.untitled"),
                     count: assetCount
                 ))
             }

@@ -15,21 +15,14 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::crypto::hash::Hash32;
+/// A blob's role within an asset, as the storage-verification endpoint reports it.
+///
+/// Defined in [`crate::crypto::receipts`] and re-exported here, because a custody receipt's
+/// `blob_role` is written from the same enum and the issuer and the verifier must not each
+/// have their own (`S-C46`). This path is the one the storage-verification doc names, so it
+/// stays.
+pub use crate::crypto::receipts::BlobRole;
 use crate::db::DatabaseDriver;
-
-/// A blob's role within an asset, as the storage-verification endpoint reports it
-/// (closed enum; the value set is owned by the storage-verification doc).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BlobRole {
-    /// The original ciphertext blob.
-    Original,
-    /// The encrypted metadata blob.
-    Metadata,
-    /// A derivative (thumbnail / preview / embedding) blob.
-    Derivative,
-    /// The provenance chain.
-    Provenance,
-}
 
 /// The server's key-free per-blob verdict.
 #[derive(Debug, Clone, PartialEq, Eq)]

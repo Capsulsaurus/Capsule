@@ -13,13 +13,14 @@ use std::collections::HashSet;
 use capsule_core::import::upload::UploadPolicy;
 use capsule_core::lifecycle::{LifecycleError, Workspace};
 use capsule_sdk::albums::{AlbumClient, AlbumTransport};
-use capsule_sdk::auth::{AuthClient, AuthError, Session};
+use capsule_sdk::auth::{AuthClient, AuthError, LoginOutcome, Session};
 use capsule_sdk::net::ConnectionClass;
 use capsule_sdk::push::{self, PushError};
 use capsule_sdk::staged::{StagedScheduler, TierSessionOutcome, held_from_feed};
 use capsule_sdk::sync::{SyncConsumer, SyncCursor, SyncError, SyncState};
 use capsule_sdk::upload::{UploadClient, UploadTransport};
 use sea_orm::{ConnectionTrait, TransactionTrait};
+use secrecy::SecretString;
 use thiserror::Error;
 use tracing::instrument;
 
@@ -159,12 +160,60 @@ pub async fn auth_login(
     store: &SessionStore,
     email: &str,
     password: &str,
+) -> Result<LoginStep, RemoteError> {
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    match client.login(email, password).await? {
+        LoginOutcome::Session(session) => {
+            persist(store, session).await?;
+            tracing::info!("login persisted to the session store");
+            Ok(LoginStep::Complete)
+        }
+        // The password verified and the sign-in is not finished (`S-C55`). Nothing is persisted:
+        // there is no session yet, and writing a half-authentication to the store would leave a
+        // later command believing it was signed in.
+        LoginOutcome::SecondFactorRequired { mfa_token, .. } => {
+            tracing::info!("login needs a second factor");
+            Ok(LoginStep::SecondFactorRequired { mfa_token })
+        }
+    }
+}
+
+/// How far [`auth_login`] got.
+///
+/// The CLI is interactive, so it can finish the ceremony by asking for a code — which is why
+/// this is a value the caller acts on rather than an error it reports.
+#[derive(Debug)]
+pub enum LoginStep {
+    /// Signed in, and the session is in the store.
+    Complete,
+    /// The password verified; a code is needed.
+    SecondFactorRequired {
+        /// The challenge to hand to [`auth_verify_totp`]. Good once, and for five minutes.
+        mfa_token: SecretString,
+    },
+}
+
+/// Complete a sign-in with the code an authenticator app is showing, and persist the session.
+#[instrument(skip(store, mfa_token, totp_code))]
+pub async fn auth_verify_totp(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+    mfa_token: &SecretString,
+    totp_code: &str,
 ) -> Result<(), RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.login(email, password).await?;
+    let session = client.verify_second_factor(mfa_token, totp_code).await?;
+    persist(store, session).await?;
+    tracing::info!("second factor accepted; session persisted");
+    Ok(())
+}
+
+/// Export a freshly opened session and write it to the store.
+///
+/// One place, so the two ways a sign-in can finish cannot persist differently.
+async fn persist(store: &SessionStore, session: Session) -> Result<(), RemoteError> {
     let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
     store.save(&persisted)?;
-    tracing::info!("login persisted to the session store");
     Ok(())
 }
 
@@ -178,13 +227,11 @@ pub async fn auth_login(
 pub async fn auth_register(
     remote: &RemoteConfig,
     store: &SessionStore,
-    username: &str,
-    name: &str,
     email: &str,
     password: &str,
 ) -> Result<(), RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.register(username, name, email, password).await?;
+    let session = client.register(email, password).await?;
     let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
     store.save(&persisted)?;
     tracing::info!("registration persisted to the session store");
@@ -208,6 +255,51 @@ pub async fn auth_logout(remote: &RemoteConfig, store: &SessionStore) -> Result<
     revoke?;
     tracing::info!("logout revoked server-side and cleared the session store");
     Ok(true)
+}
+
+/// Resume the stored session, and hand back a guard that persists whatever it rotated to.
+///
+/// # The bug this exists to close
+///
+/// The server rotates on refresh: `POST /v1/auth/refresh` mints a new pair and **closes the old
+/// session**, so the refresh token in the store is dead the moment the SDK uses it. Only
+/// `auth_login` and `auth_register` ever wrote the store, so every later command — `sync`,
+/// `push`, `list` — refreshed, worked, and threw the rotated pair away on exit. Roughly fifteen
+/// minutes after signing in, every command demanded an interactive login while the refresh token
+/// it had been handed still had seven days left.
+///
+/// It is fixed here rather than inside the SDK because the store is the CLI's: the SDK's
+/// `Session` is deliberately in-memory and says so, and a library that wrote to a caller's disk
+/// would be the surprising thing.
+async fn resume_session(
+    remote: &RemoteConfig,
+    store: &SessionStore,
+) -> Result<Session, RemoteError> {
+    let persisted = store.load()?.ok_or(RemoteError::NotAuthenticated)?;
+    let client = AuthClient::new(&remote.auth_endpoint)?;
+    Ok(client.resume(persisted)?)
+}
+
+/// Write back whatever the session now holds.
+///
+/// Called on the way out of **every** command that used one, on the success path and the error
+/// path alike: a refresh that landed before a later failure still rotated the token, and
+/// discarding it there would leave the store holding a pair the server has already closed —
+/// which is the same bug, reached by a different route.
+///
+/// A session that has been logged out exports nothing; that is not an error, it is the store
+/// having nothing left to hold.
+async fn checkpoint(store: &SessionStore, session: &Session) {
+    let Some(persisted) = session.export().await else {
+        return;
+    };
+    match store.save(&persisted) {
+        Ok(()) => tracing::debug!("the rotated session was written back to the store"),
+        // Deliberately not fatal to the command that just succeeded. The work is done; the
+        // cost of a failed write-back is one interactive login, and turning it into a command
+        // failure would throw away work that landed.
+        Err(error) => tracing::warn!(%error, "the rotated session could not be persisted"),
+    }
 }
 
 /// The outcome of a `capsule sync` run.
@@ -245,13 +337,27 @@ pub async fn sync<C: ConnectionTrait + TransactionTrait>(
     dry_run: bool,
     from_start: bool,
 ) -> Result<SyncSummary, RemoteError> {
-    let persisted = store.load()?.ok_or(RemoteError::NotAuthenticated)?;
-    let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.resume(persisted)?;
+    let session = resume_session(remote, store).await?;
+    let outcome = sync_with(remote, db, session.clone(), page_size, dry_run, from_start).await;
+    // Before returning, and on the failing path too: the refresh that rotated the pair happened
+    // whether or not the work after it succeeded.
+    checkpoint(store, &session).await;
+    outcome
+}
 
-    let channel = SyncConsumer::connect(remote.sync_endpoint.clone()).await?;
-    let mut consumer =
-        SyncConsumer::with_session(channel, session, remote.protocol_version.clone());
+/// The drain itself, over a session somebody else is responsible for persisting.
+async fn sync_with<C: ConnectionTrait + TransactionTrait>(
+    remote: &RemoteConfig,
+    db: &C,
+    session: Session,
+    page_size: u32,
+    dry_run: bool,
+    from_start: bool,
+) -> Result<SyncSummary, RemoteError> {
+    // One endpoint now: the feed is `GET /v1/sync` on the same REST base URL every other call
+    // uses, so there is no second connection to dial and no second transport to configure
+    // (`S-D28`).
+    let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
 
     let mut state = syncstore::load_sync_state(db, &remote.protocol_version).await?;
     if from_start {
@@ -376,9 +482,7 @@ pub async fn held_blobs(
     session: Session,
     page_size: u32,
 ) -> Result<HashSet<String>, RemoteError> {
-    let channel = SyncConsumer::connect(remote.sync_endpoint.clone()).await?;
-    let mut consumer =
-        SyncConsumer::with_session(channel, session, remote.protocol_version.clone());
+    let consumer = SyncConsumer::with_session(&remote.sync_endpoint, session)?;
     // A scratch state: start cursor, no high-water marks. Nothing is persisted from it.
     let mut state = SyncState::restore(&remote.protocol_version, SyncCursor::start(), Vec::new());
 
@@ -426,10 +530,19 @@ pub async fn push(
     workspace: &Workspace,
     options: PushOptions,
 ) -> Result<PushSummary, RemoteError> {
-    let persisted = store.load()?.ok_or(RemoteError::NotAuthenticated)?;
-    let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.resume(persisted)?;
+    let session = resume_session(remote, store).await?;
+    let outcome = push_with(remote, workspace, session.clone(), options).await;
+    checkpoint(store, &session).await;
+    outcome
+}
 
+/// The push itself, over a session somebody else is responsible for persisting.
+async fn push_with(
+    remote: &RemoteConfig,
+    workspace: &Workspace,
+    session: Session,
+    options: PushOptions,
+) -> Result<PushSummary, RemoteError> {
     let asset_ids = workspace.asset_ids();
     let mut summary = PushSummary {
         assets: asset_ids.len(),
@@ -539,6 +652,46 @@ pub async fn list<C: ConnectionTrait>(
 mod tests {
     use super::*;
 
+    /// The write-back that closes the CLI's session-persistence bug.
+    ///
+    /// The server rotates on refresh and closes the old session, so a command that refreshed and
+    /// then dropped the rotated pair left the store holding a dead refresh token — and roughly
+    /// fifteen minutes after signing in every command demanded an interactive login. This is the
+    /// plumbing half: whatever the session holds when the work is done reaches the store.
+    #[tokio::test]
+    async fn a_checkpoint_writes_the_sessions_current_pair_back_to_the_store() {
+        let dir =
+            std::env::temp_dir().join(format!("capsule-cli-checkpoint-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a temp dir");
+        let store = SessionStore::new(dir.join("session.json"));
+
+        let persisted = capsule_sdk::auth::PersistedSession {
+            access_token: "access-1".to_owned().into(),
+            refresh_token: "refresh-1".to_owned().into(),
+            access_expires_at_unix: jiff::Timestamp::now().as_second() + 3600,
+        };
+        store.save(&persisted).expect("the store writes");
+
+        let client = AuthClient::new("http://127.0.0.1:1/v1/auth").expect("a base url");
+        let expected_refresh = {
+            use secrecy::ExposeSecret as _;
+            persisted.refresh_token.expose_secret().to_owned()
+        };
+        let session = client.resume(persisted).expect("a resumed session");
+        checkpoint(&store, &session).await;
+
+        let reloaded = store
+            .load()
+            .expect("the store reads")
+            .expect("a session is stored");
+        use secrecy::ExposeSecret as _;
+        assert_eq!(reloaded.refresh_token.expose_secret(), expected_refresh);
+
+        // And a session with nothing left to export leaves the store as it was, rather than
+        // clearing it: logging out is `auth_logout`'s job and nobody else's.
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// `from_env` reads process-wide state, so these run under one lock and restore what they
     /// touched — otherwise a parallel test would see another's variables.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -552,7 +705,9 @@ mod tests {
             "CAPSULE_UPLOAD_ENDPOINT",
             "CAPSULE_PROTOCOL",
         ];
-        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved: Vec<_> = VARS.iter().map(|k| (*k, std::env::var(k).ok())).collect();
         for k in VARS {
             unsafe { std::env::remove_var(k) };

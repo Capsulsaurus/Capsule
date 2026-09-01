@@ -6,24 +6,75 @@ status: draft
 
 Authentication binds a user identity to their master key, which is the root of every encryption and decryption operation in Capsule. The server can prove "this request is from a session it issued" but cannot prove "this user is who they say they are" — the master key, owned client-side, is the actual identity root. Everything below works to keep that binding intact through the lifetime of a session and across server moves.
 
-Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validation, and per-device records. The retired Salvo implementation remains under `legacy-review/server-salvo/auth/` as review material, not an active server. The session token format and OIDC discovery surface below are the contracts other components — including federated peers — will depend on.
+Planned in `capsule-server::auth`: OIDC handling, the session ledger, claim validation, and per-device records. The retired Salvo implementation remains under `legacy-review/server-salvo/auth/` as review material, not an active server. The session token format and OIDC discovery surface below are the contracts other components — including federated peers — will depend on.
 
 ## Design Principles
 
-- **Two first-class auth paths.** Local auth (password + TOTP, passkeys) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth is the default path a deployment gets without configuring an IdP.
+- **Two first-class auth paths.** Local auth (password, with TOTP as a second factor) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth is the default path a deployment gets without configuring an IdP.
 - **Cryptographic binding.** The user's identity is cryptographically bound to their master key. The server never sees the plaintext master key.
 
 ## Account Types
 
-- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP, passkeys, or OIDC ([Choosing an Auth Path](#choosing-an-auth-path)); the login credential authenticates the session while the master key stays cryptographically bound to the user.
+- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP or OIDC ([Choosing an Auth Path](#choosing-an-auth-path)); the login credential authenticates the session while the master key stays cryptographically bound to the user.
 - **Delegated/sponsored accounts.** Encrypted with keys derived from a registered account's master key. They do not have their own identity and rely on the registered account for authentication and key management. Owners of the sponsored account have full access. See [Cryptography — Keys: Delegated/Sponsored accounts](/design/cryptography/keys/#delegatedsponsored-accounts) for the key derivation.
 - **Non-registered accounts.** No associated identity or master key — used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link, and for [web-upload links](/design/web-upload/), where a guest seals contributions to a link-scoped key without read access.
+
+## Creating an Account
+
+`POST /v1/auth/register` takes **an address and a password, and nothing else** (slice `S-C53`), and answers with a token pair — registering signs you in, because the alternative is a second round trip that exists only to fail differently.
+
+- **No display name, no username, no invitation code.** Each would be a fact the server stores about a person, and this server stores as little as it can. A display name belongs to a profile surface, which is owed rather than assumed.
+- **A length floor and no composition rule.** Twelve characters. The password authenticates a *session* — the master key never derives from it and is never visible to the credential verifier — so this is ordinary sign-in security, and composition rules measurably push people towards shorter, more guessable passwords.
+- **A taken address is `409 error.auth.user_already_exists`, and that is an account oracle.** It is the decided contract: answering success and creating nothing leaves a client that then cannot sign in and no way to tell it why. What bounds the oracle is a rate limiter, and there is **none** — registration is the one unauthenticated write on the surface, and limiting it means limiting a *source*, which needs a trusted client address this server does not have behind an unconfigured proxy chain. The same missing fact the [share](/design/share-links/) and [drop](/design/web-upload/) source limiters are waiting on.
+- **A new account has no device directory, and therefore cannot write.** That is deliberate: invariant 7's floor is the writing device's `added_at` in the account's published directory, with no account-creation fallback, so *"was this device in the directory"* has an honest answer for a brand-new account and the answer is no. A client's first act after registering is publishing one.
+- **The status is `200`, where the retired surface answered `201`.** A `201` must say *where* the new thing lives, and this server exposes no URL for an account. Inventing one to satisfy a status would be inventing a surface.
+
+**Deliberately not ported from the retired surface:** `POST /v1/auth/validate` — a token-introspection endpoint is what a server *without* a session ledger needs, and [`S-C48`](#explicit-revocation) put the ledger on every request, so validation **is** the request — and password reset, which on an end-to-end-encrypted account is not a password reset at all: the server cannot re-wrap a master key it has never seen, and the real recovery path is the [escrow blob](/design/backup-recovery/). Both are gone rather than owed.
+
+### Passkeys Are Not in v1
+
+Slice `S-C56`, and it is a **removal decided on evidence** rather than a deferral for want of time. The retired surface had six passkey operations and none of them could work:
+
+- They were Salvo `#[handler]`s rather than `#[endpoint]`s, so they appeared in **no** OpenAPI document and no generated client could reach them.
+- The authentication ceremony was started with an **empty** allow-list and `set_allowed_credentials` was never called, so `webauthn-rs` answered `CredentialNotFound` to every assertion. Not a bypass — simply an authentication that could never succeed.
+- Registration stored the credential's serialized *public key*, not the credential, so nothing it wrote could be turned back into something authentication could use.
+- The code said so: *"Using allow_credentials requires constructing `webauthn_rs::prelude::Passkey`, which currently presents integration challenges … For now, an empty list allows any credential for this RP."*
+
+So there was nothing to port, and shipping passkeys means building them. That is a slice of its own, and it carries a real cost worth naming here: `webauthn-rs` is the **only** reason `openssl` is in the dependency tree — its attestation-CA parser links it. With passkeys deferred, the `rustls`-only rule in [Dependencies](/design/dependencies/) holds with no exception at all, and the rebuild reopens both questions together.
+
+### The Second Factor
+
+Slice `S-C55`. Password + TOTP is a first-class local auth path, and on the retired surface it did not work: all four TOTP operations existed, and **login never issued a challenge**. An account could enroll a second factor, see it confirmed, and still be signed into with a password alone — a control that reported success and gated nothing.
+
+- **`POST /v1/auth/login` answers `202 Accepted`** when the account has a confirmed second factor. That is what it is: the credentials were accepted and the request is not complete. No session is opened, no cohort is recorded and no refresh token is minted, because none of those may exist for an authentication that has not finished.
+- **`POST /v1/auth/login/verify-totp`** takes the challenge and a code, and *that* is where the session is opened — so the advisory `cohort_hash` and `device_id` ride this request rather than the first one. Five attempts per challenge, keyed on the **challenge** and not the account: a per-account budget would let anyone who knows an address lock its owner out with sign-ins they cannot complete.
+- **`POST /v1/auth/totp/enroll`** issues a secret and the `otpauth://` URI an app scans. Nothing is gated until a code confirms it — a mis-scanned QR code must not lock somebody out of their own account. Enrolling over a **confirmed** factor is refused; enrolling over a pending one replaces it, because nothing is protecting an unconfirmed secret.
+- **`POST /v1/auth/totp/verify-enrollment`** confirms it, and the confirming code is **spent**: its step goes into the replay ledger so it cannot also complete a sign-in a moment later.
+- **`POST /v1/auth/totp/disable`** needs a live code, not just a session. The whole point of the factor is that a stolen access token is insufficient, and a disable that took only a token would let the token switch off the control that makes it so.
+
+**A code is accepted at most once** (RFC 6238 §5.2). It stays valid for ninety seconds with drift, so "somebody read the six digits over your shoulder" is a real attack that verification alone cannot see; the defence is a compare-and-set on the highest step the account has used. The parameters are fixed and published — SHA-1, six digits, a thirty-second step, one step of drift — because every authenticator app assumes all four.
+
+**A store outage fails a sign-in closed.** A login that proceeded because the enrollment store was unreachable would be a second factor an attacker turns off by loading that store.
+
+**Every client reads the `202` from the status** (slice `S-C63`). `capsule-sdk`'s `login` returns a `LoginOutcome` rather than a session, so a caller must decide what to do about a challenge instead of receiving one shaped like a failure; `capsule auth login` prompts for the code, and a caller that cannot prompt gets a typed `SecondFactorRequired`. The advisory `cohort_hash` rides the **completing** request in every client, because that is the one that opens the session.
+
+**`POST /v1/auth/reauthenticate` still takes a password alone.** The second factor guards *becoming* a session; re-authentication is performed by a session that already exists, and demanding a code there would protect nothing an attacker holding that session has not already got past.
+
+### The Profile Surface
+
+Slice `S-C54`. Three operations, where the retired surface had one handler that branched on which fields a body happened to carry.
+
+- **`GET /v1/auth/profile`** — the caller's own account: its id, the address it signs in with, its display name if it set one, and when it was created. That list is the whole of what this server stores about a person. There is no `{user_id}` segment, so reading somebody else's profile is not a forbidden request but an unrepresentable one; the public facts of *other* accounts are the [device directory](/design/cryptography/keys/#device-directory), which publishes keys and nothing else.
+- **`PATCH /v1/auth/profile`** — the display name, and only the display name. The body is a partial: an absent key leaves the name alone and an explicit `null` clears it, which are different requests. A name is trimmed, capped at 128 characters, and **refused rather than rewritten** when it carries control characters — one that renders as something other than what was typed is worse than one the server declines.
+- **`POST /v1/auth/password`** — a password *change*, authenticated by the password it replaces. It verifies through the same directory call a sign-in uses, so a locked account is locked here too, and it then closes every session of the account and re-opens the caller's own under its own session id: the leaked credential's sessions stop working, and the person doing the rotation is not signed out of the device they are doing it on. `403` for a wrong current password, never `401` — the caller is authenticated, and a `401` would send a client to a sign-in its live session does not need.
+
+**The login address cannot be changed by any of them.** The retired surface could change it, with no proof that the caller controlled the new address and no mail path in the deployment to obtain one. That is not a profile edit but the first step of an account takeover: a live token moves the account onto an address the attacker owns, and every later recovery flow then addresses them. The address is fixed at registration until there is a way to prove control of a new one, and the port has no method for it rather than a method that refuses.
 
 ## Choosing an Auth Path
 
 Both paths mint the same Capsule [sessions](#session-and-access-tokens) and bind identity to the master key the same way; the difference is who verifies the login credential (decision 2026-07-12):
 
-- **Local auth** (password + TOTP, or passkeys) — recommended for personal and self-hosted single-user or household servers: no external dependency, the server is self-contained.
+- **Local auth** (password, with TOTP as a second factor) — recommended for personal and self-hosted single-user or household servers: no external dependency, the server is self-contained.
 - **OIDC** (external identity provider, authorization-code + PKCE) — recommended for enterprise and organizational deployments that already run an IdP, and for anyone wanting SSO. Capsule is a relying party only; account lifecycle policy lives at the IdP.
 
 A deployment may enable either or both. Neither path weakens the cryptographic binding: the IdP (or password) authenticates the *session*; the master key never derives from, and is never visible to, the credential verifier.
@@ -51,7 +102,7 @@ Every well-known path Capsule serves, in one census. Each path's record format i
 | `.well-known/capsule/deprecation`    | Min-supported-client deprecation announcements.                                                                                  | [Threat Model — Schema Rules](/design/threat-model/schema-rules/#min-supported-client-deprecation-policy) |
 | `.well-known/capsule/attestation-keys` | The server's storage-attestation public keys + append-only key history.                                                        | [Storage Verification](/design/import/storage-verification/)                                              |
 
-**Status note.** `attestation-keys` is part of the v1 server contract (specified, and exercised end-to-end against the pre-teardown server); `server-info`, `revoked-jti`, and `deprecation` land with slice `S-C18`; `moved/{user}` is post-v1 with [Account Portability](#account-portability). All of them are served by the planned `capsule-api` Kynos surface.
+**Status note.** Four of the five records are served today by the Kynos surface: `attestation-keys` with slice `S-C15`, and `server-info`, `revoked-jti` and `deprecation` with slice `S-C18`. Every one of them is public and takes no credential — a client deciding whether it can talk to this server at all has no token yet, a peer checking whether a capability token it holds is still good is by construction not authenticated here, and a client pinning the key that checks the server's own liability must not need the server's permission to fetch it. `moved/{user}` is post-v1 with [Account Portability](#account-portability); it is the one record that names a user, admissible only because the user signs it and the user initiates the migration.
 
 ## Account Portability
 
@@ -69,7 +120,7 @@ Because the IK signs the move and every device cross-signs to that IK, no server
 
 ## Session and Access Tokens
 
-These are the two token shapes consumers depend on. Both will be issued by `capsule-api::auth::session` after a successful authentication ceremony.
+These are the two token shapes consumers depend on. Both will be issued by `capsule-server::auth::session` after a successful authentication ceremony.
 
 ### Session ID
 
@@ -97,7 +148,7 @@ A session that has not been used for **180 days** (default; deployment-configura
 
 Every session token has a **hard expiry of 365 days** from issuance (default; deployment-configurable). The hard expiry **does not reset** on use — it is the upper bound on the lifetime of a token regardless of activity.
 
-The rationale is the malicious-keyholder class from [Threat Model — Client Class Taxonomy](/design/threat-model/#client-class-taxonomy): an attacker who silently exfiltrates a session token from a device the user actively uses would otherwise have an indefinite window of access. The hard expiry caps that window at one year; the user re-authenticates (passkey / password+TOTP) at most once a year per device — acceptable friction in exchange for a bounded leak-window.
+The rationale is the malicious-keyholder class from [Threat Model — Client Class Taxonomy](/design/threat-model/#client-class-taxonomy): an attacker who silently exfiltrates a session token from a device the user actively uses would otherwise have an indefinite window of access. The hard expiry caps that window at one year; the user re-authenticates (password + TOTP) at most once a year per device — acceptable friction in exchange for a bounded leak-window.
 
 Both expiries are enforced server-side at access-token issuance; the session token itself is not invalidated for any other reason than these expiries or an explicit revoke.
 
@@ -108,6 +159,15 @@ A common user session ledger supports:
 1. **List all active sessions** (with last-used timestamp, so an expiring session is visible).
 2. **Revoke any single session** by invalidating its session token — authenticated by any active session token.
 3. **Revoke all sessions at once** ("log out of all devices") — authenticated by **proof of master-key possession** (a signature with the user's IK over a server-issued challenge), not by an active session token.
+
+The ceremony is two requests: an authenticated `POST /v1/auth/logout/all/challenge` issues a single-use challenge, and an **unauthenticated** `POST /v1/auth/logout/all` redeems a proof over it. Issuing the challenge takes a session token and the revoke does not, which is not a contradiction — a challenge is worthless without the identity key, so handing one to a stolen token costs nothing, while issuing them unauthenticated would make the endpoint an oracle for whether an account exists. The proof is an IK signature over a domain-separated message covering the challenge, verified against the account's [identity anchor](/design/cryptography/keys/#device-directory) rather than any key the request supplies. The challenge is **burned on every attempt**, successful or not, so an attacker cannot grind signatures against a live one.
+
+**What a revoke is immediate about.** Both halves. Every session record is closed, so no refresh token can mint anything from that moment; and the bearer scheme reads the session ledger on every authenticated request, so an access token already in flight is refused on its next use rather than on its next deadline. The fifteen-minute access-token lifetime is therefore a bound on how long a *lost* token is useful, not on how long a *revoked* one is.
+
+The price is one ledger read per authenticated request, against a store the deployment already requires. Two consequences follow from putting it on that path, and both are contract rather than implementation detail:
+
+- **An unreadable ledger refuses.** Failing open would suspend revocation at exactly the moment an attacker would choose to suspend it. The refusal renders `401`, which is the only status the framework's authentication rejection can carry; the honest `503` is owed and tracked on `S-C36`. A client that answers the `401` by refreshing gets `error.auth.unavailable` from `POST /v1/auth/refresh` and can tell an outage from an expiry there.
+- **The last-used timestamp in (1) is coarse.** Recording activity on every request would mean a store write on every request, so it is coalesced to at most one write per minute per session. A device that is actively syncing can therefore read as up to a minute idle. Session lifetime is unaffected: it is absolute from the moment the session opened, and activity never extends it.
 
 The asymmetric authentication on (3) addresses a damage scenario that pure session-token auth opens up: an attacker holding a stolen session token could otherwise invoke "log out of all devices" and lock the legitimate user out of every other device. Requiring master-key proof for the global revoke means an attacker with a session token can only revoke *that* session — they cannot escalate to denial-of-service. A user who has lost their master key is no worse off: they can still revoke individual sessions one at a time. The single-session revoke (2) is the everyday tool; the global revoke (3) is the nuclear option, gated accordingly.
 
@@ -148,7 +208,7 @@ Domain-separated, [canonical CBOR](/design/metadata/#canonical-cbor-encoding) (n
 
 ### Server Storage and Surfacing
 
-The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort.
+The session record carries `cohort_hash`, and a small durable `device_cohorts(user_id, cohort_hash, first_seen, last_seen)` map persists it beyond session expiry — session-store-only would forget cohorts exactly when the "seen before" question matters. The session-listing surface returns the cohort per session plus the cohort map; clients group the ledger by cohort. Recording a cohort is **never allowed to fail a sign-in**: it is written after the session and its failure is logged and dropped, because an advisory grouping aid must not take down the one operation an account cannot do without — the same reason a malformed value is dropped rather than rejected. The listing surface is shaped so the advisory-only rule cannot quietly erode: the cohort appears there and nowhere else, no parameter filters by one, and revocation names a `session_id`. A "revoke this cohort" verb would be an authorization decision made from a spoofable string.
 
 ### UX and Support Contract
 

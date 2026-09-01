@@ -11,7 +11,6 @@
 import { createFileRoute } from '@tanstack/react-router'
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as AlbumsIndexRouteImport } from './routes/albums/index'
 import { Route as UOpaqueIdRouteImport } from './routes/u/$opaqueId'
 import { Route as SOpaqueIdRouteImport } from './routes/s/$opaqueId'
@@ -22,7 +21,6 @@ const SharingLazyRouteImport = createFileRoute('/sharing')()
 const SettingsLazyRouteImport = createFileRoute('/settings')()
 const PhotosLazyRouteImport = createFileRoute('/photos')()
 const LoginLazyRouteImport = createFileRoute('/login')()
-const ForgotPasswordLazyRouteImport = createFileRoute('/forgot-password')()
 const ExploreLazyRouteImport = createFileRoute('/explore')()
 const DashboardLazyRouteImport = createFileRoute('/dashboard')()
 const IndexLazyRouteImport = createFileRoute('/')()
@@ -56,13 +54,6 @@ const LoginLazyRoute = LoginLazyRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/login.lazy').then((d) => d.Route))
-const ForgotPasswordLazyRoute = ForgotPasswordLazyRouteImport.update({
-  id: '/forgot-password',
-  path: '/forgot-password',
-  getParentRoute: () => rootRouteImport,
-} as any).lazy(() =>
-  import('./routes/forgot-password.lazy').then((d) => d.Route),
-)
 const ExploreLazyRoute = ExploreLazyRouteImport.update({
   id: '/explore',
   path: '/explore',
@@ -73,11 +64,6 @@ const DashboardLazyRoute = DashboardLazyRouteImport.update({
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
 } as any).lazy(() => import('./routes/dashboard.lazy').then((d) => d.Route))
-const ResetPasswordRoute = ResetPasswordRouteImport.update({
-  id: '/reset-password',
-  path: '/reset-password',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const IndexLazyRoute = IndexLazyRouteImport.update({
   id: '/',
   path: '/',
@@ -132,10 +118,8 @@ const AlbumsIdRoute = AlbumsIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/dashboard': typeof DashboardLazyRoute
   '/explore': typeof ExploreLazyRoute
-  '/forgot-password': typeof ForgotPasswordLazyRoute
   '/login': typeof LoginLazyRoute
   '/photos': typeof PhotosLazyRoute
   '/settings': typeof SettingsLazyRouteWithChildren
@@ -152,10 +136,8 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/dashboard': typeof DashboardLazyRoute
   '/explore': typeof ExploreLazyRoute
-  '/forgot-password': typeof ForgotPasswordLazyRoute
   '/login': typeof LoginLazyRoute
   '/photos': typeof PhotosLazyRoute
   '/settings': typeof SettingsLazyRouteWithChildren
@@ -173,10 +155,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexLazyRoute
-  '/reset-password': typeof ResetPasswordRoute
   '/dashboard': typeof DashboardLazyRoute
   '/explore': typeof ExploreLazyRoute
-  '/forgot-password': typeof ForgotPasswordLazyRoute
   '/login': typeof LoginLazyRoute
   '/photos': typeof PhotosLazyRoute
   '/settings': typeof SettingsLazyRouteWithChildren
@@ -195,10 +175,8 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/reset-password'
     | '/dashboard'
     | '/explore'
-    | '/forgot-password'
     | '/login'
     | '/photos'
     | '/settings'
@@ -215,10 +193,8 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/reset-password'
     | '/dashboard'
     | '/explore'
-    | '/forgot-password'
     | '/login'
     | '/photos'
     | '/settings'
@@ -235,10 +211,8 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
-    | '/reset-password'
     | '/dashboard'
     | '/explore'
-    | '/forgot-password'
     | '/login'
     | '/photos'
     | '/settings'
@@ -256,10 +230,8 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexLazyRoute: typeof IndexLazyRoute
-  ResetPasswordRoute: typeof ResetPasswordRoute
   DashboardLazyRoute: typeof DashboardLazyRoute
   ExploreLazyRoute: typeof ExploreLazyRoute
-  ForgotPasswordLazyRoute: typeof ForgotPasswordLazyRoute
   LoginLazyRoute: typeof LoginLazyRoute
   PhotosLazyRoute: typeof PhotosLazyRoute
   SettingsLazyRoute: typeof SettingsLazyRouteWithChildren
@@ -311,13 +283,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginLazyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/forgot-password': {
-      id: '/forgot-password'
-      path: '/forgot-password'
-      fullPath: '/forgot-password'
-      preLoaderRoute: typeof ForgotPasswordLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/explore': {
       id: '/explore'
       path: '/explore'
@@ -330,13 +295,6 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardLazyRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/reset-password': {
-      id: '/reset-password'
-      path: '/reset-password'
-      fullPath: '/reset-password'
-      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -419,10 +377,8 @@ const SettingsLazyRouteWithChildren = SettingsLazyRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexLazyRoute: IndexLazyRoute,
-  ResetPasswordRoute: ResetPasswordRoute,
   DashboardLazyRoute: DashboardLazyRoute,
   ExploreLazyRoute: ExploreLazyRoute,
-  ForgotPasswordLazyRoute: ForgotPasswordLazyRoute,
   LoginLazyRoute: LoginLazyRoute,
   PhotosLazyRoute: PhotosLazyRoute,
   SettingsLazyRoute: SettingsLazyRouteWithChildren,

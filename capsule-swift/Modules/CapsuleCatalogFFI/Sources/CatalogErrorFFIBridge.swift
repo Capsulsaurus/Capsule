@@ -24,5 +24,6 @@ func nativeCatalogError(_ error: Error) -> NativeCatalogError {
     case let .Database(message): return .database(message: message)
     case let .Sidecar(message): return .sidecar(message: message)
     case let .InvalidArgument(message): return .invalidArgument(message: message)
+    case .ViewLocked: return .viewLocked
     }
 }

@@ -28,7 +28,8 @@ and deterministic mocks. Database models do not become wire DTOs.
 - REST/OpenAPI is the only public server transport.
 - Kynos owns HTTP runtime startup, routing, middleware composition, OpenAPI emission, request
   context, limits, graceful shutdown, and runtime observability.
-- A checked-in OpenAPI 3.1 document is generated deterministically without live infrastructure.
+- A checked-in [OpenAPI 3.2 document](/design/api-surfaces/#the-document-is-32-and-its-version-is-pinned)
+  is generated deterministically without live infrastructure.
 - Spargen generates the Rust client and runs support and compatibility checks in CI.
 - Every error has a stable `error.*` code. English detail remains diagnostic; clients localize the
   code from the canonical catalogs.
@@ -54,7 +55,10 @@ authoritative.
   inform it, but no external transfer server owns asset reservation, provenance, bundle visibility,
   or finalization.
 - `AuthStateStore` and `UploadSessionStore` are distinct typed ports. Postgres, Valkey, and in-memory
-  adapters run the same domain-specific conformance suites.
+  adapters run the same domain-specific conformance suites. An adapter existing is not a deployment
+  choice: Valkey is [required](/design/filesystem/server/#required-services), the in-memory adapter is
+  a test double, and the conformance suite exists so the double can be trusted to behave like the
+  real thing — not so that one backend can be swapped for another at deploy time.
 
 ## Observability and Logging
 

@@ -46,6 +46,7 @@ impl Fixture {
             devices: vec![DeviceEntry {
                 device_id: self.device_id,
                 dsk_public: self.device.verifying_key(),
+                dek_public: None,
                 added_at: "2026-08-01T00:00:00Z".into(),
                 revoked_at: None,
             }],

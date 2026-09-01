@@ -240,6 +240,7 @@ mod tests {
             devices: vec![DeviceEntry {
                 device_id: Uuid::from_u128(0xD1),
                 dsk_public: vk.clone(),
+                dek_public: None,
                 added_at: "2026-05-30T00:00:00Z".into(),
                 revoked_at: None,
             }],

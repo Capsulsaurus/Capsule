@@ -975,17 +975,12 @@ mod tests {
             let mut engine = RetryEngine::deterministic(class, 1.0);
             let mut prev = Duration::ZERO;
             let mut retries = 0u32;
-            loop {
-                match engine.next_backoff(None) {
-                    RetryDecision::Retry { after } => {
-                        assert!(after <= policy.max_delay, "{class:?} within cap");
-                        assert!(after >= prev, "{class:?} ceiling non-decreasing");
-                        prev = after;
-                        retries += 1;
-                        assert!(retries <= policy.max_retries, "{class:?} bounded");
-                    }
-                    RetryDecision::GiveUp => break,
-                }
+            while let RetryDecision::Retry { after } = engine.next_backoff(None) {
+                assert!(after <= policy.max_delay, "{class:?} within cap");
+                assert!(after >= prev, "{class:?} ceiling non-decreasing");
+                prev = after;
+                retries += 1;
+                assert!(retries <= policy.max_retries, "{class:?} bounded");
             }
             assert_eq!(
                 retries, policy.max_retries,
@@ -1008,7 +1003,7 @@ mod tests {
             let hint = policy.max_delay + Duration::from_secs(5);
             match hinted.next_backoff(Some(hint)) {
                 RetryDecision::Retry { after } => {
-                    assert_eq!(after, hint, "{class:?} honors Retry-After")
+                    assert_eq!(after, hint, "{class:?} honors Retry-After");
                 }
                 RetryDecision::GiveUp => panic!("{class:?} should retry first"),
             }

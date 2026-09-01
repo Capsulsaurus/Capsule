@@ -55,7 +55,14 @@ public struct FannedAssetStack: View {
         }
         // The fan is one preview, not three photos to sweep through.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text("app.places.preview.accessibility \(cardCount)"))
+        // Through `String(localized:defaultValue:)` rather than an interpolated
+        // `LocalizedStringKey`: SwiftUI folds the interpolation into the *key*
+        // (`…accessibility %lld`), which is not the key the catalog carries, so
+        // the lookup missed and VoiceOver read the key itself aloud.
+        .accessibilityLabel(Text(String(
+            localized: "app.places.preview.accessibility",
+            defaultValue: "\(cardCount) photos at this place"
+        )))
     }
 
     @ViewBuilder

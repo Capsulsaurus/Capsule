@@ -152,8 +152,8 @@
     "target": "Компоненты:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
-    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -200,8 +200,8 @@
     "target": "- `capsule-android`: Android Studio или IntelliJ IDEA с плагинами"
   },
   {
-    "source": "- `capsule-api`: VS Code or similar",
-    "target": "- `capsule-api`: VS Code или аналог"
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`: VS Code или аналог"
   },
   {
     "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",
@@ -316,15 +316,15 @@
     "target": "### Лицензионное соглашение участника (CLA)"
   },
   {
-    "source": "We require all contributors to sign a CLA. This ensures the project maintains the legal flexibility necessary to secure future funding and a dedicated maintenance team, guaranteeing the software remains actively supported and self-sufficient for decades to come.",
-    "target": "Мы требуем, чтобы все участники подписывали CLA. Это гарантирует, что проект сохраняет юридическую гибкость, необходимую для получения будущего финансирования и формирования выделенной команды поддержки, обеспечивая активную поддержку и самодостаточность программного обеспечения на десятилетия вперёд."
+    "source": "We require all contributors to agree to a [CLA](CLA.md). Copyright in Capsule is held by a single person, and that is what keeps app-store distribution possible: the App Store's terms are incompatible with the AGPL, so a store build can only be a separate grant from the copyright holder. In return, every public source release stays under an OSI-approved licence.",
+    "target": "Мы требуем, чтобы все участники согласились с [CLA](CLA.md). Авторские права на Capsule принадлежат одному человеку, и именно это делает возможным распространение через магазины приложений: условия App Store несовместимы с AGPL, поэтому сборка для магазина может быть только отдельным разрешением от правообладателя. В ответ каждый публичный выпуск исходного кода остаётся под лицензией, одобренной OSI."
   },
   {
     "source": "## License",
     "target": "## Лицензия"
   },
   {
-    "source": "Capsule is licensed under the [AGPL-3.0 License](LICENSE).",
-    "target": "Capsule распространяется по [лицензии AGPL-3.0](LICENSE)."
+    "source": "Capsule is published under [AGPL-3.0-only](LICENSE). Copyright is held solely by Justin Chung; third-party notices are in [NOTICE](NOTICE). The copyright holder may also offer Capsule under separate commercial terms, including the proprietary terms app stores require. That does not affect what is already published: any version you receive under the AGPL stays yours under the AGPL, permanently. The full position is documented in the [licensing design doc](https://capsule.justinchung.net/design/licensing/).",
+    "target": "Capsule публикуется под [AGPL-3.0-only](LICENSE). Авторские права принадлежат исключительно Justin Chung; уведомления о сторонних компонентах находятся в [NOTICE](NOTICE). Правообладатель может также предлагать Capsule на отдельных коммерческих условиях, включая проприетарные условия, которых требуют магазины приложений. Это не затрагивает уже опубликованное: любая версия, полученная вами под AGPL, навсегда остаётся вашей под AGPL. Полная позиция описана в [проектном документе о лицензировании](https://capsule.justinchung.net/design/licensing/)."
   }
 ]
