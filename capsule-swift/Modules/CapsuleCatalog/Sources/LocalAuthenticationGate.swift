@@ -2,8 +2,8 @@ import CapsuleFoundation
 import Foundation
 import LocalAuthentication
 
-/// The Apple implementation of the core's ``LocalAuthGate`` seam: an `LAContext`
-/// fresh-local-auth challenge for a gated view.
+/// The Apple implementation of the catalog's ``LocalAuthGate`` seam: an
+/// `LAContext` fresh-local-auth challenge for a gated view.
 ///
 /// Scope, stated as the design states it (Local Gallery — SR1): opening Recently Deleted
 /// or Hidden requires fresh local authentication, which is **view-time UX protection
@@ -19,9 +19,9 @@ import LocalAuthentication
 ///
 /// - Important: ``authenticate(view:)`` is synchronous because the UniFFI foreign-trait
 ///   seam is, so it **blocks its calling thread** for as long as the prompt is on screen.
-///   Call it only through ``CapsuleCatalog``, whose actor isolation keeps it off the main
+///   Call it only through an ``AssetCatalog``, whose actor isolation keeps it off the main
 ///   thread; blocking the main thread here would deadlock the prompt it is waiting for.
-public final class LocalAuthenticationGate: LocalAuthGate {
+public final class LocalAuthenticationGate: LocalAuthGate, @unchecked Sendable {
     /// Builds the `LAContext` for one challenge. Injectable so a test can supply a
     /// pre-configured context; production makes a fresh one per challenge, which is what
     /// keeps the authentication *fresh* (an `LAContext` caches its own successful
@@ -62,7 +62,7 @@ public final class LocalAuthenticationGate: LocalAuthGate {
         guard let result = evaluation.collect() else {
             // The callback signalled, so it delivered; an empty mailbox would mean the
             // platform violated that contract. Fail closed rather than mint a grant.
-            throw LocalAuthError.Failed
+            throw LocalAuthError.failed
         }
         if result.succeeded { return }
         throw Self.failure(for: result.errorCode)
@@ -73,8 +73,8 @@ public final class LocalAuthenticationGate: LocalAuthGate {
     /// app bundle that carries `Localizable.xcstrings`.
     private static func reason(for view: GatedView) -> String {
         switch view {
-        case .recentlyDeleted: String(localized: "ios.auth.reason.recently_deleted")
-        case .hidden: String(localized: "ios.auth.reason.hidden")
+        case .recentlyDeleted: String(localized: "app.recently_deleted.auth.reason")
+        case .hidden: String(localized: "app.hidden.auth.reason")
         }
     }
 
@@ -83,12 +83,12 @@ public final class LocalAuthenticationGate: LocalAuthGate {
     private static func failure(for code: LAError.Code?) -> LocalAuthError {
         switch code {
         case .userCancel, .appCancel, .systemCancel, .userFallback:
-            .Cancelled
+            .cancelled
         case .biometryNotAvailable, .biometryNotEnrolled, .passcodeNotSet, .invalidContext,
              .notInteractive:
-            .Unavailable
+            .unavailable
         default:
-            .Failed
+            .failed
         }
     }
 

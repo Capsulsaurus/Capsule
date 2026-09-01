@@ -16,8 +16,8 @@
     "target": "## Fonctionnalités"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **Native et multiplateforme** : Capsule est disponible sur toutes les principales plateformes de bureau et mobiles. Elle est rapide et native sur chacune d'elles."
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **Natif et multiplateforme** : Capsule est conçu comme une véritable application native par plateforme plutôt qu'une seule application web dans plusieurs enveloppes, si bien que chacune est rapide et idiomatique là où elle s'exécute. Chaque client natif a vocation à devenir complet et intégré à sa plateforme ; le tableau ci-dessous indique ce qui existe aujourd'hui."
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **Open source** : Capsule est open source pour toujours et vous pouvez héberger votre propre serveur."
+  },
+  {
+    "source": "## Clients",
+    "target": "## Clients"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "Chaque ligne donne la **portée visée** du client et son **état actuel** — les deux sont volontairement distincts, car la portée est un engagement et l'état un instantané. Chaque client natif a vocation à devenir complet et intégré à sa plateforme ; l'ordre dans lequel ils y parviendront est consigné dans le [document de conception des clients](https://capsule.justinchung.net/design/clients/). Le client web est la seule exception délibérée et reste en lecture seule de façon permanente."
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| Client | Portée visée | État actuel |\n| --- | --- | --- |\n| iOS | Complet, intégré à la plateforme | Tous les écrans principaux réalisés, fonctionnant sur des données en mémoire ; pas encore de dialogue avec un serveur |\n| Android (téléphone) | Complet, intégré à la plateforme | Ébauche |\n| iPadOS | Complet ; partage ses vues avec macOS | Livré avec l'app iOS |\n| macOS | Complet, idiomatique sur bureau | Livré avec l'app iOS |\n| Tablette Android | Complet ; partage ses mises en page avec le téléphone | Non commencé |\n| Windows, Linux | Complet, intégré à la plateforme | Non commencé |\n| Web | **En lecture seule, de façon permanente.** Consultation de votre propre bibliothèque, plus les liens publics de partage et de dépôt invité. N'écrit jamais, n'inscrit jamais d'appareil. Servi et versionné par votre serveur plutôt qu'installé par vous. | Utilisable ; en cours de bascule vers la nouvelle API du serveur |"
   },
   {
     "source": "## Is Capsule for you?",

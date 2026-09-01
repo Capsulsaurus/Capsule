@@ -1,6 +1,6 @@
 ---
 title: Clients
-description: Native client priorities, what every client must validate, and the sandboxed decoder
+description: Platform tiers and design language, what every client must validate, and the sandboxed decoder
 status: draft
 ---
 
@@ -14,6 +14,56 @@ The offline-first requirement set every native client must satisfy — the local
 
 - **Native.** Native implementations per platform ensure familiar usability and enable platform-specific optimizations.
 - **Minimal divergence.** Heavy and complex logic is centralized in `capsule-core` and `capsule-sdk`; client-specific code is generally minimal and focused on display.
+
+### Platform Tiers
+
+Every native client is intended to end up **fully featured and platform-integrated** — Windows and Linux included. The tiers below are the order in which they get there, not a permanent hierarchy, and not a statement that a lower tier gets a lesser product. A client is *first-class* when it has full feature parity and idiomatic platform integration; the tier says when that is expected, not whether it is owed.
+
+| Tier | Platforms | Meaning |
+| --- | --- | --- |
+| 1 — stabilizing now | iOS, Android (phone) | The two the product is designed against. Every feature lands here first. |
+| 2 — next | iPadOS, Android tablet | Large-screen adaptations of tier 1, not separate products. |
+| 3 — after | macOS | Desktop-idiomatic; shares its views with iPadOS. |
+| Deferred | Windows, Linux | Real targets, not started. |
+| Not on the ladder | Web | Permanently read-only; see [Web Client](#web-client). |
+
+The phone tiers lead because a photo library is overwhelmingly captured and consumed on a phone. Tablets and desktops earn their place by being *better* at the things phones are bad at — culling a thousand frames, a wide timeline, a real keyboard — which is work that only pays off once the feature it operates on exists.
+
+### What Clients Share
+
+Sharing is decided by what actually differs between two platforms, not by which company makes them:
+
+- **iPadOS and macOS share views.** Both present a regular-width split view, both have a pointer and a keyboard, and both address the same navigation graph. A screen written for one renders on the other; divergence is confined to the shell around it (a menu bar, a Settings scene, detached windows) rather than to the screens themselves.
+- **iOS and Android share layouts and feature sets, but not design language.** Same information architecture, same navigation graph, same screens in the same order. What differs is the vocabulary they are drawn in — see [Design Language](#design-language). A feature present on one phone and absent on the other is a bug in the plan, not a platform difference.
+- **Apple-specific logic is shared across iOS, iPadOS and macOS.** One workspace, one route enum, one router, three shells chosen by size class rather than by `#if os(...)`. The same is intended for Android phone and tablet.
+
+The rule this produces: **a difference between two clients has to be justified by a difference in the platform.** Screen real estate, input device, and platform convention are justifications. Which client was written first is not.
+
+### Design Language
+
+Each client is drawn in its own platform's vocabulary, over a shared skeleton. The skeleton — what screens exist, what they contain, how they nest — is common; the material is not. On Apple platforms that means stock controls, system materials, SF Symbols and the HIG; on Android it means Material. **Neither client emulates the other**, and neither invents a third, house style: an app that looks equally foreign everywhere is the failure mode this rule exists to prevent.
+
+Bespoke components are reserved for concepts the host platform has no analogue for — seal state, verification verdicts, quarantine surfaces, the degrade ladder, the smart-album predicate builder, ceremony progress. Those are drawn once per platform in that platform's idiom, not copied between them.
+
+Because the *strings* belong to the shared skeleton rather than to a platform, they are namespaced by surface rather than by client: a key naming a product concept present on both phones carries no platform prefix, and only genuinely platform-only chrome (a macOS menu bar) gets one. See [i18n](/design/i18n/).
+
+### Web Client
+
+The web client is not a tier on the ladder above, because it is not trying to become a native client. It is **permanently read-only**, in two modes:
+
+- **Authenticated viewing** — a signed-in user browsing their own library.
+- **Public links** — [share links](/design/share-links/) for viewing, and [upload links](/design/web-upload/) for guest drops.
+
+It never writes library state, never enrolls a device, and never uploads outside a guest drop. This is a consequence of the [key hierarchy](/design/cryptography/keys/), not a product decision that could be reversed by adding screens: a browser holds neither the hardware-bound device keys nor the write-tier keys those operations require. Guest drops are the sole exception and are quarantined by construction — the guest is keyless and the drop is sealed to the recipient, which is why it needs no write authority.
+
+Two further properties separate it from every native client:
+
+- **Server-owned.** It ships with the server and is updated by the server administrator. A user does not choose its version, and there is no app store between the two.
+- **Version-locked to its server.** Native clients must be lenient about which server versions they accept — a user's phone and their server update on unrelated schedules, which is why [protocol evolution is additive](/design/versioning/). The web client is served *by* the server it talks to, so that skew cannot arise and it needs no such leniency. It is the one client permitted to assume its peer's exact version.
+
+This section owns the web client's **scope** — read-only, server-owned, version-locked. It does not own the guest-drop path: the keyless *web uploader* class, the sealed drop object, and the adoption transition are owned by [Web Upload](/design/web-upload/), and the public view-only link surface by [Share Links](/design/share-links/).
+
+**Status note — the Apple client is built against ports, not against the SDK (2026-08-22).** It was written while `capsule-sdk`'s FFI verbs did not yet exist, because waiting for them would have left the client unbuilt at the moment they landed — the worst sequencing for the surface with the most design work and the slowest review loop. Those verbs have since landed (`S-P1`), so the swap described below is now schedulable rather than hypothetical. So the Apple client's data seam is a set of `async`/`Sendable` protocols with an in-memory adapter behind them, and every screen is written and tested against that. The domain types those protocols carry are shaped as structural matches for the uniffi records they will be generated from, so the swap is a constructor change in one composition root. **This does not relax any duty below.** `verify_asset` quarantine states, forward-version refusal, and the unreadable-on-this-device surface are all reachable and tested in the mocked client — a client that cannot *show* a quarantine is not a client that can be trusted to enforce one. The slice list is lane U in the repo-root `SLICES.md`.
 
 ## Platform Limitations
 

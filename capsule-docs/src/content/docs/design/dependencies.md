@@ -70,6 +70,10 @@ Mechanically, every Rust version is pinned once in the root `Cargo.toml` `[works
 
 Test frameworks and performance tooling are owned by [Clients — Test and Performance Tooling](/design/clients/#test-and-performance-tooling). Bindings come from the single-version uniffi strategy (slice S-F1). Project generation and formatting (Tuist, SwiftLint, SwiftFormat) are mise-pinned toolchain, not library pins.
 
+| Domain | Canonical choice | Scope | Exceptions |
+| --- | --- | --- | --- |
+| Reverse geocoding | Apple `CoreLocation` (`CLGeocoder`), behind an **opt-in, per-device** preference | Turning a photo's coordinates into a place name in the viewer's info panel. **Off by default**, because resolving a name sends that photo's coordinates to Apple — the one outbound call the offline-first library makes on a read path. The permission check lives inside `SystemPlaceNameResolver` rather than at its call sites, so a second caller cannot forget it, and the default `PlaceNameResolver` (`NoPlaceNameResolver`) makes no call at all. | The preference is a **device** value, never a `LibrarySettings` field: syncing it would enable geocoding on a phone by ticking a box on a laptop, which is the ambient consent the posture refuses. No third-party geocoder is used, and no coordinate is sent anywhere else. |
+
 ## Kotlin
 
 Bindings likewise ride the uniffi strategy (S-F1); JNA loads the produced library. JUnit 5 is the current test harness; the canonical pin is recorded in [Clients — Test and Performance Tooling](/design/clients/#test-and-performance-tooling) when the Android harness stabilizes.

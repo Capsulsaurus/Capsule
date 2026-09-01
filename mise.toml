@@ -60,8 +60,8 @@ description = "Verify lints, every toolchain"
 depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md"]
 
 [tasks.test]
-description = "Run tests (rust + web + kotlin)"
-depends = ["test-rust", "test-web", "test-kotlin"]
+description = "Run tests (rust + web + kotlin + swift)"
+depends = ["test-rust", "test-web", "test-kotlin", "test-swift"]
 
 [tasks.test-coverage]
 description = "Coverage report (rust)"
@@ -325,8 +325,17 @@ run = [
 # Generate the deterministic cross-language share-link KAT fixture the bun test reopens (Rust
 # seals via the real issuer crypto; wasm reopens — proving byte-identical interop). Written to the
 # gitignored capsule-web/src/generated/ tree.
+#
+# Ordered behind `build-wasm`, and `drop-kat` behind this one, so the three cargo tasks under
+# `check-web` never run at once. They are the only cargo in that graph, and mise runs independent
+# dependencies in parallel: concurrently they thrash the single `target/` lock — the same reason
+# `check` and `check-rust` are sequential — and on a cold machine each one triggers rustup's
+# toolchain-file auto-install, where they clobber each other's `~/.rustup/downloads/*.partial`
+# and the gate dies with "could not rename 'downloaded' file". Neither fixture needs the wasm
+# build; the edge is ordering, exactly as `test-swift-ui` depends on `test-swift`.
 [tasks.share-kat]
 description = "Generate the share-link cross-language KAT fixture for the web bun test"
+depends = ["build-wasm"]
 run = "cargo run -q -p xtask -- share-kat"
 
 # Generate the deterministic cross-language guest-drop KAT fixture the bun test reproduces (slice
@@ -334,12 +343,15 @@ run = "cargo run -q -p xtask -- share-kat"
 # output + the passphrase abuse-gate proof. Written to the gitignored capsule-web/src/generated/.
 [tasks.drop-kat]
 description = "Generate the guest-drop cross-language KAT fixture for the web bun test"
+depends = ["share-kat"]
 run = "cargo run -q -p xtask -- drop-kat"
 
-# test-web loads the wasm module + both KAT fixtures, so all three are prerequisites.
+# test-web loads the wasm module + both KAT fixtures. Naming `drop-kat` alone is enough: it
+# pulls in `share-kat`, which pulls in `build-wasm`. Listing all three would say nothing extra
+# and would invite someone to "parallelise" them again — see the note on `share-kat`.
 [tasks.test-web]
 dir = "capsule-web"
-depends = ["build-wasm", "share-kat", "drop-kat"]
+depends = ["drop-kat"]
 run = "bun test --pass-with-no-tests"
 
 # build-web bundles the guest share viewer, which imports the generated wasm glue.
@@ -403,9 +415,15 @@ run = "./gradlew build -Pcapsule.wireFfi"
 
 # One-shot: build the FFI xcframework, then generate the workspace. Sequential —
 # tuist generate consumes the xcframework build-ffi-apple produces.
+# The default (mock) lane needs no Rust at all — `generate-swift` is enough to open
+# and run the app. Use `setup-swift-ffi` only when working on the Rust-backed half.
 [tasks.setup-swift]
-description = "Build the FFI xcframework, then generate the Xcode workspace"
-run = ["mise run build-ffi-apple", "mise run generate-swift"]
+description = "Generate the Xcode workspace for the mock lane (no Rust required)"
+run = ["mise run generate-swift"]
+
+[tasks.setup-swift-ffi]
+description = "Build the FFI xcframework, then generate the Rust-backed workspace"
+run = ["mise run build-ffi-apple", "TUIST_FFI=1 mise run generate-swift"]
 
 # ── Vision ───────────────────────────────────────────────────────────────────
 

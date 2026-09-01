@@ -24,7 +24,9 @@ public actor HiddenStore {
             if hidden { ids.insert(id) } else { ids.remove(id) }
         }
         persist()
-        for continuation in observers.values { continuation.yield(()) }
+        for continuation in observers.values {
+            continuation.yield(())
+        }
     }
 
     /// A stream that fires whenever the hidden set changes.

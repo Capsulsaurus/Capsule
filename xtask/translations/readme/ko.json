@@ -16,8 +16,8 @@
     "target": "## 기능"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **네이티브 및 크로스 플랫폼**: Capsule은 일반적인 모든 데스크톱 및 모바일 플랫폼에서 사용할 수 있습니다. 모든 플랫폼에서 빠르고 네이티브하게 동작합니다."
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **네이티브 및 멀티플랫폼**: Capsule은 하나의 웹 앱을 여러 껍데기로 감싸는 대신 플랫폼마다 진짜 네이티브 앱으로 만들어지므로, 각 앱은 실행되는 곳에서 빠르고 그 플랫폼답게 동작합니다. 모든 네이티브 클라이언트는 최종적으로 모든 기능을 갖추고 플랫폼에 통합되는 것을 목표로 합니다. 현재 무엇이 있는지는 아래 표를 참고하세요."
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **오픈소스**: Capsule은 영원히 오픈소스이며 자체 서버를 직접 호스팅할 수 있습니다."
+  },
+  {
+    "source": "## Clients",
+    "target": "## 클라이언트"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "각 행은 클라이언트의 **목표 범위**와 **현재 상태**를 보여줍니다. 범위는 약속이고 상태는 특정 시점의 스냅숏이므로 둘은 의도적으로 분리했습니다. 모든 네이티브 클라이언트는 최종적으로 모든 기능을 갖추고 플랫폼에 통합되는 것을 목표로 하며, 그 도달 순서는 [클라이언트 설계 문서](https://capsule.justinchung.net/design/clients/)에 기록되어 있습니다. 웹 클라이언트만이 의도된 예외이며 영구적으로 읽기 전용입니다."
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| 클라이언트 | 목표 범위 | 현재 상태 |\n| --- | --- | --- |\n| iOS | 모든 기능 탑재, 플랫폼 통합 | 주요 화면을 모두 구축해 메모리 내 데이터로 동작 중. 아직 서버와 통신하지 않음 |\n| Android(휴대전화) | 모든 기능 탑재, 플랫폼 통합 | 초기 골격 |\n| iPadOS | 모든 기능 탑재. macOS와 화면을 공유 | iOS 앱에 포함 |\n| macOS | 모든 기능 탑재, 데스크톱다운 구성 | iOS 앱에 포함 |\n| Android 태블릿 | 모든 기능 탑재. 휴대전화와 레이아웃을 공유 | 시작 전 |\n| Windows, Linux | 모든 기능 탑재, 플랫폼 통합 | 시작 전 |\n| Web | **영구적으로 읽기 전용.** 본인 라이브러리 열람과 공개 공유 링크 및 게스트 업로드 링크. 절대 쓰지 않으며 기기를 등록하지도 않습니다. 사용자가 설치하는 것이 아니라 서버가 제공하고 버전을 관리합니다. | 사용 가능. 새 서버 API로 전환 중 |"
   },
   {
     "source": "## Is Capsule for you?",
