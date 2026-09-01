@@ -12,7 +12,7 @@
 
 ## Dependencies
 
-- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-cli/entity` and, until the Kynos rebuild retires it, `capsule-api/entity` (convert at the entity boundary).
+- Datetime: `jiff`, never `chrono` — chrono exists only as the sea-orm column type inside `capsule-cli/entity` (convert at the entity boundary). The server's copy went to `legacy-review/` with the Salvo tree.
 - Errors: `thiserror` in libraries, `eyre`/`color-eyre` in binaries; no `anyhow`.
 - Logging: `tracing`, never the `log` facade in new code.
 - TLS: `rustls` only; never native-tls/openssl.

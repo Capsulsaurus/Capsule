@@ -10,7 +10,7 @@
 //!
 //! This module owns the client-side halves: link issuance, drop sealing (compiled to WASM
 //! for `capsule-web`), and adoption. The server halves (drop store, inbox, atomic
-//! inbox→album promotion) live in `capsule-api-media::drops`.
+//! inbox→album promotion) live in the server's drop module.
 //!
 //! [Web Upload]: https://docs/design/web-upload/
 //! [`KeyMode::Wrapped`]: crate::crypto::provenance::KeyMode

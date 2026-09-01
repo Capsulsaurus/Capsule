@@ -10,12 +10,15 @@ both halves of the current programme:
   to end.
 
 It also absorbs the **post-teardown verdict**: the previous Salvo server, the Progenitor
-SDK, `capsule-media`, and `capsule-core`'s media/exif/legacy-import-execution trees are
-review material (four `legacy-review/` buckets: `server-salvo`, `sdk-progenitor`,
-`media-pipeline`, `core-import-media`), and the replacement server is one **Kynos**
-REST/OpenAPI application. That verdict is accepted and final. What it does **not** mean is
-that those trees are gone from this workspace today — see
-[Sequencing — build then retire](#sequencing--build-then-retire).
+SDK and the standalone media crate are review material, and the replacement server is one
+**Kynos** REST/OpenAPI application. That verdict is accepted and final.
+
+**`S-C59` executed it**, and narrowed it on evidence. Three `legacy-review/` buckets remain —
+`server-salvo`, `sdk-progenitor`, `media-pipeline` — and the fourth, `core-import-media`, is
+**gone**: it quarantined `capsule-core::exif` and the import executor's cancellation and progress
+halves, and this branch has since rebuilt all three, live and tested. Quarantining a stale twin of
+a working module is the opposite of what quarantine is for, so those stay in `capsule-core` and
+the bucket went. See [`S-C59`](#s-c59--the-salvo-tree-leaves-the-workspace).
 
 Because a slice can now be honest in one tree and dishonest in the other, every row carries
 an **Area**. Read `Status` through `Area`, never on its own.
@@ -42,7 +45,7 @@ an **Area**. Read `Status` through `Area`, never on its own.
 | Area | Meaning |
 | --- | --- |
 | `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its media/exif trees, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
-| `RETIRED` | The target sits in a `legacy-review/` bucket on `master` — `capsule-api/**`, `capsule-sdk/**`, `capsule-media`, or `capsule-core::{media, exif}` + `import/{executor_cancellation, progress}.rs`. The deliverable must be re-landed on the replacement (Kynos for the server buckets, the Rawshift-backed pipeline for media, the spargen SDK for the client). |
+| `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live (`S-C59`). |
 | `MIXED` | Both: a surviving `capsule-core`/client/app half that ships and stays, and a server, SDK-wire, or media half that must be re-landed. |
 
 **Status — read through Area.**
@@ -268,6 +271,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C56 | The passkey surface could never authenticate | server | S-C29, S-C55 | M | RETIRED | done | six operations that were in no document and always answered `CredentialNotFound`; deferred out of v1 on evidence, and `openssl` leaves the tree with them |
 | S-C57 | The resumption listing did not come across | server | S-C1 | S | RETIRED | done | `GET /v1/upload/sessions`, with a `?status=` that is refused rather than silently ignored |
 | S-C58 | The durable custody chain did not come across | server | S-C15, S-C52 | S | RETIRED | done | `GET /v1/assets/{asset_id}/receipts`, narrowed to the owner and answering one `404` for everyone else |
+| S-C59 | The Salvo tree leaves the workspace | server | S-C54, S-C55, S-C56, S-C57, S-C58 | L | RETIRED | done | parity reached, `capsule-api/**` and `capsule_core::media` quarantined, `architecture-check` becomes a gate |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -610,10 +614,11 @@ not touch them.
 
 ## Lane B — media / import
 
-Split area. The **executor, planner, scanner, importers, streaming, and staged
-scheduler** survive the teardown; **`capsule-core::{media, exif}`, `capsule-media`, and
-`import/{executor_cancellation, progress}.rs`** do not. A slice that produces or consumes
-decoded pixels is `RETIRED` or `MIXED` for that reason alone.
+Split area. The **executor, planner, scanner, importers, streaming, staged scheduler,
+`capsule_core::exif`, and the executor's cancellation and progress halves** survive the teardown;
+**`capsule_core::media`** does not (`S-C59`). A slice that produces or consumes decoded pixels is
+`RETIRED` or `MIXED` for that reason alone — and after `S-C59` there is **no decoder in the
+workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift lands.
 
 ### S-B1 — Thumbnail/LQIP generation
 
@@ -630,11 +635,12 @@ decoded pixels is `RETIRED` or `MIXED` for that reason alone.
 - **Done when:** generation produces the committed still formats with signed
   derivative manifests.
 - **Tier:** Unit + Smoke. **Blocks:** S-B2, S-B5.
-- **Landed in retired code:** generation ships today over injected per-platform encoder
-  seams and is green in this workspace, but it lives in `capsule-core::media` +
-  `capsule-media`, both review material on `master`. **Re-scoped:** re-land on the
-  Rawshift-backed pipeline. The signed `DerivativeManifest` chain and the sidecar `lqip`
-  field are `ACTIVE` and stay — the field stays here, its producer moves to `S-B14`.
+- **Landed in retired code, and retired 2026-09-01 by `S-C59`:** generation shipped over injected
+  per-platform encoder seams and was green in this workspace, but it lived in
+  `capsule_core::media` — review material. It is now in `legacy-review/media-pipeline/`, together
+  with `lifecycle/derivatives.rs`, its only caller. **Re-scoped:** re-land on the Rawshift-backed
+  pipeline. The signed `DerivativeManifest` chain and the sidecar `lqip` field are `ACTIVE` and
+  stay — the field stays here, its producer moves to `S-B14`.
 
 ### S-B2 — Signed-path import-executor rewrite
 
@@ -3212,8 +3218,8 @@ unrepresentable, and suspending the guarantee for one surface suspends it for th
 **only** edge pulling `openssl` into the workspace — `webauthn-attestation-ca` uses it to parse
 attestation certificates. It was never a TLS stack, which is why `dependencies.md` carved it out
 of the rustls-only rule; with passkeys deferred the carve-out is spent and the rule holds with no
-exception at all. `cargo tree -i openssl -e no-dev` resolves to `capsule-api-auth` and nothing
-else, so `openssl` leaves when that tree does.
+exception at all. `cargo tree -i openssl -e no-dev` resolved to the Salvo auth crate and nothing
+else, so `openssl` left the workspace with it in `S-C59`.
 
 **The `WebauthnCeremonyStore` goes too.** `S-C29` built it — the port, an in-memory adapter and
 three conformance cases — for these routes and for nothing else. A port nothing consumes, with an
@@ -3292,6 +3298,76 @@ trusting this server's JSON encoder rather than its signature, so
   `another_accounts_chain_is_404_and_not_403`,
   `an_asset_with_nothing_finalized_has_an_empty_chain` and two cases beside them, plus the
   conformance walk. **Tier:** Unit + Smoke.
+
+### S-C59 — the Salvo tree leaves the workspace
+
+- **Contract:** `legacy-review/README.md`'s charter — *"code may leave this directory only after
+  its replacement contract and tests exist"* — read in the direction it is usually not: a tree
+  enters quarantine once its **replacement** has one.
+- **Deliverable:** `capsule-api/**` → `legacy-review/server-salvo/`, `capsule_core::media` →
+  `legacy-review/media-pipeline/`, and `xtask architecture-check` promoted from a report to a
+  `check-rust` gate in the same change.
+
+**Parity was the precondition and it is reached.** `S-C53`'s audit is what made this a sequence
+rather than a single move: twenty-one `/v1/auth/*` paths on the Salvo document against seven on
+the Kynos one. The remaining gaps closed one at a time, and each closure was a finding rather
+than a transcription:
+
+| Salvo surface | Verdict |
+| --- | --- |
+| `GET`/`POST /v1/auth/profile` | ported and **split** (`S-C54`); the address became immutable |
+| password change | ported as a *change*, not a reset (`S-C54`) |
+| `POST /v1/auth/validate` | deleted — `S-C48` put the session ledger on every request |
+| password reset | deleted — a server cannot re-wrap a master key it has never seen |
+| four TOTP operations | ported, and **made to work** (`S-C55`): the Salvo login never issued a challenge |
+| six passkey operations | deferred out of v1 (`S-C56`): they were in no document and always answered `CredentialNotFound` |
+| `GET /v1/upload/sessions` | ported, with the silently-ignored status filter fixed (`S-C57`) |
+| `GET /v1/assets/{asset_id}/receipts` | ported, narrowed to the owner (`S-C58`) |
+| `GET /v1/upload/quota`, `GET`/`PUT /v1/auth/backup/escrow` | already ported under their present paths |
+
+Thirty-seven documented operations became **fifty-nine**, and the six that were never
+documented are accounted for.
+
+**The `core-import-media` bucket is deleted rather than refreshed.** It quarantined
+`capsule_core::exif` and the import executor's cancellation and progress halves. All three are
+live, tested and *newer* on this branch than the snapshot that quarantined them — which is
+exactly the charter's exit condition, met in the other direction. Keeping a stale twin of a
+working module beside it is the opposite of what quarantine is for, so the bucket went and those
+modules stay. This is a **deliberate narrowing of the teardown's file list**, recorded here
+because the plan named those files for the move.
+
+**`capsule_core::media` does go, and it takes the decoder with it.** It was the former standalone
+media crate, gated behind a non-default feature whose only consumer was the equally-gated
+`lifecycle/derivatives.rs`, so nothing in a default build reached it. The consequence is real and
+is named rather than hidden: **there is no image decoder in the workspace at all**, so every still
+import is now a `DeferredNoCodec` — no LQIP, no thumbnail, no preview — until Rawshift's adapter
+lands (`S-B1`). What is preserved is the half that would be worst to lose quietly, and
+`originals_with_no_codec_are_still_imported_and_signed` pins it: an undecodable original is still
+a signed, encrypted, self-verifying backup. `capsule_core::lqip` (`S-B14`) stays where it is,
+outside the retiring stack, because a placeholder that depended on which client imported a photo
+would be a visible defect.
+
+**What left the dependency tree with them.** `salvo`, `tonic`, `tonic-prost`, `tonic-web`,
+`prost`, `prost-types`, `async-graphql`, `webauthn-rs` — and with the last of those, `openssl`,
+whose only edge into this workspace was attestation-certificate parsing. The `rustls`-only rule
+now holds with **no exception at all**. `protoc` leaves CI with the protobuf build scripts, and
+the `containers` nextest group is empty because no test in the workspace starts a container any
+more: every port has a deterministic in-memory adapter and Kynos's `TestClient` drives a built
+service in-process. That is also why the Rust test job stops being `continue-on-error` — a gate
+that is allowed to fail is not a gate.
+
+**One document, one drift guard.** `capsule-sdk/openapi.json` and the `openapi`/`openapi-check`
+tasks that produced it are gone; `capsule-server/openapi.json` is the contract, singular, and
+`S-D28` already pointed the SDK's generator at it. Two documents existed only so a client had
+somewhere to point at each stage of the rebuild.
+
+- **Owed:** nothing on this slice. What the *rebuild* still owes is unchanged and recorded
+  elsewhere: no Postgres or Valkey adapter, no server binary, no configuration loading — nothing
+  reads `JWT_ED25519_DER`, `SYNC_CURSOR_MAC_KEY` or `ATTESTATION_KEY_SEED` yet.
+- **Done when:** ✅ `mise run architecture-check` reports boundaries intact (63 violations at
+  adoption, 0 now) **and runs inside `check-rust`**; `cargo tree -i openssl -e no-dev` empty;
+  `mise run check-rust` and `mise run test-rust` green with no `capsule-api` in the workspace.
+  **Tier:** Unit.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

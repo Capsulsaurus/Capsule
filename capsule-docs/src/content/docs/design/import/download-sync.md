@@ -6,7 +6,7 @@ status: draft
 
 Download is the inverse of [upload](/design/import/upload-protocol/), and rests on the same two foundations: blobs are **content-addressed by ciphertext hash**, and the server never holds a key, so it serves only opaque ciphertext. Where the upload path optimises for correctness under interruption, the download path optimises for **bandwidth and storage frugality** — a client fetches the smallest representation that satisfies the user's current intent, and nothing more.
 
-The download client is planned in `capsule-sdk` (per-platform glue handles cache placement and [connection-class detection](/design/networking/#connection-classes)); the Kynos REST sync feed and ranged blob fetch are planned in `capsule-api::sync`. The `/sync` feed format is the **contract** other modules consume; its versioning and per-album monotonic ordering are what defeats the stale-rewind attack class.
+The download client is planned in `capsule-sdk` (per-platform glue handles cache placement and [connection-class detection](/design/networking/#connection-classes)); the Kynos REST sync feed and ranged blob fetch are planned in `capsule-server::sync`. The `/sync` feed format is the **contract** other modules consume; its versioning and per-album monotonic ordering are what defeats the stale-rewind attack class.
 
 ## Discovering What Changed
 

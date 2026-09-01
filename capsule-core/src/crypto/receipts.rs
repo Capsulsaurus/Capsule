@@ -54,7 +54,9 @@ pub enum BlobRole {
 
 /// The signed core of a [`CustodyReceipt`] — every field the server attestation key covers.
 ///
-/// Mirrors `capsule-api-service`'s `attestation::CustodyReceiptCore` on the wire. Canonical
+/// The one definition of the receipt's signed core. `capsule-server`'s attestation module signs
+/// exactly this type rather than a mirror of it (`S-C46`), because canonical CBOR sorts map keys
+/// and two definitions of a signed structure disagree the moment either gains a field. Canonical
 /// CBOR with the manifest wire-presence discipline (absent optionals encode as absent keys).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CustodyReceiptCore {

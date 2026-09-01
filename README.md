@@ -65,7 +65,7 @@ This is a personal choice but if you're happy with existing services like Google
 
 Components:
 
-- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined
+- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`
 - [Capsule Web](capsule-web/README.md) (WIP): Web client in React
 - [Capsule Core Kotlin](capsule-core-kotlin/README.md): Shared core Kotlin multiplatform library for client-specific logic
 - [Capsule Android](capsule-android/README.md) (WIP): Jetpack Compose App
@@ -87,7 +87,7 @@ Blob storage is implemented behind a Capsule-owned backend contract; it does not
 Considering all the technologies used, you may have to switch between IDEs to develop various parts of the project. This is what we recommend:
 
 - `capsule-android`: Android Studio or IntelliJ IDEA with plugins
-- `capsule-api`: VS Code or similar
+- `capsule-server`: VS Code or similar
 - `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins
 - `capsule-docs`: VS Code or similar
 - `capsule-swift`: Xcode

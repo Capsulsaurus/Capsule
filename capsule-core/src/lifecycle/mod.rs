@@ -26,8 +26,6 @@
 
 mod album;
 mod backup;
-#[cfg(feature = "media")]
-mod derivatives;
 mod drops;
 mod groups;
 mod import;
@@ -432,19 +430,12 @@ pub struct Workspace {
     /// [Web Upload]: https://docs/design/web-upload/
     upload_links: HashMap<UploadLinkId, IssuedLink>,
     /// Pending guest drops in this user's inbox, keyed by drop id. Models the server's
-    /// staging store (`capsule-api-media::drops`, S-C5) so the offline core can drive the
+    /// staging store (the server's drop module, `S-C5`) so the offline core can drive the
     /// full seal → stage → adopt path; a real client fills it from server responses.
     ///
     /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
-    /// The per-platform still-derivative byte encoder (the `capsule-sdk` codec seam). When set
-    /// (behind the `media` feature), a signed import additionally decodes the still, computes its
-    /// LQIP, and generates + signs thumbnail/preview [`DerivativeManifest`]s per S-B1's pipeline.
-    /// `None` leaves imports at signed-original-only, so the default library build stays free of
-    /// the media stack.
-    #[cfg(feature = "media")]
-    still_encoder: Option<Box<dyn crate::media::image::derivative::StillEncoder>>,
 }
 
 fn now_rfc3339() -> String {

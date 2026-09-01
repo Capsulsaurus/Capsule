@@ -6,7 +6,7 @@ status: draft
 
 Federation lets an album owned on one Capsule server be shared with users whose accounts live on another. This document covers **server-to-server** federation only; direct device-to-device sync for a single user is [Peering](/design/peering/).
 
-Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-api::federation`.
+Federation reuses the planned Kynos REST read primitives — `/sync`, `/blob/{hash}`, and the standard manifest envelope. The only new things federation introduces are a **capability token** (the contract that gates which peers may fetch what) and a **per-peer compartmentalization layer**. Capability issuance, verification, the pull path, and per-peer rate budgeting will live in `capsule-server::federation`.
 
 ## Threat Model
 

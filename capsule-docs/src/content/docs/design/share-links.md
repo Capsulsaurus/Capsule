@@ -6,7 +6,7 @@ status: draft
 
 Share links let a Capsule user grant view (and possibly limited write) access to an album or a specific asset *without* requiring the recipient to have a Capsule account. The recipient is the [non-registered account](/design/authentication/#account-types) class — no master key, no User IK, no MLS membership. The cryptographic shape (the link secret carries the decryption material; an optional passphrase wraps it with the [password-based KDF](/design/cryptography/primitives/#password-based-kdf)) is owned by [Cryptography — Keys: Non-registered accounts](/design/cryptography/keys/#non-registered-accounts); this doc owns everything else.
 
-Implementation will live in the planned `capsule-api::shares` module (public-share serving endpoints) and `capsule-core::sharing` (link generation, capability validation).
+Implementation will live in the planned `capsule-server::share` module (public-share serving endpoints) and `capsule-core::sharing` (link generation, capability validation).
 
 ## Scope (v1)
 
@@ -51,7 +51,7 @@ trait ShareLinkIssuer {
     fn revoke(link_id: ShareLinkId) -> Result<(), Error>;
 }
 
-// planned in capsule-api::shares
+// planned in capsule-server::share
 //   GET  /s/{opaque-id}                 → metadata blob + LQIP (mandatory server-side strip — see Security Contract)
 //   GET  /s/{opaque-id}/blob/{hash}     → ciphertext blob; client decrypts using link-derived key
 //   GET  /s/{opaque-id}/wrapped-secret  → the passphrase-WRAPPED link material, when the link is

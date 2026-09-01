@@ -27,10 +27,8 @@ use crate::db::{AssetRow, CachedRepresentationRow};
 use crate::exif::extract::extract_exif;
 use crate::exif::timezone::resolve_timezone;
 use crate::metadata::crdt::{Lww, OrSet};
-#[cfg(not(feature = "media"))]
-use crate::sidecar::sidecar_v1::Dimensions;
 use crate::sidecar::sidecar_v1::{
-    Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
+    Dimensions, Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.
@@ -384,24 +382,12 @@ impl Workspace {
             "import: sidecar metadata resolved"
         );
 
-        // Still-derived sidecar metadata (dimensions + LQIP) and the derivatives to persist
-        // after the commit. Behind `media` this decodes the still once and generates the signed
-        // derivatives; without it, dimensions come from EXIF and no derivatives are generated.
-        // Either way the import proceeds: a still this build cannot decode is still backed up as
-        // a signed, encrypted original — `derivative_status` records the gap so it is reportable
-        // rather than silent (S-B13).
-        #[cfg(feature = "media")]
-        let (dimensions, lqip, pending_derivatives, derivative_status) = {
-            let prepared = self.prepare_still(&plaintext, &ext, src, &exif, asset_id, album_id)?;
-            (
-                prepared.dimensions,
-                prepared.lqip,
-                prepared.derivatives,
-                prepared.status,
-            )
-        };
-        // No `media` feature means no codecs at all, so every still is a deferral.
-        #[cfg(not(feature = "media"))]
+        // Still-derived sidecar metadata. Dimensions come from EXIF; there is **no decoder in
+        // this build** since `S-C59` retired `capsule_core::media`, so no still is decoded, no
+        // LQIP is computed and no derivatives are generated. The import proceeds regardless: the
+        // original is still backed up as a signed, encrypted blob, and `derivative_status`
+        // records the gap so it is reportable rather than silent (`S-B13`). Rawshift's
+        // replacement is what closes it.
         let (dimensions, lqip, derivative_status) = (
             exif.width
                 .zip(exif.height)
@@ -528,10 +514,6 @@ impl Workspace {
         self.write_asset_files(&asset, &plaintext)?;
         self.index_asset_row(&asset)?;
         self.index_original_representation(&asset, plaintext.len())?;
-
-        // Persist the signed still derivatives generated pre-commit (media + encoder attached).
-        #[cfg(feature = "media")]
-        self.persist_derivatives(&asset, &pending_derivatives)?;
 
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),

@@ -6,7 +6,7 @@ status: draft
 
 Authentication binds a user identity to their master key, which is the root of every encryption and decryption operation in Capsule. The server can prove "this request is from a session it issued" but cannot prove "this user is who they say they are" — the master key, owned client-side, is the actual identity root. Everything below works to keep that binding intact through the lifetime of a session and across server moves.
 
-Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validation, and per-device records. The retired Salvo implementation remains under `legacy-review/server-salvo/auth/` as review material, not an active server. The session token format and OIDC discovery surface below are the contracts other components — including federated peers — will depend on.
+Planned in `capsule-server::auth`: OIDC handling, the session ledger, claim validation, and per-device records. The retired Salvo implementation remains under `legacy-review/server-salvo/auth/` as review material, not an active server. The session token format and OIDC discovery surface below are the contracts other components — including federated peers — will depend on.
 
 ## Design Principles
 
@@ -118,7 +118,7 @@ Because the IK signs the move and every device cross-signs to that IK, no server
 
 ## Session and Access Tokens
 
-These are the two token shapes consumers depend on. Both will be issued by `capsule-api::auth::session` after a successful authentication ceremony.
+These are the two token shapes consumers depend on. Both will be issued by `capsule-server::auth::session` after a successful authentication ceremony.
 
 ### Session ID
 

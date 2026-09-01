@@ -140,8 +140,8 @@
     "target": "Componentes:"
   },
   {
-    "source": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined",
-    "target": "- [Capsule API](capsule-api/README.md): Planned Kynos REST/OpenAPI server; the previous server is quarantined"
+    "source": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`",
+    "target": "- [Capsule Server](capsule-server/README.md): The Kynos REST/OpenAPI server; the previous Salvo server is quarantined under `legacy-review/`"
   },
   {
     "source": "- [Capsule Web](capsule-web/README.md) (WIP): Web client in React",
@@ -188,8 +188,8 @@
     "target": "- `capsule-android`: Android Studio ou IntelliJ IDEA com plugins"
   },
   {
-    "source": "- `capsule-api`: VS Code or similar",
-    "target": "- `capsule-api`: VS Code ou similar"
+    "source": "- `capsule-server`: VS Code or similar",
+    "target": "- `capsule-server`: VS Code ou similar"
   },
   {
     "source": "- `capsule-core-kotlin`: Android Studio or IntelliJ IDEA with plugins",

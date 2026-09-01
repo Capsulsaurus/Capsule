@@ -54,8 +54,6 @@ pub mod import;
 pub mod library;
 #[cfg(feature = "native")]
 pub mod lifecycle;
-#[cfg(feature = "media")]
-pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]

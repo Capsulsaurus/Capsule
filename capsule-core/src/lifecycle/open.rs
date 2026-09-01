@@ -302,8 +302,6 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            #[cfg(feature = "media")]
-            still_encoder: None,
         })
     }
 
@@ -316,19 +314,6 @@ impl Workspace {
     #[must_use]
     pub fn with_client_id(mut self, client_id: &str, semver: &str) -> Self {
         self.client_version = crate::client_build::client_version(client_id, semver);
-        self
-    }
-
-    /// Attach the per-platform [`StillEncoder`](crate::media::image::derivative::StillEncoder) so
-    /// signed imports generate thumbnail/preview derivatives + LQIP (S-B1 → S-B2). Without it,
-    /// imports are signed-original-only.
-    #[cfg(feature = "media")]
-    #[must_use]
-    pub fn with_still_encoder(
-        mut self,
-        encoder: Box<dyn crate::media::image::derivative::StillEncoder>,
-    ) -> Self {
-        self.still_encoder = Some(encoder);
         self
     }
 
@@ -443,8 +428,6 @@ impl Workspace {
             share_links: HashMap::new(),
             upload_links: HashMap::new(),
             inbox: HashMap::new(),
-            #[cfg(feature = "media")]
-            still_encoder: None,
         };
         // `S-A10`: album keys, authorities, and every managed asset come back from disk here.
         // Without this the reopened workspace would hold an unlocked account and nothing else.

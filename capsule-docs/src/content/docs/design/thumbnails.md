@@ -6,7 +6,7 @@ status: draft
 
 We generate thumbnails and previews for all photos and videos. This doc is the **single source of truth** for the LQIP scheme and the thumbnail/preview formats — per the [SSoT rule](/design/principles/#single-source-of-truth), other docs reference these by link rather than restating the choice. The format table is itself the contract: every receiver (and every federated peer) compares the `DerivativeManifest.format` value against this list, and an unknown value is a structural rejection.
 
-Rawshift owns client-side media decoding, metadata extraction, and derivative generation. Capsule core maps those outputs into signed manifests, and the planned `capsule-api::blob` module serves only opaque ciphertext. The [LQIP](#lqip) is the one derivative Rawshift does **not** own: Capsule imports Chromahash directly and computes it in `capsule-core::lqip`.
+Rawshift owns client-side media decoding, metadata extraction, and derivative generation. Capsule core maps those outputs into signed manifests, and the planned `capsule-server::blob` module serves only opaque ciphertext. The [LQIP](#lqip) is the one derivative Rawshift does **not** own: Capsule imports Chromahash directly and computes it in `capsule-core::lqip`.
 
 ## Thumbnail and Preview Formats
 

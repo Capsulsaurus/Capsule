@@ -44,21 +44,6 @@ mls = [
 # uniffi's CLI so the `uniffi-bindgen` bin can emit the bindings.
 ffi = ["native", "dep:uniffi"]
 ffi-bindgen = ["ffi", "uniffi/cli"]
-# `media` exposes the decode/encode + media-metadata utilities (the former standalone
-# `capsule-media` crate) as `capsule_core::media`. Non-default so the default library
-# build (crypto data plane, CLI, FFI, future WASM) never compiles the media stack;
-# `capsule-api-upload` opts in.
-media = [
-    "native",
-    "dep:base64",
-    "dep:file-format",
-    "dep:jpeg-encoder",
-    "dep:memmap2",
-    "dep:num-rational",
-    "dep:tokio",
-    "dep:zune-core",
-    "dep:zune-jpeg",
-]
 # `tpm` builds the desktop (Linux/Windows) TPM 2.0 reference `HardwareSigner` (see
 # `crypto::keys::tpm`). Off by default and never built in CI: tss-esapi links the system
 # `libtss2` and exercising it needs a real TPM or a software TPM (swtpm). Compile on a
@@ -132,19 +117,10 @@ getrandom = "0.3"        # OS CSPRNG for keys, salts, nonce prefixes
 tar = "0.4"              # deterministic uncompressed POSIX tar backup container
 sharks = "0.5"           # Shamir secret sharing (opt-in 2-of-3 recovery)
 
-# ── Media (optional; `media` feature) — decode/encode + media metadata ──────
-base64 = { workspace = true, optional = true }
-file-format = { workspace = true, optional = true }
-jpeg-encoder = { version = "0.6", optional = true }
-memmap2 = { version = "0.9.10", optional = true }
-num-rational = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
 # Sole logging facade (the `log` crate is forbidden in new code; see the Dependencies doc).
 # Non-optional: the native library/import/lifecycle surface instruments hot-path spans and
 # events, and the WASM sealing build links only the facade (no subscriber), which is free.
 tracing = { workspace = true }
-zune-core = { version = "0.5.1", optional = true }
-zune-jpeg = { version = "0.5.15", optional = true }
 
 # ── FFI (optional; `ffi` feature) ──────────────────────────────────────────
 # uniffi proc-macro bindings for Kotlin/Swift. Optional so the default library
@@ -210,18 +186,6 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 # `uuid` also needs an explicit wasm randomness source; route it through getrandom (whose
 # wasm backend is configured above) so the drop id / file-id draws work in the browser.
 uuid = { workspace = true, features = ["rng-getrandom"] }
-
-[[example]]
-name = "extract_metadata"
-required-features = ["media"]
-
-[[example]]
-name = "generate_derivative"
-required-features = ["media"]
-
-[[example]]
-name = "generate_lqip"
-required-features = ["media"]
 
 [dev-dependencies]
 tempfile = "3"

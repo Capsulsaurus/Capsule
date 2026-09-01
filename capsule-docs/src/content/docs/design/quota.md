@@ -6,7 +6,7 @@ status: draft
 
 Storage quota in Capsule is accounted to `upload_user_id` (the authenticated uploader), which is distinct from `owner_id` (the asset's owner). This separation lets a user upload on behalf of a different owner (with verified permission) while keeping storage cost attributed correctly. The accounting model is enforced at the [server filesystem](/design/filesystem/server/#ownership-partitioning-and-quota) and at [upload session creation](/design/import/upload-protocol/#quota-and-permissions); this doc owns the threshold model and what happens when limits are hit.
 
-Implementation will live in the planned `capsule-api::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
+Implementation will live in the planned `capsule-server::quota` module. Accounting reads from the Postgres asset index (size sums per `upload_user_id`); enforcement runs at session creation, before any chunks are accepted.
 
 ## Accounting Model
 
@@ -61,7 +61,7 @@ Where the quota check actually runs:
 ## Contract Skeleton
 
 ```rust
-// planned in capsule-api::quota
+// planned in capsule-server::quota
 struct QuotaStatus {
     used: u64,
     soft_limit: u64,

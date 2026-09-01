@@ -1,16 +1,5 @@
 [workspace]
 members = [
-    "capsule-api",
-    "capsule-api/auth",
-    "capsule-api/media",
-    "capsule-api/service",
-    "capsule-api/entity",
-    "capsule-api/environment",
-    "capsule-api/sync",
-    "capsule-api/migration",
-    "capsule-api/model",
-    "capsule-api/testing",
-    "capsule-api/upload",
     "capsule-cli",
     "capsule-cli/entity",
     "capsule-cli/migration",
@@ -24,19 +13,8 @@ members = [
     "xtask",
 ]
 # capsule-sdk's REST client is generated at build time by spargen from the committed
-# capsule-sdk/openapi.json (slice S-D8); regenerate the schema with `mise run openapi`.
+# capsule-server/openapi.json (slice S-D28); regenerate it with `mise run openapi-kynos`.
 default-members = [
-    "capsule-api",
-    "capsule-api/auth",
-    "capsule-api/media",
-    "capsule-api/service",
-    "capsule-api/entity",
-    "capsule-api/environment",
-    "capsule-api/sync",
-    "capsule-api/migration",
-    "capsule-api/model",
-    "capsule-api/testing",
-    "capsule-api/upload",
     "capsule-cli",
     "capsule-cli/entity",
     "capsule-cli/migration",

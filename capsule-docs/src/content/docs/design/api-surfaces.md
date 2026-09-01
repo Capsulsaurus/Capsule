@@ -19,16 +19,16 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 | Surface | Transport | Planned module | Owner doc |
 | --- | --- | --- | --- |
 | Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
-| Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-api::upload` | [Upload Protocol](/design/import/upload-protocol/) |
-| Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-api::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
-| Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-api::blob` | [Download & Sync](/design/import/download-sync/) |
-| Sync feed (change discovery after a cursor) | REST | `capsule-api::sync` | [Download & Sync](/design/import/download-sync/) |
-| Federation pull | REST | `capsule-api::federation` | [Federation](/design/federation/) |
-| Share serving (`/s/{opaque-id}`) | REST | `capsule-api::shares` | [Share Links](/design/share-links/) |
-| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption) | REST | `capsule-api::drops` | [Web Upload](/design/web-upload/) |
-| Storage verification (`POST /storage/verify`) | REST | `capsule-api::blob` | [Storage Verification](/design/import/storage-verification/) |
-| Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-api::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
-| Version/handshake | REST | `capsule-api` | [Threat Model — Validation](/design/threat-model/validation/) |
+| Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-server::upload` | [Upload Protocol](/design/import/upload-protocol/) |
+| Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-server::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
+| Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-server::blob` | [Download & Sync](/design/import/download-sync/) |
+| Sync feed (change discovery after a cursor) | REST | `capsule-server::sync` | [Download & Sync](/design/import/download-sync/) |
+| Federation pull | REST | `capsule-server::federation` | [Federation](/design/federation/) |
+| Share serving (`/s/{opaque-id}`) | REST | `capsule-server::share` | [Share Links](/design/share-links/) |
+| Guest drops (`/u/{opaque-id}/drop`, inbox, adoption) | REST | `capsule-server::drop` | [Web Upload](/design/web-upload/) |
+| Storage verification (`POST /storage/verify`) | REST | `capsule-server::blob` | [Storage Verification](/design/import/storage-verification/) |
+| Device enrollment (`/auth/devices/enroll…`) | REST | `capsule-server::auth::devices` | [Device Enrollment](/design/device-enrollment/) |
+| Version/handshake | REST | `capsule-server` | [Threat Model — Validation](/design/threat-model/validation/) |
 | Library queries (timeline, albums, search) | none — client-side over `library.sqlite` | `capsule-core::library` + `db` | [Organization](/design/organization/#system--smart-albums-views) |
 
 Blob bytes use ranged HTTP. The sync feed carries only small opaque envelopes, encrypted metadata,

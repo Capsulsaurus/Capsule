@@ -421,13 +421,15 @@ mod tests {
     /// build is imported as a signed, encrypted, verifiable asset — it simply arrives without a
     /// thumbnail/preview, and the run summary says so.
     ///
-    /// This also pins the distinction the logs must preserve: `iphone.heic` is an *expected*
-    /// deferral (no HEIC codec), while `snap.jpg` holds bytes that are not really a JPEG, so it
-    /// is a *genuine* decode failure of a format we do support. Both import; only the second is
-    /// a problem worth investigating.
-    #[cfg(feature = "media")]
+    /// **`S-C59` narrowed what this can assert.** It used to pin the distinction the logs must
+    /// preserve: `iphone.heic` an *expected* deferral, `snap.jpg` a *genuine* decode failure of a
+    /// format we do support. With `capsule_core::media` retired there is no decoder for any
+    /// format, so both are deferrals and the distinction is unobservable — it comes back with
+    /// Rawshift. What survives is the half that matters most and would be the worst to lose
+    /// silently: **an undecodable original is still a signed, encrypted, self-verifying backup**,
+    /// and both files land.
     #[test]
-    fn heic_originals_are_imported_without_derivatives() {
+    fn originals_with_no_codec_are_still_imported_and_signed() {
         use crate::lifecycle::DerivativeStatus;
 
         let src = TempDir::new().unwrap();
@@ -450,26 +452,28 @@ mod tests {
         assert_eq!(summary.imported_count(), 2, "both originals are backed up");
         assert_eq!(
             summary.deferred_derivative_count(),
-            1,
-            "the HEIC is an expected codec deferral"
+            2,
+            "with no decoder in the build, every still is a codec deferral"
         );
         assert_eq!(
             summary.decode_failed_count(),
-            1,
-            "the bogus JPEG is a real decode failure, reported separately"
+            0,
+            "nothing is *attempted*, so nothing can fail to decode — the distinction returns \
+             with Rawshift"
         );
 
-        // The two reasons are distinguishable per file, not just in aggregate.
+        // Reported per file rather than only in aggregate, so the shape a caller reads is
+        // pinned even while there is one reason rather than two.
         for (path, outcome) in &summary.outcomes {
             let ImportOutcome::Imported { derivatives } = outcome else {
                 panic!("{} should have imported, got {outcome:?}", path.display());
             };
-            let expected = match path.extension().unwrap().to_str().unwrap() {
-                "heic" => DerivativeStatus::DeferredNoCodec,
-                "jpg" => DerivativeStatus::DecodeFailed,
-                other => panic!("unexpected member extension {other}"),
-            };
-            assert_eq!(*derivatives, expected, "for {}", path.display());
+            assert_eq!(
+                *derivatives,
+                DerivativeStatus::DeferredNoCodec,
+                "for {}",
+                path.display()
+            );
         }
 
         // Both land on the signed path and self-verify — a missing thumbnail is not a missing
@@ -484,7 +488,6 @@ mod tests {
     /// A RAW-only candidate — no same-stem JPEG to fall back on — still lands as a signed,
     /// self-verifying original. RAW has no decoder in this build, which is exactly why this
     /// needs pinning: the archive is the whole point, the derivative is a bonus (slice `S-B13`).
-    #[cfg(feature = "media")]
     #[test]
     fn raw_only_candidate_lands_as_a_signed_original() {
         use crate::lifecycle::DerivativeStatus;
@@ -651,125 +654,5 @@ mod tests {
         assert_eq!(primaries, 1, "exactly one member represents the stack");
         stack_ids.dedup();
         assert_eq!(stack_ids.len(), 1, "both members share one stack id");
-    }
-
-    /// S-B2: an executor import produces `verify_asset`-accepting assets **with signed
-    /// derivatives** when a `StillEncoder` is attached (behind the `media` feature).
-    #[cfg(feature = "media")]
-    #[test]
-    fn import_generates_signed_derivatives() {
-        use crate::media::image::buffer::{ComponentType, ImageBuffer, PixelFormat};
-        use crate::media::image::derivative::{DerivativeFormat, DerivativeTier, StillEncoder};
-        use crate::media::image::formats::jpeg::JpegImage;
-        use crate::media::image::metadata::ImageMetadata;
-        use crate::media::image::types::ImageFormat;
-        use crate::media::image::{Image, ImageEncode};
-        use crate::media::metadata::ColorSpace;
-
-        /// Deterministic in-test byte encoder standing in for the SDK's per-platform codecs.
-        struct TagEncoder;
-        impl StillEncoder for TagEncoder {
-            fn encode(
-                &self,
-                buffer: &ImageBuffer,
-                format: DerivativeFormat,
-                _tier: DerivativeTier,
-            ) -> Result<Vec<u8>, crate::media::image::buffer::ImageBufferError> {
-                let tag: u8 = match format {
-                    DerivativeFormat::Jxl => 0x4A,
-                    DerivativeFormat::Avif => 0xAF,
-                    DerivativeFormat::WebP => 0x7B,
-                    DerivativeFormat::Original => 0x00,
-                };
-                let mut v = Vec::with_capacity(buffer.data.len() + 1);
-                v.push(tag);
-                v.extend_from_slice(&buffer.data);
-                Ok(v)
-            }
-        }
-
-        // A real, decodable JPEG (512×384 gradient) so the still decode + derivative path runs.
-        fn gradient_jpeg() -> Vec<u8> {
-            let (w, h) = (512usize, 384usize);
-            let mut data = Vec::with_capacity(w * h * 3);
-            for y in 0..h {
-                for x in 0..w {
-                    data.push((x % 256) as u8);
-                    data.push((y % 256) as u8);
-                    data.push(((x + y) % 256) as u8);
-                }
-            }
-            let buffer = ImageBuffer::new(
-                data,
-                w,
-                h,
-                PixelFormat::Rgb,
-                ComponentType::U8,
-                ColorSpace::Srgb,
-            )
-            .unwrap();
-            let meta = ImageMetadata {
-                format: Some(ImageFormat::Jpeg),
-                width: w as u32,
-                height: h as u32,
-                bit_depth: 8,
-                color_space: ColorSpace::Srgb,
-                ..Default::default()
-            };
-            JpegImage::from_raw_parts(buffer, meta)
-                .unwrap()
-                .encode_to_bytes()
-                .unwrap()
-        }
-
-        let src = TempDir::new().unwrap();
-        let lib_dir = TempDir::new().unwrap();
-        fs::write(src.path().join("photo.jpg"), gradient_jpeg()).unwrap();
-
-        let mut ws = signed_workspace(lib_dir.path()).with_still_encoder(Box::new(TagEncoder));
-        let scan_result = scan(&[src.path().to_path_buf()]).unwrap();
-        let config = ImportConfig::default();
-        let plan_result = plan(&scan_result, ws.db(), &config).unwrap();
-
-        let token = CancellationToken::new();
-        let summary = execute(&plan_result, &mut ws, &config, noop_event, &token).unwrap();
-        assert_eq!(summary.imported_count(), 1);
-
-        let ids = ws.asset_ids();
-        assert_eq!(ws.verify(&ids[0]).unwrap(), VerifyOutcome::Accept);
-
-        // The sidecar carries an LQIP computed from the decoded still.
-        assert!(
-            ws.asset(&ids[0]).unwrap().sidecar.lqip.is_some(),
-            "LQIP should be populated for a decodable still"
-        );
-
-        // Signed derivatives are persisted: the manifest bundle plus the encoded tiers.
-        let stem = ids[0].simple().to_string();
-        let deriv_files: Vec<_> = walkdir::WalkDir::new(lib_dir.path().join("media"))
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| {
-                e.path()
-                    .to_string_lossy()
-                    .contains(&format!("derivatives/{stem}"))
-            })
-            .filter(|e| e.path().is_file())
-            .collect();
-        assert!(
-            deriv_files
-                .iter()
-                .any(|e| e.path().to_string_lossy().ends_with(".derivatives.cbor")),
-            "the signed derivative manifest bundle should exist"
-        );
-        // Thumbnail (>256px → 3 formats) + preview (3 formats) tiers were written to disk.
-        let tier_files = deriv_files
-            .iter()
-            .filter(|e| !e.path().to_string_lossy().ends_with(".derivatives.cbor"))
-            .count();
-        assert!(
-            tier_files >= 2,
-            "expected multiple derivative tier files, got {tier_files}"
-        );
     }
 }

@@ -17,7 +17,7 @@ for review. A name in the design does not imply that a deployable implementation
 | `capsule-core-ffi` | Active | UniFFI bindings for native Swift/Kotlin consumers, consolidated on one UniFFI version across both surfaces |
 | `capsule-cli` + CLI entity/migration crates | Active | Local CLI behavior and its SQLite persistence. Its network commands (`auth`, `sync`, `list`, `push`) ride the Rust SDK and pause while that is rebuilt |
 | Client import execution | Quarantined | Rebuild over Rawshift plus direct Chromahash v1; scan, grouping, and planning remain active. The signed-path executor is a partial replacement — it already applies privacy and sidecar policy before encrypting, signing, and committing, but still consumes in-repository media rather than normalized Rawshift results |
-| Server | Quarantined | Rebuild with Kynos as REST/OpenAPI-only `capsule-api` modules |
+| Server | Quarantined | Rebuild with Kynos as REST/OpenAPI-only `capsule-server` modules |
 | Rust SDK | Quarantined | Regenerate with Spargen from the canonical Kynos OpenAPI document. Orchestration (auth/session refresh, upload, sync, recovery, protocol-version negotiation) is Capsule-owned and stays outside generated code |
 | Media pipeline | Quarantined | Rawshift replaces in-repository codecs and metadata extraction |
 | GraphQL and gRPC transports | Deleted | Rejected; no compatibility surface will be restored |
@@ -53,7 +53,7 @@ protocols, schemas, provenance, and policy. Peering lives in the SDK and is quar
 
 ## Planned Server Modules
 
-The future `capsule-api` is one Kynos REST/OpenAPI application composed from cohesive internal
+The future `capsule-server` is one Kynos REST/OpenAPI application composed from cohesive internal
 modules, not separate public transports or microservices.
 
 | Module | Contract owner | Required validation |

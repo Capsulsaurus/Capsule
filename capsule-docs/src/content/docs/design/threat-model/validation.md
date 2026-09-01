@@ -6,7 +6,7 @@ status: draft
 
 The cross-cutting refuse-by-default rules every Capsule receiver runs before persisting any incoming write. These are the operational core of the threat model — a server or client that skips one of them silently widens the blast radius for the entire client class taxonomy.
 
-The server-side invariants are implemented as pure, key-free checks in `capsule-core::validation` (protocol gate, manifest-envelope check, idempotency keys); wiring them into every `capsule-api` write path lands with the networked surface (planned). The client-side invariants are enforced via the single `verify_asset` chokepoint in `capsule-core::crypto` (implemented) plus the per-receiver decoder paths. The protocol handshake is a one-shot pre-flight check on every request; idempotency and atomicity invariants are properties of specific write surfaces, each cross-linked to the doc that owns the surface.
+The server-side invariants are implemented as pure, key-free checks in `capsule-core::validation` (protocol gate, manifest-envelope check, idempotency keys); wiring them into every `capsule-server` write path lands with the networked surface (planned). The client-side invariants are enforced via the single `verify_asset` chokepoint in `capsule-core::crypto` (implemented) plus the per-receiver decoder paths. The protocol handshake is a one-shot pre-flight check on every request; idempotency and atomicity invariants are properties of specific write surfaces, each cross-linked to the doc that owns the surface.
 
 ## Server-Side Validation Invariants
 
