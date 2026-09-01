@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">بلغ هذا المصدر حدّ التخزين المؤقت على حسابك.</string>
     <string name="error_quota_unavailable">تعذّر على Capsule التحقق من استخدام مساحة التخزين. يُرجى المحاولة مرة أخرى.</string>
     <string name="error_share_rate_limited">محاولات كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">عمليات فحص عميق للتخزين كثيرة جدًا. يُرجى الانتظار ثم المحاولة مرة أخرى.</string>
     <string name="error_storage_invalid_request">طلب التحقق من التخزين مُشوَّه.</string>
     <string name="error_storage_unavailable">تعذّر على Capsule التحقق من تخزين صورك بأمان. يُرجى المحاولة مرة أخرى.</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">يستخدم هذا التغيير إجراءً لا يسمح به الألبوم.</string>
     <string name="error_upload_invalid_hash">قيمة تجزئة المحتوى المُعلنة للرفع غير صالحة.</string>
     <string name="error_upload_invalid_size">الحجم المُعلن للرفع غير صالح.</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">طلب الرفع مُشوَّه.</string>
     <string name="error_upload_missing_checksum">كان طلب الرفع يفتقر إلى مجموع التحقق من السلامة.</string>
     <string name="error_upload_missing_offset">كان طلب الرفع يفتقر إلى علامة الموضع.</string>

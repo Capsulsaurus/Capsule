@@ -250,6 +250,7 @@
     <string name="error_share_malformed">That share link could not be created.</string>
     <string name="error_share_rate_limited">Too many attempts. Please wait and try again.</string>
     <string name="error_share_unavailable">Capsule couldn\'t reach that share. Please try again.</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">Too many deep storage checks. Please wait and try again.</string>
     <string name="error_storage_invalid_request">The storage-verification request was malformed.</string>
     <string name="error_storage_unavailable">Capsule couldn\'t check whether your photos are safely stored. Please try again.</string>
@@ -275,6 +276,7 @@
     <string name="error_upload_invalid_action">This change uses an action the album doesn\'t allow.</string>
     <string name="error_upload_invalid_hash">The upload\'s declared content hash is invalid.</string>
     <string name="error_upload_invalid_size">The upload\'s declared size is invalid.</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">The upload request was malformed.</string>
     <string name="error_upload_missing_checksum">The upload request was missing its integrity checksum.</string>
     <string name="error_upload_missing_offset">The upload request was missing its position marker.</string>

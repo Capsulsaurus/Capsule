@@ -290,6 +290,9 @@ pub mod error_codes {
     /// `error.share.unavailable`
     pub const SHARE_UNAVAILABLE: &str = "error.share.unavailable";
 
+    /// `error.storage.asset_not_found`
+    pub const STORAGE_ASSET_NOT_FOUND: &str = "error.storage.asset_not_found";
+
     /// `error.storage.deep_rate_limited`
     pub const STORAGE_DEEP_RATE_LIMITED: &str = "error.storage.deep_rate_limited";
 
@@ -364,6 +367,9 @@ pub mod error_codes {
 
     /// `error.upload.invalid_size`
     pub const UPLOAD_INVALID_SIZE: &str = "error.upload.invalid_size";
+
+    /// `error.upload.invalid_status_filter`
+    pub const UPLOAD_INVALID_STATUS_FILTER: &str = "error.upload.invalid_status_filter";
 
     /// `error.upload.malformed_request`
     pub const UPLOAD_MALFORMED_REQUEST: &str = "error.upload.malformed_request";

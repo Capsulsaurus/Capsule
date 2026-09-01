@@ -266,6 +266,8 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C54 | The profile surface, and a password change that is not a reset | server | S-C53 | M | RETIRED | done | three operations where Salvo had one; the address becomes immutable and `/validate` and password reset are deleted rather than owed |
 | S-C55 | A confirmed second factor gated nothing | server | S-C13, S-C32, S-C53 | L | RETIRED | done | Salvo's login never issued an MFA challenge; login gains a `202`, and a code is accepted at most once |
 | S-C56 | The passkey surface could never authenticate | server | S-C29, S-C55 | M | RETIRED | done | six operations that were in no document and always answered `CredentialNotFound`; deferred out of v1 on evidence, and `openssl` leaves the tree with them |
+| S-C57 | The resumption listing did not come across | server | S-C1 | S | RETIRED | done | `GET /v1/upload/sessions`, with a `?status=` that is refused rather than silently ignored |
+| S-C58 | The durable custody chain did not come across | server | S-C15, S-C52 | S | RETIRED | done | `GET /v1/assets/{asset_id}/receipts`, narrowed to the owner and answering one `404` for everyone else |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -3225,6 +3227,71 @@ commit that removed it, and this row is the pointer.
 - **Done when:** ✅ `mise run test-rust` green with the port, its adapter and its three
   conformance cases removed; `cargo tree -i openssl -e no-dev` naming only the retiring tree;
   the auth doc carrying the four findings rather than the aspiration. **Tier:** Unit.
+
+### S-C57 — the resumption listing did not come across
+
+- **Contract:** [Upload Protocol — Endpoints](capsule-docs/src/content/docs/design/import/upload-protocol.md).
+- **Gap:** `GET /upload/sessions` is in the protocol's endpoint table and had no Kynos surface.
+  It is the only way a client that lost its local record of an in-flight upload — a reinstall, a
+  second device, a crash before the session id was persisted — can find the bytes already on the
+  server. Without it those bytes are unreachable and are evicted at the survival floor, which is
+  a silent data-transfer loss rather than an error anybody sees.
+
+**The filter is refused, where the retired handler ignored it.** That handler read `?status=`
+with `serde_json::from_str(…).ok()` and dropped the `None`, so `?status=complete` — one letter
+off `completed` — returned **every** session instead of none. A filter that is quietly ignored is
+worse than one that is refused, because the caller believes the list is filtered and acts on it;
+here an unknown value is a `400` naming the five it expected.
+
+**The listing is a resumption view, not the finalization record.** The manifest envelope, the
+expected hash and the crypto pin stay off it: they are finalization's inputs and are already the
+client's own, and echoing a signed document into every listing puts it somewhere nobody reads it
+from. `a_listing_carries_what_a_resume_needs_and_nothing_signed` pins the absence.
+
+- **Done when:** ✅ `a_client_that_lost_its_session_ids_can_find_them_again`,
+  `an_unknown_status_filter_is_refused_rather_than_ignored`,
+  `a_listing_carries_what_a_resume_needs_and_nothing_signed`,
+  `the_listing_is_scoped_to_the_uploader`, `the_literal_path_is_not_read_as_an_upload_id` and
+  four cases beside them, plus the conformance walk. **Tier:** Unit + Smoke.
+
+### S-C58 — the durable custody chain did not come across
+
+- **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md);
+  the retention it depends on is `S-C52`.
+- **Gap:** `GET /assets/{asset_id}/receipts` is the **durable** half of the receipt surface and
+  had no Kynos port — only the session-window `GET /v1/upload/{id}/receipt`, whose answer leaves
+  the caller's reach when the upload session is collected. So the server could take custody of a
+  photo's whole bundle and, a day later, offer no way to ask what it had admitted taking.
+
+**This is the operation a dispute is settled from**, which is why it belongs beside `S-C52`
+rather than being folded into the session fetch. A receipt is a signature over what the server
+said it accepted, at a sequence number it cannot go back and renumber; a client comparing its
+local chain against this list can distinguish a server that lost a blob from one that never had
+it. `S-C52` decided to keep the chain — this is where the keeping becomes visible.
+
+**Owner-only, narrowing the retired surface's "uploader or owner."** The receipts name their
+uploading account, so admitting the uploader was possible — and it is exactly wrong for the case
+that makes it possible. A guest depositing through a drop link (`S-C5`) gives the asset up, and
+letting them read its later chain would tell them when the owner amended, culled or restored it.
+The authority is the one `S-C39` settled for blob reads: an account reads its own assets.
+
+**One `404` for "no such asset" and "not yours."** An asset id is not a capability, and a
+stranger who could tell a real one from a guess by reading the status line has an enumeration
+oracle over a library's contents — the same reasoning `serve::resolve` consults its authority
+*first* for.
+
+**The CBOR is the receipt; the scalars are a convenience.** Each entry carries `receipt_cbor`,
+base64 of the exact canonical bytes the attestation signature covers, encoded from the whole
+receipt before anything is read out of it. A client that verified the projection would be
+trusting this server's JSON encoder rather than its signature, so
+`the_chain_carries_the_bytes_a_client_verifies` decodes the base64 and runs `capsule_core`'s own
+`verify_receipt` over it.
+
+- **Done when:** ✅ `the_chain_carries_the_bytes_a_client_verifies`,
+  `the_chain_is_every_blob_of_the_bundle_in_sequence_order`,
+  `another_accounts_chain_is_404_and_not_403`,
+  `an_asset_with_nothing_finalized_has_an_empty_chain` and two cases beside them, plus the
+  conformance walk. **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

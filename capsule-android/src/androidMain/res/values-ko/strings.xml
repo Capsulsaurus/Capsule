@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">이 원본은 계정의 캐싱 한도에 도달했습니다.</string>
     <string name="error_quota_unavailable">Capsule이 저장 공간 사용량을 확인하지 못했습니다. 다시 시도해 주세요.</string>
     <string name="error_share_rate_limited">시도 횟수가 너무 많습니다. 잠시 후 다시 시도해 주세요.</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">심층 저장소 검사가 너무 많습니다. 잠시 후 다시 시도해 주세요.</string>
     <string name="error_storage_invalid_request">저장소 확인 요청의 형식이 올바르지 않습니다.</string>
     <string name="error_storage_unavailable">Capsule이 사진이 안전하게 저장되었는지 확인하지 못했습니다. 다시 시도해 주세요.</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">이 변경은 앨범에서 허용하지 않는 작업을 사용합니다.</string>
     <string name="error_upload_invalid_hash">업로드에 선언된 콘텐츠 해시가 유효하지 않습니다.</string>
     <string name="error_upload_invalid_size">업로드에 선언된 크기가 유효하지 않습니다.</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">업로드 요청의 형식이 올바르지 않습니다.</string>
     <string name="error_upload_missing_checksum">업로드 요청에 무결성 체크섬이 없습니다.</string>
     <string name="error_upload_missing_offset">업로드 요청에 위치 표시가 없습니다.</string>

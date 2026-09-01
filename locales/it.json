@@ -227,6 +227,10 @@
         "message": "Troppi controlli approfonditi dello spazio di archiviazione. Attendi e riprova.",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.asset_not_found": {
+        "message": "That item was not found.",
+        "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts (slice S-C58): no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
+    },
     "error.share.rate_limited": {
         "message": "Troppi tentativi. Attendi e riprova.",
         "context": "Machine-translated seed pending human review."
@@ -374,6 +378,10 @@
     "error.upload.amk_regressed": {
         "message": "Questa modifica fa riferimento a una chiave dell'album più vecchia di quella registrata dal server.",
         "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_status_filter": {
+        "message": "That is not an upload status.",
+        "context": "HTTP 400 on GET /v1/upload/sessions (slice S-C57): the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
     },
     "error.drop.cap_exceeded": {
         "message": "Questo link di caricamento è pieno.",

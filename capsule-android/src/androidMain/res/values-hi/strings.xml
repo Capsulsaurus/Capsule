@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">इस स्रोत ने आपके खाते पर अपनी कैशिंग सीमा पूरी कर ली है।</string>
     <string name="error_quota_unavailable">Capsule आपके संग्रहण उपयोग की जाँच नहीं कर सका। कृपया फिर से प्रयास करें।</string>
     <string name="error_share_rate_limited">बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।</string>
     <string name="error_storage_invalid_request">स्टोरेज सत्यापन अनुरोध ग़लत रूप में है।</string>
     <string name="error_storage_unavailable">Capsule यह जाँच नहीं सका कि आपकी फ़ोटो सुरक्षित रूप से संग्रहित हैं या नहीं। कृपया फिर से प्रयास करें।</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">यह परिवर्तन एक ऐसी क्रिया का उपयोग करता है जिसकी एल्बम अनुमति नहीं देता।</string>
     <string name="error_upload_invalid_hash">अपलोड का घोषित सामग्री हैश अमान्य है।</string>
     <string name="error_upload_invalid_size">अपलोड का घोषित आकार अमान्य है।</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">अपलोड अनुरोध ग़लत रूप में है।</string>
     <string name="error_upload_missing_checksum">अपलोड अनुरोध में इसकी अखंडता चेकसम नहीं थी।</string>
     <string name="error_upload_missing_offset">अपलोड अनुरोध में इसका स्थिति चिह्न नहीं था।</string>

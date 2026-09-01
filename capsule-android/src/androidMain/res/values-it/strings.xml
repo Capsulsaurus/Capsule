@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">Questa fonte ha raggiunto il limite di memorizzazione nella cache sul tuo account.</string>
     <string name="error_quota_unavailable">Capsule non è riuscito a verificare l\'utilizzo dello spazio. Riprova.</string>
     <string name="error_share_rate_limited">Troppi tentativi. Attendi e riprova.</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">Troppi controlli approfonditi dello spazio di archiviazione. Attendi e riprova.</string>
     <string name="error_storage_invalid_request">La richiesta di verifica dello spazio di archiviazione è malformata.</string>
     <string name="error_storage_unavailable">Capsule non è riuscito a verificare se le tue foto sono archiviate in sicurezza. Riprova.</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">Questa modifica usa un\'azione che l\'album non consente.</string>
     <string name="error_upload_invalid_hash">L\'hash del contenuto dichiarato per il caricamento non è valido.</string>
     <string name="error_upload_invalid_size">La dimensione dichiarata per il caricamento non è valida.</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">La richiesta di caricamento è malformata.</string>
     <string name="error_upload_missing_checksum">Alla richiesta di caricamento mancava il checksum di integrità.</string>
     <string name="error_upload_missing_offset">Alla richiesta di caricamento mancava il marcatore di posizione.</string>

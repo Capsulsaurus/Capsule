@@ -7,6 +7,7 @@
 //! writers, OpenAPI registration and configuration projections are not.
 
 pub mod albums;
+pub mod assets;
 pub mod auth;
 pub mod blob;
 pub mod devices;
@@ -19,6 +20,7 @@ pub mod ops;
 pub mod profile;
 pub mod quota;
 pub mod receipts;
+pub mod sessions;
 pub mod share;
 pub mod storage;
 pub mod sync;

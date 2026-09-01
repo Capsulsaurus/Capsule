@@ -3647,6 +3647,97 @@
         ]
       }
     },
+    "/v1/upload/sessions": {
+      "get": {
+        "summary": "Every upload the caller can resume.",
+        "description": "Oldest first, which is the order the store promises and the order a client wants: the oldest\nin-flight session is the one closest to eviction.",
+        "operationId": "list_upload_sessions",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Return only sessions in this state.\n\nOne of `pending`, `uploading`, `waiting_for_processing`, `completed`,\n`failed_processing` — the same tokens the `X-Capsule-Upload-Status` header carries, so a\nclient filters on the value it was already given rather than on a second vocabulary.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionsResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/upload/{id}/receipt": {
       "get": {
         "summary": "Fetch the custody receipt for a finalized upload.",
@@ -4306,6 +4397,103 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/StorageVerifyResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/v1/assets/{asset_id}/receipts": {
+      "get": {
+        "summary": "Fetch every custody receipt covering one asset.",
+        "operationId": "get_asset_receipts",
+        "parameters": [
+          {
+            "name": "asset_id",
+            "in": "path",
+            "description": "The asset id.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "401": {
+            "description": "Unauthorized",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "The challenge the client must answer, per RFC 9110 section 11.6.1.",
+                "required": true,
+                "schema": {
+                  "type": "string"
+                },
+                "example": "Bearer"
+              }
+            },
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetReceiptsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
                 }
               }
             }
@@ -6817,6 +7005,81 @@
         ],
         "description": "What a client needs to start sending bytes."
       },
+      "SessionSummary": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The session id, which is what `PATCH /v1/upload/{id}` resumes against."
+          },
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the bundle belongs to, so a client can group a bundle's sessions."
+          },
+          "album_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The album it is filed into, when it named one."
+          },
+          "blob_role": {
+            "type": "string",
+            "description": "This blob's role in its bundle: `original`, `derivative`, `metadata`, `provenance` or\n`backup`."
+          },
+          "status": {
+            "type": "string",
+            "description": "Where the session is in its state machine."
+          },
+          "received_bytes": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Bytes durably accepted so far — the offset a resume continues from."
+          },
+          "total_size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "The declared total."
+          },
+          "created_at": {
+            "type": "string",
+            "description": "When the session was created, RFC 3339."
+          },
+          "last_progress_at": {
+            "type": "string",
+            "description": "When the last chunk was accepted, RFC 3339, or the creation time if none.\n\nWhat the survival floor is measured from, so a client can tell which of its stalled\nsessions is closest to being evicted."
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "asset_id",
+          "blob_role",
+          "status",
+          "received_bytes",
+          "total_size",
+          "created_at",
+          "last_progress_at"
+        ],
+        "description": "One in-flight upload, as the resumption listing serves it.\n\nDeliberately not the whole [`UploadSessionRecord`]. The manifest envelope, the expected hash\nand the crypto pin are finalization's inputs and are already the client's own — echoing them\nto every listing would put a signed document in a response nobody reads it from."
+      },
+      "SessionsResponse": {
+        "properties": {
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/SessionSummary"
+            },
+            "type": "array",
+            "description": "Every session the caller can resume, oldest first, ties broken by upload id."
+          }
+        },
+        "type": "object",
+        "required": [
+          "sessions"
+        ],
+        "description": "The listing."
+      },
       "OpRequest": {
         "properties": {
           "manifest_envelope": {
@@ -7126,6 +7389,98 @@
           "verdicts"
         ],
         "description": "The `POST /v1/storage/verify` response."
+      },
+      "AssetReceipt": {
+        "properties": {
+          "receipt_seq": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Strictly monotonic per server. The chain position this receipt cannot be moved from."
+          },
+          "server_id": {
+            "type": "string",
+            "description": "This server's canonical origin — what binds the receipt to one server."
+          },
+          "server_key_id": {
+            "type": "string",
+            "description": "The attestation key fingerprint that signed, hex. Survives rotation, which is why the\nkey is named rather than assumed."
+          },
+          "prior_receipt_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the previous receipt in the server's log, hex. Absent for the first receipt\nthis server ever issued."
+          },
+          "upload_id": {
+            "type": "string",
+            "description": "The upload session that produced custody."
+          },
+          "blob_role": {
+            "type": "string",
+            "description": "`original`, `derivative`, `metadata` or `provenance`."
+          },
+          "ciphertext_hash": {
+            "type": "string",
+            "description": "The server-recomputed ciphertext content address, hex."
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0.0,
+            "format": "uint64",
+            "description": "Ciphertext size in bytes."
+          },
+          "envelope_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "SHA-256 of the asset's signed manifest, hex — present on the `provenance` receipt and\nabsent on every other, because the manifest commits to the rest."
+          },
+          "received_at": {
+            "type": "string",
+            "description": "The server's trusted clock at the finalization commit, RFC 3339."
+          },
+          "receipt_cbor": {
+            "type": "string",
+            "description": "The full signed receipt as canonical CBOR, base64.\n\n**This is the receipt.** Verify the hybrid signature over these bytes under the key\n`server_key_id` names, from `/.well-known/capsule/attestation-keys`; everything above is\na reading of them."
+          }
+        },
+        "type": "object",
+        "required": [
+          "receipt_seq",
+          "server_id",
+          "server_key_id",
+          "upload_id",
+          "blob_role",
+          "ciphertext_hash",
+          "size",
+          "received_at",
+          "receipt_cbor"
+        ],
+        "description": "One custody receipt, decoded, beside the bytes that were signed."
+      },
+      "AssetReceiptsResponse": {
+        "properties": {
+          "asset_id": {
+            "type": "string",
+            "description": "The asset the chain belongs to, echoed so a client batching requests can tell the\nanswers apart."
+          },
+          "receipts": {
+            "items": {
+              "$ref": "#/components/schemas/AssetReceipt"
+            },
+            "type": "array",
+            "description": "Every receipt covering the asset, in `receipt_seq` order."
+          }
+        },
+        "type": "object",
+        "required": [
+          "asset_id",
+          "receipts"
+        ],
+        "description": "The chain."
       },
       "IssueShareRequest": {
         "properties": {

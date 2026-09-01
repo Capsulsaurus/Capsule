@@ -437,3 +437,191 @@ async fn a_client_can_form_the_expectation_before_it_uploads() {
         Ok(())
     );
 }
+
+// ===========================================================================================
+// The durable chain — `GET /v1/assets/{asset_id}/receipts` (slice `S-C58`)
+// ===========================================================================================
+
+/// Fetch the whole chain for `asset`, asserting the status.
+async fn chain(
+    fixture: &Fixture,
+    bearer: &str,
+    asset: &str,
+    expect: StatusCode,
+) -> kynos::test::TestResponse {
+    let response = fixture
+        .client
+        .get(&format!("/v1/assets/{asset}/receipts"))
+        .header("authorization", bearer)
+        .header("accept", "application/json")
+        .send()
+        .await;
+    response.assert_status(expect);
+    response
+}
+
+/// The asset every fixture upload files itself under — the manifest envelope's `file_id`.
+const UPLOADED_ASSET: &str = "018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e61";
+
+#[tokio::test]
+async fn the_chain_carries_the_bytes_a_client_verifies() {
+    // The projection is a convenience; `receipt_cbor` is the receipt. A client that trusted the
+    // scalars would be trusting this server's JSON encoder rather than its signature.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (first, second, whole) = blob();
+    let id = upload(&fixture, &bearer, &first, &second, &whole).await;
+
+    let body: Value = chain(&fixture, &bearer, UPLOADED_ASSET, StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["asset_id"], UPLOADED_ASSET);
+    let entries = body["receipts"].as_array().expect("a receipts array");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["upload_id"], id);
+
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(entries[0]["receipt_cbor"].as_str().expect("base64 CBOR"))
+        .expect("the CBOR decodes from base64");
+    let receipt = CustodyReceipt::from_canonical_cbor(&bytes).expect("a receipt");
+    assert_eq!(
+        verify_receipt(
+            &receipt,
+            &[fixture.attestation_key.verifying_key()],
+            &ReceiptExpectations {
+                ciphertext_hash: hash_bytes(&whole),
+                size: whole.len() as u64,
+                role: BlobRole::Original,
+                envelope_hash: receipt.core.envelope_hash,
+            },
+            receipt
+                .core
+                .received_at
+                .parse::<jiff::Timestamp>()
+                .expect("an instant")
+                .as_second(),
+        ),
+        Ok(()),
+        "the base64 in the listing is the same signed object the single-receipt route serves"
+    );
+
+    // And the projection agrees with what it is a projection of.
+    assert_eq!(entries[0]["receipt_seq"], receipt.core.receipt_seq);
+    assert_eq!(
+        entries[0]["ciphertext_hash"],
+        receipt.core.ciphertext_hash.to_hex()
+    );
+    assert_eq!(entries[0]["size"], receipt.core.size);
+    assert_eq!(entries[0]["blob_role"], receipt.core.blob_role);
+}
+
+#[tokio::test]
+async fn the_chain_is_every_blob_of_the_bundle_in_sequence_order() {
+    // The durable half of the surface: one asset, several blobs, one chain. This is what a
+    // dispute is settled from, so the order is the server's own sequence and not the store's
+    // iteration order.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (first, second, whole) = blob();
+    upload(&fixture, &bearer, &first, &second, &whole).await;
+
+    let metadata = support::payload(b'm', 4096);
+    let id = fixture.open_session(&metadata, "metadata", &bearer).await;
+    fixture
+        .chunk(&id, 0, &metadata, &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::NO_CONTENT);
+
+    let body: Value = chain(&fixture, &bearer, UPLOADED_ASSET, StatusCode::OK)
+        .await
+        .json();
+    let entries = body["receipts"].as_array().expect("an array");
+    assert_eq!(entries.len(), 2);
+    let seqs: Vec<u64> = entries
+        .iter()
+        .map(|entry| entry["receipt_seq"].as_u64().expect("a sequence number"))
+        .collect();
+    assert!(seqs.windows(2).all(|pair| pair[0] < pair[1]), "{seqs:?}");
+    let roles: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["blob_role"].as_str().expect("a role"))
+        .collect();
+    assert!(
+        roles.contains(&"original") && roles.contains(&"metadata"),
+        "{roles:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_asset_with_nothing_finalized_has_an_empty_chain() {
+    // A normal answer, not a 404: the asset exists and its bundle is still in flight.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (_, _, whole) = blob();
+    fixture.open_session(&whole, "original", &bearer).await;
+
+    let body: Value = chain(&fixture, &bearer, UPLOADED_ASSET, StatusCode::OK)
+        .await
+        .json();
+    assert_eq!(body["receipts"].as_array().expect("an array").len(), 0);
+}
+
+#[tokio::test]
+async fn another_accounts_chain_is_404_and_not_403() {
+    // One answer for "no such asset" and "not yours". A stranger must not be able to tell a
+    // real asset id from a guessed one by reading the status line — the same rule `S-C39`
+    // settled for blob reads.
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    let (first, second, whole) = blob();
+    upload(&fixture, &bearer, &first, &second, &whole).await;
+
+    let stranger = fixture
+        .other_bearer("018f3f1e-0000-7000-8000-00000000fffe")
+        .await;
+    let real: Value = chain(&fixture, &stranger, UPLOADED_ASSET, StatusCode::NOT_FOUND)
+        .await
+        .json();
+    let invented: Value = chain(
+        &fixture,
+        &stranger,
+        "018f3f1e-0000-7000-8000-0000deadbeef",
+        StatusCode::NOT_FOUND,
+    )
+    .await
+    .json();
+    assert_eq!(real["code"], "error.storage.asset_not_found");
+    assert_eq!(
+        real["code"], invented["code"],
+        "a real asset and an invented one must be indistinguishable to a stranger"
+    );
+}
+
+#[tokio::test]
+async fn the_chain_answers_500_when_the_index_cannot() {
+    let fixture = Fixture::working();
+    let bearer = token(&fixture).await;
+    fixture.index.set_unavailable(true);
+
+    let body: Value = chain(
+        &fixture,
+        &bearer,
+        UPLOADED_ASSET,
+        StatusCode::INTERNAL_SERVER_ERROR,
+    )
+    .await
+    .json();
+    assert_eq!(body["code"], "error.storage.unavailable");
+}
+
+#[tokio::test]
+async fn the_chain_needs_a_credential() {
+    let fixture = Fixture::working();
+    fixture
+        .client
+        .get(&format!("/v1/assets/{UPLOADED_ASSET}/receipts"))
+        .send()
+        .await
+        .assert_status(StatusCode::UNAUTHORIZED);
+}

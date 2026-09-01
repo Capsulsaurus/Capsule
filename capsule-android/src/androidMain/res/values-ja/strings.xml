@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">この提供元は、あなたのアカウントでのキャッシュ上限に達しました。</string>
     <string name="error_quota_unavailable">Capsule はストレージ使用量を確認できませんでした。もう一度お試しください。</string>
     <string name="error_share_rate_limited">試行回数が多すぎます。しばらくしてからもう一度お試しください。</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">ディープストレージチェックが多すぎます。しばらくしてからもう一度お試しください。</string>
     <string name="error_storage_invalid_request">ストレージ検証リクエストの形式が正しくありません。</string>
     <string name="error_storage_unavailable">Capsule は写真が安全に保存されているか確認できませんでした。もう一度お試しください。</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">この変更は、このアルバムで許可されていない操作を使用しています。</string>
     <string name="error_upload_invalid_hash">アップロードで宣言されたコンテンツハッシュが無効です。</string>
     <string name="error_upload_invalid_size">アップロードで宣言されたサイズが無効です。</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">アップロードリクエストの形式が正しくありません。</string>
     <string name="error_upload_missing_checksum">アップロードリクエストに整合性チェックサムがありません。</string>
     <string name="error_upload_missing_offset">アップロードリクエストに位置マーカーがありません。</string>

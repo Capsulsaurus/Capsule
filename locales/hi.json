@@ -227,6 +227,10 @@
         "message": "बहुत अधिक गहन स्टोरेज जाँच। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
         "context": "Machine-translated seed pending human review."
     },
+    "error.storage.asset_not_found": {
+        "message": "That item was not found.",
+        "context": "HTTP 404 on GET /v1/assets/{asset_id}/receipts (slice S-C58): no such asset, or one belonging to another account. One answer for both — an asset id is not a capability, and a guess must not reveal whether it named something."
+    },
     "error.share.rate_limited": {
         "message": "बहुत अधिक प्रयास। कृपया प्रतीक्षा करें और फिर से प्रयास करें।",
         "context": "Machine-translated seed pending human review."
@@ -374,6 +378,10 @@
     "error.upload.amk_regressed": {
         "message": "यह परिवर्तन सर्वर द्वारा दर्ज की गई एल्बम कुंजी से पुरानी कुंजी को संदर्भित करता है।",
         "context": "Machine-translated seed pending human review."
+    },
+    "error.upload.invalid_status_filter": {
+        "message": "That is not an upload status.",
+        "context": "HTTP 400 on GET /v1/upload/sessions (slice S-C57): the ?status= filter named something that is not one of pending, uploading, waiting_for_processing, completed, failed_processing. Refused rather than ignored — the retired surface dropped an unparseable filter silently, so one letter off returned every session instead of none, and the caller acted on a list they believed was filtered."
     },
     "error.drop.cap_exceeded": {
         "message": "यह अपलोड लिंक भर गया है।",

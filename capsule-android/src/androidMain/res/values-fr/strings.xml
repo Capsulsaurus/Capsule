@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">Cette source a atteint sa limite de mise en cache sur votre compte.</string>
     <string name="error_quota_unavailable">Capsule n\'a pas pu vérifier votre utilisation du stockage. Veuillez réessayer.</string>
     <string name="error_share_rate_limited">Trop de tentatives. Veuillez patienter et réessayer.</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">Trop de vérifications approfondies du stockage. Veuillez patienter et réessayer.</string>
     <string name="error_storage_invalid_request">La demande de vérification du stockage est mal formée.</string>
     <string name="error_storage_unavailable">Capsule n\'a pas pu vérifier si vos photos sont stockées en sécurité. Veuillez réessayer.</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">Cette modification utilise une action que l\'album n\'autorise pas.</string>
     <string name="error_upload_invalid_hash">Le hachage de contenu déclaré pour le téléversement est invalide.</string>
     <string name="error_upload_invalid_size">La taille déclarée pour le téléversement est invalide.</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">La demande de téléversement est mal formée.</string>
     <string name="error_upload_missing_checksum">La demande de téléversement était dépourvue de sa somme de contrôle d\'intégrité.</string>
     <string name="error_upload_missing_offset">La demande de téléversement était dépourvue de son marqueur de position.</string>

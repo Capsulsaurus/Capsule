@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">此來源在您帳戶上的快取已達上限。</string>
     <string name="error_quota_unavailable">Capsule 無法檢查你的儲存空間使用情況，請重試。</string>
     <string name="error_share_rate_limited">嘗試次數過多。請稍候再試。</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">深度儲存檢查次數過多。請稍候再試。</string>
     <string name="error_storage_invalid_request">儲存驗證請求格式不正確。</string>
     <string name="error_storage_unavailable">Capsule 無法確認你的相片是否已安全儲存，請重試。</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">此變更使用了該相簿不允許的操作。</string>
     <string name="error_upload_invalid_hash">上傳宣告的內容雜湊無效。</string>
     <string name="error_upload_invalid_size">上傳宣告的大小無效。</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">上傳請求格式不正確。</string>
     <string name="error_upload_missing_checksum">上傳請求缺少完整性總和檢查碼。</string>
     <string name="error_upload_missing_offset">上傳請求缺少位置標記。</string>

@@ -175,6 +175,7 @@
     <string name="error_quota_peer_budget_exceeded">此来源在您账户上的缓存已达到上限。</string>
     <string name="error_quota_unavailable">Capsule 无法检查你的存储使用情况，请重试。</string>
     <string name="error_share_rate_limited">尝试次数过多。请稍候再试。</string>
+    <string name="error_storage_asset_not_found">That item was not found.</string>
     <string name="error_storage_deep_rate_limited">深度存储检查次数过多。请稍候再试。</string>
     <string name="error_storage_invalid_request">存储验证请求格式不正确。</string>
     <string name="error_storage_unavailable">Capsule 无法确认你的照片是否已安全存储，请重试。</string>
@@ -199,6 +200,7 @@
     <string name="error_upload_invalid_action">此更改使用了该相册不允许的操作。</string>
     <string name="error_upload_invalid_hash">上传声明的内容哈希无效。</string>
     <string name="error_upload_invalid_size">上传声明的大小无效。</string>
+    <string name="error_upload_invalid_status_filter">That is not an upload status.</string>
     <string name="error_upload_malformed_request">上传请求格式不正确。</string>
     <string name="error_upload_missing_checksum">上传请求缺少完整性校验和。</string>
     <string name="error_upload_missing_offset">上传请求缺少位置标记。</string>

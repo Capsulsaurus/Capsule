@@ -122,6 +122,8 @@ async fn every_declared_response_is_exercised() {
         ("GET", "/v1/albums/anything/upgrade"),
         ("DELETE", "/v1/albums/anything/upgrade"),
         ("GET", "/v1/quota"),
+        ("GET", "/v1/upload/sessions"),
+        ("GET", "/v1/assets/anything/receipts"),
         ("GET", "/v1/upload/anything/receipt"),
         ("GET", "/.well-known/capsule/attestation-keys"),
         ("GET", "/.well-known/capsule/server-info"),
@@ -2285,6 +2287,92 @@ async fn every_declared_response_is_exercised() {
 
     // ── The second factor (`S-C55`) ────────────────────────────────────────────────────────
     totp_block(client, &fixture).await;
+
+    // ── The resumption listing (`S-C57`) and the durable custody chain (`S-C58`) ───────────
+    // Both are plain authenticated reads over stores this walk has already filled, so they sit
+    // here rather than in a block of their own.
+    for (method, path) in [
+        ("GET", "/v1/upload/sessions"),
+        ("GET", "/v1/assets/anything/receipts"),
+    ] {
+        client
+            .get(path)
+            .send()
+            .await
+            .assert_status(StatusCode::UNAUTHORIZED);
+        client
+            .get(path)
+            .header(
+                "authorization",
+                &format!("Bearer {}", rotated.refresh_token),
+            )
+            .send()
+            .await
+            .assert_status(StatusCode::FORBIDDEN);
+        let _ = method;
+    }
+
+    // 200 on both: the listing over whatever this walk left in flight, and the chain of the
+    // asset it uploaded.
+    client
+        .get("/v1/upload/sessions")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .get(&format!("/v1/assets/{}/receipts", support::OPS_ASSET))
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+
+    // 400 twice, and they are different faults: a `status` this server has no such state for,
+    // and a path segment that is not UTF-8 at all.
+    client
+        .get("/v1/upload/sessions?status=complete")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    client
+        .get("/v1/assets/%FF/receipts")
+        .header("authorization", &bearer)
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+
+    // 404: an asset id that names nothing.
+    client
+        .get("/v1/assets/018f3f1e-0000-7000-8000-0000000c0ffe/receipts")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+
+    // 500 from each one's own collaborator.
+    fixture.uploads.set_unavailable(true);
+    client
+        .get("/v1/upload/sessions")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.uploads.set_unavailable(false);
+    fixture.index.set_unavailable(true);
+    client
+        .get(&format!("/v1/assets/{}/receipts", support::OPS_ASSET))
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.index.set_unavailable(false);
 
     // ── The global sign-out ceremony (`S-C23`) ─────────────────────────────────────────────
     // Last, because a successful revoke closes every session this walk has been using. The

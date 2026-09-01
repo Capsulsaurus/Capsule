@@ -155,6 +155,7 @@ pub fn router() -> ServerRouter {
         .mount(kynos::routes![
             routes::upload::create_upload,
             routes::upload::append_chunk,
+            routes::sessions::list_upload_sessions,
             routes::upload::head_upload,
             routes::upload::cancel_upload,
             routes::receipts::get_upload_receipt,
@@ -162,6 +163,7 @@ pub fn router() -> ServerRouter {
             routes::sync::sync_feed,
             routes::blob::get_blob,
             routes::storage::verify_storage,
+            routes::assets::get_asset_receipts,
         ])
         // Share links: two owner operations, and the one path served without an account.
         .mount(kynos::routes![
