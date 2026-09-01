@@ -33,7 +33,7 @@ mise run hooks-install # installs the git hooks (hk)
 
 | Task | Contents |
 | --- | --- |
-| `mise run check-rust` | `format-check-rust`, `lint-check-rust`, `i18n-check`, `i18n-guard`, `openapi-check`, `translate-readme-check`, `build-rust`, `build-ffi`, `lint-check-ffi`, `gen-bindings`, `verify-examples` — sequential, because they all contend on one `target/` lock |
+| `mise run check-rust` | `format-check-rust`, `lint-check-rust`, `i18n-check`, `i18n-guard`, `openapi-check-kynos`, `architecture-check`, `license-check`, `translate-readme-check`, `build-rust`, `build-check-wasm`, `build-ffi`, `lint-check-ffi`, `gen-bindings`, `verify-examples` — sequential, because they all contend on one `target/` lock |
 | `mise run check-web` | `format-check-web`, `lint-check-web`, `test-web`, `build-web` |
 | `mise run check-docs` | `format-check-docs`, `lint-check-docs`, `build-docs` (a real Astro build — a broken internal link fails it) |
 | `mise run check-md` | `lint-check-md` (markdownlint over every `.md` in the repo) |

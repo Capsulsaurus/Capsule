@@ -50,7 +50,7 @@ file describing the surface. The docs build reads committed artifacts and nothin
 invokes cargo, uniffi, or wasm-bindgen.
 
 `capsule-sdk/openapi.json` already is such an artifact — emitted by a state-free binary, refreshed by
-`mise run openapi`, and drift-gated by `mise run openapi-check`. This rule generalizes that shape to
+`mise run openapi-kynos`, and drift-gated by `mise run openapi-check-kynos`. This rule generalizes that shape to
 every other surface rather than inventing a second mechanism for each.
 
 Two consequences follow, and both are load-bearing:

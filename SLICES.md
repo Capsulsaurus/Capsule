@@ -125,8 +125,10 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
   recorded in module-map.md so a future audit does not re-flag them. **`master` has no
   equivalent** (it still carries the 3501-LOC `lifecycle.rs`), which is why this branch's
   baseline, not `master`'s, is the one wave 2 stands on.
-- **Operable server** (`S-P7`): `mise run serve-api` brings up deps, seeds `.env`, mints a
-  signing key, migrates and serves in one command. The gRPC sync service moved to the server
+- **Operable server** (`S-P7`): `mise run serve-api` brought up deps, seeded `.env`, minted a
+  signing key, migrated and served in one command. **It retired with the Salvo binary it
+  launched** (`S-C59`) and is the rebuild's critical path: nothing that needs a live server can
+  run until `capsule-server` has one. The gRPC sync service moved to the server
   **root** — tonic's `AddOrigin` keeps only scheme and authority, so the previous
   `/v1/sync/...` mount was unreachable from every native client and `capsule sync` could not
   work against a real deployment at all.
@@ -4923,20 +4925,29 @@ so every simulator-backed verification in this lane rides the `build-ios` CI lan
 
 - **Contract:** [Module Map — E2E Test Surface](capsule-docs/src/content/docs/design/module-map.md);
   operational, no design change.
-- **Deliverable:** `mise run serve-api` (compose deps up + migrations + server run),
+- **Deliverable:** a one-command dev server — compose deps up, configuration loaded, server run —
   a keygen bootstrap for `JWT_ED25519_DER` (+ documented `ATTESTATION_KEY_SEED`
   handling), reconcile the blob backend (filesystem `UPLOAD_DIR` is what the code
   uses — drop the unused MinIO service from `compose.yaml` or wire it explicitly),
   and the ATS `NSAllowsLocalNetworking` exception in the app's Info.plist for
   simulator ↔ localhost.
-- **Done when:** `mise run serve-api` from a clean checkout yields a server the CLI
-  round-trips against; the simulator reaches it. **Tier:** Smoke.
-- **Landed:** shipped on this branch — this is what unblocked `S-P8` and `S-Q5`. The
-  task graph, the keygen bootstrap, the blob-backend reconciliation, and the Info.plist
-  exception are `ACTIVE`; only the binary `serve-api` launches is `RETIRED`, so the task
-  re-targets Kynos rather than being rewritten. Also moved the gRPC sync service to the
-  server **root** — tonic's `AddOrigin` keeps only scheme and authority, so the previous
-  `/v1/sync/...` mount was unreachable from every native client.
+- **Done when:** the task from a clean checkout yields a server the CLI round-trips against; the
+  simulator reaches it. **Tier:** Smoke.
+- **Landed, then retired 2026-09-01 (`S-C59`).** It shipped on this branch and is what
+  unblocked `S-P8` and `S-Q5`; the task, its compose stack and the `keygen` bootstrap went with
+  the Salvo binary they launched, because a task that brings up a server that no longer exists is
+  worse than an absent one. Its *contents* re-target Kynos and are re-scoped rather than
+  rewritten: the compose services, the `JWT_ED25519_DER` bootstrap and the Info.plist ATS
+  exception are all still what the replacement needs.
+- **Re-scoped, and this is now the critical path.** `capsule-server` has **no binary, no
+  configuration loading and no adapter** — nothing reads `JWT_ED25519_DER`,
+  `SYNC_CURSOR_MAC_KEY` or `ATTESTATION_KEY_SEED` — so nothing that needs a live server can run:
+  `S-P8`, `S-Q5`, `S-D28`'s CLI round trip and the browser's own smoke all wait on it.
+- **Historical note kept for the reason it was written:** the gRPC sync service used to sit at
+  the server **root**, because tonic's `AddOrigin` keeps only scheme and authority and a
+  `/v1/sync/...` mount was therefore unreachable from every native client. That constraint died
+  with the transport; the REST feed is at `/v1/sync`, where a person reading a request log can
+  see the version.
 
 ### S-P8 — Swift behavioral FFI harness
 

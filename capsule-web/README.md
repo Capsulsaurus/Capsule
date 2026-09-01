@@ -48,7 +48,7 @@ it is not dead code.
 ### Prerequisites
 
 - Install [Bun](https://bun.sh).
-- A running server for anything beyond empty states — `mise run serve-api`
+- A running server for anything beyond empty states. **There is not one today**: the Salvo server and its `serve-api` task retired in slice `S-C59`, and the Kynos server that replaces it has no binary yet. Every screen renders its empty state; the sync store's own tests (`bun test src/data/server/`) are what exercise the data path meanwhile.
   from the repo root. There is no mock gateway to fall back on.
 
 With no reachable server the app still builds, runs, and renders empty states, so
