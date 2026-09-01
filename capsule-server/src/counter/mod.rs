@@ -67,6 +67,14 @@ pub enum CounterKey {
     DropSource(String),
     /// Deep storage verifications for one account (`S-C41`).
     DeepVerify(UserId),
+    /// Account registrations from one source address (`S-C53`).
+    ///
+    /// Declared and consumed nowhere, like its two siblings above, and for the same reason: the
+    /// key names a fact this server does not have behind an unconfigured proxy chain. Registration
+    /// is the one **unauthenticated write** on the surface, so it is the place that fact is most
+    /// missed — recorded here rather than replaced by an email-keyed limiter, which would bound
+    /// repeated probes against one address while doing nothing about a sweep across many.
+    RegistrationSource(String),
 }
 
 impl CounterKey {
@@ -80,6 +88,7 @@ impl CounterKey {
             Self::DropLink(_) => "drop_link",
             Self::DropSource(_) => "drop_source",
             Self::DeepVerify(_) => "deep_verify",
+            Self::RegistrationSource(_) => "registration_source",
         }
     }
 }

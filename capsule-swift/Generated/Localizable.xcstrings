@@ -4295,16 +4295,6 @@
         }
       }
     },
-    "cli.auth.register.username_prompt": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Username"
-          }
-        }
-      }
-    },
     "cli.cull.failed": {
       "localizations": {
         "en": {
@@ -11439,6 +11429,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "嘗試次數過多。請稍候再試。"
+          }
+        }
+      }
+    },
+    "error.auth.registration_invalid": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "That email or password can't be used. Passwords need at least 12 characters."
           }
         }
       }

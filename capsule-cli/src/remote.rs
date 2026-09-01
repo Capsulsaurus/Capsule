@@ -178,13 +178,11 @@ pub async fn auth_login(
 pub async fn auth_register(
     remote: &RemoteConfig,
     store: &SessionStore,
-    username: &str,
-    name: &str,
     email: &str,
     password: &str,
 ) -> Result<(), RemoteError> {
     let client = AuthClient::new(&remote.auth_endpoint)?;
-    let session = client.register(username, name, email, password).await?;
+    let session = client.register(email, password).await?;
     let persisted = session.export().await.ok_or(RemoteError::EmptySession)?;
     store.save(&persisted)?;
     tracing::info!("registration persisted to the session store");

@@ -1024,3 +1024,135 @@ async fn activity_moves_the_listing_and_is_coalesced_to_one_write_a_minute() {
 
     fixture.client.assert_conformance();
 }
+
+// ===========================================================================================
+// Registration (`S-C53`)
+// ===========================================================================================
+
+#[tokio::test]
+async fn registering_creates_an_account_and_signs_it_in() {
+    // The operation the rebuilt server did not have. Without it a fresh deployment has no first
+    // user, and the plan's own acceptance round trip — register, init, import, push, sync, list —
+    // cannot start.
+    let fixture = Fixture::working();
+
+    let pair: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/register",
+        json!({ "email": "new@example.test", "password": "correct horse battery staple" })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+
+    // Signed in, not merely created: the alternative is a `201` and a client that immediately
+    // posts the same credentials to `/login` for one more chance to fail.
+    let verified = fixture
+        .tokens
+        .verify(&pair.access_token, TokenKind::Access)
+        .expect("the pair the registration issued verifies");
+    let open = fixture
+        .sessions
+        .sessions_for_user(&verified.user)
+        .await
+        .expect("the store answers");
+    assert_eq!(open.len(), 1, "registration opened exactly one session");
+    assert_eq!(
+        open[0].authenticated_at,
+        fixture.clock.now(),
+        "registering *is* a credential presentation, so a freshness gate has something real to \
+         measure from"
+    );
+
+    // And the credentials work, which is the property that makes the account real rather than a
+    // row somebody wrote.
+    let again: TokenResponse = post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": "new@example.test", "password": "correct horse battery staple" })
+    )
+    .assert_status(StatusCode::OK)
+    .json();
+    assert_ne!(
+        again.access_token, pair.access_token,
+        "a second sign-in is a second session"
+    );
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_taken_address_is_refused_and_writes_nothing() {
+    let fixture = Fixture::working();
+    let body = json!({ "email": EMAIL, "password": "correct horse battery staple" });
+
+    let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/register", body)
+        .assert_status(StatusCode::CONFLICT)
+        .json();
+    assert_eq!(code_of(&problem), "error.auth.user_already_exists");
+
+    // The seeded account's own password is untouched — a refused registration must not be a way
+    // to overwrite somebody's credentials.
+    post_json!(
+        fixture.client,
+        "/v1/auth/login",
+        json!({ "email": EMAIL, "password": PASSWORD })
+    )
+    .assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn a_password_under_the_floor_is_refused_before_anything_is_written() {
+    // A length floor and no composition rule. The password authenticates a *session* — the
+    // master key never derives from it — so this is ordinary sign-in security, and composition
+    // rules measurably push people towards shorter, more guessable passwords.
+    let fixture = Fixture::working();
+
+    for (name, body) in [
+        (
+            "a password under the floor",
+            json!({ "email": "short@example.test", "password": "elevenchar" }),
+        ),
+        (
+            "an address that is not one",
+            json!({ "email": "  ", "password": "correct horse battery staple" }),
+        ),
+    ] {
+        let problem: serde_json::Value = post_json!(fixture.client, "/v1/auth/register", body)
+            .assert_status(StatusCode::BAD_REQUEST)
+            .json();
+        assert_eq!(
+            code_of(&problem),
+            "error.auth.registration_invalid",
+            "{name}"
+        );
+    }
+
+    // Nothing was created, so the address is still free.
+    post_json!(
+        fixture.client,
+        "/v1/auth/register",
+        json!({ "email": "short@example.test", "password": "correct horse battery staple" })
+    )
+    .assert_status(StatusCode::OK);
+
+    fixture.client.assert_conformance();
+}
+
+#[tokio::test]
+async fn registration_answers_500_when_the_registry_cannot_answer() {
+    let fixture = Fixture::working();
+    fixture.accounts.set_unavailable(true);
+
+    let problem: serde_json::Value = post_json!(
+        fixture.client,
+        "/v1/auth/register",
+        json!({ "email": "outage@example.test", "password": "correct horse battery staple" })
+    )
+    .assert_status(StatusCode::INTERNAL_SERVER_ERROR)
+    .json();
+    assert_eq!(code_of(&problem), "error.auth.unavailable");
+
+    fixture.client.assert_conformance();
+}

@@ -62,6 +62,9 @@ pub mod error_codes {
     /// `error.auth.rate_limited`
     pub const AUTH_RATE_LIMITED: &str = "error.auth.rate_limited";
 
+    /// `error.auth.registration_invalid`
+    pub const AUTH_REGISTRATION_INVALID: &str = "error.auth.registration_invalid";
+
     /// `error.auth.revoke_proof_invalid`
     pub const AUTH_REVOKE_PROOF_INVALID: &str = "error.auth.revoke_proof_invalid";
 

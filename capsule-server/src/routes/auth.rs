@@ -1,4 +1,5 @@
-//! `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`.
+//! `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`,
+//! `POST /v1/auth/logout`.
 //!
 //! The first surface of the Stage 6 rebuild with state behind it. What it is a port *of* is the
 //! Salvo `capsule-api/auth/src/routes/auth.rs`; what it is not is a transcription of it.
@@ -13,6 +14,8 @@
 //!
 //! | Salvo | Verdict here |
 //! | --- | --- |
+//! | register `201` | **`200` here.** Kynos's `Created` requires a `Location`, and this server exposes no URL for an account — see [`register_user`] |
+//! | register `400` / `409` / `500` | kept, and now coded (`error.auth.registration_invalid`, `error.auth.user_already_exists`, `error.auth.unavailable`) |
 //! | login `200` | kept — [`TokenResponse`] |
 //! | login `400` "Bad request" | **deleted as unreachable.** `LoginResponses::BadRequest` was never constructed; the 400 a malformed body actually produces comes from the `Json` extractor, and Kynos declares it |
 //! | login `401` | kept — [`LoginRejection::InvalidCredentials`], now carrying `error.auth.invalid_credentials` |
@@ -54,8 +57,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::{
-    AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, TokenKind,
-    VerifiedToken,
+    AccessToken, AuthContext, Authentication, DirectoryError, IssuedTokens, MIN_PASSWORD_LENGTH,
+    Registration, TokenKind, VerifiedToken,
 };
 use crate::store::{
     ChallengeToken, RevokeAllChallenge, SessionId, SessionRecord, StoreError, UserId,
@@ -78,6 +81,92 @@ const MAX_COHORT_HASH_LEN: usize = 128;
 // ===========================================================================================
 // Wire types
 // ===========================================================================================
+
+/// The `POST /v1/auth/register` body.
+///
+/// Deliberately the *smallest* thing that can create an account: an address and a password. No
+/// display name, no profile, no invitation code — every one of those would be a field the server
+/// stores about a person, and this server's whole posture is that it stores as little as it can.
+#[derive(Schema, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterRequest {
+    /// The address the account is identified by.
+    pub email: String,
+
+    /// The password that will authenticate this account's **sessions**.
+    ///
+    /// Never the master key's input: the master key does not derive from it and is never visible
+    /// to the credential verifier. Hashed by the registry adapter and never retained, logged, or
+    /// echoed.
+    pub password: String,
+}
+
+impl fmt::Debug for RegisterRequest {
+    /// Redacted, exactly as [`LoginRequest`]'s is: a `Debug` that printed a password is how one
+    /// reaches a log file.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegisterRequest")
+            .field("email", &self.email)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// Why an account was not created.
+#[derive(Debug, thiserror::Error, ApiError)]
+pub enum RegisterRejection {
+    /// The request cannot create an account as it stands.
+    #[error("{detail}")]
+    #[problem(status = 400, title = "Invalid registration")]
+    Invalid {
+        /// What was wrong, in English. The client localizes `code`, not this.
+        detail: String,
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// An account already exists for that address.
+    ///
+    /// **This is an account oracle and it is the decided contract** — the message catalog fixes
+    /// `error.auth.user_already_exists` for exactly this. The alternative, answering success and
+    /// creating nothing, leaves a client that then cannot sign in and no way to tell it why.
+    /// What bounds the oracle is a rate limiter, and there is none; see
+    /// [`crate::auth::registry`] for the fact it is waiting on.
+    #[error("an account already exists for that address")]
+    #[problem(status = 409, title = "Account already exists")]
+    AlreadyExists {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+
+    /// A collaborator could not answer.
+    #[error("the account could not be created")]
+    #[problem(status = 500, title = "Internal server error")]
+    Unavailable {
+        /// The stable catalog code.
+        #[problem(extension)]
+        code: &'static str,
+    },
+}
+
+impl RegisterRejection {
+    /// The request was not one that can create an account.
+    fn invalid(detail: impl Into<String>) -> Self {
+        Self::Invalid {
+            detail: detail.into(),
+            code: error_codes::AUTH_REGISTRATION_INVALID,
+        }
+    }
+
+    /// A collaborator could not answer.
+    fn unavailable() -> Self {
+        Self::Unavailable {
+            code: error_codes::AUTH_UNAVAILABLE,
+        }
+    }
+}
 
 /// Credentials, plus the two advisory identifiers a client may volunteer.
 ///
@@ -324,6 +413,109 @@ impl LogoutRejection {
 // ===========================================================================================
 // Operations
 // ===========================================================================================
+
+/// Create an account, and open its first session.
+///
+/// # Why it signs you in
+///
+/// The alternative is `201` with no body and a client that immediately posts the same
+/// credentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and
+/// nothing gained. It also makes the CLI's `capsule register` mean what a person expects: after
+/// it, you are registered *and* signed in.
+///
+/// # What it does not do
+///
+/// **It does not publish a device directory**, and the account is therefore unable to upload
+/// until its client publishes one. That is not an omission here: `S-C20` removed the
+/// account-creation fallback for invariant 7's floor precisely so that "was this device in the
+/// directory" has an honest answer for a brand-new account, and the honest answer is *no*. A
+/// client's first action after registering is `POST /v1/auth/devices/directory`.
+///
+/// **It is not rate-limited**, and that is a real gap rather than an oversight — see
+/// [`crate::auth::registry`] for the fact the limiter is waiting on. This is the one
+/// unauthenticated write on the surface.
+///
+/// # `200`, where Salvo answered `201`
+///
+/// Kynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client
+/// something exists and not how to reach it, which is a defect the type refuses to let you
+/// commit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the
+/// operations `S-C53` records as unported. Inventing a location to satisfy a status would be
+/// inventing a surface, so the status moved instead. What a caller actually needs — the token
+/// pair — is in the body either way.
+#[kynos::post("/v1/auth/register", operation_id = "register_user", tag = AuthTag)]
+pub async fn register_user(
+    Inject(auth): Inject<AuthContext>,
+    Json(request): Json<RegisterRequest>,
+) -> Result<Json<TokenResponse>, RegisterRejection> {
+    // Structural, before anything is written. An address the server cannot use and a password
+    // under the floor are both the caller's to fix, and neither should reach a store.
+    let email = request.email.trim();
+    if email.is_empty() || !email.contains('@') {
+        return Err(RegisterRejection::invalid("that is not a usable address"));
+    }
+    if request.password.chars().count() < MIN_PASSWORD_LENGTH {
+        return Err(RegisterRejection::invalid(format!(
+            "a password must be at least {MIN_PASSWORD_LENGTH} characters"
+        )));
+    }
+
+    let now = auth.clock().now();
+    // Minted here rather than by the adapter: the id is a fact about this server's clock, and
+    // two adapters minting their own would be two id schemes.
+    let user = crate::auth::new_user_id();
+    let user = match auth
+        .registry()
+        .create(email, &request.password, &user, now)
+        .await
+        .map_err(|error: DirectoryError| {
+            tracing::error!(%error, "the account registry could not create an account");
+            RegisterRejection::unavailable()
+        })? {
+        Registration::Created(user) => user,
+        Registration::AlreadyExists => {
+            tracing::info!("a registration was refused: the address is taken");
+            return Err(RegisterRejection::AlreadyExists {
+                code: error_codes::AUTH_USER_ALREADY_EXISTS,
+            });
+        }
+    };
+
+    // The first session, opened exactly as a sign-in opens one — including
+    // `authenticated_at`, because registering *is* a credential presentation and a freshness
+    // gate measuring from anything else would be measuring from nothing.
+    let session_id = new_session_id();
+    auth.sessions()
+        .open_session(SessionRecord {
+            session_id: session_id.clone(),
+            user_id: user.clone(),
+            created_at: now,
+            authenticated_at: now,
+            last_active_at: now,
+            user_agent: None,
+            ip_address: None,
+            cohort_hash: None,
+            device_id: None,
+        })
+        .await
+        .map_err(|error| {
+            // The account exists and its session does not. Answered as an outage rather than as
+            // a failed registration, because it is one: the caller signs in and gets a session.
+            store_unavailable(&error, "open the first session of a new account");
+            RegisterRejection::unavailable()
+        })?;
+
+    let issued = auth
+        .tokens()
+        .issue(&user, &session_id, auth.sessions().ttl())
+        .map_err(|error| {
+            tracing::error!(%error, "a token pair could not be signed");
+            RegisterRejection::unavailable()
+        })?;
+
+    tracing::info!(user_id = %user, session_id = %session_id, "registered an account");
+    Ok(Json(TokenResponse::from(issued)))
+}
 
 /// Exchange an email and password for a session.
 ///

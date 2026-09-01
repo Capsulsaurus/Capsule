@@ -181,10 +181,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Auth { command } => match command {
             AuthCommands::Register {
                 email,
-                username,
-                name,
                 password_stdin,
-            } => auth_register(email, username, name, password_stdin).await?,
+            } => auth_register(email, password_stdin).await?,
             AuthCommands::Login {
                 email,
                 password_stdin,
@@ -666,23 +664,16 @@ fn read_password(from_stdin: bool, prompt: String) -> Result<String> {
 }
 
 /// `capsule auth register`: create an account over the SDK and persist the session.
-async fn auth_register(
-    email: Option<String>,
-    username: Option<String>,
-    name: Option<String>,
-    password_stdin: bool,
-) -> Result<()> {
+async fn auth_register(email: Option<String>, password_stdin: bool) -> Result<()> {
     let bundle = i18n::cli_bundle();
     let remote = remote::RemoteConfig::from_env();
     let store = session_store()?;
 
+    // An address and a password, and nothing else. The server takes nothing else (`S-C53`): a
+    // display name is a fact about a person, and the profile surface that would hold one is
+    // owed rather than assumed. Prompting for a value the server discards would be worse than
+    // not asking.
     let email = flag_or_prompt(email, bundle.format(keys::AUTH_LOGIN_EMAIL_PROMPT, &[]))?;
-    let username = flag_or_prompt(
-        username,
-        bundle.format(keys::AUTH_REGISTER_USERNAME_PROMPT, &[]),
-    )?;
-    // The display name is cosmetic; defaulting it keeps the non-interactive form to two flags.
-    let name = name.unwrap_or_else(|| username.clone());
     let password = read_password(
         password_stdin,
         bundle.format(keys::AUTH_LOGIN_PASSWORD_PROMPT, &[]),
@@ -692,7 +683,7 @@ async fn auth_register(
         "{}",
         bundle.format(keys::AUTH_REGISTER_IN_PROGRESS, &[]).green()
     );
-    match remote::auth_register(&remote, &store, &username, &name, &email, &password).await {
+    match remote::auth_register(&remote, &store, &email, &password).await {
         Ok(()) => {
             println!(
                 "{}",

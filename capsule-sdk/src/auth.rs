@@ -192,12 +192,8 @@ struct LoginRequestBody<'a> {
 /// (`capsule-api-auth`) and lets the same advisory cohort ride account creation.
 #[derive(Serialize)]
 struct RegisterRequestBody<'a> {
-    username: &'a str,
-    name: &'a str,
     email: &'a str,
     password: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    cohort_hash: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -390,13 +386,7 @@ impl AuthClient {
     /// issues tokens on registration). The configured cohort hash rides the body
     /// under the same advisory contract as [`login`](AuthClient::login).
     #[instrument(skip_all)]
-    pub async fn register(
-        &self,
-        username: &str,
-        name: &str,
-        email: &str,
-        password: &str,
-    ) -> Result<Session, AuthError> {
+    pub async fn register(&self, email: &str, password: &str) -> Result<Session, AuthError> {
         tracing::info!(
             cohort_emitted = self.cohort().is_some(),
             "registering a new account"
@@ -404,13 +394,7 @@ impl AuthClient {
         let response = self
             .http
             .post(&self.base.register)
-            .json(&RegisterRequestBody {
-                username,
-                name,
-                email,
-                password,
-                cohort_hash: self.cohort(),
-            })
+            .json(&RegisterRequestBody { email, password })
             .send()
             .await?;
         let tokens = read_tokens(Endpoint::Register, response).await?;
@@ -1343,27 +1327,34 @@ mod tests {
         );
     }
 
-    /// The same emission rides account registration (session creation on `/register`).
+    /// Registration sends an address and a password, and **nothing else**.
+    ///
+    /// It used to send a username, a display name and the advisory cohort hash. The server takes
+    /// none of them (`S-C53`), and its body is strict — so a field this client added for
+    /// old times' sake would be a `422` rather than a value quietly ignored. Asserted as an
+    /// exact key set, because the failure mode here is a field creeping back in.
     #[tokio::test]
-    async fn cohort_hash_rides_register_body() {
+    async fn registration_sends_only_an_address_and_a_password() {
         let captured = Arc::new(std::sync::Mutex::new(None));
         let server = start_mock(capturing_handler(captured.clone())).await;
 
         let client = AuthClient::new(&server.base_url)
             .unwrap()
             .with_cohort_hash("cafef00d".to_string());
-        client
-            .register("johndoe", "John Doe", "john@example.com", "pw")
-            .await
-            .unwrap();
+        client.register("john@example.com", "pw").await.unwrap();
 
         let body = captured
             .lock()
             .unwrap()
             .clone()
             .expect("register body captured");
-        assert_eq!(body["username"], "johndoe");
-        assert_eq!(body["cohort_hash"], "cafef00d");
+        let keys: Vec<&str> = body
+            .as_object()
+            .expect("a JSON object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(keys, ["email", "password"]);
     }
 
     /// Absent stays legal: with no cohort configured, the field is **omitted entirely**

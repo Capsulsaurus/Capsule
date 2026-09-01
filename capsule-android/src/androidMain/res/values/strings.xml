@@ -55,7 +55,6 @@
     <string name="cli_auth_register_failed">Could not create the account: %s</string>
     <string name="cli_auth_register_in_progress">Creating your Capsule account…</string>
     <string name="cli_auth_register_success">Account created. Signed in as %s.</string>
-    <string name="cli_auth_register_username_prompt">Username</string>
     <string name="cli_cull_failed">Cull failed: %s</string>
     <string name="cli_cull_filter_empty">No assets are flagged %s.</string>
     <string name="cli_cull_filter_header">%1$s asset(s) flagged %2$s:</string>
@@ -175,6 +174,7 @@
     <string name="error_auth_account_locked">This account is locked after too many failed sign-in attempts.</string>
     <string name="error_auth_invalid_credentials">Invalid email or password.</string>
     <string name="error_auth_rate_limited">Too many attempts. Please wait and try again.</string>
+    <string name="error_auth_registration_invalid">That email or password can\'t be used. Passwords need at least 12 characters.</string>
     <string name="error_auth_revoke_proof_invalid">That didn\'t confirm as you. Nothing was logged out.</string>
     <string name="error_auth_revoke_proof_required">Confirm with your account key to log out of all devices.</string>
     <string name="error_auth_session_expired">Your session has ended. Please sign in again.</string>

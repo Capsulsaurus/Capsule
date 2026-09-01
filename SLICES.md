@@ -259,7 +259,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C50 | The share-link privacy strip is specified where it cannot run | docs | S-C4 | S | ACTIVE | done | both docs now name the issuing client, with containment as the server's half |
 | S-C51 | Server-side album membership, which two authorities are waiting on | server | S-C25, S-C39 | L | RETIRED | blocked | found by `S-C39`; the read `403` and the widening of album *write* access are one missing fact |
 | S-C52 | The server keeps one manifest per asset, not the chain it is documented to hold | server | S-C16, S-C43, S-C45 | M | RETIRED | done | retention decided *for*, and scrub check 4 lands with it |
-| S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | ready | found by `S-D28`; five Salvo auth operations were not ported and only one of them is optional |
+| S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done\* | registration lands; profile, TOTP and password reset are audited and deferred with reasons |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -2976,35 +2976,73 @@ the record — and the scrub adjudicates neither.
 
 ### S-C53 — account creation has no surface on the rebuilt server
 
-- **Contract:** [Authentication](capsule-docs/src/content/docs/design/authentication.md), and the
-  reconciliation plan's own acceptance round trip — *"register → `library init` → `import` →
-  `push` → `sync` → `list`"*.
+- **Contract:** [Authentication — Creating an Account](capsule-docs/src/content/docs/design/authentication.md),
+  and the reconciliation plan's own acceptance round trip — *"register → `library init` →
+  `import` → `push` → `sync` → `list`"*.
 - **Gap** (found 2026-08-31 landing `S-D28`, while pointing the SDK at the Kynos document): the
-  SDK's `AuthClient` has a `register` and the Kynos server has nothing behind it. **There is no
-  way to create an account on the rebuilt server**, so the plan's own end-to-end criterion cannot
-  be run and a fresh deployment has no first user.
-- **The audit, because one missing operation turned out to be five.** The Salvo document declared
-  twenty-one `/v1/auth/*` paths; the Kynos port declares six. Most of the difference is
-  deliberate, and this row is about the part that is not:
+  SDK had a `register` and the server had nothing behind it. **There was no way to create an
+  account on the rebuilt server**, so the plan's own end-to-end criterion could not start and a
+  fresh deployment had no first user.
+- **Landed `done*` 2026-08-31.** `POST /v1/auth/register`, and an audit of the four other auth
+  operations that did not survive the port.
 
-  | Salvo operation | Verdict |
-  | --- | --- |
-  | `POST /v1/auth/register` | **owed.** Nothing replaces it and nothing can start without it |
-  | `GET /v1/auth/profile` | **owed, smaller.** A client learns its own account id only from a token claim today, which works and is not a contract |
-  | `POST /v1/auth/validate` | **deliberately gone.** A token-introspection endpoint is what a server without a session ledger needs; `S-C48` put the ledger on every request, so validation *is* the request |
-  | `POST /v1/auth/login/verify-totp`, `/totp/enroll`, `/totp/verify-enrollment`, `/totp/disable` | **decide.** MFA is not in v1's slice list and the counters it needs landed with `S-C32`; whether it ships is a product call, not an oversight |
-  | `POST /v1/auth/password-reset`, `/password-reset-request` | **decide, and carefully.** A password reset on an end-to-end-encrypted account is not a password reset — the master key is derived from it. `keys.md`'s recovery story is the escrow blob (`S-C12`), and a reset endpoint that did not go through it would be a way to lose a library rather than regain one |
+**A new port, not a new method.** `AccountDirectory`'s docs already said where this belonged: *"a
+directory that also listed accounts, created them or changed passwords would be the grab-bag
+`S-C29` deleted, rebuilt one method at a time."* It matters more than tidiness here.
+`authenticate` is built so that **no caller can tell an unknown account from a wrong password** —
+one `Refused` value, a timing-equalized miss, no branch to reintroduce an oracle through.
+Creation cannot have that property: a registration has to say whether it happened. One trait
+would put the operation that must not disclose beside the one that must.
 
-- **Deliverable:** `POST /v1/auth/register`, with the account-creation half of the directory
-  anchor decided at the same time (`S-C20` removed the account-creation fallback, so a new
-  account has no invariant-7 floor until it publishes a directory — which is transient by design
-  but is now the *first* thing a new client must do).
-- **Watch out:** registration is the one unauthenticated write on the surface, so it is where a
-  rate limiter is not optional (`S-C32`'s port exists; no consumer does this yet), and where the
-  disclosure rule of `S-C4`/`S-C25` applies — a "that email is taken" answer is an account oracle.
-- **Done when:** a fresh server with an empty directory accepts one registration, refuses the
-  second under the same identity, and the plan's round trip runs end to end. **Tier:** Unit +
-  Smoke.
+**The disclosure, stated rather than hidden.** A taken address is `409
+error.auth.user_already_exists` — the contract the message catalog already fixed — and it **is**
+an account oracle. The alternative, answering success and creating nothing, leaves a client that
+then cannot sign in with no way to learn why. What bounds an oracle is a rate limiter and there
+is none: registration is the one **unauthenticated write** on the surface, and limiting it means
+limiting a *source*, which needs the trusted client address `S-C32` records as owed.
+`CounterKey::RegistrationSource` is declared and consumed nowhere, like its two siblings, so the
+day the fact arrives is a one-line day. **An email-keyed limiter was considered and rejected**: it
+would bound repeated probes against one address while doing nothing about a sweep across many,
+which is the actual attack — and a limiter that reads as protection without providing it is worse
+than an absent one.
+
+**A length floor and no composition rule.** Twelve characters, and nothing about digits or
+symbols. The password authenticates a *session*: the master key never derives from it and is
+never visible to the credential verifier, so this is ordinary sign-in security rather than key
+strength — and composition rules measurably push people towards shorter, more guessable
+passwords.
+
+**`200`, where Salvo answered `201`.** Kynos's `Created` requires a `Location`, because a `201`
+that does not say *where* tells a client something exists and not how to reach it. This server
+exposes no URL for an account — `GET /v1/auth/profile` is one of the unported operations below —
+and inventing a location to satisfy a status would be inventing a surface.
+
+**The registration body lost three fields, and the clients lost them with it.** It used to carry
+`username`, `name` and the advisory cohort hash; it now carries an address and a password. Each
+of the others is a fact the server stores about a person, and a display name belongs to the
+profile surface that is owed rather than assumed. The CLI's `--username`/`--name` flags and the
+prompt behind them are gone too — prompting for a value the server discards is worse than not
+asking — and `registration_sends_only_an_address_and_a_password` pins the exact key set, because
+the failure mode is a field creeping back in against a body that is strict.
+
+**The audit, because one missing operation turned out to be five.** Twenty-one `/v1/auth/*` paths
+on the Salvo document; six on the Kynos one, seven now.
+
+| Salvo operation | Verdict |
+| --- | --- |
+| `POST /v1/auth/register` | **landed here** |
+| `GET /v1/auth/profile` | **owed, small.** A client learns its own account id from a token claim today, which works and is not a contract |
+| `POST /v1/auth/validate` | **deliberately gone.** Token introspection is what a server without a session ledger needs; `S-C48` put the ledger on every request, so validation *is* the request |
+| the four TOTP operations | **deferred.** MFA is not in v1's slice list; the counters it needs landed with `S-C32`, so whether it ships is a product call rather than an oversight |
+| `POST /v1/auth/password-reset`, `/password-reset-request` | **deferred, and carefully.** A password reset on an end-to-end-encrypted account is not a password reset — the recovery story is the escrow blob (`S-C12`), and a reset endpoint that did not go through it would be a way to lose a library rather than regain one |
+
+- **Owed:** the profile read; the rate limiter (blocked on `S-C32`'s per-source half); and the CLI
+  round trip `S-D28` records, which this unblocks.
+- **Done when:** ✅ `registering_creates_an_account_and_signs_it_in`,
+  `a_taken_address_is_refused_and_writes_nothing`,
+  `a_password_under_the_floor_is_refused_before_anything_is_written` and
+  `registration_answers_500_when_the_registry_cannot_answer`, plus the conformance walk.
+  **Tier:** Unit + Smoke.
 
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 

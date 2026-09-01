@@ -30,12 +30,14 @@
 //! store, and it is why [`SessionTokens`] is not a trait at all.
 
 pub mod directory;
+pub mod registry;
 pub mod scheme;
 pub mod tokens;
 
 use std::sync::Arc;
 
 pub use self::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
+pub use self::registry::{AccountRegistry, MIN_PASSWORD_LENGTH, Registration, new_user_id};
 pub use self::scheme::{AccessToken, AuthenticatedSession, TOUCH_INTERVAL};
 pub use self::tokens::{
     ACCESS_TOKEN_TTL, ISSUER, IssuedTokens, SessionTokens, TokenError, TokenKind, VerifiedToken,
@@ -51,6 +53,7 @@ use crate::store::{AuthStateStore, Clock};
 pub struct AuthContext {
     sessions: Arc<dyn AuthStateStore>,
     accounts: Arc<dyn AccountDirectory>,
+    registry: Arc<dyn AccountRegistry>,
     challenges: Arc<dyn crate::store::ChallengeStore>,
     cohorts: Arc<dyn crate::store::CohortStore>,
     tokens: Arc<SessionTokens>,
@@ -58,7 +61,7 @@ pub struct AuthContext {
 }
 
 impl AuthContext {
-    /// Assembles the module from its six collaborators.
+    /// Assembles the module from its seven collaborators.
     ///
     /// `clock` is passed separately rather than read back out of `tokens` because the session
     /// records and the token deadlines must be stamped from the *same* instant source; handing
@@ -67,6 +70,7 @@ impl AuthContext {
     pub fn new(
         sessions: Arc<dyn AuthStateStore>,
         accounts: Arc<dyn AccountDirectory>,
+        registry: Arc<dyn AccountRegistry>,
         challenges: Arc<dyn crate::store::ChallengeStore>,
         cohorts: Arc<dyn crate::store::CohortStore>,
         tokens: Arc<SessionTokens>,
@@ -75,6 +79,7 @@ impl AuthContext {
         Self {
             sessions,
             accounts,
+            registry,
             challenges,
             cohorts,
             tokens,
@@ -90,6 +95,11 @@ impl AuthContext {
     /// The account directory.
     pub fn accounts(&self) -> &dyn AccountDirectory {
         self.accounts.as_ref()
+    }
+
+    /// Where accounts are created (`S-C53`).
+    pub fn registry(&self) -> &dyn AccountRegistry {
+        self.registry.as_ref()
     }
 
     /// The single-use revoke-all challenges (`S-C23`, `S-C29`).

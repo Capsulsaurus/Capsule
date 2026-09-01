@@ -103,6 +103,7 @@ async fn every_declared_response_is_exercised() {
     // `Content-Length`, refused before a byte of the body is read.
     for (method, path) in [
         ("GET", "/v1/version"),
+        ("POST", "/v1/auth/register"),
         ("POST", "/v1/auth/login"),
         ("POST", "/v1/auth/refresh"),
         ("POST", "/v1/auth/logout"),
@@ -167,6 +168,49 @@ async fn every_declared_response_is_exercised() {
             .await
             .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
     }
+
+    // ── POST /v1/auth/register ─────────────────────────────────────────────────────────────
+    // 415 and 422 are the `Json` extractor's; 400 is the surface's own floor; 409 is the taken
+    // address, which is the one disclosure this operation makes on purpose.
+    client
+        .post("/v1/auth/register")
+        .body("text/plain", "{}")
+        .send()
+        .await
+        .assert_status(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": 42, "password": "correct horse battery staple" }))
+        .send()
+        .await
+        .assert_status(StatusCode::UNPROCESSABLE_ENTITY);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": "walk@example.test", "password": "short" }))
+        .send()
+        .await
+        .assert_status(StatusCode::BAD_REQUEST);
+    fixture.accounts.set_unavailable(true);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": "walk@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::INTERNAL_SERVER_ERROR);
+    fixture.accounts.set_unavailable(false);
+    client
+        .post("/v1/auth/register")
+        .header("accept", "application/json")
+        .json(&json!({ "email": "walk@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    client
+        .post("/v1/auth/register")
+        .json(&json!({ "email": "walk@example.test", "password": PASSWORD }))
+        .send()
+        .await
+        .assert_status(StatusCode::CONFLICT);
 
     // ── POST /v1/auth/login ────────────────────────────────────────────────────────────────
     // 400, 415, 422 are the `Json` extractor's, declared on every operation that takes a body.

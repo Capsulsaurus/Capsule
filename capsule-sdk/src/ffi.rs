@@ -624,17 +624,15 @@ impl FfiCapsuleClient {
 
     /// Create an account and return an authenticated session handle (the server
     /// issues tokens on registration).
+    /// An address and a password, and nothing else: the server takes nothing else (`S-C53`).
+    /// A display name is a fact about a person, and the profile surface that would hold one is
+    /// owed rather than assumed.
     pub async fn register(
         &self,
-        username: String,
-        name: String,
         email: String,
         password: String,
     ) -> Result<Arc<FfiSession>, FfiError> {
-        let session = self
-            .auth
-            .register(&username, &name, &email, &password)
-            .await?;
+        let session = self.auth.register(&email, &password).await?;
         Ok(self.session_handle(session))
     }
 }

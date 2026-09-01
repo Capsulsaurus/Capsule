@@ -27,6 +27,88 @@
         }
       }
     },
+    "/v1/auth/register": {
+      "post": {
+        "summary": "Create an account, and open its first session.",
+        "description": "# Why it signs you in\n\nThe alternative is `201` with no body and a client that immediately posts the same\ncredentials to `/v1/auth/login`, which is one more round trip for one more chance to fail and\nnothing gained. It also makes the CLI's `capsule register` mean what a person expects: after\nit, you are registered *and* signed in.\n\n# What it does not do\n\n**It does not publish a device directory**, and the account is therefore unable to upload\nuntil its client publishes one. That is not an omission here: `S-C20` removed the\naccount-creation fallback for invariant 7's floor precisely so that \"was this device in the\ndirectory\" has an honest answer for a brand-new account, and the honest answer is *no*. A\nclient's first action after registering is `POST /v1/auth/devices/directory`.\n\n**It is not rate-limited**, and that is a real gap rather than an oversight — see\n[`crate::auth::registry`] for the fact the limiter is waiting on. This is the one\nunauthenticated write on the surface.\n\n# `200`, where Salvo answered `201`\n\nKynos's `Created` requires a `Location` — a `201` that does not say *where* tells a client\nsomething exists and not how to reach it, which is a defect the type refuses to let you\ncommit. This server exposes no URL for an account: `GET /v1/auth/profile` is among the\noperations `S-C53` records as unported. Inventing a location to satisfy a status would be\ninventing a surface, so the status moved instead. What a caller actually needs — the token\npair — is in the body either way.",
+        "operationId": "register_user",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported Media Type",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Account already exists",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodedProblem"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "the request body exceeds the configured limit"
+          }
+        }
+      }
+    },
     "/v1/auth/login": {
       "post": {
         "summary": "Exchange an email and password for a session.",
@@ -4814,29 +4896,15 @@
         ],
         "description": "Identifies the running server.\n\nDeliberately incurious: a name and a version, no build host, no commit, no uptime, no\nfeature list. This endpoint is unauthenticated, so everything it returns is public, and a\nkey-free server has no reason to hand an anonymous caller a fingerprint of its deployment.\nExact client build identification runs the other way (`S-D15`) — clients tell the server\nwhat they are, not the reverse."
       },
-      "LoginRequest": {
+      "RegisterRequest": {
         "properties": {
           "email": {
             "type": "string",
-            "description": "The account's email address."
+            "description": "The address the account is identified by."
           },
           "password": {
             "type": "string",
-            "description": "The account's password.\n\nVerified by the account directory and never retained, logged, or echoed."
-          },
-          "cohort_hash": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments\n(slice `S-C13`).\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
-          },
-          "device_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID.\n\nClient-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for\nthe same reason as `cohort_hash`."
+            "description": "The password that will authenticate this account's **sessions**.\n\nNever the master key's input: the master key does not derive from it and is never visible\nto the credential verifier. Hashed by the registry adapter and never retained, logged, or\nechoed."
           }
         },
         "type": "object",
@@ -4844,7 +4912,7 @@
           "email",
           "password"
         ],
-        "description": "Credentials, plus the two advisory identifiers a client may volunteer.\n\n`Debug` is hand-written. A derived one would print the password into any log line, panic\nmessage or `tracing` field that formatted the request — which is the single worst thing this\nfile could do, and is one `#[derive(Debug)]` away at all times.\nNo `#[schema(min_length = ...)]` on either credential, deliberately. Kynos 0.1.0 publishes a\nstring constraint into the document but does not enforce it on the request path — an empty\npassword reaches the handler — so declaring one would put a promise in the contract that the\nserver does not keep, which is the exact class of drift this rebuild exists to remove. Length\nis a body-size concern and belongs to a limits middleware; it is recorded as owed rather than\nasserted here."
+        "description": "The `POST /v1/auth/register` body.\n\nDeliberately the *smallest* thing that can create an account: an address and a password. No\ndisplay name, no profile, no invitation code — every one of those would be a field the server\nstores about a person, and this server's whole posture is that it stores as little as it can."
       },
       "Problem": {
         "properties": {
@@ -4905,6 +4973,38 @@
           "expires_by"
         ],
         "description": "A freshly issued token pair.\n\nThe field names and `expires_by`'s meaning are a live client contract — `capsule-sdk`'s\n`TokenResponseBody` reads exactly these — so they are preserved verbatim from the Salvo\nsurface. `Debug` is hand-written; both tokens are bearer credentials.\n\n`Deserialize` is derived so the suite reads the pair back through the same type the server\nwrote — a test that pulled `access_token` out of a `serde_json::Value` would still pass if\nthe field were renamed on the way out."
+      },
+      "LoginRequest": {
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "The account's email address."
+          },
+          "password": {
+            "type": "string",
+            "description": "The account's password.\n\nVerified by the account directory and never retained, logged, or echoed."
+          },
+          "cohort_hash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "An advisory device-cohort hash grouping one physical device's re-enrollments\n(slice `S-C13`).\n\nLegibility metadata only: no authorization path reads it, and an unusable value is\ndropped rather than refused — a sign-in must not fail over a field that gates nothing."
+          },
+          "device_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The directory device the client claims to be (slice `S-N3`), as a UUID.\n\nClient-asserted and unverified. Dropped, not refused, when it is not a usable UUID, for\nthe same reason as `cohort_hash`."
+          }
+        },
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "description": "Credentials, plus the two advisory identifiers a client may volunteer.\n\n`Debug` is hand-written. A derived one would print the password into any log line, panic\nmessage or `tracing` field that formatted the request — which is the single worst thing this\nfile could do, and is one `#[derive(Debug)]` away at all times.\nNo `#[schema(min_length = ...)]` on either credential, deliberately. Kynos 0.1.0 publishes a\nstring constraint into the document but does not enforce it on the request path — an empty\npassword reaches the handler — so declaring one would put a promise in the contract that the\nserver does not keep, which is the exact class of drift this rebuild exists to remove. Length\nis a body-size concern and belongs to a limits middleware; it is recorded as owed rather than\nasserted here."
       },
       "RefreshRequest": {
         "properties": {

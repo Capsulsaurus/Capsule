@@ -106,6 +106,7 @@ pub fn router() -> ServerRouter {
         // The account: who you are, what devices you have, and how you get your key back.
         .mount(kynos::routes![
             routes::version::get_version,
+            routes::auth::register_user,
             routes::auth::login_user,
             routes::auth::refresh_token,
             routes::auth::logout,

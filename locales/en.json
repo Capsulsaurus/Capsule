@@ -59,6 +59,10 @@
         "message": "An account with these details already exists.",
         "context": "High-level error for HTTP 409 on registration. Server sends code `error.auth.user_already_exists`; clients localize this message."
     },
+    "error.auth.registration_invalid": {
+        "message": "That email or password can't be used. Passwords need at least 12 characters.",
+        "context": "HTTP 400 on POST /v1/auth/register (slice S-C53): the address is not usable or the password is under the length floor. A length floor and no composition rule — the password authenticates a session, not the master key, and composition rules push people towards shorter, more guessable passwords."
+    },
     "error.auth.invalid_credentials": {
         "message": "Invalid email or password.",
         "context": "High-level error for HTTP 401 on login. Server sends code `error.auth.invalid_credentials`."
@@ -534,10 +538,6 @@
     "cli.auth.login.failed": {
         "message": "Login failed: {reason}",
         "context": "CLI failure line for `capsule auth login`. {reason} is a localized or English error detail."
-    },
-    "cli.auth.register.username_prompt": {
-        "message": "Username",
-        "context": "CLI `capsule auth register` interactive prompt for the login handle."
     },
     "cli.auth.register.in_progress": {
         "message": "Creating your Capsule account…",

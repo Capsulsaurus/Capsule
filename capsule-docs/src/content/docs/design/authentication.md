@@ -19,6 +19,18 @@ Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validat
 - **Delegated/sponsored accounts.** Encrypted with keys derived from a registered account's master key. They do not have their own identity and rely on the registered account for authentication and key management. Owners of the sponsored account have full access. See [Cryptography — Keys: Delegated/Sponsored accounts](/design/cryptography/keys/#delegatedsponsored-accounts) for the key derivation.
 - **Non-registered accounts.** No associated identity or master key — used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link, and for [web-upload links](/design/web-upload/), where a guest seals contributions to a link-scoped key without read access.
 
+## Creating an Account
+
+`POST /v1/auth/register` takes **an address and a password, and nothing else** (slice `S-C53`), and answers with a token pair — registering signs you in, because the alternative is a second round trip that exists only to fail differently.
+
+- **No display name, no username, no invitation code.** Each would be a fact the server stores about a person, and this server stores as little as it can. A display name belongs to a profile surface, which is owed rather than assumed.
+- **A length floor and no composition rule.** Twelve characters. The password authenticates a *session* — the master key never derives from it and is never visible to the credential verifier — so this is ordinary sign-in security, and composition rules measurably push people towards shorter, more guessable passwords.
+- **A taken address is `409 error.auth.user_already_exists`, and that is an account oracle.** It is the decided contract: answering success and creating nothing leaves a client that then cannot sign in and no way to tell it why. What bounds the oracle is a rate limiter, and there is **none** — registration is the one unauthenticated write on the surface, and limiting it means limiting a *source*, which needs a trusted client address this server does not have behind an unconfigured proxy chain. The same missing fact the [share](/design/share-links/) and [drop](/design/web-upload/) source limiters are waiting on.
+- **A new account has no device directory, and therefore cannot write.** That is deliberate: invariant 7's floor is the writing device's `added_at` in the account's published directory, with no account-creation fallback, so *"was this device in the directory"* has an honest answer for a brand-new account and the answer is no. A client's first act after registering is publishing one.
+- **The status is `200`, where the retired surface answered `201`.** A `201` must say *where* the new thing lives, and this server exposes no URL for an account. Inventing one to satisfy a status would be inventing a surface.
+
+**Not ported from the retired surface, and tracked on `S-C53`:** `GET /v1/auth/profile`, `POST /v1/auth/validate` (a token-introspection endpoint is what a server without a session ledger needs; [`S-C48`](#explicit-revocation) put the ledger on every request, so validation *is* the request), the four TOTP operations, and password reset — which on an end-to-end-encrypted account is not a password reset at all, and whose real answer is the [escrow blob](/design/backup-recovery/).
+
 ## Choosing an Auth Path
 
 Both paths mint the same Capsule [sessions](#session-and-access-tokens) and bind identity to the master key the same way; the difference is who verifies the login credential (decision 2026-07-12):

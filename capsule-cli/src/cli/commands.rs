@@ -210,12 +210,6 @@ pub(crate) enum AuthCommands {
         /// Account email (prompted when omitted)
         #[arg(long)]
         email: Option<String>,
-        /// Login handle (prompted when omitted)
-        #[arg(long)]
-        username: Option<String>,
-        /// Display name (defaults to the username)
-        #[arg(long)]
-        name: Option<String>,
         /// Read the password from stdin instead of prompting, so the command
         /// works in scripts and CI where there is no terminal.
         #[arg(long)]

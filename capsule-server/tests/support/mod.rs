@@ -324,6 +324,39 @@ impl AccountDirectory for InMemoryAccounts {
     }
 }
 
+impl capsule_server::auth::AccountRegistry for InMemoryAccounts {
+    fn create<'a>(
+        &'a self,
+        email: &'a str,
+        password: &'a str,
+        user: &'a UserId,
+        _at: Timestamp,
+    ) -> capsule_server::auth::DirectoryFuture<'a, capsule_server::auth::Registration> {
+        Box::pin(async move {
+            if self.unavailable.load(Ordering::SeqCst) {
+                return Err(capsule_server::auth::DirectoryError::Unavailable {
+                    detail: REFUSAL.to_owned(),
+                });
+            }
+            // One critical section, as the port requires: a check and a write a caller could
+            // interleave is two registrations that both believe they own the address.
+            let mut accounts = self.accounts();
+            if accounts.contains_key(email) {
+                return Ok(capsule_server::auth::Registration::AlreadyExists);
+            }
+            accounts.insert(
+                email.to_owned(),
+                Account {
+                    user_id: user.clone(),
+                    password: password.to_owned(),
+                    locked: false,
+                },
+            );
+            Ok(capsule_server::auth::Registration::Created(user.clone()))
+        })
+    }
+}
+
 // ===========================================================================================
 // Session store double
 // ===========================================================================================
@@ -2079,6 +2112,7 @@ impl Fixture {
             auth: AuthContext::new(
                 sessions.clone(),
                 accounts.clone(),
+                accounts.clone(),
                 challenges.clone(),
                 cohorts.clone(),
                 tokens.clone(),
@@ -2191,6 +2225,7 @@ impl Fixture {
         let app = App::new(Modules {
             auth: AuthContext::new(
                 Arc::new(SwitchableSessions::new(clock.clone())),
+                accounts.clone(),
                 accounts,
                 Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
                 Arc::new(InMemoryCohorts::new()),
