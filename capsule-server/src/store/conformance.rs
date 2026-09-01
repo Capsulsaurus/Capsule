@@ -40,13 +40,11 @@ use uuid::Uuid;
 
 use super::auth::{AuthStateStore, CohortStore, SessionRecord};
 use super::ceremony::{
-    AuthenticationCeremony, CeremonyState, ChallengeStore, ChannelStore, Direction, DrainOutcome,
-    EnrollmentStore, PendingEnrollment, RegistrationCeremony, RelayChannel, RelayOutcome,
-    RelayPayload, RevokeAllChallenge, WebauthnCeremonyStore,
+    ChallengeStore, ChannelStore, Direction, DrainOutcome, EnrollmentStore, PendingEnrollment,
+    RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
 };
 use super::ids::{
-    AssetId, CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
-    UserId,
+    AssetId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, BlobRole, FinalizeClaim, UploadSessionRecord, UploadSessionStatus,
@@ -70,8 +68,6 @@ pub trait Harness: Send + Sync {
     fn enrollments(&self) -> &dyn EnrollmentStore;
     /// The enrollment relay-channel store under test.
     fn channels(&self) -> &dyn ChannelStore;
-    /// The WebAuthn ceremony store under test.
-    fn webauthn(&self) -> &dyn WebauthnCeremonyStore;
     /// The durable device-cohort map under test.
     fn cohorts(&self) -> &dyn CohortStore;
 
@@ -1241,125 +1237,6 @@ pub async fn closing_a_channel_drops_both_mailboxes(h: &dyn Harness) {
     }
 }
 
-/// A registration and an authentication under one ceremony id do not see each other.
-///
-/// The Salvo store namespaced these by a hand-formatted `passkey_reg:` / `passkey_auth:` key
-/// prefix and typed both as `T`, so reading one as the other compiled and failed at runtime.
-pub async fn webauthn_registration_and_authentication_do_not_collide(h: &dyn Harness) {
-    let store = h.webauthn();
-    let ceremony = CeremonyId::new("webauthn-shared-id");
-    let registration = RegistrationCeremony {
-        user_id: UserId::new("webauthn-user"),
-        state: CeremonyState::new("{\"registration\":true}"),
-    };
-    let authentication = AuthenticationCeremony {
-        state: CeremonyState::new("{\"authentication\":true}"),
-    };
-
-    ok(
-        store
-            .begin_registration(&ceremony, registration.clone())
-            .await,
-        "begin_registration",
-    );
-    ok(
-        store
-            .begin_authentication(&ceremony, authentication.clone())
-            .await,
-        "begin_authentication",
-    );
-
-    assert_eq!(
-        ok(
-            store.finish_registration(&ceremony).await,
-            "finish_registration"
-        ),
-        Some(registration),
-        "the registration comes back as a registration"
-    );
-    assert_eq!(
-        ok(
-            store.finish_authentication(&ceremony).await,
-            "finish_authentication"
-        ),
-        Some(authentication),
-        "and the authentication is untouched by finishing the registration"
-    );
-}
-
-/// Finishing a WebAuthn ceremony consumes it.
-pub async fn a_webauthn_ceremony_is_consumed_by_its_finish(h: &dyn Harness) {
-    let store = h.webauthn();
-    let ceremony = CeremonyId::new("webauthn-single-use");
-    ok(
-        store
-            .begin_registration(
-                &ceremony,
-                RegistrationCeremony {
-                    user_id: UserId::new("webauthn-single-use-user"),
-                    state: CeremonyState::new("state"),
-                },
-            )
-            .await,
-        "begin_registration",
-    );
-
-    assert!(
-        ok(
-            store.finish_registration(&ceremony).await,
-            "finish_registration"
-        )
-        .is_some(),
-        "the first finish gets the ceremony"
-    );
-    assert_eq!(
-        ok(
-            store.finish_registration(&ceremony).await,
-            "finish_registration"
-        ),
-        None,
-        "a finished ceremony cannot be replayed"
-    );
-    assert_eq!(
-        ok(
-            store
-                .finish_authentication(&CeremonyId::new("webauthn-never-started"))
-                .await,
-            "finish_authentication"
-        ),
-        None,
-        "an unknown ceremony is absent, not a failure"
-    );
-}
-
-/// A WebAuthn ceremony dies at its store's TTL.
-pub async fn a_webauthn_ceremony_expires_with_its_store(h: &dyn Harness) {
-    let store = h.webauthn();
-    let ceremony = CeremonyId::new("webauthn-expiry");
-    ok(
-        store
-            .begin_authentication(
-                &ceremony,
-                AuthenticationCeremony {
-                    state: CeremonyState::new("state"),
-                },
-            )
-            .await,
-        "begin_authentication",
-    );
-
-    ok(h.advance(store.ttl()).await, "advance to the ceremony TTL");
-
-    assert_eq!(
-        ok(
-            store.finish_authentication(&ceremony).await,
-            "finish_authentication"
-        ),
-        None,
-        "the ceremony window is the store's property, restated by no route"
-    );
-}
-
 // -------------------------------------------------------------------------------------------
 // Device cohorts
 // -------------------------------------------------------------------------------------------
@@ -1501,9 +1378,6 @@ pub async fn run_all(h: &dyn Harness) {
     relaying_requires_a_live_channel(h).await;
     relayed_payloads_drain_in_order_and_by_direction(h).await;
     closing_a_channel_drops_both_mailboxes(h).await;
-    a_webauthn_ceremony_is_consumed_by_its_finish(h).await;
-    webauthn_registration_and_authentication_do_not_collide(h).await;
-    a_webauthn_ceremony_expires_with_its_store(h).await;
     observing_a_cohort_twice_is_one_row_that_moves_last_seen(h).await;
     cohorts_are_listed_oldest_first(h).await;
     a_cohort_is_scoped_to_its_account(h).await;

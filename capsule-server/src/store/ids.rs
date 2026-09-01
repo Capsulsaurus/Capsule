@@ -124,12 +124,6 @@ secret_id! {
     EnrollmentCode
 }
 
-secret_id! {
-    /// A WebAuthn ceremony id. It travels to the browser in a cookie, so anything that can
-    /// print it can hijack the ceremony.
-    CeremonyId
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

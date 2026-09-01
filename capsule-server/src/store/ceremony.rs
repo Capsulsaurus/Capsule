@@ -1,5 +1,10 @@
-//! The four typed ceremony stores that replace `save_temp_data<T>` / `get_temp_data<T>` /
+//! The typed ceremony stores that replace `save_temp_data<T>` / `get_temp_data<T>` /
 //! `delete_temp_data`.
+//!
+//! There were four. `S-C56` dropped passkeys from v1, and the WebAuthn ceremony store went with
+//! them — a port nothing consumes, with an adapter and a conformance suite behind it, reads as
+//! live and is not. Its contract is recoverable from the commit that removed it, and the slice
+//! that rebuilds passkeys says so.
 //!
 //! # What was there
 //!
@@ -11,33 +16,30 @@
 //! | `revoke_all:challenge:{token}` | the revoke-all challenge | `CHALLENGE_TTL` |
 //! | `enroll:code:{code}` | the pending enrollment, written twice under two spellings | `CODE_TTL` |
 //! | `enroll:channel:{id}`, `enroll:mbox:{id}:{a\|b}` | the relay channel and its queues | `CHANNEL_TTL` |
-//! | `passkey_reg:{id}`, `passkey_auth:{id}` | WebAuthn ceremony state | an inline `Duration::from_secs(300)` |
 //!
 //! Three things went wrong with that, and each is closed by construction below.
 //!
-//! - **Type safety ended at the boundary.** `get_temp_data::<PasskeyAuthentication>` against a
-//!   key written as `PasskeyRegistration` compiled fine and failed at runtime as a
-//!   deserialization error. Here each ceremony's store names its own record type, and a
-//!   registration and an authentication are different types even though they share an id
-//!   space — so the confusion has no way to be written.
+//! - **Type safety ended at the boundary.** `get_temp_data::<RelayChannel>` against a key
+//!   written as a `PendingEnrollment` compiled fine and failed at runtime as a deserialization
+//!   error. Here each ceremony's store names its own record type, so the confusion has no way to
+//!   be written.
 //! - **Collisions were prevented by convention.** A prefix typo put two ceremonies in one
 //!   namespace. Here the key space is the store's, and a store holds exactly one kind of thing.
 //! - **A record's lifetime was an argument.** Every call site restated the TTL, and the
-//!   WebAuthn one restated it as a bare literal in two routes. Here `ttl()` is a property of
-//!   the store, fixed at construction, and no operation accepts one.
+//!   retired WebAuthn one restated it as a bare literal in two routes. Here `ttl()` is a
+//!   property of the store, fixed at construction, and no operation accepts one.
 //!
 //! # Single-use is also a property, not a convention
 //!
-//! Three of these four ceremonies are one-shot. The generic store made that the caller's job:
+//! Two of these three ceremonies are one-shot. The generic store made that the caller's job:
 //! `get_temp_data` then `delete_temp_data`, two calls, and a route that forgot the second left
-//! a replayable credential. Here the read *is* the removal — [`ChallengeStore::consume`],
-//! [`EnrollmentStore::redeem`], [`WebauthnCeremonyStore::finish_registration`] and
-//! [`WebauthnCeremonyStore::finish_authentication`] have no non-destructive counterpart, so a
-//! replay window cannot be left open by omission.
+//! a replayable credential. Here the read *is* the removal — [`ChallengeStore::consume`] and
+//! [`EnrollmentStore::redeem`] have no non-destructive counterpart, so a replay window cannot be
+//! left open by omission.
 
 use jiff::{SignedDuration, Timestamp};
 
-use super::{CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, StoreFuture, UserId};
+use super::{ChallengeToken, ChannelId, EnrollmentCode, StoreFuture, UserId};
 
 // -------------------------------------------------------------------------------------------
 // Revoke-all challenge
@@ -272,95 +274,6 @@ pub trait ChannelStore: std::fmt::Debug + Send + Sync {
 
 // -------------------------------------------------------------------------------------------
 // WebAuthn ceremonies
-// -------------------------------------------------------------------------------------------
-
-/// In-flight state for one WebAuthn ceremony, as the WebAuthn library serializes it.
-///
-/// Opaque here by necessity: the state belongs to `webauthn-rs`, whose representation is that
-/// crate's business and changes with it. This is a *named* type on a *named* operation, which
-/// is what the contract requires — the store cannot be handed anything else, and cannot hand
-/// this to a route expecting something else — as distinct from the generic `T: Serialize` it
-/// replaces, which could carry anything anywhere.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CeremonyState(String);
-
-impl CeremonyState {
-    /// Wrap the WebAuthn library's serialized ceremony state.
-    pub fn new(state: impl Into<String>) -> Self {
-        Self(state.into())
-    }
-
-    /// The serialized state, to hand back to the WebAuthn library.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// A passkey **registration** ceremony awaiting its finish.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegistrationCeremony {
-    /// The account registering a passkey. Bound here so the finish route cannot be told which
-    /// account it is completing by the request it is completing it with.
-    pub user_id: UserId,
-    /// The library's in-flight registration state.
-    pub state: CeremonyState,
-}
-
-/// A passkey **authentication** ceremony awaiting its finish.
-///
-/// A separate type from [`RegistrationCeremony`] with a separate pair of operations, so the
-/// `passkey_reg:` / `passkey_auth:` prefix convention has nothing left to enforce: a
-/// registration cannot be finished as an authentication even under the same ceremony id.
-/// It carries no `user_id` because a discoverable-credential login learns the account *from*
-/// the credential — recording an expected account here would be inventing an authorization
-/// input the ceremony does not have.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthenticationCeremony {
-    /// The library's in-flight authentication state.
-    pub state: CeremonyState,
-}
-
-/// How long a started WebAuthn ceremony may take to finish.
-///
-/// Five minutes, the value the Salvo passkey routes restated as a bare
-/// `Duration::from_secs(300)` literal at each of their two start handlers. Declared once here
-/// because it is a property of the ceremony, not of a route.
-pub const WEBAUTHN_CEREMONY_TTL: SignedDuration = SignedDuration::from_mins(5);
-
-/// WebAuthn ceremony state for the passkey routes.
-pub trait WebauthnCeremonyStore: std::fmt::Debug + Send + Sync {
-    /// How long a started ceremony may take to finish.
-    fn ttl(&self) -> SignedDuration;
-
-    /// Record a started registration ceremony under `ceremony`.
-    fn begin_registration<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-        record: RegistrationCeremony,
-    ) -> StoreFuture<'a, ()>;
-
-    /// Take the registration ceremony `ceremony`, or `None` if it is unknown, already
-    /// finished, expired — or is an *authentication* ceremony under that id.
-    fn finish_registration<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-    ) -> StoreFuture<'a, Option<RegistrationCeremony>>;
-
-    /// Record a started authentication ceremony under `ceremony`.
-    fn begin_authentication<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-        record: AuthenticationCeremony,
-    ) -> StoreFuture<'a, ()>;
-
-    /// Take the authentication ceremony `ceremony`, or `None` if it is unknown, already
-    /// finished, expired — or is a *registration* ceremony under that id.
-    fn finish_authentication<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-    ) -> StoreFuture<'a, Option<AuthenticationCeremony>>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

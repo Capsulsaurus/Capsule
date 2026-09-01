@@ -100,7 +100,10 @@ tree). Everything the v1 campaign shipped is the floor wave 2 stands on:
   binaries), federation capabilities/budgets/revocation state, album provisioning with
   UUID album ids. Auth: sessions, password+TOTP, passkeys — real and testcontainer-tested
   (OIDC is wave 2, `S-N1`). **This whole tree is `RETIRED` territory**: it is live and
-  green today, and it is the contract the Kynos rebuild must reproduce.
+  green today, and it is the contract the Kynos rebuild must reproduce. *Two corrections
+  found while reproducing it: the login never demanded a confirmed second factor (`S-C55`),
+  and the passkey surface could not authenticate at all (`S-C56`). "Real and
+  testcontainer-tested" was true of the code and not of the capability.*
 - **SDK/clients**: session store + auto refresh, hand-written upload/sync clients,
   spargen-generated typed REST client from committed `openapi.json`, verify-before-
   destroy + receipt gate, adverse-network engine, LAN peering (in-process), recovery
@@ -262,6 +265,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-C53 | Account creation has no surface on the rebuilt server | server | S-C13 | M | RETIRED | done | registration lands; the unported operations are decided one by one on `S-C54`–`S-C58` |
 | S-C54 | The profile surface, and a password change that is not a reset | server | S-C53 | M | RETIRED | done | three operations where Salvo had one; the address becomes immutable and `/validate` and password reset are deleted rather than owed |
 | S-C55 | A confirmed second factor gated nothing | server | S-C13, S-C32, S-C53 | L | RETIRED | done | Salvo's login never issued an MFA challenge; login gains a `202`, and a code is accepted at most once |
+| S-C56 | The passkey surface could never authenticate | server | S-C29, S-C55 | M | RETIRED | done | six operations that were in no document and always answered `CredentialNotFound`; deferred out of v1 on evidence, and `openssl` leaves the tree with them |
 | S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | RETIRED | ready | |
 | S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | RETIRED | ready | |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
@@ -321,7 +325,7 @@ campaign's own metadata; `Owed →` names where a `done*` row's remainder now li
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
-| S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done\* | the wire half lands with `S-C13`; TOTP/passkey ceremonies wait on `S-N1` |
+| S-N3 | `device_id` on session listing + ceremony cohorts | auth | — | S | RETIRED | done | the wire half lands with `S-C13`; the TOTP ceremony with `S-C55`; passkeys retire on `S-C56` |
 | S-P1 | `capsule_sdk` FFI workspace verbs | iOS path | S-A10 | L | MIXED | done | feed `manifest_cbor` shape → `S-C30` |
 | S-P2 | Swift auth service + Keychain + login screen | iOS path | S-P1 | L | MIXED | ready | |
 | S-P3 | First-device enrollment UI | iOS path | S-P1 | L | MIXED | ready | |
@@ -3170,6 +3174,58 @@ store, or by holding a stolen token — is not one.
   seven unit tests on the codes themselves, plus the conformance walk's `totp_block`.
   **Tier:** Unit + Smoke.
 
+### S-C56 — the passkey surface could never authenticate
+
+- **Contract:** [Authentication — Passkeys Are Not in v1](capsule-docs/src/content/docs/design/authentication.md);
+  the dependency consequence is the WebAuthn and TLS rows in
+  [Dependencies](capsule-docs/src/content/docs/design/dependencies.md).
+- **Finding** (2026-09-01, sizing the port): there was nothing to port. Four faults, each
+  independently fatal, in `capsule-api/auth/src/routes/passkey.rs` and its service:
+
+  1. All six routes are Salvo `#[handler]`s rather than `#[endpoint]`s, so they appear in **no**
+     OpenAPI document. No generated client could reach them, and `S-D8`'s schema dump never saw
+     them.
+  2. `start_passkey_authentication(&[])` — an **empty** allow-list — and
+     `set_allowed_credentials` is never called. `webauthn-rs-core`'s `authenticate_credential`
+     then walks that list for a matching `cred_id` and ends at
+     `found_cred.ok_or(WebauthnError::CredentialNotFound)?`. Every assertion failed. Not a
+     bypass; an authentication that could never succeed.
+  3. `finish_registration` persisted `serde_json::to_vec(&credential.get_public_key())` — the
+     public key, not the `Passkey` — so what registration wrote could not be turned back into a
+     credential even if (2) were fixed.
+  4. The code says so, in a comment: *"Using allow_credentials requires constructing
+     `webauthn_rs::prelude::Passkey`, which currently presents integration challenges (private
+     fields/constructor availability). For now, an empty list allows any credential for this
+     RP."*
+
+**Why this is a removal and not a port.** Shipping passkeys means *writing* them: a credential
+store, a discoverable-credential ceremony, and six operations. It also means a way to exercise a
+successful ceremony, because `assert_declared_responses_covered` fails on any declared status no
+test produces — and the software authenticator for that is published only as a `0.6.1-dev`
+prerelease against this tree's `webauthn-rs` 0.5.5. Building it half-tested was rejected outright:
+a declared response nothing reaches is the `S-C28` class this whole rebuild exists to make
+unrepresentable, and suspending the guarantee for one surface suspends it for the document.
+
+**The dependency consequence is the reason to be pleased about this.** `webauthn-rs` is the
+**only** edge pulling `openssl` into the workspace — `webauthn-attestation-ca` uses it to parse
+attestation certificates. It was never a TLS stack, which is why `dependencies.md` carved it out
+of the rustls-only rule; with passkeys deferred the carve-out is spent and the rule holds with no
+exception at all. `cargo tree -i openssl -e no-dev` resolves to `capsule-api-auth` and nothing
+else, so `openssl` leaves when that tree does.
+
+**The `WebauthnCeremonyStore` goes too.** `S-C29` built it — the port, an in-memory adapter and
+three conformance cases — for these routes and for nothing else. A port nothing consumes, with an
+adapter and a suite behind it, *reads as live*; that is the same weight as the
+zero-consumer `capsule-api-testing` the slimming audit flagged. Its contract is intact in the
+commit that removed it, and this row is the pointer.
+
+- **Owed:** passkeys themselves, as a wave-2 slice with its own contract. It reopens the
+  `openssl` question, and the software-authenticator question with it — the two should be decided
+  together rather than one at a time.
+- **Done when:** ✅ `mise run test-rust` green with the port, its adapter and its three
+  conformance cases removed; `cargo tree -i openssl -e no-dev` naming only the retiring tree;
+  the auth doc carrying the four findings rather than the aspiration. **Tier:** Unit.
+
 ### S-C46 — the custody-receipt type is `native`-gated, so the server cannot share it
 
 - **Contract:** [Storage Verification — Custody Receipts](capsule-docs/src/content/docs/design/import/storage-verification.md);
@@ -4295,8 +4351,8 @@ untouched by the rebuild.
 
 ## Lane N — auth (OIDC first-class alongside local auth)
 
-Decision 2026-07-12: local auth (password + TOTP, passkeys) and OIDC are **both
-first-class**; [Authentication — Choosing an Auth Path](capsule-docs/src/content/docs/design/authentication.md)
+Decision 2026-07-12: local auth (password + TOTP; passkeys deferred by `S-C56`) and OIDC are
+**both first-class**; [Authentication — Choosing an Auth Path](capsule-docs/src/content/docs/design/authentication.md)
 carries the audience split. Today OIDC is a config struct with zero routes
 (`capsule-api/auth/src/oidc.rs`) — and that whole tree is `RETIRED`, so the OIDC work
 lands on Kynos rather than on Salvo.
@@ -4460,10 +4516,11 @@ lands on Kynos rather than on Salvo.
   groups re-enrollments of one physical device, `device_id` names one directory device — and
   `a_reinstall_groups_with_the_device_it_replaced` asserts exactly that distinction: two
   `device_id`s, one cohort, one durable row.
-- **Owed: the TOTP and passkey ceremonies.** They have no surface on this port at all — the only
-  sign-in is password, and OIDC and the second-factor ceremonies are `S-N1`'s. Accepting
-  `cohort_hash` there is a line each once those ceremonies exist, and there is nothing to
-  implement it against today.
+- **Closed 2026-09-01.** The TOTP ceremony landed with `S-C55` and takes `cohort_hash` and
+  `device_id` on `POST /v1/auth/login/verify-totp` — the *completing* request, because that is
+  where the session they describe is opened; `the_advisory_identifiers_ride_the_completing_request`
+  asserts they reach the devices view. The passkey ceremony is gone with `S-C56`. What remains is
+  OIDC's, and it is `S-N1`'s to carry.
 
 ## Lane P — iOS app path
 

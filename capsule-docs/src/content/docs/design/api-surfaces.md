@@ -18,7 +18,7 @@ the gate that keeps it current — is [Developer Documentation](/design/develope
 
 | Surface | Transport | Planned module | Owner doc |
 | --- | --- | --- | --- |
-| Authentication (sessions, passkeys, TOTP, OIDC) | REST | `capsule-api::auth` | [Authentication](/design/authentication/) |
+| Authentication (sessions, TOTP, OIDC) | REST | `capsule-server::auth` | [Authentication](/design/authentication/) |
 | Resumable upload (`POST/HEAD/PATCH /upload`) | REST | `capsule-api::upload` | [Upload Protocol](/design/import/upload-protocol/) |
 | Lifecycle writes (`POST /albums/{album_id}/ops`) | REST | `capsule-api::upload::ops` | [Authorization](/design/authorization/#the-lifecycle-write-surface) |
 | Blob fetch (`GET /blob/{hash}`, HTTP `Range`) | REST | `capsule-api::blob` | [Download & Sync](/design/import/download-sync/) |

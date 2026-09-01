@@ -23,14 +23,12 @@ use jiff::{SignedDuration, Timestamp};
 
 use super::auth::{AuthStateStore, CohortRecord, CohortStore, DEFAULT_SESSION_TTL, SessionRecord};
 use super::ceremony::{
-    AuthenticationCeremony, CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome,
-    ENROLLMENT_CODE_TTL, EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL,
-    RegistrationCeremony, RelayChannel, RelayOutcome, RelayPayload, RevokeAllChallenge,
-    WEBAUTHN_CEREMONY_TTL, WebauthnCeremonyStore,
+    CHALLENGE_TTL, ChallengeStore, ChannelStore, Direction, DrainOutcome, ENROLLMENT_CODE_TTL,
+    EnrollmentStore, PendingEnrollment, RELAY_CHANNEL_TTL, RelayChannel, RelayOutcome,
+    RelayPayload, RevokeAllChallenge,
 };
 use super::ids::{
-    AlbumId, CeremonyId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId,
-    UserId,
+    AlbumId, ChallengeToken, ChannelId, EnrollmentCode, OwnerId, SessionId, UploadId, UserId,
 };
 use super::upload::{
     AcceptedChunk, FinalizeClaim, LIFETIME_CAP, UploadSessionRecord, UploadSessionStatus,
@@ -1037,115 +1035,6 @@ impl ChannelStore for InMemoryChannels {
     }
 }
 
-/// In-memory [`WebauthnCeremonyStore`].
-///
-/// Two maps, not one namespaced by a key prefix: a registration and an authentication under
-/// the same ceremony id are simply different entries in different maps, so the type confusion
-/// the `passkey_reg:` / `passkey_auth:` convention existed to prevent has nowhere to occur.
-#[derive(Debug)]
-pub struct InMemoryWebauthnCeremonies {
-    clock: Arc<dyn Clock>,
-    ttl: SignedDuration,
-    registrations: Mutex<BTreeMap<CeremonyId, Entry<RegistrationCeremony>>>,
-    authentications: Mutex<BTreeMap<CeremonyId, Entry<AuthenticationCeremony>>>,
-}
-
-impl InMemoryWebauthnCeremonies {
-    /// A store on `clock` with the given ceremony window.
-    pub fn new(clock: Arc<dyn Clock>, ttl: SignedDuration) -> Self {
-        Self {
-            clock,
-            ttl,
-            registrations: Mutex::new(BTreeMap::new()),
-            authentications: Mutex::new(BTreeMap::new()),
-        }
-    }
-
-    /// A store on `clock` with the [`WEBAUTHN_CEREMONY_TTL`].
-    pub fn with_default_ttl(clock: Arc<dyn Clock>) -> Self {
-        Self::new(clock, WEBAUTHN_CEREMONY_TTL)
-    }
-}
-
-impl WebauthnCeremonyStore for InMemoryWebauthnCeremonies {
-    fn ttl(&self) -> SignedDuration {
-        self.ttl
-    }
-
-    fn begin_registration<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-        record: RegistrationCeremony,
-    ) -> StoreFuture<'a, ()> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let user_id = record.user_id.clone();
-            lock(&self.registrations).insert(
-                ceremony.clone(),
-                Entry {
-                    record,
-                    expires_at: deadline(now, self.ttl),
-                },
-            );
-            tracing::debug!(%user_id, "began passkey registration ceremony");
-            Ok(())
-        })
-    }
-
-    fn finish_registration<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-    ) -> StoreFuture<'a, Option<RegistrationCeremony>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let taken = lock(&self.registrations)
-                .remove(ceremony)
-                .filter(|entry| entry.is_live_at(now));
-            tracing::debug!(
-                hit = taken.is_some(),
-                "finished passkey registration ceremony"
-            );
-            Ok(taken.map(|entry| entry.record))
-        })
-    }
-
-    fn begin_authentication<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-        record: AuthenticationCeremony,
-    ) -> StoreFuture<'a, ()> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            lock(&self.authentications).insert(
-                ceremony.clone(),
-                Entry {
-                    record,
-                    expires_at: deadline(now, self.ttl),
-                },
-            );
-            tracing::debug!("began passkey authentication ceremony");
-            Ok(())
-        })
-    }
-
-    fn finish_authentication<'a>(
-        &'a self,
-        ceremony: &'a CeremonyId,
-    ) -> StoreFuture<'a, Option<AuthenticationCeremony>> {
-        Box::pin(async move {
-            let now = self.clock.now();
-            let taken = lock(&self.authentications)
-                .remove(ceremony)
-                .filter(|entry| entry.is_live_at(now));
-            tracing::debug!(
-                hit = taken.is_some(),
-                "finished passkey authentication ceremony"
-            );
-            Ok(taken.map(|entry| entry.record))
-        })
-    }
-}
-
 // ===========================================================================================
 // The harness the conformance suite drives
 // ===========================================================================================
@@ -1162,7 +1051,6 @@ pub struct InMemoryStores {
     challenges: InMemoryChallenges,
     enrollments: InMemoryEnrollments,
     channels: InMemoryChannels,
-    webauthn: InMemoryWebauthnCeremonies,
     /// The one store here with no TTL and no clock — see [`InMemoryCohorts`].
     cohorts: InMemoryCohorts,
 }
@@ -1177,20 +1065,18 @@ impl InMemoryStores {
             CHALLENGE_TTL,
             ENROLLMENT_CODE_TTL,
             RELAY_CHANNEL_TTL,
-            WEBAUTHN_CEREMONY_TTL,
         )
     }
 
     /// Every store on one lifetime, for the conformance suite's expiry cases.
     ///
-    /// A single TTL across all six is what lets [`super::conformance::Harness::advance`] be one
-    /// operation rather than six, and it is legitimate precisely because the TTL is a property
-    /// of the *store instance* — varying it is configuration, not a per-call argument.
+    /// A single TTL across all of them is what lets [`super::conformance::Harness::advance`] be
+    /// one operation rather than five, and it is legitimate precisely because the TTL is a
+    /// property of the *store instance* — varying it is configuration, not a per-call argument.
     pub fn with_uniform_ttl(ttl: SignedDuration) -> Self {
-        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl, ttl)
+        Self::with_ttl(ManualClock::default(), ttl, ttl, ttl, ttl, ttl)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn with_ttl(
         clock: ManualClock,
         session: SignedDuration,
@@ -1198,7 +1084,6 @@ impl InMemoryStores {
         challenge: SignedDuration,
         enrollment: SignedDuration,
         channel: SignedDuration,
-        webauthn: SignedDuration,
     ) -> Self {
         let shared: Arc<dyn Clock> = Arc::new(clock.clone());
         Self {
@@ -1207,7 +1092,6 @@ impl InMemoryStores {
             challenges: InMemoryChallenges::new(Arc::clone(&shared), challenge),
             enrollments: InMemoryEnrollments::new(Arc::clone(&shared), enrollment),
             channels: InMemoryChannels::new(Arc::clone(&shared), channel),
-            webauthn: InMemoryWebauthnCeremonies::new(Arc::clone(&shared), webauthn),
             cohorts: InMemoryCohorts::new(),
             clock,
         }
@@ -1248,10 +1132,6 @@ impl super::conformance::Harness for InMemoryStores {
 
     fn channels(&self) -> &dyn ChannelStore {
         &self.channels
-    }
-
-    fn webauthn(&self) -> &dyn WebauthnCeremonyStore {
-        &self.webauthn
     }
 
     fn advance(&self, by: SignedDuration) -> StoreFuture<'_, ()> {
@@ -1318,9 +1198,6 @@ mod tests {
         relaying_requires_a_live_channel,
         relayed_payloads_drain_in_order_and_by_direction,
         closing_a_channel_drops_both_mailboxes,
-        webauthn_registration_and_authentication_do_not_collide,
-        a_webauthn_ceremony_is_consumed_by_its_finish,
-        a_webauthn_ceremony_expires_with_its_store,
     }
 
     /// The whole suite, in one pass on one harness.
@@ -1349,10 +1226,6 @@ mod tests {
             ENROLLMENT_CODE_TTL
         );
         assert_eq!(ChannelStore::ttl(&stores.channels), RELAY_CHANNEL_TTL);
-        assert_eq!(
-            WebauthnCeremonyStore::ttl(&stores.webauthn),
-            WEBAUTHN_CEREMONY_TTL
-        );
         assert_ne!(
             CHALLENGE_TTL, ENROLLMENT_CODE_TTL,
             "a ceremony's window belongs to what it is; if these ever coincide by accident \

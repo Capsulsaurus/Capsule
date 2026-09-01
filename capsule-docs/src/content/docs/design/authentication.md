@@ -10,12 +10,12 @@ Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validat
 
 ## Design Principles
 
-- **Two first-class auth paths.** Local auth (password + TOTP, passkeys) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth is the default path a deployment gets without configuring an IdP.
+- **Two first-class auth paths.** Local auth (password, with TOTP as a second factor) and OpenID Connect are both first-class login methods — see [Choosing an Auth Path](#choosing-an-auth-path). The OIDC relying-party implementation is slice `S-N1`; local auth is the default path a deployment gets without configuring an IdP.
 - **Cryptographic binding.** The user's identity is cryptographically bound to their master key. The server never sees the plaintext master key.
 
 ## Account Types
 
-- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP, passkeys, or OIDC ([Choosing an Auth Path](#choosing-an-auth-path)); the login credential authenticates the session while the master key stays cryptographically bound to the user.
+- **Registered accounts.** Associated with a unique identity and have their own master key. Authenticated using password+TOTP or OIDC ([Choosing an Auth Path](#choosing-an-auth-path)); the login credential authenticates the session while the master key stays cryptographically bound to the user.
 - **Delegated/sponsored accounts.** Encrypted with keys derived from a registered account's master key. They do not have their own identity and rely on the registered account for authentication and key management. Owners of the sponsored account have full access. See [Cryptography — Keys: Delegated/Sponsored accounts](/design/cryptography/keys/#delegatedsponsored-accounts) for the key derivation.
 - **Non-registered accounts.** No associated identity or master key — used for [share links](/design/share-links/), where the decryption keys are encapsulated around the secret stored in the link, and for [web-upload links](/design/web-upload/), where a guest seals contributions to a link-scoped key without read access.
 
@@ -30,6 +30,17 @@ Planned in `capsule-api::auth`: OIDC handling, the session ledger, claim validat
 - **The status is `200`, where the retired surface answered `201`.** A `201` must say *where* the new thing lives, and this server exposes no URL for an account. Inventing one to satisfy a status would be inventing a surface.
 
 **Deliberately not ported from the retired surface:** `POST /v1/auth/validate` — a token-introspection endpoint is what a server *without* a session ledger needs, and [`S-C48`](#explicit-revocation) put the ledger on every request, so validation **is** the request — and password reset, which on an end-to-end-encrypted account is not a password reset at all: the server cannot re-wrap a master key it has never seen, and the real recovery path is the [escrow blob](/design/backup-recovery/). Both are gone rather than owed.
+
+### Passkeys Are Not in v1
+
+Slice `S-C56`, and it is a **removal decided on evidence** rather than a deferral for want of time. The retired surface had six passkey operations and none of them could work:
+
+- They were Salvo `#[handler]`s rather than `#[endpoint]`s, so they appeared in **no** OpenAPI document and no generated client could reach them.
+- The authentication ceremony was started with an **empty** allow-list and `set_allowed_credentials` was never called, so `webauthn-rs` answered `CredentialNotFound` to every assertion. Not a bypass — simply an authentication that could never succeed.
+- Registration stored the credential's serialized *public key*, not the credential, so nothing it wrote could be turned back into something authentication could use.
+- The code said so: *"Using allow_credentials requires constructing `webauthn_rs::prelude::Passkey`, which currently presents integration challenges … For now, an empty list allows any credential for this RP."*
+
+So there was nothing to port, and shipping passkeys means building them. That is a slice of its own, and it carries a real cost worth naming here: `webauthn-rs` is the **only** reason `openssl` is in the dependency tree — its attestation-CA parser links it. With passkeys deferred, the `rustls`-only rule in [Dependencies](/design/dependencies/) holds with no exception at all, and the rebuild reopens both questions together.
 
 ### The Second Factor
 
@@ -61,7 +72,7 @@ Slice `S-C54`. Three operations, where the retired surface had one handler that 
 
 Both paths mint the same Capsule [sessions](#session-and-access-tokens) and bind identity to the master key the same way; the difference is who verifies the login credential (decision 2026-07-12):
 
-- **Local auth** (password + TOTP, or passkeys) — recommended for personal and self-hosted single-user or household servers: no external dependency, the server is self-contained.
+- **Local auth** (password, with TOTP as a second factor) — recommended for personal and self-hosted single-user or household servers: no external dependency, the server is self-contained.
 - **OIDC** (external identity provider, authorization-code + PKCE) — recommended for enterprise and organizational deployments that already run an IdP, and for anyone wanting SSO. Capsule is a relying party only; account lifecycle policy lives at the IdP.
 
 A deployment may enable either or both. Neither path weakens the cryptographic binding: the IdP (or password) authenticates the *session*; the master key never derives from, and is never visible to, the credential verifier.
@@ -135,7 +146,7 @@ A session that has not been used for **180 days** (default; deployment-configura
 
 Every session token has a **hard expiry of 365 days** from issuance (default; deployment-configurable). The hard expiry **does not reset** on use — it is the upper bound on the lifetime of a token regardless of activity.
 
-The rationale is the malicious-keyholder class from [Threat Model — Client Class Taxonomy](/design/threat-model/#client-class-taxonomy): an attacker who silently exfiltrates a session token from a device the user actively uses would otherwise have an indefinite window of access. The hard expiry caps that window at one year; the user re-authenticates (passkey / password+TOTP) at most once a year per device — acceptable friction in exchange for a bounded leak-window.
+The rationale is the malicious-keyholder class from [Threat Model — Client Class Taxonomy](/design/threat-model/#client-class-taxonomy): an attacker who silently exfiltrates a session token from a device the user actively uses would otherwise have an indefinite window of access. The hard expiry caps that window at one year; the user re-authenticates (password + TOTP) at most once a year per device — acceptable friction in exchange for a bounded leak-window.
 
 Both expiries are enforced server-side at access-token issuance; the session token itself is not invalidated for any other reason than these expiries or an explicit revoke.
 
