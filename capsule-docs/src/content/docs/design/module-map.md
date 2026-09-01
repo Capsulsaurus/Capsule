@@ -80,6 +80,7 @@ separate typed ports; no generic CAS, transfer, or TTL library is planned.
 | Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work |
 | LQIP | Capsule imports Chromahash directly after v1; Rawshift has no Chromahash responsibility |
 | Import commit | Capsule applies privacy policy, creates sidecars/provenance, encrypts, signs, and commits normalized media results |
+| Alerts | Alert classes and trigger predicates live in `capsule-core::notify` (planned) so every platform evaluates one decision function; scheduling and presentation are native per client. See [Notifications](/design/notifications/) |
 
 ## External Dependency Register
 

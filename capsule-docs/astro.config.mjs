@@ -126,6 +126,7 @@ export default defineConfig({
                                 { slug: 'design/organization' },
                                 { slug: 'design/clients' },
                                 { slug: 'design/local-gallery' },
+                                { slug: 'design/notifications' },
                                 { slug: 'design/i18n' },
                                 { slug: 'design/ai' },
                             ],
