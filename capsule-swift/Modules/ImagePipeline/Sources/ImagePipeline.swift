@@ -1,7 +1,7 @@
 import AssetKit
 import CapsuleFoundation
+import CoreGraphics
 import Photos
-import UIKit
 
 /// Loads and prefetches the thumbnails the photo grid renders.
 ///
@@ -10,7 +10,7 @@ import UIKit
 public protocol ThumbnailProvider: Sendable {
     /// A thumbnail for `asset` decoded to fill `pixelSize`, or `nil` if it
     /// cannot be produced. `pixelSize` is in device pixels.
-    func thumbnail(for asset: Asset, pixelSize: CGSize) async -> UIImage?
+    func thumbnail(for asset: Asset, pixelSize: CGSize) async -> PlatformImage?
 
     /// Warm the cache for assets about to scroll on screen.
     func beginPrefetching(for assets: [Asset], pixelSize: CGSize) async
@@ -39,11 +39,12 @@ public actor ImagePipeline: ThumbnailProvider {
     private let cachingManager = PHCachingImageManager()
     private var resolvedAssets: [String: PHAsset] = [:]
 
-    public init() {
-        cachingManager.allowsCachingHighQualityImages = false
-    }
+    /// No configuration: `allowsCachingHighQualityImages` used to be set here,
+    /// but the 26.0 SDKs deprecate it on every platform with "this property is
+    /// unused and will be removed", so setting it only produced a warning.
+    public init() {}
 
-    public func thumbnail(for asset: Asset, pixelSize: CGSize) async -> UIImage? {
+    public func thumbnail(for asset: Asset, pixelSize: CGSize) async -> PlatformImage? {
         let signposter = CapsuleSignpost.imagePipeline
         let interval = signposter.beginInterval("thumbnail")
         defer { signposter.endInterval("thumbnail", interval) }
@@ -79,6 +80,11 @@ public actor ImagePipeline: ThumbnailProvider {
     }
 
     /// Drop all cached thumbnails — invoked by the app under memory pressure.
+    ///
+    /// Only iOS raises that signal: `PlatformLifecycle.memoryWarningNotification`
+    /// is `nil` on macOS, so on the Mac this runs only when something calls it
+    /// explicitly. That is the right trade — a Mac has the headroom, and the
+    /// cache is still bounded by `PHCachingImageManager`'s own policy.
     public func flushCaches() {
         CapsuleLog.imagePipeline.notice("memory pressure — flushing thumbnail caches")
         cachingManager.stopCachingImagesForAllAssets()
@@ -87,7 +93,12 @@ public actor ImagePipeline: ThumbnailProvider {
 
     // MARK: Private
 
-    private func requestImage(_ phAsset: PHAsset, pixelSize: CGSize) async -> UIImage? {
+    /// Bridge PhotoKit's callback-style request into `async`.
+    ///
+    /// `requestImage` is declared once per platform in `PHImageManager.h` — the
+    /// handler is given a `UIImage` on iOS and an `NSImage` on macOS — so the
+    /// result already lands as ``PlatformImage`` on both without a branch here.
+    private func requestImage(_ phAsset: PHAsset, pixelSize: CGSize) async -> PlatformImage? {
         await withCheckedContinuation { continuation in
             cachingManager.requestImage(
                 for: phAsset,

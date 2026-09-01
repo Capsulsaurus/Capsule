@@ -71,17 +71,18 @@ struct MockCatalogTests {
     @Test("expiredTrash selects only assets deleted before the cutoff")
     func expiredTrashCutoff() async throws {
         let catalog = MockCatalog()
-        await catalog.setNow(10_000)
+        await catalog.setNow(10000)
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "fresh"))
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "stale"))
-        await catalog.softDeleteAsset(id: "fresh", deletedAt: 9_000)
-        await catalog.softDeleteAsset(id: "stale", deletedAt: 1_000)
+        await catalog.softDeleteAsset(id: "fresh", deletedAt: 9000)
+        await catalog.softDeleteAsset(id: "stale", deletedAt: 1000)
 
-        let expired = await catalog.expiredTrash(olderThanSeconds: 5_000)
+        let expired = await catalog.expiredTrash(olderThanSeconds: 5000)
         #expect(expired.map(\.id) == ["stale"])
     }
 
     // MARK: Gated views (SR1)
+
     //
     // These mirror the core's `gated_hidden_query_refuses_without_grant_and_serves_with_one`
     // and `locked_until_opened_then_refuses_after_grace_expiry`. The mock is only useful to
@@ -93,7 +94,7 @@ struct MockCatalogTests {
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "gone"))
         await catalog.softDeleteAsset(id: "gone", deletedAt: 100)
 
-        await #expect(throws: CatalogError.ViewLocked) {
+        await #expect(throws: CatalogError.viewLocked) {
             try await catalog.trash(offset: 0, limit: 10)
         }
 
@@ -104,13 +105,13 @@ struct MockCatalogTests {
     @Test("a refused challenge mints nothing and leaves the view locked")
     func refusedChallengeMintsNothing() async throws {
         let catalog = MockCatalog()
-        let gate = MockLocalAuthGate(refusingWith: .Cancelled)
+        let gate = MockLocalAuthGate(refusingWith: .cancelled)
 
-        await #expect(throws: LocalAuthError.Cancelled) {
+        await #expect(throws: LocalAuthError.cancelled) {
             try await catalog.unlockView(.recentlyDeleted, using: gate)
         }
         #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
-        await #expect(throws: CatalogError.ViewLocked) {
+        await #expect(throws: CatalogError.viewLocked) {
             try await catalog.trash(offset: 0, limit: 10)
         }
     }
@@ -122,7 +123,7 @@ struct MockCatalogTests {
 
         #expect(await catalog.isViewUnlocked(.hidden))
         #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
-        await #expect(throws: CatalogError.ViewLocked) {
+        await #expect(throws: CatalogError.viewLocked) {
             try await catalog.trash(offset: 0, limit: 10)
         }
     }
@@ -131,19 +132,19 @@ struct MockCatalogTests {
     func grantExpiresAfterGrace() async throws {
         let catalog = MockCatalog()
         let gate = MockLocalAuthGate()
-        await catalog.setNow(1_000)
+        await catalog.setNow(1000)
 
         try await catalog.unlockView(.recentlyDeleted, using: gate)
         #expect(gate.challengeCount == 1)
 
         // Re-entering inside the window reuses the grant — no second prompt — and
         // does not slide the window forward: it runs from the original mint.
-        await catalog.setNow(1_000 + MockCatalog.graceSeconds - 1)
+        await catalog.setNow(1000 + MockCatalog.graceSeconds - 1)
         try await catalog.unlockView(.recentlyDeleted, using: gate)
         #expect(gate.challengeCount == 1)
         #expect(await catalog.isViewUnlocked(.recentlyDeleted))
 
-        await catalog.setNow(1_000 + MockCatalog.graceSeconds)
+        await catalog.setNow(1000 + MockCatalog.graceSeconds)
         #expect(await catalog.isViewUnlocked(.recentlyDeleted) == false)
         try await catalog.unlockView(.recentlyDeleted, using: gate)
         #expect(gate.challengeCount == 2)
@@ -166,11 +167,11 @@ struct MockCatalogTests {
     @Test("the retention sweep stays ungated")
     func retentionSweepStaysUngated() async throws {
         let catalog = MockCatalog()
-        await catalog.setNow(10_000)
+        await catalog.setNow(10000)
         try await catalog.insertAsset(Fixtures.catalogAsset(id: "stale"))
-        await catalog.softDeleteAsset(id: "stale", deletedAt: 1_000)
+        await catalog.softDeleteAsset(id: "stale", deletedAt: 1000)
 
         // No grant taken: the unattended purge job has no user to authenticate.
-        #expect(await catalog.expiredTrash(olderThanSeconds: 5_000).map(\.id) == ["stale"])
+        #expect(await catalog.expiredTrash(olderThanSeconds: 5000).map(\.id) == ["stale"])
     }
 }

@@ -69,10 +69,10 @@ struct ExportTests {
 
     @Test("disk space buckets by threshold")
     func diskBuckets() {
-        #expect(DiskSpaceBucket.bucket(forBytes: 100_000_000) == .critical)
-        #expect(DiskSpaceBucket.bucket(forBytes: 1_000_000_000) == .low)
-        #expect(DiskSpaceBucket.bucket(forBytes: 5_000_000_000) == .moderate)
-        #expect(DiskSpaceBucket.bucket(forBytes: 50_000_000_000) == .ample)
+        #expect(DiskSpaceBucket.bucket(forBytes: 100000000) == .critical)
+        #expect(DiskSpaceBucket.bucket(forBytes: 1000000000) == .low)
+        #expect(DiskSpaceBucket.bucket(forBytes: 5000000000) == .moderate)
+        #expect(DiskSpaceBucket.bucket(forBytes: 50000000000) == .ample)
     }
 
     @Test("bundle round-trips through Codable")

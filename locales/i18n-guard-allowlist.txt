@@ -27,6 +27,10 @@
 #
 # Keep this list SHORT and justify each entry with a comment above it.
 
+# `PHAssetResource` exposes no public byte count, so its size is read by KVC.
+# `forKey:` is a Key-Value Coding key here, not a catalog key — the guard matches
+# the `…Key:` argument label and cannot tell the two apart.
+capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
 
 # `capsule demo` — the offline showcase command (`S-A10`). Every one of these is a
 # terse `eyre!` step label ("shamir: {e}") written for whoever is watching the demo run,

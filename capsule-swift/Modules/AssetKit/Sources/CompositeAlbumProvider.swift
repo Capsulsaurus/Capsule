@@ -30,7 +30,7 @@ public final class CompositeAlbumProvider: AlbumProvider {
     public func createUserAlbum(named name: String) async throws {
         var created = false
         for provider in providers
-            where (try? await provider.createUserAlbum(named: name)) != nil {
+            where await (try? provider.createUserAlbum(named: name)) != nil {
             created = true
         }
         if !created {

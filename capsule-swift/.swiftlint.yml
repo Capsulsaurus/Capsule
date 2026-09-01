@@ -44,6 +44,16 @@ opt_in_rules:
   - weak_delegate
   - yoda_condition
 
+# `master` is this project's own cryptographic vocabulary, not the master/slave
+# usage the rule exists to catch: the master key is the root of the key chain
+# (`capsule-core::crypto::keys::MasterKey`), and master-key *proof* is the
+# specific authentication the docs require for `revoke_all_sessions`. Renaming it
+# in Swift alone would put the client out of step with the design docs, the Rust
+# core, and the wire contract — so the term is allowed, and only here.
+inclusive_language:
+  override_allowed_terms:
+    - master
+
 disabled_rules:
   # swiftformat owns line wrapping (--maxwidth none); avoid a turf war.
   - line_length
@@ -53,3 +63,38 @@ disabled_rules:
 # collection literals; require the same here so the two tools agree.
 trailing_comma:
   mandatory_comma: true
+
+# The platform boundary. UIKit and AppKit may be imported only inside a directory
+# named `Platform/` or `PlatformCollection/` — the audited islands where the two
+# frameworks are allowed to differ:
+#
+#   CapsuleFoundation/Sources/Platform/        the type shim (PlatformImage,
+#                                              PlatformColor, PlatformEnvironment,
+#                                              PlatformLifecycle)
+#   CapsuleUI/Sources/PlatformCollection/      the collection-view island every
+#                                              grid is built on
+#   <FeatureModule>/Sources/Platform/          per-feature chrome shims, e.g. the
+#                                              no-op-on-Mac navigation modifiers
+#
+# Everywhere else the app is SwiftUI written once for iPhone, iPad, and Mac, and
+# feature code branches on capability (`PlatformEnvironment.hasMenuBar`) rather
+# than on `#if os(...)`.
+#
+# Enforced as a lint rule rather than a convention because it is the single thing
+# that decides whether a new screen is portable by default or quietly iOS-only.
+# A view body that needs a platform difference gets a `Platform/` modifier, not an
+# inline `#if` — which keeps the difference named, reviewable, and in one place.
+custom_rules:
+  no_platform_ui_import:
+    name: "Platform UI import outside the shim"
+    regex: '^\s*import\s+(UIKit|AppKit)\b'
+    match_kinds:
+      - keyword
+      - identifier
+    excluded: ".*/(Platform|PlatformCollection)/.*"
+    message: >-
+      Import CapsuleFoundation and use PlatformImage / PlatformEnvironment instead.
+      If this genuinely needs a platform difference, move it into a `Platform/`
+      directory in this module so the difference is named and reviewable, rather
+      than an inline `#if os(...)` in a view body.
+    severity: error
