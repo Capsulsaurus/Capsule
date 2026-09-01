@@ -42,9 +42,20 @@ Session TTL, the ≥ 1-hour survival floor, and pressure-discard semantics are s
 - **14.** Recomputed ciphertext hash == declared `hash`. Otherwise `FailedProcessing` + corruption error.
 - **15.** Manifest envelope re-validated (rerun 1–8) inside the finalization transaction.
 
-### On non-upload writes (lifecycle action manifest, metadata-update, derivative-add/replace, trash-restore)
+### In the index critical section (every manifest write, upload or lifecycle)
 
-These checks run at the single lifecycle-write surface, `POST /v1/albums/{album_id}/ops`, owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface) (transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map); slice `S-C16`).
+These three are grouped by **where they are enforced**, not by which request carries them, and the
+distinction is load-bearing. They run inside the index's critical section — the one that re-points
+the roles and mints the sequence number — for a lifecycle write at `POST /v1/albums/{album_id}/ops`
+(owned by [Authorization — The Lifecycle Write Surface](/design/authorization/#the-lifecycle-write-surface),
+transport row in [API Surfaces](/design/api-surfaces/#surface--transport-map), slice `S-C16`) **and
+equally for a `replace` arriving over the upload protocol**.
+
+Filing them under "non-upload writes" was a phase label describing the common case, and it made
+[Upload Protocol — `create` and `replace`](/design/import/upload-protocol/#what-gets-uploaded) look
+like it was claiming an exception when it was describing the rule. Enforcing them at the gate
+instead of in the critical section would let two concurrent replaces both pass and double-apply —
+reintroducing the stale revival that 17 exists to catch, in the code enforcing it.
 
 - **16.** `action` is in the closed enum. Otherwise `400`.
 - **17.** `prior_provenance_hash` equals the last accepted manifest's content hash for this `asset_id`. Otherwise `409` (stale-revival).
