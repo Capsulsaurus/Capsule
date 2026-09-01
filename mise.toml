@@ -57,11 +57,11 @@ depends = ["lint-rust", "lint-web", "lint-docs", "lint-kotlin", "lint-vision", "
 
 [tasks.lint-check]
 description = "Verify lints, every toolchain"
-depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md"]
+depends = ["lint-check-rust", "lint-check-web", "lint-check-docs", "lint-check-kotlin", "lint-check-vision", "lint-check-swift", "lint-check-md", "check-docs-truth"]
 
 [tasks.test]
-description = "Run tests (rust + web + kotlin)"
-depends = ["test-rust", "test-web", "test-kotlin"]
+description = "Run tests (rust + web + kotlin + docs)"
+depends = ["test-rust", "test-web", "test-kotlin", "test-docs"]
 
 [tasks.test-coverage]
 description = "Coverage report (rust)"
@@ -106,7 +106,7 @@ depends = ["format-check-web", "lint-check-web", "test-web", "build-web"]
 
 [tasks.check-docs]
 description = "Docs CI gate"
-depends = ["format-check-docs", "lint-check-docs", "build-docs"]
+depends = ["format-check-docs", "lint-check-docs", "test-docs", "build-docs"]
 
 [tasks.check-vision]
 description = "Vision CI gate"
@@ -366,9 +366,23 @@ run = "bunx biome check --write ."
 dir = "capsule-docs"
 run = "bunx biome check ."
 
+[tasks.test-docs]
+dir = "capsule-docs"
+run = "bun run test"
+
 [tasks.build-docs]
 dir = "capsule-docs"
 run = "bun run build"
+
+# Deliberately NOT a dependency of `check-docs`, and not part of `check-rust`.
+# `check-docs`'s expensive step is the Astro build, which this check does not
+# need and should not trigger. `check-rust`'s CI paths filter excludes
+# `capsule-docs/**`, so a docs-only pull request would skip it there. It gets
+# its own CI job, whose filter covers both the prose and what the prose links
+# to. Runs on `node:` builtins alone: no install step.
+[tasks.check-docs-truth]
+description = "Prove every file, route, and anchor the docs name actually exists"
+run = "bun capsule-docs/scripts/docs-truth.mjs"
 
 # ── Kotlin ───────────────────────────────────────────────────────────────────
 

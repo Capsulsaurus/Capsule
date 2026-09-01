@@ -28,6 +28,7 @@ jobs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
       docs: ${{ steps.filter.outputs.docs }}
+      docs-truth: ${{ steps.filter.outputs.docs-truth }}
       vision: ${{ steps.filter.outputs.vision }}
       markdown: ${{ steps.filter.outputs.markdown }}
       kotlin: ${{ steps.filter.outputs.kotlin }}
@@ -65,6 +66,23 @@ jobs:
               - 'capsule-docs/**'
               - 'mise.toml'
               - 'mise-tasks/**'
+              - '.github/workflows/ci.yml'
+            # Both sides this gate cross-references: the prose, and the things
+            # the prose links to. Today those are Markdown, the two root legal
+            # files, and `astro.config.mjs` (which supplies the published origin
+            # that site URLs are resolved against). It grows to the crate trees
+            # and `capsule-server/openapi.json` when the endpoint and module
+            # census checks land — not before, so the filter keeps describing
+            # what the gate actually reads.
+            docs-truth:
+              - 'capsule-docs/scripts/**'
+              - 'capsule-docs/src/content/docs/**'
+              - 'capsule-docs/astro.config.mjs'
+              - '**/*.md'
+              - '**/*.mdx'
+              - 'LICENSE'
+              - 'NOTICE'
+              - 'mise.toml'
               - '.github/workflows/ci.yml'
             vision:
               - 'capsule-vision/**'
@@ -269,7 +287,7 @@ jobs:
         run: mise run check-web
 
   docs:
-    name: Docs (format + lint + build)
+    name: Docs (format + lint + test + build)
     needs: changes
     if: ${{ needs.changes.outputs.docs == 'true' }}
     runs-on: ubuntu-latest
@@ -292,8 +310,28 @@ jobs:
         uses: jdx/mise-action@v2
         with:
           install: false
-      - name: Check (format + lint + build)
+      - name: Check (format + lint + test + build)
         run: mise run check-docs
+
+  # No `bun install` step: the scripts import only `node:` builtins, so this job
+  # needs a runtime and nothing else. That is deliberate, not an omission.
+  docs-truth:
+    name: Docs truth (names resolve)
+    needs: changes
+    if: ${{ needs.changes.outputs.docs-truth == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Set up mise (task runner)
+        uses: jdx/mise-action@v2
+        with:
+          install: false
+      - name: Check (every file, route, and anchor the docs name)
+        run: mise run check-docs-truth
 
   vision:
     name: Vision (format + lint)
@@ -369,14 +407,14 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, vision, markdown, kotlin]
+    needs: [changes, commit-lint, rust, rust-test, rust-cross, web, docs, docs-truth, vision, markdown, kotlin]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded
         run: |
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
-                   "${{ needs.docs.result }}" "${{ needs.vision.result }}" \
+                   "${{ needs.docs.result }}" "${{ needs.docs-truth.result }}" "${{ needs.vision.result }}" \
                    "${{ needs.markdown.result }}" "${{ needs.kotlin.result }}"; do
             if [ "$r" = "failure" ] || [ "$r" = "cancelled" ]; then
               echo "A required job did not pass (result: $r)."
