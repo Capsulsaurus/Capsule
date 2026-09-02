@@ -246,6 +246,27 @@ pub struct DerivativeCore {
     /// Which kind of derivative.
     pub role: DerivativeRole,
     /// MIME/format string, e.g. `image/avif` or `embedding/mobileclip-b`.
+    ///
+    /// **A `String`, and deliberately so, even though the still formats are a closed set.**
+    /// Two reasons, and both are about keeping a *policy* rejection from becoming a *parse*
+    /// failure:
+    ///
+    /// - the same field carries the embedding-role grammar `embedding/{model_id}`
+    ///   ([`crate::ml`]), which no still-format enum can model, so a single typed field would
+    ///   have to be an enum over both grammars;
+    /// - a `#[serde(try_from = "String")]` newtype would make an *older* manifest naming a
+    ///   future codec fail at deserialisation — before its signature is examined at all —
+    ///   turning "this receiver does not recognise that format" into "this manifest is
+    ///   unreadable".
+    ///
+    /// The closed set is enforced at the two boundaries instead: production, because
+    /// `media::generate_still_derivatives` only ever writes
+    /// `media::DerivativeFormat::mime`; and verification, via `media::verify_still_format`,
+    /// which rejects a still-role manifest whose value is outside the set and leaves the
+    /// embedding-role grammar alone. Both live behind the `media` feature, which is where the
+    /// tier table's format column belongs; this field stays feature-independent because
+    /// `capsule-server` and `capsule-wasm` must be able to *read* a manifest without linking a
+    /// codec. SSoT: [Thumbnails](https://docs/design/thumbnails/).
     pub format: String,
     /// Content-address digest over the derivative ciphertext.
     pub ciphertext_hash: Hash32,

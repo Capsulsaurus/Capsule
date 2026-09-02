@@ -25,7 +25,14 @@ required-features = ["ffi-bindgen"]
 # `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
-native = ["dep:rusqlite", "dep:sqlite-vec", "mls"]
+native = ["dep:rusqlite", "dep:sqlite-vec", "mls", "media"]
+# `media` links the still-image decode/encode stack (`capsule_core::media`, slices `S-B1`/`S-B13`)
+# over `rawshift-image`. Implied by `native`, so the CLI, the tests and the mobile FFI all carry
+# decoders; **excluded** from the `wasm32-unknown-unknown` sealing build (`--no-default-features`)
+# because the WebP backend is a vendored C library built through `cc` and the whole stack is
+# irrelevant to sealing. `capsule_core::lqip` stays unconditional and is NOT behind this feature —
+# a placeholder must not depend on which client imported the photo (slice `S-B14`).
+media = ["dep:rawshift-image"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -77,6 +84,34 @@ chromahash = { version = "0.7.1", default-features = false, features = ["simd"] 
 indexmap = { workspace = true }
 jiff = { workspace = true }
 kamadak-exif = "0.5"
+# Still-image decode/encode for `capsule_core::media` (`media` feature). A **registry**
+# dependency, not the pinned `rawshift/` submodule, which is an uninitialised newer
+# v1-in-progress tree and is not a workspace member. Depended on directly rather than through
+# the `rawshift` facade because only the per-crate dependency gives per-format Cargo control
+# (`rawshift-image`'s own docs say so), and the format set is a licence + build-host decision:
+#
+# - `jpeg` / `png`  — pure-Rust zune decode **and** encode; the two formats every library holds.
+# - `jxl-decode`    — jxl-oxide, pure Rust. Decode only: the pure-Rust encoder backend is
+#                     `zune-jpegxl`'s lossless `JxlSimpleEncoder`, so a q=50 thumbnail is not
+#                     expressible without C libjxl (`bindgen` + `pkg-config`).
+# - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
+# - `webp`          — the derivative encoder that ships first (`libwebp-sys` 0.14.4, MIT,
+#                     vendored static libwebp through `cc` with pre-generated bindings — the same
+#                     class of C build `rusqlite/bundled` already performs).
+#
+# Deliberately absent: `heic` (system libheif), `avif` (image 0.25's `avif-native` → system
+# libdav1d for decode; `ravif` → `rav1e/asm` → nasm on every x86_64 build host for encode), `svg`
+# and the RAW families (`experimental`; CR3 pixel decode unimplemented upstream). Each is a typed
+# `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
+# allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
+rawshift-image = { version = "0.1.1", default-features = false, features = [
+    "jpeg",
+    "png",
+    "jxl-decode",
+    "tiff-decode",
+    "gif-decode",
+    "webp",
+], optional = true }
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }

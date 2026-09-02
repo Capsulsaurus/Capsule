@@ -54,6 +54,13 @@ pub mod import;
 pub mod library;
 #[cfg(feature = "native")]
 pub mod lifecycle;
+/// Still decode, orientation, metadata normalisation and derivative generation over
+/// `rawshift-image` (`media` feature, implied by `native`; slices `S-B1`/`S-B13`). Feature-gated
+/// rather than `native`-gated so the codec stack is one manifest edit away from being dropped
+/// from a size-constrained build, and so the `wasm32-unknown-unknown` sealing surface provably
+/// does not link it. See [`media`].
+#[cfg(feature = "media")]
+pub mod media;
 #[cfg(feature = "native")]
 pub mod metadata;
 #[cfg(feature = "native")]
