@@ -7,9 +7,9 @@
         "dev": "bun scripts/gen-reference.mjs && astro dev",
         "start": "bun scripts/gen-reference.mjs && astro dev",
         "build": "bun scripts/gen-reference.mjs && astro build",
-        "preview": "wrangler pages dev ./dist",
+        "preview": "bun run build && wrangler pages dev ./dist",
         "astro": "astro",
-        "deploy": "wrangler pages deploy ./dist",
+        "deploy": "bun run build && wrangler pages deploy ./dist",
         "test": "vitest run"
     },
     "dependencies": {

@@ -70,7 +70,7 @@ export function walkFiles(root, predicate) {
                 const relDir = `${relative(root, abs).split(sep).join('/')}/`;
                 if (
                     !SKIP_DIRS.has(entry.name) &&
-                    !SKIP_PREFIXES.includes(relDir)
+                    !SKIP_PREFIXES.some((prefix) => relDir.startsWith(prefix))
                 ) {
                     visit(abs);
                 }

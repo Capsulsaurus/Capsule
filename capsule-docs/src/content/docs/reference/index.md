@@ -19,6 +19,7 @@ generated page is wrong, the annotation in the source is wrong.
 
 | Surface | Overview | Generated from | Kept current by |
 | --- | --- | --- | --- |
+| REST | [REST API](/reference/api/) | `capsule-server/openapi.json` | `mise run openapi-check-kynos` |
 | Command line | [CLI](/reference/cli/) | `capsule-cli/cli-surface.json` | `mise run cli-surface-check` |
 
 ## Not published yet

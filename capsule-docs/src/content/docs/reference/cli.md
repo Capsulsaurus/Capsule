@@ -41,8 +41,8 @@ A library is opened with a passphrase. Each command that opens one accepts
 - The behaviour of the import pipeline is [Import Pipeline](/design/import/pipeline/); what
   `capsule push` speaks is the [Upload Protocol](/design/import/upload-protocol/), and what
   `capsule sync` drains is [Download & Sync](/design/import/download-sync/).
-- The server endpoints behind the networked commands are mapped in
-  [API Surfaces](/design/api-surfaces/#surface--transport-map).
+- The server endpoints behind the networked commands are the
+  [REST API](/reference/api/) reference.
 - Terminal output is localized through the catalogs described in
   [Internationalization](/design/i18n/). Help text is not yet: the command tree this reference
   is generated from is English, deliberately and by pinning, so the artifact cannot vary with

@@ -1,6 +1,6 @@
 {
   "about": "A command line interface for Capsule - the photo management platform",
-  "long_about": "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections",
+  "long_about": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
   "name": "capsule",
   "schema": 1,
   "subcommands": [

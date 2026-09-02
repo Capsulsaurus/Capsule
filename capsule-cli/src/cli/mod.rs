@@ -50,7 +50,11 @@ const COMMAND_TREE_SCHEMA: u32 = 1;
 #[command(name = "capsule")]
 #[command(about = "A command line interface for Capsule - the photo management platform")]
 #[command(
-    long_about = "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections"
+    // Markdown list markers, not `•`: this text is the root `long_about` in the committed
+    // command tree, and the reference page renders it as prose. Bullet characters soft-wrap
+    // into one run-on paragraph there, while `-` renders as the list it already is. A
+    // terminal shows `-` as a list too, so `capsule --help` loses nothing.
+    long_about = "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections"
 )]
 pub(crate) struct Cli {
     #[command(subcommand)]
