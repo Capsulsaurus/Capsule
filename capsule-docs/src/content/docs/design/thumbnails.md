@@ -29,6 +29,27 @@ Two derivative tiers per photo asset and one preview tier for video assets:
 - **WebP** is the last-resort fallback for the rare client lacking AVIF. We deliberately do not fall back to JPEG — WebP covers everything JPEG would.
 - **H.264 baseline** for video previews — universally decodable, cheap to decode on every platform. AV1 was considered but mobile encode cost is still high in 2026.
 
+:::note[Implementation status — what ships today]
+The table above is the **contract**, not an inventory of what is built. As of `#410`,
+`capsule-core::media` (on `rawshift-image` 0.1.1, behind the `media` feature that `native`
+implies) generates the **thumbnail tier as WebP at q=50** and nothing else. Concretely:
+
+| Tier | Photo formats generated | Missing, and why |
+| --- | --- | --- |
+| Thumbnail | **WebP** q=50, 256 px long edge; or the `original` sentinel when the source is already inside the cap | **JXL** needs C libjxl for a lossy encode — the pure-Rust backend is `zune-jpegxl`'s *lossless* simple encoder. **AVIF** needs `nasm` on every x86_64 build host (`ravif` → `rav1e/asm`). |
+| Preview | — | Blocked with the master codec: a source-resolution *lossless* still would rival the original in size, so the tier is only worth its bytes once a lossy master is available. |
+| Video (either tier) | — | `rawshift-video` is unpublished; slice `S-B5`. |
+
+Decode is JPEG, PNG, JXL, TIFF, GIF and WebP. **HEIC, AVIF and the RAW families are recognised
+and refused**, because their backends need system libheif / libdav1d.
+
+None of this is silent. A format with no codec is a typed
+`media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder
+is recorded on `media::StillDerivatives::deferred` and counted by
+`ImportExecutionSummary::deferred_format_count()` — so the distance between this table and the
+build is a number the import run reports. The remainder is tracked as the `S-B1` follow-up.
+:::
+
 ### Video Previews
 
 The table above stays the SSoT for the video formats; this section only names the implementation seam. Video derivative generation — the first-frame still and the H.264 baseline preview transcode — is its own implementation slice (`S-B5` in the repo-root `SLICES.md`), split from still-image generation (`S-B1`) because transcode brings a distinct toolchain (demux, video decode, H.264/AAC encode) the still path never touches. Both slices sign their outputs identically through the [`DerivativeManifest`](#derivative-provenance) path.
@@ -56,7 +77,7 @@ Four calls carry the whole contract, and the module uses no more than these:
 
 ### Where LQIP Lives
 
-`capsule-core::lqip` — a dedicated module, slice `S-B14` in the repo-root `SLICES.md`. It is deliberately **not** in `capsule-core::media`, which retires to `legacy-review/` with the rest of the decode/encode stack: a placeholder scheme every client depends on cannot live inside something scheduled for teardown. It is equally not in Rawshift — `AGENTS.md` is explicit that Rawshift owns media decoding but must not wrap Chromahash, which Capsule imports directly.
+`capsule-core::lqip` — a dedicated module, slice `S-B14` in the repo-root `SLICES.md`. It is deliberately **not** in `capsule-core::media`, and the reason outlived the teardown that first prompted it: `media` is `native`-only wherever it exists (it links codecs, and since `#410` a vendored C one), so a placeholder scheme every client depends on cannot live inside it and still reach the browser. It is equally not in Rawshift — `AGENTS.md` is explicit that Rawshift owns media decoding but must not wrap Chromahash, which Capsule imports directly. `media` is the module that *produces* the pixels this one hashes; it never owns the hash.
 
 A small Capsule-owned module outside the retiring stack satisfies both constraints at once, and is reachable from all three places a placeholder is produced or consumed: the import pipeline, the native apps through the uniffi FFI, and the browser through `capsule-wasm`. That is the point of a single home — one implementation for every surface, so a photo's placeholder does not depend on which client happened to import it.
 
