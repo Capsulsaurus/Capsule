@@ -388,24 +388,30 @@ mod tests {
     }
 
     #[test]
-    fn selection_never_leaves_the_selectable_set() {
-        // The property the generator relies on: an arm it drops as unreachable is one the
-        // runtime will never ask for. Asserted over the whole boundary range plus the
-        // millions, so the two tables cannot drift apart silently.
+    fn the_selectable_set_is_exactly_what_selection_can_produce() {
+        // The two halves of a row must agree in both directions, because both are load
+        // bearing: `xtask i18n` drops an `<item quantity=…>` the language cannot select,
+        // and the runtime picks the arm. A category listed but unreachable is a dead arm
+        // the generator would emit; a category reachable but unlisted is an arm it would
+        // drop and the runtime would then ask for.
+        //
+        // `other` is the exception in one direction only: Russian never selects it for an
+        // *integer* (its `other` is for fractions), yet every plural resource must carry
+        // it, so it is always listed.
         for language in LANGUAGES {
             let selectable = selectable(language).expect("a shipped language has rules");
             assert!(selectable.contains(&Category::Other), "{language}");
-            let mut sorted = selectable.to_vec();
-            sorted.sort_unstable();
-            sorted.dedup();
-            assert_eq!(sorted, selectable, "{language} is not in CLDR order");
-            for n in (0i64..=2000).chain([999_999, 1_000_000, 2_000_000, i64::MAX]) {
-                let picked = category(language, n);
-                assert!(
-                    selectable.contains(&picked),
-                    "{language} selected `{picked}` at n={n}, which it lists as unselectable"
-                );
-            }
+            let mut reachable: Vec<Category> = (0i64..=2000)
+                .chain([999_999, 1_000_000, 2_000_000, i64::MAX])
+                .map(|n| category(language, n))
+                .collect();
+            reachable.push(Category::Other);
+            reachable.sort_unstable();
+            reachable.dedup();
+            assert_eq!(
+                reachable, selectable,
+                "{language}: the rules and the selectable set disagree"
+            );
         }
     }
 

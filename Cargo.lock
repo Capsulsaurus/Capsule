@@ -7232,6 +7232,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "capsule-core",
+ "capsule-i18n",
  "eyre",
  "hex",
  "regex",
