@@ -46,7 +46,7 @@ use super::{
 };
 use crate::blob::ContentAddress;
 use crate::postgres::error::Port;
-use crate::postgres::time::{from_micros, to_micros};
+use crate::postgres::time::{from_micros, stored, to_micros};
 use crate::store::{AlbumId, AssetId, BlobRole, OwnerId, StoreError};
 
 /// Which port is speaking, for every error this adapter raises.
@@ -539,7 +539,10 @@ impl AssetIndex for PostgresAssetIndex {
                 size: blob.size,
             });
             row.blobs.sort();
-            row.updated_at = blob.finalized_at;
+            // Through `stored`, because this row is returned to the caller without being read
+            // back: a `BIGINT` of microseconds cannot carry the nanoseconds `Timestamp` does, so
+            // the untruncated value would differ from what the next `read` produces.
+            row.updated_at = stored(blob.finalized_at);
 
             // The create's provenance blob is the asset's first accepted manifest, so it is the
             // chain the first lifecycle op must name (invariant 17). Set from the record's own
@@ -595,7 +598,7 @@ impl AssetIndex for PostgresAssetIndex {
             // still becomes terminal, so its id cannot be reserved back into life.
             let was_published = row.sync_seq.is_some();
             row.state = AssetState::Tombstoned;
-            row.updated_at = at;
+            row.updated_at = stored(at);
             if was_published {
                 row.sync_seq = Some(mint(&transaction, &row.owner_id).await?);
             }
@@ -765,18 +768,20 @@ impl AssetIndex for PostgresAssetIndex {
                     store: PORT.store,
                     detail: "the album epoch query returned no row".to_owned(),
                 })?;
-            let stored: i64 = epoch
+            let column: i64 = epoch
                 .try_get("", "stored")
                 .map_err(PORT.failing("reading an album's epoch"))?;
-            let stored = sequence_from(stored)?;
-            if op.amk_version < stored {
+            let album_epoch = sequence_from(column)?;
+            if op.amk_version < album_epoch {
                 tracing::info!(
                     asset = %op.asset_id,
-                    stored,
+                    stored = album_epoch,
                     submitted = op.amk_version,
                     "a lifecycle write was refused: the album epoch regresses"
                 );
-                return Ok(OpOutcome::AmkRegressed { stored });
+                return Ok(OpOutcome::AmkRegressed {
+                    stored: album_epoch,
+                });
             }
 
             let mut row = row;
@@ -803,14 +808,14 @@ impl AssetIndex for PostgresAssetIndex {
             row.chain_head = Some(op.manifest_hash);
             row.amk_version = op.amk_version;
             row.retention_until = match op.action {
-                OpAction::Delete => op.retention_until,
+                OpAction::Delete => op.retention_until.map(stored),
                 // Back in the live set: there is no window left to run out.
                 OpAction::TrashRestore => None,
                 OpAction::MetadataUpdate | OpAction::Derivative | OpAction::Replace => {
                     row.retention_until
                 }
             };
-            row.updated_at = op.at;
+            row.updated_at = stored(op.at);
 
             let sync_seq = mint(&transaction, &row.owner_id).await?;
             row.sync_seq = Some(sync_seq);
