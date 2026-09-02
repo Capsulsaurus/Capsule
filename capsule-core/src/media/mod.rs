@@ -60,8 +60,8 @@ pub use self::decode::{
     DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded, guarded,
 };
 pub use self::derivative::{
-    DerivativeContext, DerivativeFormat, DerivativeTier, GeneratedDerivative, StillDerivatives,
-    generate_still_derivatives, verify_still_format,
+    DerivativeContext, DerivativeFormat, DerivativeSealer, DerivativeTier, GeneratedDerivative,
+    SealedDerivative, StillDerivatives, generate_still_derivatives, verify_still_format,
 };
 pub use self::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 pub use self::error::{FormatOp, MediaError};

@@ -173,3 +173,319 @@ fn walk_find(root: &std::path::Path, name: &str) -> bool {
         .filter_map(std::result::Result::ok)
         .any(|e| e.file_name().to_string_lossy() == name)
 }
+
+// ── Derivative blobs cross the network encrypted (S-B1 / encryption.md) ──────
+
+/// A library with one **decodable** asset large enough to earn a real derivative, so the
+/// derivative path is exercised rather than the `original` sentinel.
+///
+/// A 512x384 PNG, built here rather than committed: the repository carries no binary fixtures.
+fn library_with_a_thumbnailed_asset(lib: &TempDir, src: &TempDir) -> (Uuid, Uuid) {
+    use rawshift_image::core::metadata::ImageMetadata;
+    use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
+    use rawshift_image::formats::encode_rgb_image_to_vec;
+    use rawshift_image::formats::export::{
+        CommonEncodeOptions, EncodeOptions, ZunePngEncodeConfig,
+    };
+
+    let (w, h) = (512u32, 384u32);
+    let mut data = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            data.push(((x * 255 / w) as u16) * 257);
+            data.push(((y * 255 / h) as u16) * 257);
+            data.push((((x + y) * 255 / (w + h)) as u16) * 257);
+        }
+    }
+    let frame = rawshift_image::core::image::RgbImage::with_color_space(
+        w,
+        h,
+        data,
+        rawshift_image::core::ColorSpace::Srgb,
+    );
+    let png = encode_rgb_image_to_vec(
+        &frame,
+        &ImageMetadata::default(),
+        &EncodeOptions::PngZune(ZunePngEncodeConfig {
+            common: CommonEncodeOptions {
+                metadata: MetadataEmbedOptions::none(),
+                bit_depth: BitDepth::Eight,
+            },
+            ..ZunePngEncodeConfig::default()
+        }),
+    )
+    .expect("the fixture PNG encodes");
+
+    let img = src.path().join("photo.png");
+    fs::write(&img, &png).unwrap();
+    let mut ws = Workspace::create_with_params(lib.path(), b"passphrase", FAST).unwrap();
+    let album = ws.default_album_id();
+    ws.ensure_album(album, "Imports").unwrap();
+    let asset = ws.import_asset(album, &img).unwrap();
+    (album, asset)
+}
+
+/// The derivative round trip, end to end: the plaintext the library holds is **not** what the
+/// bundle ships, the bundle's bytes content-address to the signed `ciphertext_hash`, and
+/// decrypting them with the manifest's recorded `nonce_prefix` yields the plaintext back.
+///
+/// This is the property the encryption doc states without qualification — "every asset —
+/// original bytes, derivative bytes, metadata blob — is encrypted client-side" — and a thumbnail
+/// is a recognisable low-resolution copy of a private photo, so shipping one in the clear would
+/// hand the server the picture it is not allowed to see.
+#[test]
+fn derivative_blobs_ship_ciphertext_that_decrypts_to_the_bytes_on_disk() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert_eq!(bundle.derivatives.len(), 1, "one encodable format today");
+    let blob = &bundle.derivatives[0];
+    assert_eq!(blob.format, "image/jxl");
+
+    // The plaintext the local gallery paints, straight off disk.
+    let asset = ws.asset(&asset_id).expect("the asset is held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    let stem = asset_id.simple().to_string();
+    let plaintext = fs::read(dir.join(format!("{stem}.thumbnail.jxl"))).unwrap();
+    assert_eq!(
+        &plaintext[..2],
+        b"\xFF\x0A",
+        "the on-disk derivative is a bare JXL codestream"
+    );
+
+    assert_ne!(
+        blob.bytes, plaintext,
+        "what crosses the network is not what sits on disk"
+    );
+    assert_eq!(
+        hash::hash_bytes(&blob.bytes),
+        blob.ciphertext_hash,
+        "the blob's declared address is its own content address"
+    );
+
+    // And that address is the one the *signed* manifest committed to.
+    let bundle_path = dir.join(format!("{stem}.derivatives.cbor"));
+    let manifests: Vec<DerivativeManifest> =
+        cbor::from_slice(&fs::read(&bundle_path).unwrap()).expect("the bundle decodes");
+    let core = &manifests[0].core;
+    assert_eq!(core.ciphertext_hash, blob.ciphertext_hash);
+
+    // The receiver's half: the recorded prefix selects the key and the nonces.
+    let album_keys = ws.album(&asset.album_id).unwrap();
+    let file_key = ws.file_key(
+        album_keys,
+        core.amk_version.unwrap().0,
+        &asset_id,
+        &core.nonce_prefix,
+    );
+    let recovered =
+        stream::decrypt_asset_vec(&file_key, &core.nonce_prefix, &blob.bytes).expect("it opens");
+    assert_eq!(
+        recovered, plaintext,
+        "and it decrypts to exactly the derivative the client holds"
+    );
+}
+
+/// A derivative whose on-disk bytes have been altered no longer re-derives to the address its
+/// manifest signed, so it is skipped rather than shipped. The bundle still carries the original
+/// and its metadata — a stale thumbnail is regenerable, a missing backup is not.
+#[test]
+fn a_tampered_derivative_is_skipped_rather_than_shipped() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let asset = ws.asset(&asset_id).expect("the asset is held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    let path = dir.join(format!("{}.thumbnail.jxl", asset_id.simple()));
+
+    let mut bytes = fs::read(&path).unwrap();
+    let last = bytes.len() - 1;
+    bytes[last] ^= 0x01;
+    fs::write(&path, &bytes).unwrap();
+
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert!(
+        bundle.derivatives.is_empty(),
+        "a derivative that does not match its signed manifest is not uploaded"
+    );
+    assert!(
+        !bundle.ciphertext.is_empty(),
+        "and the original is still shipped — the backup is what must not be lost"
+    );
+}
+
+/// The `original` sentinel carries no bytes **by design**, so the bundle simply has no
+/// derivative blob for that tier — and the skip is not a warning, because an expected absence
+/// logged as a problem is how people learn to ignore warnings.
+#[test]
+fn the_original_sentinel_contributes_no_blob_and_is_not_an_error() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    // The 8x8 JPEG fixture is far inside the 256 px thumbnail cap, so its tier is the sentinel.
+    let (_album, asset_id) = library_with_one_asset(&lib, &src);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert!(
+        bundle.derivatives.is_empty(),
+        "the sentinel references the original blob; there is nothing extra to upload"
+    );
+}
+
+/// Rewrite an asset's derivative bundle with `manifests`, returning the directory it lives in.
+fn rewrite_bundle(lib: &TempDir, ws: &Workspace, asset_id: Uuid, manifests: &[DerivativeManifest]) {
+    let asset = ws.asset(&asset_id).expect("the asset is held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join(format!("{}.derivatives.cbor", asset_id.simple())),
+        cbor::to_canonical_vec(&manifests.to_vec()).unwrap(),
+    )
+    .unwrap();
+}
+
+/// Sign a derivative manifest with the given role and wire `format`, over `ciphertext_hash`.
+fn signed_derivative(
+    asset_id: Uuid,
+    role: DerivativeRole,
+    format: &str,
+    ciphertext_hash: crate::crypto::hash::Hash32,
+) -> DerivativeManifest {
+    use crate::crypto::keys::{AmkVersion, HybridSigningKey};
+    use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
+    use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+
+    let device = HybridSigningKey::from_seed_bytes(&[21; 32], &[22; 32]);
+    let write = HybridSigningKey::from_seed_bytes(&[23; 32], &[24; 32]);
+    DerivativeCore {
+        version: DERIVATIVE_MANIFEST_VERSION.into(),
+        crypto_suite_id: CRYPTO_SUITE_ID,
+        protocol_version: Some(PROTOCOL_VERSION.into()),
+        amk_version: Some(AmkVersion(1)),
+        source_asset_id: asset_id,
+        role,
+        format: format.into(),
+        ciphertext_hash,
+        nonce_prefix: [7, 6, 5, 4, 3, 2, 1],
+        generated_by_device: Uuid::from_u128(0xD1),
+        generated_by_client: "capsule-core/test".into(),
+        model_id: None,
+        model_version: None,
+        generated_at: "2026-09-02T00:00:00Z".into(),
+        prior_provenance_hash: None,
+    }
+    .sign(&device, &write)
+    .expect("signing")
+}
+
+/// **The closed-format rule, at the boundary that ships bytes.** A still-role manifest naming a
+/// format outside the committed set is a structural rejection, so its bytes never reach the
+/// network — even though they are sitting on disk and hash correctly.
+///
+/// The embedding role is deliberately exempt: it writes `embedding/{model_id}` into the same
+/// field, a grammar this set does not model, so it must not be caught in the crossfire.
+#[test]
+fn a_still_role_derivative_outside_the_closed_set_is_skipped() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    // The bytes on disk stay exactly as the import wrote them; only the manifest's format moves.
+    let asset = ws.asset(&asset_id).expect("held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    let plaintext = fs::read(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
+    let album_keys = ws.album(&asset.album_id).unwrap();
+    let file_key = ws.file_key(album_keys, 1, &asset_id, &[7, 6, 5, 4, 3, 2, 1]);
+    let (_, ciphertext) =
+        stream::encrypt_asset_vec_with_prefix(&file_key, [7, 6, 5, 4, 3, 2, 1], &plaintext);
+    let address = hash::hash_bytes(&ciphertext);
+
+    // A recognised format ships...
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[signed_derivative(
+            asset_id,
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            address,
+        )],
+    );
+    assert_eq!(
+        ws.upload_bundle(&asset_id).unwrap().derivatives.len(),
+        1,
+        "a format inside the closed set is uploaded"
+    );
+
+    // ...and an unrecognised one does not, with everything else held equal.
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[signed_derivative(
+            asset_id,
+            DerivativeRole::Thumbnail,
+            "image/future-codec",
+            address,
+        )],
+    );
+    assert!(
+        ws.upload_bundle(&asset_id).unwrap().derivatives.is_empty(),
+        "an unrecognised still format is a structural rejection, not a blob"
+    );
+}
+
+/// A manifest with a **recognised** format and no bytes on disk is a genuine problem and is
+/// skipped, which is what keeps the sentinel's quiet skip from being a blanket amnesty for
+/// missing files.
+#[test]
+fn a_non_sentinel_manifest_with_no_bytes_is_still_skipped() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    let asset = ws.asset(&asset_id).expect("held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    fs::remove_file(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
+
+    assert!(
+        ws.upload_bundle(&asset_id).unwrap().derivatives.is_empty(),
+        "a thumbnail manifest whose bytes have gone is not shipped"
+    );
+}
+
+/// The `capsule import` acceptance case, at the bundle boundary: the bytes a push would send for
+/// the thumbnail tier are **not** the bytes on disk, and their magic differs — the on-disk file
+/// is a bare JXL codestream (`FF 0A`), the wire blob is STREAM ciphertext.
+///
+/// The magic check is the cheap, legible version of the round trip above: it is what someone
+/// eyeballing a packet capture would look for.
+#[test]
+fn the_pushed_thumbnail_is_not_the_jxl_on_disk() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+    let asset = ws.asset(&asset_id).expect("held");
+    let dir = media_dir(lib.path(), asset.capture_utc).join("derivatives");
+    let disk = fs::read(dir.join(format!("{}.thumbnail.jxl", asset_id.simple()))).unwrap();
+    assert_eq!(&disk[..2], b"\xFF\x0A", "on disk: a bare JXL codestream");
+
+    let mut bundle = ws.upload_bundle(&asset_id).unwrap();
+    let blob = bundle.derivatives.remove(0);
+    assert_ne!(
+        &blob.bytes[..2],
+        b"\xFF\x0A",
+        "on the wire: ciphertext, so it does not begin with the JXL magic"
+    );
+    assert_ne!(blob.bytes, disk);
+}

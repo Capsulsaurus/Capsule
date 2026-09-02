@@ -26,13 +26,16 @@ use uuid::Uuid;
 
 use super::{AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
-use crate::crypto::keys::AmkVersion;
+use crate::crypto::encryption::encrypt_asset_rekey;
+use crate::crypto::encryption::stream::AssetEncryption;
+use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::exif::extract::ExifExtract;
 use crate::lqip::Lqip;
 use crate::media::{
-    DecodedImage, DerivativeContext, DerivativeTier, GeneratedDerivative, MediaError,
-    RawshiftDecoder, StillFormat, decode_guarded, generate_still_derivatives,
+    DecodedImage, DerivativeContext, DerivativeSealer, DerivativeTier, GeneratedDerivative,
+    MediaError, RawshiftDecoder, SealedDerivative, StillFormat, decode_guarded,
+    generate_still_derivatives, guarded,
 };
 use crate::sidecar::sidecar_v1::{Dimensions, Lqip as SidecarLqip};
 
@@ -121,12 +124,23 @@ fn classify(error: &MediaError, src: &Path, format: Option<StillFormat>) -> Deri
 /// chromahash consumes the whole frame and band-limits on the read side via `decode_capped`, so
 /// pre-resizing would silently cap fidelity the format can carry ([`crate::lqip`]).
 fn lqip_from(decoded: &DecodedImage, src: &Path) -> Option<SidecarLqip> {
-    match Lqip::encode(
-        decoded.width(),
-        decoded.height(),
-        &decoded.image.rgba,
-        decoded.gamut,
-    ) {
+    // Guarded because `chromahash` is pre-1.0 too and its own `encode` panics on a zero
+    // dimension or a length mismatch. `Lqip::encode` checks both, so this is belt and braces —
+    // but it is what makes the module's "no codec can abort an import" claim true rather than
+    // nearly true.
+    let encoded = guarded("lqip", || {
+        Lqip::encode(
+            decoded.width(),
+            decoded.height(),
+            &decoded.image.rgba,
+            decoded.gamut,
+        )
+        .map_err(|e| MediaError::Decode {
+            format: decoded.format,
+            detail: format!("LQIP encode: {e}"),
+        })
+    });
+    match encoded {
         Ok(lqip) => Some(lqip.to_sidecar()),
         Err(error) => {
             // A decoded frame satisfies both of `encode`'s preconditions by construction, so
@@ -139,6 +153,35 @@ fn lqip_from(decoded: &DecodedImage, src: &Path) -> Option<SidecarLqip> {
             );
             None
         }
+    }
+}
+
+/// The album-key half of derivative generation: `media` produces the bytes, this encrypts them.
+///
+/// One `encrypt_asset_rekey` per derivative under the **source asset's** `file_id` and the
+/// album's current AMK, with a fresh CSPRNG nonce prefix each time — so every derivative of an
+/// asset gets its own file key, per the encryption doc's per-file key derivation. The ciphertext
+/// is deliberately dropped: the client keeps the plaintext derivative on disk (the local gallery
+/// paints it) and re-derives the ciphertext at push time from the recorded prefix, exactly as it
+/// already does for the original.
+struct AlbumSealer<'a> {
+    amk: &'a Amk,
+    asset_id: Uuid,
+}
+
+impl DerivativeSealer for AlbumSealer<'_> {
+    fn seal(&self, plaintext: &[u8]) -> std::result::Result<SealedDerivative, MediaError> {
+        let (enc, _ciphertext, _file_key) =
+            encrypt_asset_rekey(self.amk, &self.asset_id, plaintext, None).map_err(|e| {
+                MediaError::Encode {
+                    format: crate::media::DerivativeFormat::Original,
+                    detail: format!("sealing the derivative: {e}"),
+                }
+            })?;
+        Ok(SealedDerivative {
+            ciphertext_hash: enc.ciphertext_hash,
+            nonce_prefix: enc.nonce_prefix,
+        })
     }
 }
 
@@ -164,6 +207,8 @@ impl Workspace {
         exif: &ExifExtract,
         asset_id: Uuid,
         album_id: Uuid,
+        amk: &Amk,
+        original: &AssetEncryption,
     ) -> Result<PreparedStill> {
         let exif_dimensions = exif
             .width
@@ -215,10 +260,46 @@ impl Workspace {
             generated_at: super::now_rfc3339(),
             device_signer: self.device_signer.as_ref(),
             write_tier_signer: album.write_tier_signer()?,
+            sealer: &AlbumSealer { amk, asset_id },
+            // The `original` sentinel references the original blob rather than encrypting
+            // anything, so it signs what the original's own manifest signs.
+            original: SealedDerivative {
+                ciphertext_hash: original.ciphertext_hash,
+                nonce_prefix: original.nonce_prefix,
+            },
         };
-        let derivatives =
-            generate_still_derivatives(&decoded, plaintext, &DerivativeTier::GENERATED, &ctx)
-                .map_err(|e| LifecycleError::Io(format!("derivative generation: {e}")))?;
+        // Guarded, and **not** propagated on failure. A codec refusing a frame the decoder just
+        // produced is a real defect, but it is this asset's derivative that is broken, not the
+        // workspace: the signed original, its dimensions and its placeholder are all still
+        // right, and failing the import would trade a missing thumbnail for a missing backup.
+        // Reported as `DecodeFailed` — the "a supported path produced no derivative and somebody
+        // should look at it" bucket — so the run summary counts it instead of staying silent.
+        let generated = guarded("derivatives", || {
+            generate_still_derivatives(&decoded, &DerivativeTier::GENERATED, &ctx)
+        });
+        let derivatives = match generated {
+            Ok(derivatives) => derivatives,
+            Err(error) => {
+                tracing::warn!(
+                    asset_id = %asset_id,
+                    path = %src.display(),
+                    format = %decoded.format,
+                    width = decoded.width(),
+                    height = decoded.height(),
+                    %error,
+                    "derivatives: the still decoded but no derivative could be produced from it; \
+                     the original, its dimensions and its placeholder are committed regardless"
+                );
+                return Ok(PreparedStill {
+                    format: Some(decoded.format),
+                    dimensions,
+                    lqip,
+                    derivatives: Vec::new(),
+                    deferred_formats: 0,
+                    status: DerivativeStatus::DecodeFailed,
+                });
+            }
+        };
 
         Ok(PreparedStill {
             format: Some(decoded.format),
@@ -564,10 +645,14 @@ mod tests {
             cbor::from_slice(&fs::read(&bundle_path).unwrap()).expect("the bundle decodes");
         assert_eq!(manifests.len(), 1);
         let core = &manifests[0].core;
-        assert_eq!(
+        assert_ne!(
             core.ciphertext_hash,
             hash::hash_bytes(&bytes),
-            "the signed manifest content-addresses the bytes on disk"
+            "the manifest addresses the ciphertext, never the plaintext on disk"
+        );
+        assert_ne!(
+            core.nonce_prefix, [0u8; 7],
+            "and it records the prefix that ciphertext was produced under"
         );
         assert_eq!(core.source_asset_id, receipt.asset_id);
         assert_eq!(
@@ -625,10 +710,28 @@ mod tests {
                 .expect("the bundle decodes");
         assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].core.format, "original");
+        // The sentinel references the original *blob*: it signs the original manifest's own
+        // ciphertext address and nonce prefix, not the plaintext's.
+        let state = ws.asset(&receipt.asset_id).expect("the asset is held");
+        let original_core = &state
+            .chain
+            .records()
+            .last()
+            .expect("a create record")
+            .manifest
+            .core;
         assert_eq!(
+            manifests[0].core.ciphertext_hash, original_core.ciphertext_hash,
+            "the sentinel points at the blob a receiver already holds"
+        );
+        assert_eq!(
+            manifests[0].core.nonce_prefix, original_core.nonce_prefix,
+            "under the same key the original was encrypted with"
+        );
+        assert_ne!(
             manifests[0].core.ciphertext_hash,
             hash::hash_bytes(&original),
-            "the manifest content-addresses the original it references"
+            "which is not the plaintext's address"
         );
         assert_eq!(
             verify_still_format(&manifests[0]),

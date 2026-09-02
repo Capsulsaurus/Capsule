@@ -53,6 +53,7 @@ use super::error::MediaError;
 use super::resize::downscale_rgba8;
 use crate::cbor;
 use crate::crypto::CryptoError;
+use crate::crypto::encryption::stream::NONCE_PREFIX_LEN;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{AmkVersion, Signer};
 use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
@@ -202,6 +203,42 @@ impl fmt::Display for DerivativeTier {
     }
 }
 
+/// What a derivative's signed manifest has to commit to about its **ciphertext**.
+///
+/// Derivative bytes cross the network encrypted, exactly like the original
+/// ([Encryption](https://docs/design/cryptography/encryption/) — "every asset — original bytes,
+/// derivative bytes, metadata blob — is encrypted client-side"), so the content address a
+/// manifest signs is the address of the *ciphertext*, and the nonce prefix that produced it is
+/// signed alongside because it also selects the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SealedDerivative {
+    /// SHA-256 over the derivative ciphertext.
+    pub ciphertext_hash: Hash32,
+    /// The STREAM nonce prefix the ciphertext was produced under.
+    pub nonce_prefix: [u8; NONCE_PREFIX_LEN],
+}
+
+/// The encryption seam between `media` and `lifecycle`.
+///
+/// `media` owns pixels and knows nothing about album keys; `lifecycle` owns the AMK and must
+/// not own codecs. A derivative's manifest cannot be signed until its ciphertext exists — the
+/// hash is *of* the ciphertext — so the encryption has to happen inside generation, and this is
+/// the narrowest thing that lets it: one method, no key material in any `media` signature.
+///
+/// Each call must draw a **fresh** nonce prefix, so two derivatives of one asset get distinct
+/// keys and distinct ciphertexts even when their plaintext is identical.
+pub trait DerivativeSealer {
+    /// Encrypt `plaintext` under the source asset's identity and epoch, returning what the
+    /// manifest commits to. The ciphertext itself is discarded: clients keep the plaintext
+    /// derivative locally and re-derive the ciphertext at push time from the recorded prefix,
+    /// exactly as they do for the original.
+    ///
+    /// # Errors
+    /// [`MediaError::Encode`] when the encryption refuses (a drawn prefix that collides with
+    /// the one being replaced).
+    fn seal(&self, plaintext: &[u8]) -> Result<SealedDerivative, MediaError>;
+}
+
 /// Everything the manifest signer needs that the pixels do not carry: the asset identity, the
 /// epoch/authorisation context, and the two signing keys that produce the manifest's two hybrid
 /// signatures.
@@ -224,6 +261,13 @@ pub struct DerivativeContext<'a> {
     pub device_signer: &'a dyn Signer,
     /// The per-epoch write-tier key (authorisation signature).
     pub write_tier_signer: &'a dyn Signer,
+    /// Encrypts each generated derivative so its manifest can commit to the ciphertext.
+    pub sealer: &'a dyn DerivativeSealer,
+    /// What the **original**'s own manifest committed to. The `original` sentinel generates no
+    /// bytes and encrypts nothing: it is a reference to the original blob, so it signs the
+    /// original's ciphertext address and the original's nonce prefix, and a receiver resolves it
+    /// against the blob it already has.
+    pub original: SealedDerivative,
 }
 
 /// One generated derivative: the encoded bytes plus its signed manifest.
@@ -260,18 +304,21 @@ pub struct StillDerivatives {
 ///
 /// Per tier:
 /// - if the tier caps the long edge and the source is **not larger** than the cap, a single
-///   `format = "original"` manifest is signed over `original_bytes` — the redundant-derivative
-///   sentinel from the contract, never a re-encode;
-/// - otherwise the frame is downscaled to the tier and encoded to each encodable format of
-///   [`DerivativeFormat::STILL_DELIVERY_ORDER`], with the rest recorded as deferrals.
+///   `format = "original"` manifest is signed as a *reference* to the original blob (no bytes,
+///   nothing encrypted, committing to [`DerivativeContext::original`]) — the
+///   redundant-derivative sentinel from the contract, never a re-encode;
+/// - otherwise the frame is downscaled to the tier, encoded to each encodable format of
+///   [`DerivativeFormat::STILL_DELIVERY_ORDER`], and **encrypted** through
+///   [`DerivativeContext::sealer`] before its manifest is signed over the ciphertext's address;
+///   the formats with no encoder here are recorded as deferrals.
 ///
 /// Manifests of the same role are hash-chained in generation order, so a role's derivative
 /// provenance is append-only exactly like the asset's.
 ///
 /// # Errors
 /// [`MediaError::Encode`] when a codec refuses the frame, and [`MediaError::ZeroDimension`] for
-/// an empty source. A signing failure (a hardware device signer refusing) surfaces as
-/// [`MediaError::Encode`] too, carrying the crypto error's message.
+/// an empty source. A signing failure (a hardware device signer refusing) and a sealing failure
+/// both surface as [`MediaError::Encode`] too, carrying the crypto error's message.
 #[tracing::instrument(
     level = "debug",
     skip_all,
@@ -279,7 +326,6 @@ pub struct StillDerivatives {
 )]
 pub fn generate_still_derivatives(
     decoded: &DecodedImage,
-    original_bytes: &[u8],
     tiers: &[DerivativeTier],
     ctx: &DerivativeContext<'_>,
 ) -> Result<StillDerivatives, MediaError> {
@@ -307,17 +353,18 @@ pub fn generate_still_derivatives(
                 cap,
                 "media: source is within the tier cap; signing the `original` sentinel"
             );
-            // Signed **over** the original's bytes — that is what makes the manifest a
-            // reference to them — but carrying none of its own. See `DerivativeFormat::Original`.
-            let mut sentinel = sign_derivative(
+            // A reference to the original blob: no bytes of its own, and **nothing encrypted**
+            // — it commits to the original's own ciphertext address and nonce prefix, and the
+            // receiver resolves it against the blob it already holds. See
+            // `DerivativeFormat::Original`.
+            out.generated.push(sign_derivative(
                 ctx,
                 tier,
                 DerivativeFormat::Original,
-                original_bytes,
+                Vec::new(),
+                ctx.original,
                 &mut prior,
-            )?;
-            sentinel.bytes.clear();
-            out.generated.push(sentinel);
+            )?);
             continue;
         }
 
@@ -338,8 +385,13 @@ pub fn generate_still_derivatives(
                 continue;
             }
             let bytes = encode(&work, format, tier)?;
-            out.generated
-                .push(sign_derivative(ctx, tier, format, &bytes, &mut prior)?);
+            // Encrypt before signing: the manifest's content address is the ciphertext's, so
+            // the ciphertext has to exist first. A fresh prefix per derivative, so two
+            // derivatives of one asset never share a key even for identical plaintext.
+            let sealed = ctx.sealer.seal(&bytes)?;
+            out.generated.push(sign_derivative(
+                ctx, tier, format, bytes, sealed, &mut prior,
+            )?);
         }
     }
 
@@ -447,7 +499,12 @@ fn to_rgb_u16(frame: &RgbaImage) -> RgbImage {
     RgbImage::with_color_space(frame.width, frame.height, data, ColorSpace::Srgb)
 }
 
-/// Build, sign and chain one derivative manifest over `bytes`.
+/// Build, sign and chain one derivative manifest.
+///
+/// `bytes` is the **plaintext** the client keeps on disk; `sealed` is what the manifest actually
+/// commits to — the ciphertext's content address and the nonce prefix that produced it. The two
+/// are separate arguments because they are separate artefacts: only one of them ever crosses the
+/// network, and only the other is ever painted locally.
 ///
 /// `pub(super)` so the module's tests can exercise the chaining directly. That is not test
 /// convenience for its own sake: today exactly one still format is encodable, so a single call
@@ -458,7 +515,8 @@ pub(super) fn sign_derivative(
     ctx: &DerivativeContext<'_>,
     tier: DerivativeTier,
     format: DerivativeFormat,
-    bytes: &[u8],
+    bytes: Vec<u8>,
+    sealed: SealedDerivative,
     prior: &mut Option<Hash32>,
 ) -> Result<GeneratedDerivative, MediaError> {
     let core = DerivativeCore {
@@ -469,7 +527,10 @@ pub(super) fn sign_derivative(
         source_asset_id: ctx.source_asset_id,
         role: tier.role(),
         format: format.mime().into(),
-        ciphertext_hash: hash::hash_bytes(bytes),
+        // The address of the **ciphertext**, not of `bytes`: `bytes` is the plaintext kept
+        // locally, and what a receiver content-addresses is what crossed the network.
+        ciphertext_hash: sealed.ciphertext_hash,
+        nonce_prefix: sealed.nonce_prefix,
         generated_by_device: ctx.generated_by_device,
         generated_by_client: ctx.generated_by_client.clone(),
         model_id: None,
@@ -494,7 +555,7 @@ pub(super) fn sign_derivative(
     Ok(GeneratedDerivative {
         tier,
         format,
-        bytes: bytes.to_vec(),
+        bytes,
         manifest,
     })
 }

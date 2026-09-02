@@ -390,9 +390,22 @@ impl Workspace {
             "import: sidecar metadata resolved"
         );
 
+        let album = self.album(&album_id)?;
+        let epoch = album.current_epoch;
+        let amk = Amk::from_bytes(album.amks[&epoch]);
+        // First write: draw a fresh nonce prefix and derive the folded file key together
+        // (nothing to replace on a create).
+        //
+        // **Before** the derivatives, and that ordering is load-bearing: the `original`
+        // sentinel is a signed *reference* to this blob, so it commits to this ciphertext's
+        // address and this nonce prefix, neither of which exists until now.
+        let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
+
         // Still-derived sidecar metadata, from one decode pass over the plaintext: the
         // header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and the
-        // signed thumbnail derivatives to persist once the asset's own files are durable.
+        // signed thumbnail derivatives to persist once the asset's own files are durable. Each
+        // generated derivative is encrypted under its own fresh nonce prefix as it is signed —
+        // derivative bytes cross the network encrypted exactly like the original.
         //
         // Never fatal. A still this build cannot decode — or cannot decode *these bytes* of —
         // commits exactly as before: EXIF dimensions, no LQIP, no derivatives, and a
@@ -405,14 +418,7 @@ impl Workspace {
             derivatives,
             deferred_formats,
             status: derivative_status,
-        } = self.prepare_still(&plaintext, &ext, src, &exif, asset_id, album_id)?;
-
-        let album = self.album(&album_id)?;
-        let epoch = album.current_epoch;
-        let amk = Amk::from_bytes(album.amks[&epoch]);
-        // First write: draw a fresh nonce prefix and derive the folded file key together
-        // (nothing to replace on a create).
-        let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
+        } = self.prepare_still(&plaintext, &ext, src, &exif, asset_id, album_id, &amk, &enc)?;
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.

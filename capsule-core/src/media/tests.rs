@@ -28,13 +28,15 @@ use uuid::Uuid;
 
 use super::decode::{Decoder, RawshiftDecoder, decode_guarded};
 use super::derivative::{
-    DerivativeContext, DerivativeFormat, DerivativeTier, StillDerivatives,
-    generate_still_derivatives, verify_still_format,
+    DerivativeContext, DerivativeFormat, DerivativeSealer, DerivativeTier, SealedDerivative,
+    StillDerivatives, generate_still_derivatives, verify_still_format,
 };
 use super::detect::{MAX_DECODE_PIXELS, SUPPORTED_STILL_FORMATS, StillFormat};
 use super::error::{FormatOp, MediaError};
 use super::resize::{capped_dimensions, downscale_rgba8};
-use crate::crypto::keys::{AmkVersion, HybridSigningKey};
+use crate::crypto::encryption::encrypt_asset_rekey;
+use crate::crypto::hash::Hash32;
+use crate::crypto::keys::{Amk, AmkVersion, HybridSigningKey};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
@@ -895,9 +897,41 @@ fn signers() -> (HybridSigningKey, HybridSigningKey) {
     )
 }
 
+/// A real AMK-backed sealer — the same `encrypt_asset_rekey` construction the import path uses,
+/// so these tests exercise the production encryption rather than a stand-in.
+struct TestSealer {
+    amk: Amk,
+    asset_id: Uuid,
+}
+
+impl DerivativeSealer for TestSealer {
+    fn seal(&self, plaintext: &[u8]) -> Result<SealedDerivative, MediaError> {
+        let (enc, _ciphertext, _key) =
+            encrypt_asset_rekey(&self.amk, &self.asset_id, plaintext, None).expect("sealing");
+        Ok(SealedDerivative {
+            ciphertext_hash: enc.ciphertext_hash,
+            nonce_prefix: enc.nonce_prefix,
+        })
+    }
+}
+
+fn sealer(asset_id: Uuid) -> TestSealer {
+    TestSealer {
+        amk: Amk::from_bytes([0x5A; 32]),
+        asset_id,
+    }
+}
+
+/// What the *original*'s own manifest committed to; the `original` sentinel signs exactly this.
+const ORIGINAL_SEAL: SealedDerivative = SealedDerivative {
+    ciphertext_hash: Hash32([0xC1; 32]),
+    nonce_prefix: [1, 2, 3, 4, 5, 6, 7],
+};
+
 fn context<'a>(
     device: &'a HybridSigningKey,
     write_tier: &'a HybridSigningKey,
+    sealer: &'a dyn DerivativeSealer,
     asset_id: Uuid,
 ) -> DerivativeContext<'a> {
     DerivativeContext {
@@ -910,12 +944,15 @@ fn context<'a>(
         generated_at: "2026-09-01T00:00:00Z".into(),
         device_signer: device,
         write_tier_signer: write_tier,
+        sealer,
+        original: ORIGINAL_SEAL,
     }
 }
 
 fn generate(frame: &RgbaImage, original: &[u8]) -> StillDerivatives {
     let (device, write_tier) = signers();
-    let ctx = context(&device, &write_tier, Uuid::from_u128(0xB1));
+    let seal = sealer(Uuid::from_u128(0xB1));
+    let ctx = context(&device, &write_tier, &seal, Uuid::from_u128(0xB1));
     let decoded = RawshiftDecoder
         .decode(original, "png")
         .expect("the fixture decodes");
@@ -923,7 +960,7 @@ fn generate(frame: &RgbaImage, original: &[u8]) -> StillDerivatives {
         (decoded.width(), decoded.height()),
         (frame.width, frame.height)
     );
-    generate_still_derivatives(&decoded, original, &DerivativeTier::GENERATED, &ctx)
+    generate_still_derivatives(&decoded, &DerivativeTier::GENERATED, &ctx)
         .expect("generation succeeds")
 }
 
@@ -942,10 +979,38 @@ fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
     assert_eq!(thumb.format, DerivativeFormat::Jxl);
     assert_eq!(thumb.manifest.core.format, "image/jxl");
     assert_eq!(thumb.manifest.core.role, DerivativeRole::Thumbnail);
+    // The manifest commits to the **ciphertext**, not to the plaintext on disk. Re-derive it
+    // the way the push path does — from the recorded prefix under the same AMK — and the
+    // signed address has to come back.
+    let seal = sealer(Uuid::from_u128(0xB1));
+    let file_key = seal
+        .amk
+        .derive_file_key(&Uuid::from_u128(0xB1), &thumb.manifest.core.nonce_prefix);
+    let (_, ciphertext) = crate::crypto::encryption::stream::encrypt_asset_vec_with_prefix(
+        &file_key,
+        thumb.manifest.core.nonce_prefix,
+        &thumb.bytes,
+    );
     assert_eq!(
         thumb.manifest.core.ciphertext_hash,
+        crate::crypto::hash::hash_bytes(&ciphertext),
+        "the manifest binds the ciphertext the push path re-derives"
+    );
+    assert_ne!(
+        thumb.manifest.core.ciphertext_hash,
         crate::crypto::hash::hash_bytes(&thumb.bytes),
-        "the manifest binds the bytes it is signed over"
+        "and that is not the plaintext's address — a thumbnail is a recognisable copy of a \
+         private photo and does not cross the network in the clear"
+    );
+    assert_eq!(
+        crate::crypto::encryption::stream::decrypt_asset_vec(
+            &file_key,
+            &thumb.manifest.core.nonce_prefix,
+            &ciphertext
+        )
+        .expect("the ciphertext authenticates"),
+        thumb.bytes,
+        "and it round-trips back to the bytes on disk"
     );
     assert_eq!(thumb.manifest.core.version, DERIVATIVE_MANIFEST_VERSION);
     assert!(
@@ -1030,9 +1095,13 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
          source's EXIF, GPS included, into a derivative blob"
     );
     assert_eq!(
-        only.manifest.core.ciphertext_hash,
-        crate::crypto::hash::hash_bytes(&original),
-        "the reference is the content address the manifest signs"
+        only.manifest.core.ciphertext_hash, ORIGINAL_SEAL.ciphertext_hash,
+        "the sentinel signs the **original's** ciphertext address — the blob a receiver already \
+         holds — and encrypts nothing of its own"
+    );
+    assert_eq!(
+        only.manifest.core.nonce_prefix, ORIGINAL_SEAL.nonce_prefix,
+        "and the original's prefix, so the reference selects the same key"
     );
     assert!(
         result.deferred.is_empty(),
@@ -1052,14 +1121,16 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
 #[test]
 fn manifests_of_one_role_form_an_append_only_chain() {
     let (device, write_tier) = signers();
-    let ctx = context(&device, &write_tier, Uuid::from_u128(0xB2));
+    let seal = sealer(Uuid::from_u128(0xB2));
+    let ctx = context(&device, &write_tier, &seal, Uuid::from_u128(0xB2));
     let mut prior = None;
 
     let first = super::derivative::sign_derivative(
         &ctx,
         DerivativeTier::Thumbnail,
-        DerivativeFormat::WebP,
-        b"first generation bytes",
+        DerivativeFormat::Jxl,
+        b"first generation bytes".to_vec(),
+        seal.seal(b"first generation bytes").expect("sealing"),
         &mut prior,
     )
     .expect("signing the first manifest");
@@ -1080,8 +1151,9 @@ fn manifests_of_one_role_form_an_append_only_chain() {
     let second = super::derivative::sign_derivative(
         &ctx,
         DerivativeTier::Thumbnail,
-        DerivativeFormat::WebP,
-        b"second generation bytes",
+        DerivativeFormat::Jxl,
+        b"second generation bytes".to_vec(),
+        seal.seal(b"second generation bytes").expect("sealing"),
         &mut prior,
     )
     .expect("signing the second manifest");
@@ -1113,11 +1185,11 @@ fn each_tier_starts_its_own_role_chain() {
     let (device, write_tier) = signers();
     let decoded = RawshiftDecoder.decode(&original, "png").expect("decode");
 
+    let seal = sealer(Uuid::from_u128(0xB5));
     let both = generate_still_derivatives(
         &decoded,
-        &original,
         &[DerivativeTier::Thumbnail, DerivativeTier::Preview],
-        &context(&device, &write_tier, Uuid::from_u128(0xB5)),
+        &context(&device, &write_tier, &seal, Uuid::from_u128(0xB5)),
     )
     .expect("both tiers");
 
@@ -1147,6 +1219,55 @@ fn each_tier_starts_its_own_role_chain() {
         .decode(&previewed.bytes, "webp")
         .expect("the preview decodes");
     assert_eq!((back.width(), back.height()), (512, 384));
+}
+
+/// Two derivatives of one asset get **distinct** nonce prefixes, and therefore distinct keys and
+/// distinct ciphertexts, even when their plaintext is byte-identical.
+///
+/// This is the property that makes per-derivative sealing worth doing rather than reusing the
+/// original's key: a shared prefix would reuse a keystream across two blobs under one file key,
+/// which is the failure the encryption doc's per-file derivation exists to prevent.
+#[test]
+fn two_derivatives_of_one_asset_never_share_a_nonce_prefix() {
+    let (device, write_tier) = signers();
+    let asset_id = Uuid::from_u128(0xB6);
+    let seal = sealer(asset_id);
+    let ctx = context(&device, &write_tier, &seal, asset_id);
+    let identical = b"byte-identical derivative plaintext".to_vec();
+
+    let mut prior = None;
+    let first = super::derivative::sign_derivative(
+        &ctx,
+        DerivativeTier::Thumbnail,
+        DerivativeFormat::Jxl,
+        identical.clone(),
+        seal.seal(&identical).expect("sealing"),
+        &mut prior,
+    )
+    .expect("first");
+    let mut prior = None;
+    let second = super::derivative::sign_derivative(
+        &ctx,
+        DerivativeTier::Preview,
+        DerivativeFormat::Jxl,
+        identical.clone(),
+        seal.seal(&identical).expect("sealing"),
+        &mut prior,
+    )
+    .expect("second");
+
+    assert_eq!(
+        first.bytes, second.bytes,
+        "the plaintext really is identical"
+    );
+    assert_ne!(
+        first.manifest.core.nonce_prefix, second.manifest.core.nonce_prefix,
+        "a fresh prefix is drawn per derivative"
+    );
+    assert_ne!(
+        first.manifest.core.ciphertext_hash, second.manifest.core.ciphertext_hash,
+        "so identical plaintext does not produce a shared ciphertext or a shared key"
+    );
 }
 
 /// **The privacy case.** A thumbnail must not inherit the source's EXIF, and above all not its
@@ -1183,11 +1304,11 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
     // Capsule's derivative, over the same GPS-bearing source.
     let (device, write_tier) = signers();
     let decoded = RawshiftDecoder.decode(&source, "jpg").expect("decode");
+    let seal = sealer(Uuid::from_u128(0xB3));
     let result = generate_still_derivatives(
         &decoded,
-        &source,
         &DerivativeTier::GENERATED,
-        &context(&device, &write_tier, Uuid::from_u128(0xB3)),
+        &context(&device, &write_tier, &seal, Uuid::from_u128(0xB3)),
     )
     .expect("generation");
     let thumb = &result.generated[0].bytes;
@@ -1275,6 +1396,7 @@ fn verification_rejects_an_unrecognised_still_format() {
             role,
             format: format.into(),
             ciphertext_hash: crate::crypto::hash::hash_bytes(b"bytes"),
+            nonce_prefix: [9, 8, 7, 6, 5, 4, 3],
             generated_by_device: Uuid::from_u128(0xD1),
             generated_by_client: "capsule-core/test".into(),
             model_id: None,

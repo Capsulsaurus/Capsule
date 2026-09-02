@@ -270,6 +270,18 @@ pub struct DerivativeCore {
     pub format: String,
     /// Content-address digest over the derivative ciphertext.
     pub ciphertext_hash: Hash32,
+    /// The STREAM nonce prefix the derivative ciphertext was produced under; folded into the
+    /// file-key salt, so it also selects the key.
+    ///
+    /// **Required, not `Option`.** Derivative bytes are encrypted client-side exactly like the
+    /// original ([Encryption](https://docs/design/cryptography/encryption/)), so a receiver that
+    /// cannot recover this cannot decrypt the blob at all — an absent prefix would be an
+    /// unopenable derivative rather than a tolerable gap. It is safe to make it required
+    /// because no real `derivative-manifest/v1` has ever been written to any store: derivatives
+    /// were unconditionally `DeferredNoCodec` until the decoder landed, and `crate::ml`
+    /// constructs no derivative manifest. There is nothing to stay compatible with, so the
+    /// schema string does not move.
+    pub nonce_prefix: [u8; 7],
     /// Device that generated the derivative.
     pub generated_by_device: Uuid,
     /// Generating client version.
@@ -494,6 +506,7 @@ mod tests {
             role: DerivativeRole::Thumbnail,
             format: "image/avif".into(),
             ciphertext_hash: Hash32([0xAB; 32]),
+            nonce_prefix: [9, 8, 7, 6, 5, 4, 3],
             generated_by_device: Uuid::from_u128(0xD1),
             generated_by_client: "capsule-cli/0.1.0".into(),
             model_id: None,
