@@ -11,6 +11,8 @@
 //! never sees them disagree by a second. Suppression is the mirror image and is exclusive
 //! (`until > now`), so a class snoozed to exactly `now` is due at `now`.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 
 use super::class::{Alert, AlertClass};
@@ -55,41 +57,73 @@ pub fn evaluate(input: &NotifyInput, now: Timestamp) -> Vec<Alert> {
     alerts
 }
 
-/// The next instant an OS timer should be armed for, or `None` when there is nothing to arm —
-/// in which case the client cancels its timer, which is the cancel half of the
+/// The instant an OS timer must be armed for, **per class** — the arm half of the
 /// arm / re-arm / cancel rule.
 ///
+/// A class present in the map should have exactly one live timer, set to the returned instant.
+/// A class *absent* from it should have no timer: cancel whatever it holds. Because the answer
+/// is a pure function of state, the whole client-side protocol is "recompute after any state
+/// change, then reconcile your timers against this map" — and one entry per class from one
+/// function is why two live timers for one class is structurally impossible.
+///
+/// It is keyed per class rather than collapsed to a single instant because the timers are
+/// independent: with a staleness deadline two weeks out and a recovery check ninety days out,
+/// arming only the earlier one loses the later alert entirely on a device the app never runs on
+/// again — which is the exact case pre-arming exists for. A client also needs the class to pick
+/// its `notification.*` catalog key for the notification it is arming.
+///
 /// This is deliberately **narrower** than [`evaluate()`]. An armed notification fires from the
-/// OS's own timer with the app not running, so it cannot be re-checked when it arrives: a
-/// deadline is only returned when the alert is certain to be true on arrival. Three things
+/// OS's own timer with the app not running, so it cannot be re-checked when it arrives: an
+/// instant is returned only when the alert is certain to be true on arrival. Three things
 /// therefore withhold one:
 ///
-/// - the class is not [pre-armable](AlertClass::pre_armable) — its condition is server-held;
-/// - the class is suppressed at `now`, or its deadline is not strictly after `now` (already
-///   passed, so there is nothing left to schedule);
-/// - the class would arrive as a *badge* rather than a notification: `sync_stale` with nothing
-///   un-synced (only a sync can change that, and a sync re-arms), and `recovery_check_due` with
-///   its snooze budget spent.
+/// - the class is not [pre-armable](AlertClass::pre_armable) — its condition is server-held, so
+///   the device cannot compute a deadline for it at all;
+/// - the resulting instant is not strictly after `now` (it has already passed, so there is
+///   nothing left to schedule) — including a class the alert has already fired for;
+/// - the class would arrive as something other than a notification: `sync_stale` with nothing
+///   un-synced (only a sync can change that, and a sync re-arms), `recovery_check_due` with its
+///   snooze budget spent (a badge, which is in-app), and any class the user has
+///   [disabled](NotifyInput::disabled).
 ///
-/// The result is a single value, so recomputing after any state change and cancel-then-arming
-/// on a change is the whole client-side protocol — and two live timers for one class is
-/// structurally impossible.
+/// A [snooze](NotifyInput::suppressed) **defers** the armed instant rather than cancelling it: a
+/// class snoozed after it fired must re-fire when the snooze ends, and the snooze end is a
+/// deadline the device can compute.
 #[must_use]
-pub fn next_deadline(input: &NotifyInput, now: Timestamp) -> Option<Timestamp> {
-    let deadline = AlertClass::ALL
-        .into_iter()
-        .filter(|class| class.pre_armable() && !input.is_suppressed(*class, now))
-        .filter_map(|class| pre_arm_deadline(input, class, now))
-        .filter(|deadline| *deadline > now)
-        .min();
-    // A timer that was armed for the wrong instant, or cancelled when it should not have been,
-    // is otherwise invisible until an alert fails to arrive weeks later.
+pub fn pre_arm_deadlines(input: &NotifyInput, now: Timestamp) -> BTreeMap<AlertClass, Timestamp> {
+    let mut armed = BTreeMap::new();
+    for class in AlertClass::ALL {
+        if !class.pre_armable() {
+            continue;
+        }
+        if let Some(at) = pre_arm_deadline(input, class)
+            && at > now
+        {
+            armed.insert(class, at);
+        }
+    }
+    // A timer armed for the wrong instant, or cancelled when it should not have been, is
+    // otherwise invisible until an alert fails to arrive weeks later.
     tracing::debug!(
         now = %now,
-        deadline = ?deadline.map(|d| d.to_string()),
-        "notify: computed the next pre-arm deadline"
+        armed = ?armed
+            .iter()
+            .map(|(class, at)| (class.as_str(), at.to_string()))
+            .collect::<Vec<_>>(),
+        "notify: computed the pre-arm deadlines"
     );
-    deadline
+    armed
+}
+
+/// The earliest instant in [`pre_arm_deadlines()`], or `None` when nothing is to be armed.
+///
+/// A convenience for a caller that holds a single timer — a desktop scheduler, a CLI, a status
+/// line. **A client that pre-arms per class wants [`pre_arm_deadlines()`]**: collapsing the map
+/// to its minimum discards the later class's timer, which on a device the app never runs on
+/// again loses that alert.
+#[must_use]
+pub fn next_deadline(input: &NotifyInput, now: Timestamp) -> Option<Timestamp> {
+    pre_arm_deadlines(input, now).into_values().min()
 }
 
 /// The predicate for one class. Separated per class rather than per fact so the emission order
@@ -109,8 +143,11 @@ fn evaluate_class(input: &NotifyInput, class: AlertClass, now: Timestamp) -> Opt
 
 /// A class that fires on any non-zero count and carries it as the `count` parameter.
 ///
-/// A quarantined item — and a pending drop is one — is never silently dropped and never
-/// silently applied, so any non-zero count is reported.
+/// A quarantined item is never silently dropped and never silently applied, so any non-zero
+/// count is reported. The two counts are **disjoint**: a pending drop is a quarantine surface in
+/// the threat model's inventory, but it has its own class here, so
+/// [`NotifyInput::quarantine_pending`] excludes drops and only
+/// [`NotifyInput::drops_pending`] counts them.
 fn counted(class: AlertClass, count: u64) -> Option<Alert> {
     (count > 0).then(|| Alert::new(class).with_param("count", count.to_string()))
 }
@@ -152,6 +189,11 @@ fn sync_stale_deadline(facts: &SyncFacts) -> Timestamp {
 /// `next_due` as given. `snooze_budget_spent` does not change *whether* the class is reported —
 /// a client cannot render a badge for a condition it was not told about — only how, which is
 /// delivery and therefore the client's. It is carried as the `snooze_budget` parameter.
+///
+/// The reported `deadline` is the **later** of `next_due` and an expired `snoozed_until`,
+/// because that is the instant whose passing actually made the alert true — and it is the same
+/// instant [`pre_arm_deadline`] armed, so what a client scheduled and what it is handed on
+/// arrival agree.
 fn recovery_check_due(facts: &RecoveryFacts, now: Timestamp) -> Option<Alert> {
     if facts.snoozed_until.is_some_and(|until| until > now) {
         return None;
@@ -159,9 +201,12 @@ fn recovery_check_due(facts: &RecoveryFacts, now: Timestamp) -> Option<Alert> {
     if now < facts.next_due {
         return None;
     }
+    let became_true_at = facts
+        .snoozed_until
+        .map_or(facts.next_due, |until| until.max(facts.next_due));
     Some(
         Alert::new(AlertClass::RecoveryCheckDue)
-            .with_deadline(facts.next_due)
+            .with_deadline(became_true_at)
             .with_param(
                 "snooze_budget",
                 if facts.snooze_budget_spent {
@@ -169,6 +214,13 @@ fn recovery_check_due(facts: &RecoveryFacts, now: Timestamp) -> Option<Alert> {
                 } else {
                     "available"
                 },
+            )
+            // Without this the alert for "you told us you lost your recovery secret" is
+            // byte-identical to the routine ninety-day check, and a client rendering from the
+            // class alone would say "time for your periodic check" at the worst moment.
+            .with_param(
+                "recovery",
+                if facts.rewrap_due { "rewrap" } else { "check" },
             ),
     )
 }
@@ -190,9 +242,19 @@ fn quota_grace_expiring(state: QuotaAdvisory) -> Option<Alert> {
     Some(Alert::new(AlertClass::QuotaGraceExpiring).with_param("grace", grace))
 }
 
-/// The deadline to arm for one pre-armable class, if it has one that will certainly fire.
-fn pre_arm_deadline(input: &NotifyInput, class: AlertClass, now: Timestamp) -> Option<Timestamp> {
-    match class {
+/// The instant to arm for one pre-armable class, if it has one that will certainly fire.
+///
+/// Two composition rules, both of which exist because an armed notification cannot be
+/// re-checked when it fires:
+///
+/// - the class's own condition instant is the **later** of every gate on it — a recovery check
+///   snoozed to a date *before* its due date is still not due until `next_due`, so arming the
+///   snooze end alone would fire into no alert;
+/// - a [snooze](NotifyInput::suppressed) **defers** that instant instead of cancelling it, so a
+///   class snoozed after firing re-fires when the snooze ends. Only a
+///   [disable](NotifyInput::disabled) cancels.
+fn pre_arm_deadline(input: &NotifyInput, class: AlertClass) -> Option<Timestamp> {
+    let condition_at = match class {
         AlertClass::SyncStale => input
             .sync
             .as_ref()
@@ -202,17 +264,26 @@ fn pre_arm_deadline(input: &NotifyInput, class: AlertClass, now: Timestamp) -> O
             .recovery
             .as_ref()
             .filter(|facts| !facts.snooze_budget_spent)
-            .map(|facts| match facts.snoozed_until {
-                // While snoozed the deadline is the snooze's end, not the original due date.
-                Some(until) if until > now => until,
-                _ => facts.next_due,
+            .map(|facts| {
+                facts
+                    .snoozed_until
+                    .map_or(facts.next_due, |until| until.max(facts.next_due))
             }),
-        // Not pre-armable; `next_deadline` filters these out before asking.
+        // Not pre-armable; `pre_arm_deadlines` filters these out before asking.
         AlertClass::QuotaSoft
         | AlertClass::QuotaGraceExpiring
         | AlertClass::QuarantinePending
         | AlertClass::DropPending => None,
+    }?;
+    if input.disabled.contains(&class) {
+        // Disabled: nothing is ever armed again for this class.
+        return None;
     }
+    // Snoozed: re-fire when the snooze ends, if that outlasts the condition itself.
+    Some(match input.suppressed.get(&class) {
+        Some(&until) => condition_at.max(until),
+        None => condition_at,
+    })
 }
 
 /// Add a signed second offset to a timestamp, saturating at the representable bounds. Nothing
@@ -229,7 +300,7 @@ fn add_secs(base: Timestamp, secs: i64) -> Timestamp {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::super::class::AlertSeverity;
     use super::super::input::QuotaFacts;
@@ -279,6 +350,7 @@ mod tests {
                 next_due: ts(next_due),
                 snoozed_until: snoozed_until.map(ts),
                 snooze_budget_spent,
+                rewrap_due: false,
             }),
             ..NotifyInput::default()
         }
@@ -370,6 +442,44 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    /// The reported deadline is the instant that actually made the alert true — the expired
+    /// snooze when one outlasted the due date, and the due date otherwise. It is the same
+    /// instant `next_deadline` armed, so a client's timer and the alert it is handed agree.
+    #[test]
+    fn recovery_check_due_reports_the_instant_that_made_it_true() {
+        let due = BASE + 7 * DAY_SECS;
+        let until = due + 2 * DAY_SECS;
+
+        // A snooze that outlasted the due date: it, not `next_due`, is what held the alert.
+        let input = with_recovery(due, Some(until), false);
+        assert_eq!(
+            next_deadline(&input, ts(due)),
+            Some(ts(until)),
+            "the snooze end is what gets armed"
+        );
+        let alert = evaluate(&input, ts(until))
+            .into_iter()
+            .find(|a| a.class == AlertClass::RecoveryCheckDue)
+            .expect("due once the snooze expires");
+        assert_eq!(alert.deadline, Some(ts(until)), "and what gets reported");
+
+        // A snooze that expired before the due date leaves `next_due` as the true instant.
+        let early = with_recovery(due, Some(due - DAY_SECS), false);
+        let alert = evaluate(&early, ts(due))
+            .into_iter()
+            .find(|a| a.class == AlertClass::RecoveryCheckDue)
+            .expect("due at the boundary");
+        assert_eq!(alert.deadline, Some(ts(due)));
+
+        // No snooze at all: `next_due`.
+        let none = with_recovery(due, None, false);
+        let alert = evaluate(&none, ts(due))
+            .into_iter()
+            .find(|a| a.class == AlertClass::RecoveryCheckDue)
+            .expect("due at the boundary");
+        assert_eq!(alert.deadline, Some(ts(due)));
     }
 
     /// A spent snooze budget is reported, not silenced — the client needs the fact to render a
@@ -491,11 +601,9 @@ mod tests {
             );
         }
 
-        // A class suppressed while its deadline is still in the future contributes no deadline.
+        // A disabled class contributes no deadline even while its own is still in the future.
         let mut input = with_sync(BASE, 1);
-        input
-            .suppressed
-            .insert(AlertClass::SyncStale, Timestamp::MAX);
+        input.disabled.insert(AlertClass::SyncStale);
         assert_eq!(next_deadline(&input, ts(BASE)), None);
         assert!(evaluate(&input, ts(due)).is_empty());
     }
@@ -506,9 +614,7 @@ mod tests {
     fn suppression_does_not_leak_across_classes() {
         let mut input = with_sync(BASE, 1);
         input.drops_pending = 2;
-        input
-            .suppressed
-            .insert(AlertClass::SyncStale, Timestamp::MAX);
+        input.disabled.insert(AlertClass::SyncStale);
         assert_eq!(
             classes(&input, ts(BASE + SYNC_STALE_SECS)),
             [AlertClass::DropPending]
@@ -528,6 +634,7 @@ mod tests {
             next_due: ts(recovery_due),
             snoozed_until: None,
             snooze_budget_spent: false,
+            rewrap_due: false,
         });
 
         // Both future → the earlier.
@@ -597,6 +704,7 @@ mod tests {
                 next_due: ts(BASE),
                 snoozed_until: None,
                 snooze_budget_spent: false,
+                rewrap_due: false,
             }),
             // `SoftWarning` and `HardExceeded` are mutually exclusive states, so the two quota
             // classes cannot both be true; this asserts the ordering of the five that can.
@@ -606,6 +714,7 @@ mod tests {
             quarantine_pending: 1,
             drops_pending: 1,
             suppressed: BTreeMap::new(),
+            disabled: BTreeSet::new(),
         };
         assert_eq!(
             classes(&input, ts(due)),
@@ -626,9 +735,7 @@ mod tests {
         let mut input = with_sync(BASE, 9);
         input.quarantine_pending = 2;
         input.drops_pending = 4;
-        input
-            .suppressed
-            .insert(AlertClass::RecoveryCheckDue, Timestamp::MAX);
+        input.disabled.insert(AlertClass::RecoveryCheckDue);
         let now = ts(BASE + SYNC_STALE_SECS);
 
         let first = serde_json::to_string(&evaluate(&input, now)).unwrap();
@@ -640,6 +747,171 @@ mod tests {
             serde_json::from_str(&serde_json::to_string(&input).unwrap()).unwrap();
         assert_eq!(round_tripped, input);
         assert_eq!(evaluate(&round_tripped, now), evaluate(&input, now));
+    }
+
+    // ── per-class arming, deferral, and the new facts ───────────────────────
+
+    /// The two pre-armable classes get **independent** entries. Collapsing them to a single
+    /// minimum, as `next_deadline` does, discards the later timer — which on a device the app
+    /// never runs on again loses that alert entirely.
+    #[test]
+    fn pre_arm_deadlines_arms_each_class_independently() {
+        let sync_due = BASE + SYNC_STALE_SECS; // + 14 d
+        let recovery_due = BASE + 90 * DAY_SECS; // much later
+        let mut input = with_sync(BASE, 1);
+        input.recovery = Some(RecoveryFacts {
+            next_due: ts(recovery_due),
+            snoozed_until: None,
+            snooze_budget_spent: false,
+            rewrap_due: false,
+        });
+
+        let armed = pre_arm_deadlines(&input, ts(BASE));
+        assert_eq!(armed.len(), 2);
+        assert_eq!(armed[&AlertClass::SyncStale], ts(sync_due));
+        assert_eq!(armed[&AlertClass::RecoveryCheckDue], ts(recovery_due));
+        // The single-timer convenience keeps only the earlier one, which is precisely why it is
+        // not what a per-class client should call.
+        assert_eq!(next_deadline(&input, ts(BASE)), Some(ts(sync_due)));
+
+        // Past the staleness deadline the recovery timer is still armed and still later.
+        let armed = pre_arm_deadlines(&input, ts(sync_due));
+        assert_eq!(
+            armed.keys().copied().collect::<Vec<_>>(),
+            [AlertClass::RecoveryCheckDue]
+        );
+        assert_eq!(armed[&AlertClass::RecoveryCheckDue], ts(recovery_due));
+    }
+
+    /// A class snoozed *after* it fired must fire again when the snooze ends. Cancelling
+    /// instead would leave `sync_stale` reachable only in-app, defeating the pre-arm rule for
+    /// the one class it exists for.
+    #[test]
+    fn a_finite_suppression_defers_the_timer_rather_than_cancelling_it() {
+        let due = BASE + SYNC_STALE_SECS;
+        let snooze_end = due + 3 * DAY_SECS;
+        let mut input = with_sync(BASE, 1);
+        input
+            .suppressed
+            .insert(AlertClass::SyncStale, ts(snooze_end));
+
+        // Snoozed: nothing is reported, but the timer moves to the snooze end.
+        assert!(evaluate(&input, ts(due + DAY_SECS)).is_empty());
+        assert_eq!(
+            pre_arm_deadlines(&input, ts(due + DAY_SECS))[&AlertClass::SyncStale],
+            ts(snooze_end)
+        );
+        // At the snooze end it is due again, and there is nothing left to arm.
+        assert!(
+            classes(&input, ts(snooze_end)).contains(&AlertClass::SyncStale),
+            "the snooze has expired, so the class is due"
+        );
+        assert!(pre_arm_deadlines(&input, ts(snooze_end)).is_empty());
+
+        // A snooze that ends before the class's own deadline does not pull the timer earlier.
+        let mut early = with_sync(BASE, 1);
+        early
+            .suppressed
+            .insert(AlertClass::SyncStale, ts(due - DAY_SECS));
+        assert_eq!(
+            pre_arm_deadlines(&early, ts(BASE))[&AlertClass::SyncStale],
+            ts(due)
+        );
+    }
+
+    /// A disable is the one suppression that cancels the timer: nothing is ever armed again.
+    #[test]
+    fn a_disabled_class_holds_no_timer_and_reports_nothing() {
+        let mut input = with_sync(BASE, 1);
+        input.disabled.insert(AlertClass::SyncStale);
+        assert!(pre_arm_deadlines(&input, ts(BASE)).is_empty());
+        assert!(pre_arm_deadlines(&input, ts(BASE + SYNC_STALE_SECS)).is_empty());
+        assert!(evaluate(&input, ts(BASE + SYNC_STALE_SECS)).is_empty());
+    }
+
+    /// A snooze set before the due date does not make the check due earlier, so it must not be
+    /// armed alone: the armed instant is the later of the two, or the timer fires into no alert.
+    #[test]
+    fn a_snooze_before_the_due_date_does_not_pull_the_recovery_timer_earlier() {
+        let due = BASE + 7 * DAY_SECS;
+        let snooze_end = BASE + DAY_SECS; // expires long before the check is due
+        let input = with_recovery(due, Some(snooze_end), false);
+
+        assert_eq!(
+            pre_arm_deadlines(&input, ts(BASE))[&AlertClass::RecoveryCheckDue],
+            ts(due)
+        );
+        assert!(
+            evaluate(&input, ts(snooze_end)).is_empty(),
+            "the snooze ended but the check is not due yet"
+        );
+        assert!(classes(&input, ts(due)).contains(&AlertClass::RecoveryCheckDue));
+    }
+
+    /// The re-arm half of the rule: a completed sync moves the staleness timer, and a client
+    /// that recomputes sees a different value to cancel-and-arm against.
+    #[test]
+    fn a_completed_sync_re_arms_the_staleness_timer() {
+        let first = with_sync(BASE, 1);
+        let before = pre_arm_deadlines(&first, ts(BASE))[&AlertClass::SyncStale];
+        assert_eq!(before, ts(BASE + SYNC_STALE_SECS));
+
+        // A sync completes a day later with changes still pending: the deadline moves by a day.
+        let second = with_sync(BASE + DAY_SECS, 1);
+        let after = pre_arm_deadlines(&second, ts(BASE + DAY_SECS))[&AlertClass::SyncStale];
+        assert_eq!(after, ts(BASE + DAY_SECS + SYNC_STALE_SECS));
+        assert_ne!(before, after, "the value moved, so the client re-arms");
+
+        // A sync that clears the backlog cancels it instead.
+        let cleared = with_sync(BASE + DAY_SECS, 0);
+        assert!(pre_arm_deadlines(&cleared, ts(BASE + DAY_SECS)).is_empty());
+    }
+
+    /// The escalation to the guided re-wrap is carried as a parameter, because the closed class
+    /// set has only `recovery_check_due` to report it and the routine check must not look the
+    /// same.
+    #[test]
+    fn the_rewrap_escalation_is_distinguishable_from_a_routine_check() {
+        let due = BASE + 7 * DAY_SECS;
+        let routine = with_recovery(due, None, false);
+        assert_eq!(
+            params_of(&routine, AlertClass::RecoveryCheckDue, ts(due)).unwrap()["recovery"],
+            "check"
+        );
+
+        let mut escalated = routine.clone();
+        if let Some(facts) = escalated.recovery.as_mut() {
+            facts.rewrap_due = true;
+        }
+        assert_eq!(
+            params_of(&escalated, AlertClass::RecoveryCheckDue, ts(due)).unwrap()["recovery"],
+            "rewrap"
+        );
+    }
+
+    /// `days_behind` truncates toward the completed day, so the whole last day before the next
+    /// one reads the same. Asserted at both ends of that interval.
+    #[test]
+    fn days_behind_truncates_to_whole_days() {
+        for (offset, expected) in [
+            (SYNC_STALE_SECS, "14"),
+            (SYNC_STALE_SECS + DAY_SECS - 1, "14"),
+            (SYNC_STALE_SECS + DAY_SECS, "15"),
+        ] {
+            let input = with_sync(BASE, 1);
+            let params = params_of(&input, AlertClass::SyncStale, ts(BASE + offset))
+                .expect("stale with changes pending");
+            assert_eq!(params["days_behind"], expected, "at +{offset}s");
+        }
+    }
+
+    /// `quota_soft` carries no parameters: there is nothing to interpolate that the client does
+    /// not already hold from its own quota response.
+    #[test]
+    fn quota_soft_carries_no_parameters() {
+        let input = with_quota(QuotaAdvisory::SoftWarning);
+        let params = params_of(&input, AlertClass::QuotaSoft, ts(BASE)).expect("soft warning");
+        assert!(params.is_empty(), "{params:?}");
     }
 
     /// Saturating arithmetic: a sync epoch pinned at the far end of the range neither panics

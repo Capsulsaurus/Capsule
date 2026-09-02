@@ -5,8 +5,9 @@
 //! # The surface
 //!
 //! [`evaluate()`] turns a snapshot of device-held state ([`NotifyInput`]) into the [`Alert`]s
-//! that are true at an instant. [`next_deadline()`] returns the single instant an OS timer must
-//! be armed for, or `None` when there is nothing to arm.
+//! that are true at an instant. [`pre_arm_deadlines()`] returns the instant an OS timer must be
+//! armed for, **per class** — a class absent from the map has no timer to hold.
+//! [`next_deadline()`] is its minimum, for a caller that holds only one timer.
 //!
 //! Both are **pure**: no clock read, no socket, no SQLite, no `unsafe`, and no allocation beyond
 //! the returned vector. `now` is always an argument, so the whole surface is driven by a mocked
@@ -42,16 +43,16 @@
 //! that deadline becomes known, not evaluated when it expires — otherwise the staleness alert is
 //! starved by the very absence of background windows it exists to report.
 //!
-//! The consequence for this module is the reason [`next_deadline()`] is narrower than
+//! The consequence for this module is the reason [`pre_arm_deadlines()`] is narrower than
 //! [`evaluate()`]: an armed OS notification fires **without the app running**, so it cannot be
-//! re-checked at fire time. A deadline is therefore only returned when the alert is certain to be
+//! re-checked at fire time. An instant is therefore only returned when the alert is certain to be
 //! true when it arrives — see [`AlertClass::pre_armable`] for which classes can be armed at all,
-//! and [`next_deadline()`] for the two conditions that withhold a deadline from a pre-armable
+//! and [`pre_arm_deadlines()`] for the three conditions that withhold one from a pre-armable
 //! class.
 //!
 //! Because the answer is a pure function of state, "re-arm on every state change that moves the
-//! deadline" reduces on the client to: recompute after any state change, then cancel-and-arm if
-//! the value changed. One deadline per class from one function is also why two live timers for
+//! deadline" reduces on the client to: recompute after any state change, then reconcile the
+//! timers against the map. One entry per class from one function is also why two live timers for
 //! one class is structurally impossible.
 //!
 //! # Determinism
@@ -67,5 +68,5 @@ pub(crate) mod evaluate;
 pub(crate) mod input;
 
 pub use class::{Alert, AlertClass, AlertSeverity};
-pub use evaluate::{DAY_SECS, SYNC_STALE_SECS, evaluate, next_deadline};
+pub use evaluate::{DAY_SECS, SYNC_STALE_SECS, evaluate, next_deadline, pre_arm_deadlines};
 pub use input::{NotifyInput, QuotaAdvisory, QuotaFacts, RecoveryFacts, SyncFacts};

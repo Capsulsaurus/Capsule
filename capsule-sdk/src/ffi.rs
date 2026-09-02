@@ -63,8 +63,8 @@ pub use workspace::{
 mod notify;
 
 pub use notify::{
-    FfiAlert, FfiAlertClass, FfiAlertSeverity, FfiNotifyInput, FfiQuotaAdvisory, evaluate_alerts,
-    next_alert_deadline,
+    FfiAlert, FfiAlertClass, FfiAlertSeverity, FfiClassDeadline, FfiNotifyInput, FfiQuotaAdvisory,
+    evaluate_alerts, next_alert_deadline, pre_arm_deadlines,
 };
 
 // ─── Errors ──────────────────────────────────────────────────────────────────

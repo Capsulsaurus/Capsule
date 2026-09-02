@@ -42,10 +42,10 @@ This is the [minimal-divergence split](/design/clients/#design-priorities) appli
 server module is planned for v1 — Tier 0 has no server half.
 
 **Status.** `capsule-core::notify` is **built** (slice `S-D29`, core half): one pure decision
-function returns the classes true at an instant, a second returns the instant to arm, and
-`capsule-sdk::ffi` carries both to the apps. Every predicate input is caller-supplied, because
-the core holds none of the trigger state. What is still owed is the *delivery* half — the
-per-platform scheduling and presentation below, the `notification.*` catalog keys, and the
+function returns the classes true at an instant, a second returns the instant to arm per class,
+and `capsule-sdk::ffi` carries both to the apps. Every predicate input is caller-supplied,
+because the core holds none of the trigger state. What is still owed is the *delivery* half —
+the per-platform scheduling and presentation below, the `notification.*` catalog keys, and the
 permission request — so no alert on this page reaches a user yet.
 
 ## Tier 0 — Local Alerts

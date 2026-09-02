@@ -5736,12 +5736,14 @@ table hides what it would cost.
   smoke fires a pre-armed alert with the app terminated; `i18n-guard` passes with the new
   namespace consumed. **Tier:** unit + smoke.
 - **Core half landed — verified 2026-09-01.** `capsule-core::notify` is the whole shared
-  decision function: `evaluate(&NotifyInput, now)` reports the classes true at an instant and
-  `next_deadline(&NotifyInput, now)` reports the one instant to arm, both pure with `now` as an
-  argument. `capsule-sdk::ffi` exports them as free functions (`evaluate_alerts`,
-  `next_alert_deadline`) with RFC 3339 timestamps, and `RecoveryCadence::notify_facts` projects
-  the S-D12 scheduler into the recovery half of the input. The module left
-  `planned-modules.txt`; `notifications.md` no longer calls it planned.
+  decision function: `evaluate(&NotifyInput, now)` reports the classes true at an instant, and
+  `pre_arm_deadlines(&NotifyInput, now)` reports the instant to arm **per class** — keyed per
+  class because the two pre-armable timers are independent, and collapsing them to one loses the
+  later alert on a device the app never runs on again. Both are pure with `now` as an argument.
+  `capsule-sdk::ffi` exports them as free functions (`evaluate_alerts`, `pre_arm_deadlines`,
+  and `next_alert_deadline` for a single-timer host) with RFC 3339 timestamps, and
+  `RecoveryCadence::notify_facts` projects the S-D12 scheduler into the recovery half of the
+  input. The module left `planned-modules.txt`; `notifications.md` no longer calls it planned.
 - **Why `ready` and not `done*`.** Every predicate input is caller-supplied, because the core
   holds none of the trigger state — no persisted last-sync instant, no client-side quota type,
   no quarantine table (a refused sync entry is a per-entry verdict, not a row). So the predicate

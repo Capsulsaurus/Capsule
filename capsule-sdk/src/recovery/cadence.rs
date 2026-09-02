@@ -289,8 +289,11 @@ impl RecoveryCadence {
     ///   badge is persistent and non-blocking, and never escalates back into an alert.
     /// - [`VerificationState::RewrapDue`] is due **now**, whatever the ladder says: repeated
     ///   failure or an explicit "I lost it" is not a scheduled check. The alert class set is
-    ///   closed, so `recovery_check_due` is the only class that can carry it; the client then
-    ///   routes into [`RecoveryClient::guided_rewrap`](crate::recovery::RecoveryClient::guided_rewrap)
+    ///   closed, so `recovery_check_due` is the only class that can carry it — which is why the
+    ///   escalation also rides [`RecoveryFacts::rewrap_due`], surfacing as the alert's
+    ///   `recovery` parameter. Without it the alert would be byte-identical to the routine
+    ///   ninety-day check, and the client could not know to route into
+    ///   [`RecoveryClient::guided_rewrap`](crate::recovery::RecoveryClient::guided_rewrap)
     ///   rather than a plain verification prompt.
     #[must_use]
     pub fn notify_facts(&self, now: Timestamp) -> RecoveryFacts {
@@ -299,11 +302,13 @@ impl RecoveryCadence {
                 next_due,
                 snoozed_until: None,
                 snooze_budget_spent: false,
+                rewrap_due: false,
             },
             VerificationState::Due => RecoveryFacts {
                 next_due: self.next_due,
                 snoozed_until: None,
                 snooze_budget_spent: false,
+                rewrap_due: false,
             },
             VerificationState::Snoozed {
                 until,
@@ -312,16 +317,19 @@ impl RecoveryCadence {
                 next_due: self.next_due,
                 snoozed_until: Some(until),
                 snooze_budget_spent: snoozes_used >= MAX_CONSECUTIVE_SNOOZES,
+                rewrap_due: false,
             },
             VerificationState::Badge => RecoveryFacts {
                 next_due: self.next_due,
                 snoozed_until: None,
                 snooze_budget_spent: true,
+                rewrap_due: false,
             },
             VerificationState::RewrapDue => RecoveryFacts {
                 next_due: now,
                 snoozed_until: None,
                 snooze_budget_spent: false,
+                rewrap_due: true,
             },
         }
     }
@@ -589,6 +597,11 @@ mod tests {
         assert_eq!(facts.next_due, ts(due));
         assert_eq!(facts.snoozed_until, None);
         assert!(facts.snooze_budget_spent);
+
+        // None of the scheduled states is a re-wrap escalation.
+        for at in [BASE, due, at, after] {
+            assert!(!cad.notify_facts(ts(at)).rewrap_due, "at {at}");
+        }
     }
 
     /// `RewrapDue` is due now, whatever the ladder says: an explicit "I lost it" is not a
@@ -605,6 +618,21 @@ mod tests {
         assert_eq!(facts.next_due, ts(BASE));
         assert_eq!(facts.snoozed_until, None);
         assert!(!facts.snooze_budget_spent);
+        assert!(
+            facts.rewrap_due,
+            "the escalation must be distinguishable from a routine check"
+        );
+
+        // And it reaches the alert as a parameter, not just as an earlier due date.
+        let input = NotifyInput {
+            recovery: Some(facts),
+            ..NotifyInput::default()
+        };
+        let alert = notify::evaluate(&input, ts(BASE))
+            .into_iter()
+            .find(|a| a.class == AlertClass::RecoveryCheckDue)
+            .expect("due now");
+        assert_eq!(alert.params["recovery"], "rewrap");
     }
 
     /// The projection is the whole of the wiring: what the scheduler says and what the shared
