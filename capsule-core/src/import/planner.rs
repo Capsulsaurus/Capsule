@@ -234,7 +234,7 @@ fn decide(
 }
 
 fn hash_file(path: &Path) -> Result<String, std::io::Error> {
-    crate::utils::hash::get_file_hash(path)
+    Ok(crate::crypto::hash::hash_file(path)?.to_hex())
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -281,7 +281,7 @@ mod tests {
         // Write a file and pre-insert its hash
         let content = b"unique_photo_content";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = crate::utils::hash::hash_bytes(content);
+        let hash = crate::crypto::hash::hash_bytes(content).to_hex();
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid".to_string(),
@@ -327,7 +327,7 @@ mod tests {
         fs::write(tmp.path().join("b.jpg"), vec![0u8; 25]).unwrap();
         let dup_content = vec![7u8; 99];
         fs::write(tmp.path().join("dup.jpg"), &dup_content).unwrap();
-        let dup_hash = crate::utils::hash::hash_bytes(&dup_content);
+        let dup_hash = crate::crypto::hash::hash_bytes(&dup_content).to_hex();
         let row = crate::db::rows::AssetRow {
             uuid: "dup-uuid".to_string(),
             asset_type: "photo".to_string(),
@@ -474,7 +474,7 @@ mod tests {
 
         let content = b"reimport_me";
         fs::write(tmp.path().join("photo.jpg"), content).unwrap();
-        let hash = crate::utils::hash::hash_bytes(content);
+        let hash = crate::crypto::hash::hash_bytes(content).to_hex();
 
         let row = crate::db::rows::AssetRow {
             uuid: "existing-uuid2".to_string(),

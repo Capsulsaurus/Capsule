@@ -13,8 +13,9 @@
 //! strip"*. **A key-free server cannot.** The metadata a share serves is ciphertext sealed
 //! under material the server does not hold — the fragment secret never leaves the client — so
 //! there is nothing here to read, let alone redact. design/metadata.md is the one that is
-//! consistent with the architecture: *"Stripping happens at the moment of export"*, in
-//! `capsule_core::metadata::export_policy`, client-side.
+//! consistent with the architecture: *"Stripping happens at the moment of export"* —
+//! client-side, in the issuing client. No strip table is implemented yet in `capsule-core`;
+//! `S-C50` is where it lands.
 //!
 //! So the strip is the **issuing client's**, and what this server enforces is the property that
 //! makes it stick: a link serves **only the addresses its own record enumerates**, never the
