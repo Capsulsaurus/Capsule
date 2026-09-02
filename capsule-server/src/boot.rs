@@ -537,6 +537,10 @@ mod tests {
     async fn register(client: &kynos::test::TestClient<App>, password: &str) {
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -551,6 +555,10 @@ mod tests {
     ) -> kynos::http::StatusCode {
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
             .send()
@@ -767,6 +775,10 @@ mod tests {
 
         let registered: serde_json::Value = client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -780,6 +792,10 @@ mod tests {
 
         let signed_in: serde_json::Value = client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -870,6 +886,10 @@ mod tests {
         let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
         client
             .post("/v1/auth/register")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",
@@ -880,6 +900,10 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK);
         client
             .post("/v1/auth/login")
+            .header(
+                "x-capsule-protocol",
+                capsule_core::crypto::primitives::PROTOCOL_VERSION,
+            )
             .header("accept", "application/json")
             .json(&serde_json::json!({
                 "email": "somebody@example.test",

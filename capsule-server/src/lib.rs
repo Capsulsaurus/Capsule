@@ -121,114 +121,108 @@ pub fn router() -> ServerRouter {
         // ten operations from it and a group is how Kynos spells "these and not those": an
         // operation mounted inside is gated and declares the handshake parameters and the `426`;
         // one mounted on the router below is not, and still carries the response headers.
+        // `tests/conformance.rs` pins the exempt set against the emitted document and walks
+        // every operation on the wire, so a route cannot join or leave the gate by accident.
         //
-        // The exempt set the design names (`api-surfaces.md`, "Negotiation Across Transports"):
-        // `GET /v1/version` (the reachability probe a client hits before it knows the window),
-        // the four `/.well-known/capsule/*` records (public discovery, read before any
-        // handshake), the three `/s/{opaque_id}*` share reads (share-links.md requires an
-        // indistinguishable `404`, which a `426` would turn into a probing oracle), and the two
-        // `/d/{opaque_id}*` guest deposits (web-upload.md pins the protocol at link issuance, so
-        // a browser guest has nothing to assert).
-        //
-        // **What is gated today is the upload session's four operations** — the ones that
-        // enforced the handshake per route before this group existed. Every other non-exempt
-        // operation is still mounted on the router below, and moving it in is a one-line change
-        // here — deliberately not made yet, because `capsule-sdk` builds three separate
-        // `reqwest` clients (`auth.rs`, `sync.rs`, `net.rs`) and only the shared one in
-        // `client.rs` sends the handshake; widening the gate before the other two do would
-        // refuse every SDK sign-in. The census test in `tests/conformance.rs` pins the gated set
-        // so the widening is a deliberate edit to both, never an accident of a mount.
-        .group(
-            Group::<App>::new("/")
-                .intercept(negotiation::ProtocolGate::new())
-                .mount(kynos::routes![
-                    routes::upload::create_upload,
-                    routes::upload::append_chunk,
-                    routes::upload::head_upload,
-                    routes::upload::cancel_upload,
-                ]),
-        )
         // Seven `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
         // next addition obvious rather than a puzzle. Each group is well under the cap, so a
         // new operation joins the surface it belongs to instead of wherever there is room.
-        // The account: who you are, what devices you have, and how you get your key back.
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolGate::new())
+                // The account: who you are, what devices you have, and how you get your key
+                // back.
+                .mount(kynos::routes![
+                    routes::auth::register_user,
+                    routes::auth::login_user,
+                    routes::auth::refresh_token,
+                    routes::auth::logout,
+                    routes::auth::revoke_all_challenge,
+                    routes::auth::revoke_all,
+                    routes::devices::list_devices,
+                    routes::devices::revoke_session,
+                    routes::directory::publish_device_directory,
+                    routes::directory::fetch_device_directory,
+                    routes::escrow::store_escrow,
+                    routes::escrow::fetch_escrow,
+                    routes::auth::reauthenticate,
+                ])
+                // What an account knows about itself, and the credentials it opens sessions
+                // with.
+                .mount(kynos::routes![
+                    routes::profile::get_profile,
+                    routes::profile::update_profile,
+                    routes::profile::change_password,
+                    routes::totp::totp_enroll,
+                    routes::totp::totp_verify_enrollment,
+                    routes::totp::totp_disable,
+                    routes::totp::totp_verify_login,
+                ])
+                // The cross-device add: one code, one channel, and the two devices' mailboxes.
+                .mount(kynos::routes![
+                    routes::enroll::issue_enrollment_code,
+                    routes::enroll::redeem_enrollment_code,
+                    routes::enroll::relay_enrollment_payload,
+                    routes::enroll::drain_enrollment_channel,
+                    routes::enroll::close_enrollment_channel,
+                ])
+                // The library's own surfaces.
+                .mount(kynos::routes![
+                    routes::albums::provision_album,
+                    routes::upgrade::begin_album_upgrade,
+                    routes::upgrade::album_upgrade_phase,
+                    routes::upgrade::abort_album_upgrade,
+                    routes::quota::get_quota,
+                    routes::moderation::moderation_record,
+                ])
+                // The asset surfaces: getting bytes in, changing what they mean, and reading
+                // them back.
+                .mount(kynos::routes![
+                    routes::upload::create_upload,
+                    routes::upload::append_chunk,
+                    routes::sessions::list_upload_sessions,
+                    routes::upload::head_upload,
+                    routes::upload::cancel_upload,
+                    routes::receipts::get_upload_receipt,
+                    routes::ops::apply_op,
+                    routes::sync::sync_feed,
+                    routes::blob::get_blob,
+                    routes::storage::verify_storage,
+                    routes::assets::get_asset_receipts,
+                ])
+                // Share links and guest drops: the owner's side of both.
+                .mount(kynos::routes![
+                    routes::share::issue_share,
+                    routes::share::revoke_share,
+                    routes::drop::provision_link,
+                    routes::drop::revoke_link,
+                    routes::drop::list_inbox,
+                    routes::drop::adopt_drop,
+                    routes::drop::discard_drop,
+                ]),
+        )
+        // **The ten operations the design exempts from the gate**, mounted on the router so
+        // the group above does not cover them (`api-surfaces.md`, "Negotiation Across
+        // Transports"). `GET /v1/version` is the reachability probe a client hits before it
+        // knows the window. The four `/.well-known/capsule/*` records are public discovery,
+        // read before any handshake. The three `/s/{opaque_id}*` share reads must answer an
+        // indistinguishable `404` (share-links.md), which a `426` would turn into a probing
+        // oracle. The two `/d/{opaque_id}*` guest deposits have their protocol pinned at link
+        // issuance (web-upload.md), so a browser guest has nothing to assert. All ten still
+        // carry the response headers, because `Negotiation` is the router's.
         .mount(kynos::routes![
             routes::version::get_version,
-            routes::auth::register_user,
-            routes::auth::login_user,
-            routes::auth::refresh_token,
-            routes::auth::logout,
-            routes::auth::revoke_all_challenge,
-            routes::auth::revoke_all,
-            routes::devices::list_devices,
-            routes::devices::revoke_session,
-            routes::directory::publish_device_directory,
-            routes::directory::fetch_device_directory,
-            routes::escrow::store_escrow,
-            routes::escrow::fetch_escrow,
-            routes::auth::reauthenticate,
-        ])
-        // What an account knows about itself, and the credentials it opens sessions with.
-        .mount(kynos::routes![
-            routes::profile::get_profile,
-            routes::profile::update_profile,
-            routes::profile::change_password,
-            routes::totp::totp_enroll,
-            routes::totp::totp_verify_enrollment,
-            routes::totp::totp_disable,
-            routes::totp::totp_verify_login,
-        ])
-        // The cross-device add: one code, one channel, and the two devices' mailboxes.
-        .mount(kynos::routes![
-            routes::enroll::issue_enrollment_code,
-            routes::enroll::redeem_enrollment_code,
-            routes::enroll::relay_enrollment_payload,
-            routes::enroll::drain_enrollment_channel,
-            routes::enroll::close_enrollment_channel,
-        ])
-        // The library's own surfaces, and the public record anybody may read.
-        .mount(kynos::routes![
-            routes::albums::provision_album,
-            routes::upgrade::begin_album_upgrade,
-            routes::upgrade::album_upgrade_phase,
-            routes::upgrade::abort_album_upgrade,
-            routes::quota::get_quota,
-            routes::moderation::moderation_record,
             routes::well_known::attestation_keys,
             routes::well_known::server_info,
             routes::well_known::deprecation_announcements,
             routes::well_known::revoked_jti,
-        ])
-        // The asset surfaces beside the gated session operations above: changing what bytes
-        // mean, and reading them back.
-        .mount(kynos::routes![
-            routes::sessions::list_upload_sessions,
-            routes::receipts::get_upload_receipt,
-            routes::ops::apply_op,
-            routes::sync::sync_feed,
-            routes::blob::get_blob,
-            routes::storage::verify_storage,
-            routes::assets::get_asset_receipts,
-        ])
-        // Share links: two owner operations, and the one path served without an account.
-        .mount(kynos::routes![
-            routes::share::issue_share,
-            routes::share::revoke_share,
             routes::share::share_metadata,
             routes::share::share_wrapped_secret,
             routes::share::share_blob,
-        ])
-        // Guest drops: the owner's link, the guest's deposit, and the inbox between them.
-        .mount(kynos::routes![
-            routes::drop::provision_link,
-            routes::drop::revoke_link,
             routes::drop::create_drop,
             routes::drop::append_drop_chunk,
-            routes::drop::list_inbox,
-            routes::drop::adopt_drop,
-            routes::drop::discard_drop,
         ])
 }
 

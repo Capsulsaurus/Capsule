@@ -178,6 +178,31 @@ async fn every_declared_response_is_exercised() {
             .assert_status(StatusCode::PAYLOAD_TOO_LARGE);
     }
 
+    // 426 and 400 are declared on every gated operation, because the protocol gate is mounted
+    // on the group that holds them and a Kynos interceptor's declaration is its type. So every
+    // gated operation produces both here, the way the gate answers before anything else is
+    // read: an ancient protocol date, and one that is not a date at all.
+    let document = capsule_server::openapi().expect("router describes itself");
+    let document = serde_json::to_value(&document).expect("a document serializes");
+    for (method, template, operation) in operations(&document) {
+        if declares_header(&operation, "X-Capsule-Protocol").is_none() {
+            continue;
+        }
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+        client
+            .method(verb.clone(), &concrete(&template))
+            .header("x-capsule-protocol", "2000-01-01")
+            .send()
+            .await
+            .assert_status(StatusCode::UPGRADE_REQUIRED);
+        client
+            .method(verb, &concrete(&template))
+            .header("x-capsule-protocol", "yesterday")
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+    }
+
     // ── POST /v1/auth/register ─────────────────────────────────────────────────────────────
     // 415 and 422 are the `Json` extractor's; 400 is the surface's own floor; 409 is the taken
     // address, which is the one disclosure this operation makes on purpose.
@@ -2517,25 +2542,12 @@ const HANDSHAKE_HEADERS: [&str; 3] = [
     "X-Capsule-Sidecar-Schema",
 ];
 
-/// The operations the protocol gate covers, by method and path template.
+/// The operations the design exempts from the gate; every other operation is gated.
 ///
-/// **Pinned on purpose.** The gate is a Kynos `Group` in `lib.rs::router`, so an operation joins
-/// or leaves it by a mount call moving — and a mount call moving must fail this test, because
-/// widening the gate refuses every client that does not send the handshake and narrowing it
-/// silently drops a fail-closed rule. Today the set is the upload session's four operations,
-/// the ones that enforced the handshake per route before the gate existed; the design's target
-/// is every operation except the ten `lib.rs` names as exempt, and the SDK's transports have
-/// to send the handshake before that widening lands.
-const GATED: &[(&str, &str)] = &[
-    ("POST", "/v1/upload"),
-    ("PATCH", "/v1/upload/{id}"),
-    ("HEAD", "/v1/upload/{id}"),
-    ("DELETE", "/v1/upload/{id}"),
-];
-
-/// The operations the design exempts from the gate, whatever else is gated.
-///
-/// Asserted **never** to declare the handshake: `/v1/version` is the reachability probe a
+/// **Pinned on purpose.** The gate is a Kynos `Group` in `lib.rs::router`, so an operation
+/// leaves it by a mount call moving — and a mount call moving must fail this test, because a
+/// route outside the group silently drops a fail-closed rule. Asserted **never** to declare the
+/// handshake: `/v1/version` is the reachability probe a
 /// client hits before it knows the window; the `/.well-known/capsule/*` records are public
 /// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
 /// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
@@ -2632,9 +2644,16 @@ fn every_response_of_every_operation_declares_the_protocol_window() {
     assert!(responses > 100, "only {responses} responses were walked");
 }
 
-/// The operations declaring the handshake are exactly [`GATED`], and none of [`EXEMPT`].
+/// Whether `(method, template)` is one the design exempts from the gate.
+fn is_exempt(method: &str, template: &str) -> bool {
+    EXEMPT
+        .iter()
+        .any(|(exempt_method, exempt_path)| *exempt_method == method && *exempt_path == template)
+}
+
+/// The operations declaring the handshake are exactly the ones outside [`EXEMPT`].
 #[test]
-fn the_handshake_is_declared_on_exactly_the_gated_operations() {
+fn the_handshake_is_declared_on_every_operation_but_the_exempt_ten() {
     let document = capsule_server::openapi().expect("router describes itself");
     let json = serde_json::to_value(&document).expect("a document serializes");
 
@@ -2666,20 +2685,23 @@ fn the_handshake_is_declared_on_exactly_the_gated_operations() {
     }
     gated.sort();
 
-    let mut expected: Vec<(String, String)> = GATED
-        .iter()
-        .map(|(method, path)| ((*method).to_owned(), (*path).to_owned()))
-        .collect();
-    expected.sort();
-    assert_eq!(
-        gated, expected,
-        "the gated set moved; `lib.rs::router` and this pin change together"
-    );
-
     let all: Vec<(String, String)> = operations(&json)
         .into_iter()
         .map(|(method, path, _)| (method, path))
         .collect();
+    let mut expected: Vec<(String, String)> = all
+        .iter()
+        .filter(|(method, path)| !is_exempt(method, path))
+        .cloned()
+        .collect();
+    expected.sort();
+    assert_eq!(
+        gated, expected,
+        "the gated set is not \"everything but EXEMPT\"; `lib.rs::router` and this pin change \
+         together"
+    );
+    assert_eq!(EXEMPT.len(), 10, "the design names ten exemptions");
+
     for (method, path) in EXEMPT {
         assert!(
             all.contains(&((*method).to_owned(), (*path).to_owned())),
@@ -2787,6 +2809,71 @@ async fn the_protocol_window_rides_every_response_on_the_wire() {
         walked += 1;
     }
     assert_eq!(walked, operations(&json).len());
+}
+
+/// One gated route per module, refused before anything else is read (issue #404).
+///
+/// The wire census above walks every operation; this is the same fact at reading size, in the
+/// shape `api-surfaces.md` asks for — "drive every fail-closed handshake rule through
+/// representative routes in each module and assert the same headers, status, and `error.*`
+/// code". No credential, no body, no real path variable: the gate answers first.
+#[tokio::test]
+async fn a_representative_route_per_module_refuses_the_handshake_before_anything_else() {
+    use capsule_server::upload::policy::{DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN};
+
+    let fixture = Fixture::working();
+    for (method, path) in [
+        ("POST", "/v1/auth/login"),
+        ("GET", "/v1/auth/profile"),
+        ("POST", "/v1/auth/totp/enroll"),
+        ("GET", "/v1/auth/devices"),
+        ("POST", "/v1/auth/devices/directory"),
+        ("PUT", "/v1/auth/escrow"),
+        ("POST", "/v1/auth/devices/enroll"),
+        ("POST", "/v1/albums"),
+        ("POST", "/v1/albums/anything/upgrade"),
+        ("GET", "/v1/quota"),
+        ("GET", "/v1/moderation/record"),
+        ("POST", "/v1/upload"),
+        ("GET", "/v1/upload/sessions"),
+        ("GET", "/v1/upload/anything/receipt"),
+        ("POST", "/v1/albums/anything/ops"),
+        ("GET", "/v1/sync"),
+        ("GET", "/v1/blob/deadbeef"),
+        ("POST", "/v1/storage/verify"),
+        ("GET", "/v1/assets/anything/receipts"),
+        ("POST", "/v1/shares"),
+        ("POST", "/v1/drops/links"),
+    ] {
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+
+        // Outside the window: 426, the code, the window on the headers.
+        let refused = fixture
+            .client
+            .method(verb.clone(), path)
+            .header("x-capsule-protocol", "2000-01-01")
+            .send()
+            .await;
+        refused.assert_status(StatusCode::UPGRADE_REQUIRED);
+        refused.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+        refused.assert_header("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX);
+        refused.assert_header("x-capsule-min-client-build", "0.0.0");
+        let body: serde_json::Value = refused.json();
+        assert_eq!(
+            body["code"], "error.protocol.version_unsupported",
+            "{method} {path}: {body}"
+        );
+
+        // Absent: the gate's 400, still carrying the window.
+        let missing = fixture.client.raw().method(verb, path).send().await;
+        missing.assert_status(StatusCode::BAD_REQUEST);
+        missing.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+        let body: serde_json::Value = missing.json();
+        assert_eq!(
+            body["code"], "error.request.malformed",
+            "{method} {path}: {body}"
+        );
+    }
 }
 
 /// The router builds and describes itself.
