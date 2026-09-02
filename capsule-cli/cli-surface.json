@@ -1,0 +1,539 @@
+{
+  "about": "A command line interface for Capsule - the photo management platform",
+  "long_about": "Capsule CLI provides tools for managing your photos and albums:\n• Authentication management\n• Sync local and remote data\n• Check status and list files\n• Manage albums and collections",
+  "name": "capsule",
+  "schema": 1,
+  "subcommands": [
+    {
+      "about": "Authentication commands",
+      "name": "auth",
+      "subcommands": [
+        {
+          "about": "Login to Capsule",
+          "args": [
+            {
+              "help": "Account email (prompted when omitted)",
+              "id": "email",
+              "long": "email",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "EMAIL"
+              ]
+            },
+            {
+              "help": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "password_stdin",
+              "long": "password-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "login"
+        },
+        {
+          "about": "Logout from Capsule",
+          "name": "logout"
+        },
+        {
+          "about": "Create a Capsule account and sign in",
+          "args": [
+            {
+              "help": "Account email (prompted when omitted)",
+              "id": "email",
+              "long": "email",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "EMAIL"
+              ]
+            },
+            {
+              "help": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "password_stdin",
+              "long": "password-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            }
+          ],
+          "name": "register"
+        },
+        {
+          "about": "Show authentication status",
+          "name": "status"
+        }
+      ]
+    },
+    {
+      "about": "Review a local library: flag assets, filter by flag, sweep rejects to trash",
+      "args": [
+        {
+          "help": "Path to the Capsule library",
+          "id": "library",
+          "long": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Read the library passphrase from stdin instead of prompting, so culling works in scripts and CI where there is no terminal",
+          "id": "passphrase_stdin",
+          "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Flag an asset as a keeper (repeatable)",
+          "id": "pick",
+          "long": "pick",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "ASSET_ID"
+          ]
+        },
+        {
+          "help": "Clear an asset's flag back to the never-flagged default (repeatable)",
+          "id": "neutral",
+          "long": "neutral",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "ASSET_ID"
+          ]
+        },
+        {
+          "help": "Flag an asset for rejection (repeatable)",
+          "id": "reject",
+          "long": "reject",
+          "positional": false,
+          "repeatable": true,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "ASSET_ID"
+          ]
+        },
+        {
+          "help": "List the assets carrying one flag instead of only counting them",
+          "id": "filter",
+          "long": "filter",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "A keeper",
+              "name": "pick"
+            },
+            {
+              "help": "Not yet culled either way — the never-flagged default",
+              "name": "neutral"
+            },
+            {
+              "help": "Marked for rejection; the set `--sweep` moves to trash",
+              "name": "reject"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "FLAG"
+          ]
+        },
+        {
+          "help": "Move every rejected asset to trash. The only destructive step, and soft per retention — swept assets stay restorable until the window elapses",
+          "id": "sweep",
+          "long": "sweep",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "default_values": [
+            "30"
+          ],
+          "help": "Retention window, in days, the sweep's soft delete stamps",
+          "id": "retain_days",
+          "long": "retain-days",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "DAYS"
+          ]
+        }
+      ],
+      "name": "cull"
+    },
+    {
+      "about": "Run the offline end-to-end data-plane showcase (real cryptography, no network)",
+      "args": [
+        {
+          "help": "Working directory for the demo libraries (a temp dir is used if omitted)",
+          "id": "workdir",
+          "long": "workdir",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "A real image/file to import (a small synthetic file is used if omitted)",
+          "id": "image",
+          "long": "image",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        }
+      ],
+      "name": "demo"
+    },
+    {
+      "about": "Import files into a local Capsule library",
+      "args": [
+        {
+          "help": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired",
+          "id": "paths",
+          "positional": true,
+          "repeatable": true,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets",
+          "id": "provider",
+          "long": "provider",
+          "positional": false,
+          "possible_values": [
+            {
+              "help": "A Google Photos export produced by Google Takeout, extracted to disk",
+              "name": "takeout"
+            }
+          ],
+          "repeatable": false,
+          "required": false,
+          "takes_value": true,
+          "value_names": [
+            "PROVIDER"
+          ]
+        },
+        {
+          "help": "Path to the Capsule library",
+          "id": "library",
+          "long": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Move files instead of copying them",
+          "id": "move",
+          "long": "move",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Re-import files even if they already exist (duplicate override)",
+          "id": "force",
+          "long": "force",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal",
+          "id": "passphrase_stdin",
+          "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Push the library to the server after importing — sugar for a `capsule push` run over the same library. The import itself stays offline",
+          "id": "push",
+          "long": "push",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Stage the follow-on push (`--push`) in tier order, gating the preview and original tiers on the connection class",
+          "id": "staged",
+          "long": "staged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "import"
+    },
+    {
+      "about": "Manage the local library",
+      "name": "library",
+      "subcommands": [
+        {
+          "about": "Show library information",
+          "args": [
+            {
+              "help": "Path to the library",
+              "id": "path",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            }
+          ],
+          "name": "info"
+        },
+        {
+          "about": "Create a new Capsule library",
+          "args": [
+            {
+              "help": "Directory for the new library",
+              "id": "path",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "default_values": [
+                "My Library"
+              ],
+              "help": "Human-readable library name",
+              "id": "name",
+              "long": "name",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "NAME"
+              ]
+            }
+          ],
+          "name": "init"
+        },
+        {
+          "about": "Rebuild the SQLite index from sidecar files",
+          "args": [
+            {
+              "help": "Path to the library",
+              "id": "path",
+              "positional": true,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            }
+          ],
+          "name": "rebuild"
+        }
+      ]
+    },
+    {
+      "about": "List the assets the sync feed has delivered",
+      "args": [
+        {
+          "help": "Include assets the server has tombstoned (deleted) as well as live ones",
+          "id": "include_deleted",
+          "long": "include-deleted",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "list"
+    },
+    {
+      "about": "Match metadata for current file",
+      "args": [
+        {
+          "help": "Path to the file to match metadata for",
+          "id": "path",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        }
+      ],
+      "name": "match"
+    },
+    {
+      "about": "Upload a local Capsule library to the server",
+      "args": [
+        {
+          "help": "Path to the Capsule library to push",
+          "id": "library",
+          "long": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal",
+          "id": "passphrase_stdin",
+          "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Report what would be uploaded without opening a single upload session",
+          "id": "dry_run",
+          "long": "dry-run",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Re-drive every blob regardless of what the server already holds",
+          "id": "force",
+          "long": "force",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly",
+          "id": "staged",
+          "long": "staged",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "push"
+    },
+    {
+      "about": "Reset all local CLI data",
+      "args": [
+        {
+          "help": "Reset configuration",
+          "id": "config",
+          "long": "config",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Reset data directory",
+          "id": "data",
+          "long": "data",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Reset cache directory",
+          "id": "cache",
+          "long": "cache",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Reset all data",
+          "id": "all",
+          "long": "all",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "reset"
+    },
+    {
+      "about": "Show current status",
+      "name": "status"
+    },
+    {
+      "about": "Sync local and remote data",
+      "args": [
+        {
+          "help": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries",
+          "id": "force",
+          "long": "force",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        },
+        {
+          "help": "Perform a dry run without making changes",
+          "id": "dry_run",
+          "long": "dry-run",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "sync"
+    }
+  ]
+}
