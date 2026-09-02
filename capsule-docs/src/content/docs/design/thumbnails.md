@@ -32,16 +32,22 @@ Two derivative tiers per photo asset and one preview tier for video assets:
 :::note[Implementation status — what ships today]
 The table above is the **contract**, not an inventory of what is built. As of `#410`,
 `capsule-core::media` (on `rawshift-image` 0.1.1, behind the `media` feature that `native`
-implies) generates the **thumbnail tier as WebP at q=50** and nothing else. Concretely:
+implies) generates the **thumbnail tier as JXL** and nothing else. Concretely:
 
 | Tier | Photo formats generated | Missing, and why |
 | --- | --- | --- |
-| Thumbnail | **WebP** q=50, 256 px long edge; or the `original` sentinel when the source is already inside the cap | **JXL** needs C libjxl for a lossy encode — the pure-Rust backend is `zune-jpegxl`'s *lossless* simple encoder. **AVIF** needs `nasm` on every x86_64 build host (`ravif` → `rav1e/asm`). |
-| Preview | — | Blocked with the master codec: a source-resolution *lossless* still would rival the original in size, so the tier is only worth its bytes once a lossy master is available. |
+| Thumbnail | **JXL**, 256 px long edge, **lossless**; or the `original` sentinel when the source is already inside the cap | **AVIF** needs `nasm` on every x86_64 build host (`ravif` → `rav1e/asm`). **WebP** does not compile: `rawshift-image`'s codec passes `*const i8` where `libwebp-sys` declares `*const c_char`, which is `u8` on aarch64 — every mobile target. |
+| Preview | — | Blocked with a *lossy* master codec: a source-resolution lossless still would rival the original in size. |
 | Video (either tier) | — | `rawshift-video` is unpublished; slice `S-B5`. |
 
-Decode is JPEG, PNG, JXL, TIFF, GIF and WebP. **HEIC, AVIF and the RAW families are recognised
-and refused**, because their backends need system libheif / libdav1d.
+The thumbnail's declared **q=50 is advisory today**: the pure-Rust backend is `zune-jpegxl`'s
+`JxlSimpleEncoder`, which is lossless, so a thumbnail costs more bytes than the table intends. A
+lossy JXL needs C libjxl. That is the one place the build knowingly departs from this table, and
+it is asserted by a test rather than left to be discovered.
+
+Decode is JPEG, PNG, JXL, TIFF and GIF. **HEIC, AVIF, WebP and the RAW families are recognised
+and refused** — HEIC and AVIF need system libheif / libdav1d, and WebP shares the aarch64 defect
+above in both directions (the crate compiles that module for decode *or* encode).
 
 None of this is silent. A format with no codec is a typed
 `media::MediaError::UnsupportedFormat { format, op }`, and a `(tier, format)` pair with no encoder

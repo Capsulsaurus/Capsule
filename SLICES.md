@@ -210,7 +210,7 @@ row's remainder now lives.
 | S-A9 | Add-id counter reseed at `Workspace` open | core-crypto | — | S | ACTIVE | done | |
 | S-A10 | Durable album-key persistence + library open plumbing | core-crypto | — | L | ACTIVE | done | |
 | S-A11 | Publish the DEK in the device directory | core-crypto | — | M | ACTIVE | done | |
-| S-B1 | Thumbnail/LQIP generation | media/import | — | L | ACTIVE | done\* | JXL/AVIF encode, the preview tier, HEIC/RAW decode → #437 |
+| S-B1 | Thumbnail/LQIP generation | media/import | — | L | ACTIVE | done\* | lossy JXL/AVIF encode, preview tier, HEIC/RAW decode → #437; WebP → #444 |
 | S-B2 | Signed-path import-executor rewrite | media/import | S-B1 | L | MIXED | done\* | durable album keys → `S-A10` |
 | S-B3 | Streaming import (probe, `total_size`, drive mode) | media/import | S-D1, S-D4 | L | MIXED | done | |
 | S-B4 | Staged uploads (low-data tier ladder) | media/import | S-C1, S-C2, S-D1 | M | MIXED | done | |
@@ -707,9 +707,16 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
     a pre-decode 256 Mpx budget and an unwind boundary, a deterministic integer area-average
     downscale (the crate has no resize, and a derivative's bytes are signed), the closed
     `DerivativeFormat` set with the `original` sentinel, and `MediaError`.
-  - the **thumbnail tier** at 256 px / q=50 as **WebP**, signed and hash-chained through the same
-    two-signature `DerivativeCore::sign` path assets use, and persisted at the layout the upload
-    bundle reader already reads.
+  - the **thumbnail tier** at 256 px as **JXL** — the table's committed *master* format — signed
+    and hash-chained through the same two-signature `DerivativeCore::sign` path assets use, and
+    persisted at the layout the upload bundle reader already reads. The declared q=50 is advisory:
+    the pure-Rust `zune-jpegxl` backend is lossless, which a test asserts rather than hides.
+  - **WebP was the first choice and CI refuted it.** `image/webp` is in the format table and
+    `libwebp` has exactly the q=50 knob, but `rawshift-image`'s WebP module passes `*const i8`
+    where `libwebp-sys` 0.14.4 declares `*const c_char` — `u8` on aarch64 — so the feature is an
+    E0308 on every mobile target, in both directions (the module compiles under
+    `any(webp-decode, webp-encode)`). WebP is therefore a recognised-but-undecodable format here;
+    the upstream fix is filed as #444.
   - **Detection is Capsule's, not the crate's.** `rawshift-image`'s own `detect_standard_format`
     gates its HEIC arm on `heic-decode`, so delegating would make the typed refusal for a format
     depend on whether it can be decoded — a HEIC would arrive as "not a still" instead of "a
@@ -719,10 +726,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
     so a default-configured encode copies the source's EXIF — GPS included — into the thumbnail.
     A test demonstrates the leak with the crate's own default and then asserts Capsule's
     derivative carries no `EXIF`/`XMP`/`ICCP` chunk and none of the source's GPS rationals.
-- **Owed → #437.** The JXL master and the AVIF delivery variant, the preview tier, and HEIC/RAW
-  decode. Each is blocked on a toolchain, not a design: a lossy JXL needs C libjxl (the pure-Rust
-  backend is `zune-jpegxl`'s lossless simple encoder), AVIF encode needs `nasm` on every x86_64
-  build host, and HEIC/AVIF decode need system libheif/libdav1d. All four are visible today as
+- **Owed → #437 and #444.** A *lossy* JXL master, the AVIF delivery variant, the preview tier and
+  HEIC/RAW decode (#437); WebP in both directions (#444). None is blocked on a design question: a
+  lossy JXL needs C libjxl, AVIF encode needs `nasm` on every x86_64 build host, HEIC/AVIF decode
+  need system libheif/libdav1d, and WebP needs one upstream cast widened. All are visible today as
   typed `MediaError::UnsupportedFormat` or as per-`(tier, format)` deferrals counted by
   `ImportExecutionSummary::deferred_format_count()`, never as silent absence.
 
