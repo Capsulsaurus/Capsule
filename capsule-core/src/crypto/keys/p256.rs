@@ -33,7 +33,8 @@ use crate::crypto::CryptoError;
 /// Parse a hardware element's P-256 public key into a verifying key. Shipping elements emit the
 /// point in one of three shapes: compressed SEC1 (33 bytes), uncompressed SEC1 (65 bytes,
 /// `0x04‖x‖y`, e.g. Secure Enclave), or the bare `x‖y` coordinate pair (64 bytes, e.g. the TPM
-/// reference in [`super::tpm`]). All three normalize to the same key.
+/// reference in the `tpm` adapter, which is `tpm`-feature-gated and so has no doc page in a
+/// default build). All three normalize to the same key.
 fn parse_p256_public(point: &[u8]) -> Result<P256VerifyingKey, HardwareSignerError> {
     let vk = match point.len() {
         33 | 65 => P256VerifyingKey::from_sec1_bytes(point),
