@@ -47,6 +47,8 @@
 //! records: it is a pure function of a key and a clock.
 
 pub mod accounts_memory;
+pub mod accounts_postgres;
+pub mod conformance;
 pub mod credential;
 pub mod directory;
 pub mod profile;
@@ -58,6 +60,7 @@ pub mod totp;
 use std::sync::Arc;
 
 pub use self::accounts_memory::InMemoryAccounts;
+pub use self::accounts_postgres::PostgresAccounts;
 pub use self::credential::{CredentialError, Credentials};
 pub use self::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
 pub use self::profile::{

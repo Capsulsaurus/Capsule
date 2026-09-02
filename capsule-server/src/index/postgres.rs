@@ -18,7 +18,7 @@
 //! # Why the mutations are written in Rust rather than in SQL
 //!
 //! Each write hydrates the whole [`AssetRow`] under the lock, applies the same free functions
-//! the in-memory adapter applies ([`is_singular`], [`set_singular`],
+//! the in-memory adapter applies (`is_singular`, `set_singular`,
 //! [`AssetRow::is_publishable`]), and writes the row back before committing. The alternative —
 //! expressing the state machine as a chain of `UPDATE … WHERE` statements — would be a *second*
 //! statement of rules the port already fixes, in a language where the conformance suite cannot

@@ -43,6 +43,11 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(0),
                     )
+                    // The lockout's clock. Without it the count is a one-way door: no surface in
+                    // this server can clear a lockout — `login`, `reauthenticate` and `password`
+                    // all refuse on `Locked` before verifying anything, and no operator command
+                    // reaches this row — so a permanent lockout is a permanently lost account.
+                    .col(ColumnDef::new(Accounts::LastFailureAt).big_integer().null())
                     .col(ColumnDef::new(Accounts::CreatedAt).big_integer().not_null())
                     .col(ColumnDef::new(Accounts::UpdatedAt).big_integer().not_null())
                     .to_owned(),
@@ -82,6 +87,7 @@ enum Accounts {
     DisplayName,
     Credential,
     Failures,
+    LastFailureAt,
     CreatedAt,
     UpdatedAt,
 }
