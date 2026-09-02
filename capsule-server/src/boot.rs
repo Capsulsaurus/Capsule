@@ -142,19 +142,35 @@ pub enum BootError {
     },
 }
 
-/// A server, ready to serve or to sweep.
+/// The two operator workers' collaborators.
 ///
-/// The three things a subcommand can want out of one assembly: the application the router is
-/// built with, and the two operator workers, which have no wire surface at all and therefore
-/// cannot be reached through it.
+/// Assembled **without any key material**, which is what makes `config`'s claim that
+/// `gc`/`purge`/`scrub` need none structural rather than a promise: there is no signing key in
+/// scope here to accidentally require. A maintenance host that had to hold the production
+/// token-signing key to sweep a directory would be a reason to put the key on a maintenance
+/// host.
+///
+/// Neither worker has a wire surface, so neither is reachable through the router — which is why
+/// they are a separate assembly rather than fields on [`App`].
 #[derive(Debug)]
-pub struct Assembled {
-    /// The application context every operation resolves its dependencies from.
-    pub app: App,
+pub struct Maintenance {
     /// The collector's collaborators (`gc`, `purge`).
     pub collection: CollectionContext,
     /// The integrity scrub's collaborators (`scrub`).
     pub scrub: ScrubContext,
+}
+
+/// A server, ready to serve.
+///
+/// Carries [`Maintenance`] as well, over the **same** stores: one index, one blob store and one
+/// mark store behind all three, which is what makes "upload it, then let the collector see it" a
+/// property of the server rather than of three disconnected assemblies.
+#[derive(Debug)]
+pub struct Assembled {
+    /// The application context every operation resolves its dependencies from.
+    pub app: App,
+    /// The operator workers, over the same stores.
+    pub maintenance: Maintenance,
 }
 
 impl Assembled {
@@ -177,16 +193,110 @@ impl Assembled {
 /// Returns [`BootError`] for any of the startup failures above. Nothing is left half-built: the
 /// blob root is the only side effect, and it is idempotent.
 pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
+    let stores = stores(config).await?;
     match config.backends {
-        Backends::Memory => memory(config).await,
-        // The refusal `store/mod.rs` documents. `Config::load` already turned "no `VALKEY_URL`
-        // and no `--memory`" into a configuration fault naming the variable, so reaching here
-        // means the operator *did* set it — and the honest answer is that nothing reads it yet.
-        Backends::Durable => Err(BootError::AdapterUnavailable {
-            key: "VALKEY_URL",
-            issue: "#403 (Valkey) and #402 (Postgres)",
-        }),
+        Backends::Memory => memory(config, stores),
+        Backends::Durable => Err(durable()),
     }
+}
+
+/// Assemble only what `gc`, `purge` and `scrub` read.
+///
+/// # Errors
+///
+/// Returns [`BootError`] for the blob root or an unimplemented durable backend. It cannot fail
+/// on key material, because it asks for none.
+pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootError> {
+    let stores = stores(config).await?;
+    match config.backends {
+        Backends::Memory => {
+            let maintenance = stores.maintenance(config.grace_window);
+            tracing::info!(
+                blob_root = %stores.root.display(),
+                grace_window = %config.grace_window,
+                "assembled the operator workers on the in-memory adapters"
+            );
+            Ok(maintenance)
+        }
+        Backends::Durable => Err(durable()),
+    }
+}
+
+/// The refusal `store/mod.rs` documents.
+///
+/// `Config::load` already turned "no `VALKEY_URL` and no `--memory`" into a configuration fault
+/// naming the variable, so reaching here means the operator *did* set it — and the honest answer
+/// is that nothing reads it yet.
+fn durable() -> BootError {
+    BootError::AdapterUnavailable {
+        key: "VALKEY_URL",
+        issue: "#403 (Valkey) and #402 (Postgres)",
+    }
+}
+
+/// The stores every subcommand shares, and the only one of them that is durable.
+///
+/// A struct rather than six locals because [`assemble`] and [`assemble_maintenance`] must build
+/// the *same* stores: two functions each opening their own index is two servers that disagree
+/// about what is in it.
+#[derive(Debug)]
+struct Stores {
+    root: std::path::PathBuf,
+    clock: Arc<SystemClock>,
+    blobs: Arc<FilesystemBlobStore>,
+    index: Arc<InMemoryAssetIndex>,
+    uploads: Arc<InMemoryUploadSessions>,
+    marks: Arc<InMemoryCollection>,
+    quotas: Arc<InMemoryQuota>,
+}
+
+impl Stores {
+    /// The operator workers over these stores.
+    fn maintenance(&self, grace_window: jiff::SignedDuration) -> Maintenance {
+        Maintenance {
+            collection: CollectionContext::new(
+                self.index.clone(),
+                self.blobs.clone(),
+                self.marks.clone(),
+                self.quotas.clone(),
+                self.clock.clone(),
+                grace_window,
+            ),
+            scrub: ScrubContext::new(self.index.clone(), self.blobs.clone(), self.uploads.clone()),
+        }
+    }
+}
+
+/// Open the blob root and build the stores over it.
+///
+/// The blob root is the one thing on this path that touches the filesystem, and it is refused
+/// rather than deferred: a store that cannot be created now is a store every upload will fail
+/// against at write time, and a server that accepts bytes it cannot keep is worse than one that
+/// does not start.
+async fn stores(config: &Config) -> Result<Stores, BootError> {
+    let root = config
+        .blob_root
+        .clone()
+        .ok_or(BootError::Missing { key: "BLOB_ROOT" })?;
+    let clock = Arc::new(SystemClock);
+    let blobs =
+        Arc::new(
+            FilesystemBlobStore::open(&root)
+                .await
+                .map_err(|error| BootError::BlobRoot {
+                    root: root.display().to_string(),
+                    detail: error.to_string(),
+                })?,
+        );
+    Ok(Stores {
+        root,
+        index: Arc::new(InMemoryAssetIndex::new()),
+        uploads: Arc::new(InMemoryUploadSessions::with_default_ttl(clock.clone())),
+        marks: Arc::new(InMemoryCollection::new()),
+        quotas: Arc::new(InMemoryQuota::new()),
+        blobs,
+        clock,
+    })
 }
 
 /// The development profile: every in-crate adapter, over a real blob store and a real clock.
@@ -194,11 +304,7 @@ pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
     clippy::too_many_lines,
     reason = "seventeen module contexts, named once each; splitting it would hide the shape"
 )]
-async fn memory(config: &Config) -> Result<Assembled, BootError> {
-    let root = config
-        .blob_root
-        .as_ref()
-        .ok_or(BootError::Missing { key: "BLOB_ROOT" })?;
+fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     let der = config.signing_key_der.as_ref().ok_or(BootError::Missing {
         key: "JWT_ED25519_DER",
     })?;
@@ -209,16 +315,16 @@ async fn memory(config: &Config) -> Result<Assembled, BootError> {
         key: "ATTESTATION_KEY_SEED",
     })?;
 
-    let clock = Arc::new(SystemClock);
-    let blobs =
-        Arc::new(
-            FilesystemBlobStore::open(root)
-                .await
-                .map_err(|error| BootError::BlobRoot {
-                    root: root.display().to_string(),
-                    detail: error.to_string(),
-                })?,
-        );
+    // Cloned rather than moved: `stores` is handed to `Stores::maintenance` at the end, so the
+    // application and the two operator workers are built over the *same* stores. Every clone
+    // here is an `Arc` refcount bump.
+    let root = stores.root.clone();
+    let clock = stores.clock.clone();
+    let blobs = stores.blobs.clone();
+    let index = stores.index.clone();
+    let uploads = stores.uploads.clone();
+    let marks = stores.marks.clone();
+    let quotas = stores.quotas.clone();
 
     // The signer is built from the private key alone and derives its own public half, which is
     // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
@@ -238,8 +344,6 @@ async fn memory(config: &Config) -> Result<Assembled, BootError> {
     })?;
     let accounts = Arc::new(InMemoryAccounts::new(credentials));
 
-    let index = Arc::new(InMemoryAssetIndex::new());
-    let uploads = Arc::new(InMemoryUploadSessions::with_default_ttl(clock.clone()));
     let albums = Arc::new(InMemoryAlbums::new());
     let directories = Arc::new(InMemoryDeviceDirectory::new());
     // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
@@ -250,8 +354,6 @@ async fn memory(config: &Config) -> Result<Assembled, BootError> {
         directories.clone(),
         clock.clone(),
     ));
-    let quotas = Arc::new(InMemoryQuota::new());
-    let marks = Arc::new(InMemoryCollection::new());
     let receipts = Arc::new(InMemoryReceipts::new());
     // Distinct from the token signer, as the design requires: a receipt that verified under the
     // operational key would let anything holding that key manufacture custody evidence. The
@@ -358,19 +460,10 @@ async fn memory(config: &Config) -> Result<Assembled, BootError> {
     );
 
     Ok(Assembled {
-        // One index, one blob store and one mark store behind all three, which is what makes
-        // "upload it, then let the collector see it" a property of the server rather than of
-        // three disconnected assemblies.
-        collection: CollectionContext::new(
-            index.clone(),
-            blobs.clone(),
-            marks,
-            quotas,
-            clock,
-            config.grace_window,
-        ),
-        scrub: ScrubContext::new(index, blobs, uploads),
         app,
+        // The same stores, so "upload it, then let the collector see it" is a property of the
+        // server rather than of two disconnected assemblies.
+        maintenance: stores.maintenance(config.grace_window),
     })
 }
 

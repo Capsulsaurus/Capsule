@@ -31,10 +31,12 @@ use color_eyre::eyre::{Context as _, Result, bail, eyre};
 use kynos::server::Server;
 use kynos::server::shutdown::Shutdown;
 use tracing_subscriber::prelude::*;
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, fmt as log_fmt};
 
-use crate::boot::{self, Assembled};
+use crate::boot::{self, Assembled, Maintenance};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
+use crate::gc::{CollectionReport, Mode, PurgeReport};
+use crate::scrub::{Depth, ScrubReport};
 
 /// The exit code a configuration refusal produces.
 ///
@@ -49,6 +51,21 @@ pub const EXIT_MISCONFIGURED: u8 = 2;
 /// One. `design/filesystem/maintenance.md` requires that the scrub "exits non-zero, and mutates
 /// nothing", which is what makes it usable as a monitoring probe.
 pub const EXIT_FINDINGS: u8 = 1;
+
+/// How many tombstoned assets one `purge` pass considers.
+///
+/// A bound rather than a policy: the pass walks the index and a retention sweep on a large
+/// deployment should be a job that finishes, not one that holds a read for an hour. An operator
+/// who wants more runs it again.
+const DEFAULT_PURGE_LIMIT: usize = 1_000;
+
+/// How many bytes one `scrub --deep` pass will read when no budget is given.
+///
+/// One gibibyte. `Depth::Deep` carries a budget precisely because re-hashing every blob is
+/// heavy I/O by definition, and "a scrub that saturates the disk is a scrub an operator turns
+/// off". A truncated pass says so in its report, so the default cannot silently pass a store it
+/// did not finish looking at.
+const DEFAULT_SCRUB_BUDGET: u64 = 1024 * 1024 * 1024;
 
 /// The Capsule server.
 #[derive(Debug, Parser)]
@@ -101,6 +118,65 @@ pub enum Command {
         backend: BackendArgs,
     },
 
+    /// Sweep blobs nothing references any more.
+    ///
+    /// Two passes, by design: a blob that reaches zero references is *marked*, and a later pass
+    /// sweeps it once the grace window has passed and the count is still zero. That is what
+    /// gives an in-flight finalization retry time to re-reference it.
+    Gc {
+        /// Carry it out. Without this nothing is marked, unmarked or swept.
+        ///
+        /// Dry run is the default for the two subcommands that write, because the first thing an
+        /// operator does with a collector is find out what it thinks.
+        #[arg(long)]
+        apply: bool,
+
+        /// How long a blob must sit at zero references before it may be swept
+        /// (`GC_GRACE_WINDOW_HOURS`, default 24).
+        #[arg(long, value_name = "HOURS")]
+        grace_window_hours: Option<u64>,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Drop the blob references of tombstoned assets whose retention window has passed.
+    ///
+    /// The tombstone itself stays: a client that has not synced since the delete still has to
+    /// learn about it, and removing the row would make the deletion invisible rather than final.
+    Purge {
+        /// Carry it out. Without this nothing is dropped.
+        #[arg(long)]
+        apply: bool,
+
+        /// How many tombstoned assets to consider in this pass.
+        #[arg(long, value_name = "N", default_value_t = DEFAULT_PURGE_LIMIT)]
+        limit: usize,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
+    /// Compare the index against the store and report every disagreement.
+    ///
+    /// Mutates nothing, by construction, and exits non-zero on a non-empty report — which is
+    /// what makes it usable as a monitoring probe.
+    Scrub {
+        /// Also re-hash every blob's bytes: the bit-rot check.
+        #[arg(long)]
+        deep: bool,
+
+        /// The most bytes a deep pass will read. Blobs past it are left for the next run.
+        #[arg(long, value_name = "BYTES", default_value_t = DEFAULT_SCRUB_BUDGET)]
+        budget: u64,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
     ///
     /// Needs no database, no Valkey, no key material, no disk and no network: the router is
@@ -121,6 +197,9 @@ impl Command {
     fn demands(&self) -> Demands {
         match self {
             Self::Serve { .. } => Demands::Serve,
+            // No key material. A maintenance host that had to hold the production
+            // token-signing key to sweep a directory would be a reason to put the key there.
+            Self::Gc { .. } | Self::Purge { .. } | Self::Scrub { .. } => Demands::Maintenance,
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
     }
@@ -134,6 +213,19 @@ impl Command {
         match self {
             Self::Serve { listen, backend } => {
                 overrides.listen = *listen;
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Gc {
+                grace_window_hours,
+                backend,
+                ..
+            } => {
+                overrides.grace_window_hours = *grace_window_hours;
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::Purge { backend, .. } | Self::Scrub { backend, .. } => {
                 overrides.blob_root.clone_from(&backend.blob_root);
                 overrides.memory = backend.memory;
             }
@@ -171,6 +263,16 @@ pub async fn run() -> Result<ExitCode> {
 
     match cli.command {
         Command::Serve { .. } => serve(&config).await,
+        Command::Gc { apply, .. } => collect(&config, mode(apply)).await,
+        Command::Purge { apply, limit, .. } => purge(&config, mode(apply), limit).await,
+        Command::Scrub { deep, budget, .. } => {
+            let depth = if deep {
+                Depth::Deep { budget }
+            } else {
+                Depth::Structural
+            };
+            scrub(&config, depth).await
+        }
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
         // a check gate, and a settings dump on its stderr is noise in every CI log that runs it.
@@ -188,6 +290,16 @@ pub async fn run() -> Result<ExitCode> {
 async fn assemble(config: &Config) -> Result<Assembled> {
     tracing::debug!(?config, "loaded the configuration");
     Ok(boot::assemble(config).await?)
+}
+
+/// Assemble only what the operator workers read.
+///
+/// A separate entry point rather than reaching into [`Assembled`], because `gc`, `purge` and
+/// `scrub` need **no key material** and the way to make that true is for the assembly they use
+/// to have none in scope — not for it to build a token signer and then not use it.
+async fn maintenance(config: &Config) -> Result<Maintenance> {
+    tracing::debug!(?config, "loaded the configuration");
+    Ok(boot::assemble_maintenance(config).await?)
 }
 
 /// Accept requests until a termination signal, then drain.
@@ -265,7 +377,7 @@ fn install_tracing(environment: &dyn Environment, overrides: &Overrides) {
     match format {
         LogFormat::Json => registry
             .with(
-                fmt::layer()
+                log_fmt::layer()
                     .json()
                     .flatten_event(true)
                     .with_writer(std::io::stderr),
@@ -273,13 +385,206 @@ fn install_tracing(environment: &dyn Environment, overrides: &Overrides) {
             .init(),
         LogFormat::Pretty => registry
             .with(
-                fmt::layer()
+                log_fmt::layer()
                     .pretty()
                     .with_file(true)
                     .with_line_number(true)
                     .with_writer(std::io::stderr),
             )
             .init(),
+    }
+}
+
+/// Whether `--apply` was passed.
+///
+/// A free function rather than a `From<bool>` on [`Mode`]: the boolean is a command-line flag,
+/// and a blanket conversion would let any `bool` in the crate become a write mode.
+fn mode(apply: bool) -> Mode {
+    if apply { Mode::Apply } else { Mode::DryRun }
+}
+
+/// Sweep blobs nothing references any more.
+///
+/// The partial report is printed **before** the error when a pass fails part-way. `collect`
+/// propagates the first store failure having applied whatever it did before it, which is safe
+/// in both directions by the module's own argument — a mark is reversible and a sweep only ever
+/// removed a blob confirmed unreferenced twice — but an operator still needs to know what
+/// happened before it stopped.
+async fn collect(config: &Config, mode: Mode) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::gc::collect(&maintenance.collection, mode).await;
+    if let Ok(report) = &report {
+        print!("{}", render_collection(report, mode));
+    }
+    report.map_err(|error| eyre!("the collection pass could not finish: {error}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Drop the blob references of tombstoned assets past their retention window.
+async fn purge(config: &Config, mode: Mode, limit: usize) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::gc::purge_expired(&maintenance.collection, mode, limit).await;
+    if let Ok(report) = &report {
+        print!("{}", render_purge(report, mode));
+    }
+    report.map_err(|error| eyre!("the retention purge could not finish: {error}"))?;
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Compare the index against the store.
+///
+/// Exits [`EXIT_FINDINGS`] on a non-empty report, which `design/filesystem/maintenance.md`
+/// requires of it — and a **truncated** deep pass is not clean even with no findings, because it
+/// did not finish looking. `ScrubReport::is_clean` already draws that distinction; this only has
+/// to honour it.
+async fn scrub(config: &Config, depth: Depth) -> Result<ExitCode> {
+    let maintenance = maintenance(config).await?;
+    let report = crate::scrub::scrub(&maintenance.scrub, depth)
+        .await
+        .map_err(|error| eyre!("the integrity scrub could not finish: {error}"))?;
+    print!("{}", render_scrub(&report));
+    Ok(if report.is_clean() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(EXIT_FINDINGS)
+    })
+}
+
+/// One pass's report, rendered for a person.
+///
+/// A [`std::fmt::Display`] wrapper rather than a `-> String` helper, so every line is one `writeln!`
+/// into the caller's formatter: building the whole report in a `String` first meant an
+/// allocation per line and a clippy lint saying so.
+struct Rendered<'a, T>(&'a T, Mode);
+
+/// What a dry run prints above its report, so nobody reads one as an action.
+fn posture(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Apply => "applied",
+        Mode::DryRun => "dry run — nothing was changed",
+    }
+}
+
+/// Render a collection pass.
+///
+/// Every class names its blobs rather than counting them. [`CollectionReport`]'s own docs say
+/// why: "a count tells an operator that something happened without telling them what to look
+/// at." Empty classes are omitted, so a quiet pass is one short line rather than six zeroes.
+fn render_collection(report: &CollectionReport, mode: Mode) -> Rendered<'_, CollectionReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, CollectionReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "garbage collection ({})", posture(mode))?;
+        let mut quiet = true;
+        for (class, addresses) in [
+            ("marked", &report.marked),
+            ("unmarked", &report.unmarked),
+            ("swept", &report.swept),
+            ("reprieved", &report.reprieved),
+            ("dangling", &report.dangling),
+        ] {
+            if addresses.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", addresses.len())?;
+            for address in addresses {
+                writeln!(f, "    {address}")?;
+            }
+        }
+        if !report.credited.is_empty() {
+            quiet = false;
+            let total: u64 = report.credited.iter().map(|(_, bytes)| *bytes).sum();
+            writeln!(
+                f,
+                "  credited ({} accounts, {total} bytes)",
+                report.credited.len()
+            )?;
+            for (user, bytes) in &report.credited {
+                writeln!(f, "    {user} {bytes}")?;
+            }
+        }
+        if quiet {
+            writeln!(f, "  nothing to do")?;
+        }
+        Ok(())
+    }
+}
+
+/// Render a retention purge.
+///
+/// `retained` is reported as well as `purged`, because "why has this not gone yet" is exactly
+/// the question a dry run is run to answer.
+fn render_purge(report: &PurgeReport, mode: Mode) -> Rendered<'_, PurgeReport> {
+    Rendered(report, mode)
+}
+
+impl std::fmt::Display for Rendered<'_, PurgeReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self(report, mode) = *self;
+        writeln!(f, "retention purge ({})", posture(mode))?;
+        let mut quiet = true;
+        for (class, assets) in [("purged", &report.purged), ("retained", &report.retained)] {
+            if assets.is_empty() {
+                continue;
+            }
+            quiet = false;
+            writeln!(f, "  {class} ({})", assets.len())?;
+            for asset in assets {
+                writeln!(f, "    {asset}")?;
+            }
+        }
+        if quiet {
+            writeln!(f, "  nothing to do")?;
+        }
+        Ok(())
+    }
+}
+
+/// Render an integrity scrub.
+///
+/// A scrub never writes, so it has no posture; the mode is carried and ignored.
+fn render_scrub(report: &ScrubReport) -> Rendered<'_, ScrubReport> {
+    Rendered(report, Mode::DryRun)
+}
+
+/// Grouped by the class an operator alerts on, and each finding printed through its **own**
+/// `Debug`. Not a hand-written line per variant: every `Finding` variant already carries both
+/// sides' evidence, a second rendering would be a second place for the two to disagree, and a
+/// variant added later would otherwise render as nothing at all — which is the one failure mode
+/// a report must not have.
+impl std::fmt::Display for Rendered<'_, ScrubReport> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let report = self.0;
+        writeln!(
+            f,
+            "integrity scrub ({} finding{}, {} bytes hashed{})",
+            report.findings.len(),
+            if report.findings.len() == 1 { "" } else { "s" },
+            report.bytes_hashed,
+            if report.budget_exhausted {
+                ", budget exhausted — the pass did not finish looking"
+            } else {
+                ""
+            }
+        )?;
+        for (class, count) in report.counts() {
+            writeln!(f, "  {class} ({count})")?;
+            for finding in report
+                .findings
+                .iter()
+                .filter(|finding| finding.class() == class)
+            {
+                writeln!(f, "    {finding:?}")?;
+            }
+        }
+        if report.is_clean() {
+            writeln!(f, "  the index and the store agree")?;
+        }
+        Ok(())
     }
 }
 
@@ -329,7 +634,10 @@ fn gen_openapi(output: &PathBuf, check: bool) -> Result<ExitCode> {
 mod tests {
     use clap::{CommandFactory as _, Parser as _};
 
-    use super::{Cli, Command};
+    use super::{
+        Cli, CollectionReport, Command, Mode, PurgeReport, ScrubReport, mode, render_collection,
+        render_purge, render_scrub,
+    };
 
     #[test]
     fn the_command_line_is_well_formed() {
@@ -402,5 +710,143 @@ mod tests {
             cli.config.as_deref(),
             Some(std::path::Path::new("/etc/capsule.toml"))
         );
+    }
+
+    /// A well-formed content address, distinguished by `seed`.
+    fn address(seed: u8) -> crate::blob::ContentAddress {
+        let hex: String = std::iter::repeat_n(format!("{seed:02x}"), 32).collect();
+        crate::blob::ContentAddress::parse(&hex).expect("an address")
+    }
+
+    #[test]
+    fn a_quiet_collection_pass_is_one_short_line() {
+        // Six zeroes would be six lines an operator learns to skip, and the whole point of the
+        // report is that they read it.
+        let rendered = render_collection(&CollectionReport::default(), Mode::DryRun).to_string();
+        assert!(rendered.contains("dry run"), "{rendered}");
+        assert!(rendered.contains("nothing to do"), "{rendered}");
+    }
+
+    #[test]
+    fn a_collection_pass_names_the_blobs_rather_than_counting_them() {
+        // `CollectionReport`'s own docs: "a count tells an operator that something happened
+        // without telling them what to look at."
+        let report = CollectionReport {
+            marked: vec![address(0xAA), address(0xBB)],
+            swept: vec![address(0xCC)],
+            credited: vec![(crate::store::UserId::new("a-user"), 4096)],
+            ..CollectionReport::default()
+        };
+        let rendered = render_collection(&report, Mode::Apply).to_string();
+        assert!(rendered.contains("applied"), "{rendered}");
+        assert!(rendered.contains("marked (2)"), "{rendered}");
+        assert!(rendered.contains(&address(0xAA).to_string()), "{rendered}");
+        assert!(rendered.contains(&address(0xBB).to_string()), "{rendered}");
+        assert!(rendered.contains("swept (1)"), "{rendered}");
+        assert!(
+            rendered.contains("credited (1 accounts, 4096 bytes)"),
+            "{rendered}"
+        );
+        // Classes with nothing in them are omitted rather than printed as zero.
+        assert!(!rendered.contains("unmarked"), "{rendered}");
+        assert!(!rendered.contains("nothing to do"), "{rendered}");
+    }
+
+    #[test]
+    fn a_purge_reports_what_is_still_waiting() {
+        // "Why has this not gone yet" is exactly the question a dry run is run to answer.
+        let report = PurgeReport {
+            purged: vec![crate::store::AssetId::new("gone")],
+            retained: vec![crate::store::AssetId::new("waiting")],
+        };
+        let rendered = render_purge(&report, Mode::DryRun).to_string();
+        assert!(rendered.contains("purged (1)"), "{rendered}");
+        assert!(rendered.contains("gone"), "{rendered}");
+        assert!(rendered.contains("retained (1)"), "{rendered}");
+        assert!(rendered.contains("waiting"), "{rendered}");
+    }
+
+    #[test]
+    fn a_clean_scrub_says_the_two_sides_agree() {
+        let rendered = render_scrub(&ScrubReport::default()).to_string();
+        assert!(rendered.contains("0 findings"), "{rendered}");
+        assert!(rendered.contains("agree"), "{rendered}");
+    }
+
+    #[test]
+    fn a_scrub_groups_findings_by_the_class_an_operator_alerts_on() {
+        let report = ScrubReport {
+            findings: vec![
+                crate::scrub::Finding::Orphan {
+                    address: address(0xAA),
+                },
+                crate::scrub::Finding::Orphan {
+                    address: address(0xBB),
+                },
+                crate::scrub::Finding::Debris {
+                    path: "blobs/aa/not-a-blob".to_owned(),
+                },
+            ],
+            bytes_hashed: 0,
+            budget_exhausted: false,
+        };
+        let rendered = render_scrub(&report).to_string();
+        assert!(rendered.contains("3 findings"), "{rendered}");
+        assert!(rendered.contains("orphan (2)"), "{rendered}");
+        assert!(rendered.contains("debris (1)"), "{rendered}");
+        assert!(rendered.contains("not-a-blob"), "{rendered}");
+        assert!(!rendered.contains("agree"), "{rendered}");
+    }
+
+    #[test]
+    fn a_truncated_deep_pass_is_not_a_clean_one() {
+        // A clean report from a pass that stopped early is the one answer a scrub must never
+        // give, so the rendering says so out loud as well.
+        let report = ScrubReport {
+            findings: Vec::new(),
+            bytes_hashed: 1024,
+            budget_exhausted: true,
+        };
+        let rendered = render_scrub(&report).to_string();
+        assert!(rendered.contains("budget exhausted"), "{rendered}");
+        assert!(!rendered.contains("agree"), "{rendered}");
+    }
+
+    #[test]
+    fn dry_run_is_the_default_for_the_two_subcommands_that_write() {
+        // The first thing an operator does with a collector is find out what it thinks.
+        let gc = Cli::parse_from(["capsule-server", "gc"]).command;
+        assert!(matches!(gc, Command::Gc { apply: false, .. }));
+        let purge = Cli::parse_from(["capsule-server", "purge"]).command;
+        assert!(matches!(purge, Command::Purge { apply: false, .. }));
+        assert_eq!(mode(false), Mode::DryRun);
+        assert_eq!(mode(true), Mode::Apply);
+    }
+
+    #[test]
+    fn a_structural_scrub_is_the_default_and_deep_carries_a_budget() {
+        let shallow = Cli::parse_from(["capsule-server", "scrub"]).command;
+        assert!(matches!(shallow, Command::Scrub { deep: false, .. }));
+        let deep = Cli::parse_from(["capsule-server", "scrub", "--deep"]).command;
+        let Command::Scrub { deep, budget, .. } = deep else {
+            panic!("that is the subcommand that was parsed")
+        };
+        assert!(deep);
+        assert_eq!(budget, super::DEFAULT_SCRUB_BUDGET);
+    }
+
+    #[test]
+    fn the_operator_commands_demand_a_blob_root_and_no_key_material() {
+        for argv in [
+            ["capsule-server", "gc"],
+            ["capsule-server", "purge"],
+            ["capsule-server", "scrub"],
+        ] {
+            assert_eq!(
+                Cli::parse_from(argv).command.demands(),
+                crate::config::Demands::Maintenance,
+                "{argv:?}"
+            );
+        }
     }
 }

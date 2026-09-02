@@ -165,16 +165,14 @@ impl Serving {
 
         let deadline = Instant::now() + EXIT_TIMEOUT;
         loop {
-            match self.child.try_wait().expect("the child is waitable") {
-                Some(status) => return status.code(),
-                None => {
-                    assert!(
-                        Instant::now() < deadline,
-                        "the server did not exit within {EXIT_TIMEOUT:?} of SIGTERM"
-                    );
-                    std::thread::sleep(Duration::from_millis(25));
-                }
+            if let Some(status) = self.child.try_wait().expect("the child is waitable") {
+                return status.code();
             }
+            assert!(
+                Instant::now() < deadline,
+                "the server did not exit within {EXIT_TIMEOUT:?} of SIGTERM"
+            );
+            std::thread::sleep(Duration::from_millis(25));
         }
     }
 }
@@ -269,7 +267,7 @@ fn serving_without_valkey_and_without_the_memory_profile_refuses_by_name() {
     // `store/mod.rs` has documented this refusal since `S-C29` and nothing enforced it, because
     // there was no boot path to enforce it in.
     let root = tempfile::tempdir().expect("a scratch directory");
-    let (code, _, stderr) = run(&mut server(&[
+    let (code, _, stderr) = run(server(&[
         "serve",
         "--listen",
         EPHEMERAL,
@@ -286,7 +284,7 @@ fn a_durable_backend_refuses_with_the_issue_that_will_honour_it() {
     // The other half: the operator *did* set `VALKEY_URL`, and nothing reads it yet. Falling
     // back to the in-memory adapters here is the one thing that must never happen.
     let root = tempfile::tempdir().expect("a scratch directory");
-    let (code, _, stderr) = run(&mut server(&[
+    let (code, _, stderr) = run(server(&[
         "serve",
         "--listen",
         EPHEMERAL,
@@ -335,4 +333,164 @@ fn the_committed_openapi_document_is_reproduced_byte_for_byte() {
     ]));
     assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
     assert!(stdout.contains("up to date"), "{stdout}");
+}
+// ===========================================================================================
+// The operator commands
+// ===========================================================================================
+
+/// A blob root holding one file under `blobs/`, shaped the way the store shards them.
+///
+/// `blobs/aa/aa/<64 a's>.bin`: the two shard segments are the address's own first four hex
+/// characters and the suffix is `ContentAddress::file_name`'s, because a file the enumeration
+/// walk cannot turn back into an address is *debris* rather than a blob — which would be a
+/// different finding from the one each case here is about.
+///
+/// Written directly rather than uploaded, because the point is a store the *index* knows
+/// nothing about: in the `--memory` profile the index is empty on every invocation, so every
+/// blob on disk is genuinely unreferenced and both the collector and the scrub have something
+/// true to say about it.
+fn seeded_root() -> (tempfile::TempDir, String) {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let address = "a".repeat(64);
+    let shard = root.path().join("blobs").join("aa").join("aa");
+    std::fs::create_dir_all(&shard).expect("the shard is created");
+    std::fs::write(
+        shard.join(format!("{address}.bin")),
+        b"unreferenced ciphertext",
+    )
+    .expect("the blob is written");
+    (root, address)
+}
+
+/// The path a seeded blob occupies, for asserting it is still there.
+fn seeded_blob(root: &std::path::Path, address: &str) -> std::path::PathBuf {
+    root.join("blobs")
+        .join("aa")
+        .join("aa")
+        .join(format!("{address}.bin"))
+}
+
+/// An operator command over `root`, in the development profile.
+fn operator(subcommand: &str, root: &std::path::Path, extra: &[&str]) -> Command {
+    let mut args = vec![subcommand, "--memory", "--blob-root"];
+    let root = root.display().to_string();
+    args.push(&root);
+    args.extend_from_slice(extra);
+    let mut command = server(&args);
+    command.env_remove("JWT_ED25519_DER");
+    command
+}
+
+#[test]
+fn a_collection_dry_run_names_the_unreferenced_blob_and_changes_nothing() {
+    let (root, address) = seeded_root();
+    let blob = seeded_blob(root.path(), &address);
+
+    let (code, stdout, stderr) = run(&mut operator("gc", root.path(), &[]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("dry run"), "{stdout}");
+    assert!(stdout.contains("marked (1)"), "{stdout}");
+    assert!(stdout.contains(&address), "{stdout}");
+    assert!(blob.is_file(), "a dry run does not touch the store");
+}
+
+#[test]
+fn an_applied_collection_pass_marks_rather_than_sweeps_on_its_first_look() {
+    // Two passes by design: a blob that reaches zero references is marked, and swept only on a
+    // later pass once the grace window has passed. In this profile the mark store does not
+    // survive the process, so a fresh invocation can only ever mark — which is stated in
+    // `boot`'s docs and asserted here rather than left as a surprise. The cross-invocation
+    // sweep needs the durable mark store #402 brings; `gc`'s own unit tests prove the
+    // mark-then-sweep sequence in process.
+    let (root, address) = seeded_root();
+    let blob = seeded_blob(root.path(), &address);
+
+    let (code, stdout, stderr) = run(&mut operator("gc", root.path(), &["--apply"]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("applied"), "{stdout}");
+    assert!(stdout.contains("marked (1)"), "{stdout}");
+    assert!(!stdout.contains("swept"), "{stdout}");
+    assert!(
+        blob.is_file(),
+        "nothing has waited out its grace window yet"
+    );
+}
+
+#[test]
+fn a_collection_pass_over_an_empty_store_has_nothing_to_do() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, stdout, stderr) = run(&mut operator("gc", root.path(), &[]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("nothing to do"), "{stdout}");
+}
+
+#[test]
+fn a_retention_purge_runs_and_reports_an_empty_pass() {
+    // The index is empty in this profile, so there is no tombstone to purge. What is asserted
+    // is that the command runs, reports, and does not invent work.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, stdout, stderr) = run(&mut operator("purge", root.path(), &[]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("retention purge"), "{stdout}");
+    assert!(stdout.contains("nothing to do"), "{stdout}");
+}
+
+#[test]
+fn a_scrub_exits_non_zero_on_a_finding_and_mutates_nothing() {
+    // `design/filesystem/maintenance.md`: it "exits non-zero, and mutates nothing".
+    let (root, address) = seeded_root();
+    let blob = seeded_blob(root.path(), &address);
+    let before = std::fs::read(&blob).expect("the blob is readable");
+
+    let (code, stdout, stderr) = run(&mut operator("scrub", root.path(), &[]));
+    assert_eq!(code, Some(1), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("orphan (1)"), "{stdout}");
+    assert!(stdout.contains(&address), "{stdout}");
+    assert_eq!(
+        std::fs::read(&blob).expect("the blob is still readable"),
+        before,
+        "the store is byte-identical afterwards"
+    );
+}
+
+#[test]
+fn a_scrub_over_a_clean_store_exits_zero() {
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, stdout, stderr) = run(&mut operator("scrub", root.path(), &[]));
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("agree"), "{stdout}");
+}
+
+#[test]
+fn a_deep_scrub_re_hashes_the_bytes_it_reads() {
+    // The bit-rot check. The seeded file's name is not its own hash, so a deep pass finds the
+    // mismatch a structural one cannot see — and reports how many bytes it read.
+    let (root, _) = seeded_root();
+    let (code, stdout, stderr) = run(&mut operator("scrub", root.path(), &["--deep"]));
+    assert_eq!(code, Some(1), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(stdout.contains("byte_mismatch"), "{stdout}");
+    assert!(!stdout.contains("0 bytes hashed"), "{stdout}");
+}
+
+#[test]
+fn the_operator_commands_need_no_key_material() {
+    // A maintenance host that had to hold the production token-signing key to sweep a directory
+    // would be a reason to put the key on a maintenance host. `operator` removes it, so every
+    // case above already asserts this — this one says so on purpose.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    for subcommand in ["gc", "purge", "scrub"] {
+        let (code, stdout, stderr) = run(&mut operator(subcommand, root.path(), &[]));
+        assert_eq!(code, Some(0), "{subcommand}: {stdout}{stderr}");
+        assert!(
+            !stderr.contains("JWT_ED25519_DER"),
+            "{subcommand}: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn an_operator_command_without_a_blob_root_refuses_by_name() {
+    let (code, _, stderr) = run(&mut server(&["scrub", "--memory"]));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("BLOB_ROOT"), "{stderr}");
 }
