@@ -482,6 +482,42 @@ mod tests {
         assert_eq!(alert.deadline, Some(ts(due)));
     }
 
+    /// The two halves of the bounded-snooze rule, which live at different layers.
+    ///
+    /// "Past that bound the alert stops re-firing and degrades to a persistent, non-blocking
+    /// badge": the *stops re-firing* half is enforced here at the pre-arm layer — with the
+    /// budget spent, no timer is armed for the class, ever. The *badge* half needs the opposite:
+    /// `evaluate` keeps reporting the class, because a client cannot render a badge for a
+    /// condition it was never told about. Suppressing the class instead would satisfy the first
+    /// sentence by making the second impossible.
+    #[test]
+    fn a_spent_snooze_budget_stops_the_timer_but_not_the_report() {
+        let due = BASE + 7 * DAY_SECS;
+        for (now, why) in [
+            (due - DAY_SECS, "before the due date"),
+            (due, "at the due date"),
+            (due + 30 * DAY_SECS, "long after it"),
+        ] {
+            let spent = with_recovery(due, None, true);
+            assert!(
+                pre_arm_deadlines(&spent, ts(now)).is_empty(),
+                "no timer is armed {why}"
+            );
+            assert_eq!(next_deadline(&spent, ts(now)), None, "{why}");
+        }
+
+        // ...and the class is still reported once due, carrying the fact that makes it a badge.
+        let spent = with_recovery(due, None, true);
+        let params = params_of(&spent, AlertClass::RecoveryCheckDue, ts(due))
+            .expect("a spent budget degrades the presentation, it does not silence the class");
+        assert_eq!(params["snooze_budget"], "spent");
+
+        // A snooze still running with the budget spent arms nothing either: the class is
+        // already a badge, and a badge never escalates back into an alert on its own.
+        let snoozed_and_spent = with_recovery(due, Some(due + DAY_SECS), true);
+        assert!(pre_arm_deadlines(&snoozed_and_spent, ts(due)).is_empty());
+    }
+
     /// A spent snooze budget is reported, not silenced — the client needs the fact to render a
     /// badge — and it is carried as a parameter rather than a class of its own.
     #[test]

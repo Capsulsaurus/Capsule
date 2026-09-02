@@ -142,8 +142,9 @@ pub struct Alert {
     /// Parameters for the client's catalog string — plain strings, deterministically ordered.
     ///
     /// The keys in use are `count` (`sync_stale`, `quarantine_pending`, `drop_pending`),
-    /// `days_behind` (`sync_stale`), `grace` (`quota_grace_expiring`) and `snooze_budget`
-    /// (`recovery_check_due`). Each is documented at the predicate that sets it.
+    /// `days_behind` (`sync_stale`), `grace` (`quota_grace_expiring`), and `snooze_budget`
+    /// (`available` / `spent`) plus `recovery` (`check` / `rewrap`), both of which
+    /// `recovery_check_due` always carries. Each is documented at the predicate that sets it.
     pub params: BTreeMap<String, String>,
 }
 
@@ -233,6 +234,28 @@ mod tests {
     fn unknown_class_is_a_structural_error() {
         assert!(serde_json::from_str::<AlertClass>("\"telemetry_ready\"").is_err());
         assert!(serde_json::from_str::<AlertSeverity>("\"critical\"").is_err());
+    }
+
+    /// Every class's severity is pinned, so changing one arm of the mapping fails here rather
+    /// than silently changing how loudly a shipped client presents an alert. The three
+    /// `Warning`s are the states where something is already degraded or being refused; the
+    /// three `Advisory`s are the states where nothing is failing yet.
+    #[test]
+    fn severity_is_pinned_for_every_class() {
+        let expected = [
+            (AlertClass::SyncStale, AlertSeverity::Warning),
+            (AlertClass::RecoveryCheckDue, AlertSeverity::Advisory),
+            (AlertClass::QuotaSoft, AlertSeverity::Advisory),
+            (AlertClass::QuotaGraceExpiring, AlertSeverity::Warning),
+            (AlertClass::QuarantinePending, AlertSeverity::Warning),
+            (AlertClass::DropPending, AlertSeverity::Advisory),
+        ];
+        // Zipping against ALL also pins the delivery order the table is written in.
+        for (class, (expected_class, severity)) in AlertClass::ALL.into_iter().zip(expected) {
+            assert_eq!(class, expected_class, "class order changed");
+            assert_eq!(class.severity(), severity, "{}", class.as_str());
+        }
+        assert_eq!(AlertClass::ALL.len(), expected.len());
     }
 
     /// SSoT: only the two device-computable deadlines are pre-armable.
