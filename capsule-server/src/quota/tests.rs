@@ -1,7 +1,15 @@
-//! The quota port's own suite.
+//! The quota module's own suite: the **pure** half.
 //!
-//! Most of it is the state machine, which is pure — so the cases that matter read as a table of
-//! "this much used, this long over, this kind of write" and there is nothing to mock.
+//! [`state_of`] and [`admits`] take no store, so the cases that matter read as a table of "this
+//! much used, this long over, this kind of write" and there is nothing to mock. A suite generic
+//! over an adapter cannot say anything about a function that takes none, which is why these
+//! stayed here when the ledger's cases moved.
+//!
+//! Everything the *ledger* owes — the dedup rule, the two releases and the over-limit clock —
+//! is in [`super::conformance`] (#402), so it runs against `InMemoryQuota` and against the
+//! Postgres adapter from one list. Those cases used to live here against the double only, which
+//! made the double an unproven stand-in for exactly the adapter that has to get concurrency
+//! right.
 
 use super::*;
 
@@ -111,189 +119,4 @@ fn an_unlimited_deployment_never_leaves_ok() {
         u64::MAX / 2,
         limits
     ));
-}
-
-#[tokio::test]
-async fn a_shared_blob_is_charged_to_its_first_uploader_only() {
-    let quotas = InMemoryQuota::new();
-    let first = user();
-    let second = UserId::new("01937b7c-0000-7000-8000-000000000002");
-    let shared = address(1);
-
-    assert_eq!(
-        quotas
-            .charge(&first, &shared, 64, day(0), limits())
-            .await
-            .expect("charge"),
-        ChargeOutcome::Charged { used: 64 },
-    );
-    assert_eq!(
-        quotas
-            .charge(&second, &shared, 64, day(0), limits())
-            .await
-            .expect("charge"),
-        ChargeOutcome::AlreadyAttributed,
-        "without this a malicious user could exhaust another account's quota by re-uploading \
-         blobs whose addresses they already know",
-    );
-    assert_eq!(
-        quotas.usage(&second).await.expect("usage").used,
-        0,
-        "the second uploader is a merge, not a second copy"
-    );
-}
-
-#[tokio::test]
-async fn releasing_a_reservation_credits_the_bytes_back() {
-    let quotas = InMemoryQuota::new();
-    let user = user();
-    let held = address(2);
-    quotas
-        .charge(&user, &held, 64, day(0), limits())
-        .await
-        .expect("charge");
-
-    assert!(quotas.release(&user, &held).await.expect("release"));
-    assert_eq!(quotas.usage(&user).await.expect("usage").used, 0);
-    assert!(
-        !quotas.release(&user, &held).await.expect("release"),
-        "a second release must not credit the bytes twice"
-    );
-
-    // And the address is free again, so a later uploader is charged for it.
-    assert_eq!(
-        quotas
-            .charge(&user, &held, 64, day(0), limits())
-            .await
-            .expect("charge"),
-        ChargeOutcome::Charged { used: 64 },
-    );
-}
-
-#[tokio::test]
-async fn another_users_reservation_is_not_releasable() {
-    let quotas = InMemoryQuota::new();
-    let owner = user();
-    let other = UserId::new("01937b7c-0000-7000-8000-000000000002");
-    let held = address(3);
-    quotas
-        .charge(&owner, &held, 64, day(0), limits())
-        .await
-        .expect("charge");
-
-    assert!(
-        !quotas.release(&other, &held).await.expect("release"),
-        "releasing somebody else's attribution would let one account free bytes off another's \
-         ledger — and, worse, tell them the address was attributed"
-    );
-    assert_eq!(quotas.usage(&owner).await.expect("usage").used, 64);
-}
-
-#[tokio::test]
-async fn the_crossing_is_stamped_once_and_cleared_by_going_under() {
-    let quotas = InMemoryQuota::new();
-    let user = user();
-    quotas
-        .charge(&user, &address(4), 150, day(0), limits())
-        .await
-        .expect("charge");
-    assert_eq!(quotas.usage(&user).await.expect("usage").over_since, None);
-
-    quotas
-        .charge(&user, &address(5), 100, day(1), limits())
-        .await
-        .expect("charge");
-    let over = quotas.usage(&user).await.expect("usage");
-    assert_eq!(over.used, 250);
-    assert_eq!(over.over_since, Some(day(1)));
-
-    // A later charge while still over must not restamp the clock, or the grace window would
-    // never expire for an account that keeps trying to upload.
-    quotas
-        .charge(&user, &address(6), 10, day(9), limits())
-        .await
-        .expect("charge");
-    assert_eq!(
-        quotas.usage(&user).await.expect("usage").over_since,
-        Some(day(1)),
-    );
-
-    // Going back under stops the clock, so a later crossing gets a fresh window rather than
-    // inheriting an expired one.
-    quotas.release(&user, &address(5)).await.expect("release");
-    assert_eq!(quotas.usage(&user).await.expect("usage").over_since, None);
-}
-
-#[tokio::test]
-async fn the_collector_releases_by_address_and_the_ledger_names_the_account() {
-    // `S-C44`. A sweep knows an address and nothing else — attribution is global by content
-    // address, so the blob it is deleting may be charged to an account with no remaining
-    // connection to the asset whose purge exposed it. The collector must not guess a user.
-    let ledger = InMemoryQuota::new();
-    let address = address(41);
-    ledger
-        .charge(
-            &user(),
-            &address,
-            1_024,
-            Timestamp::UNIX_EPOCH,
-            QuotaLimits::unlimited(),
-        )
-        .await
-        .expect("the ledger charges");
-
-    let released = ledger
-        .release_attribution(&address)
-        .await
-        .expect("the ledger answers")
-        .expect("the address was attributed");
-    assert_eq!(released, (user(), 1_024));
-    assert_eq!(ledger.usage(&user()).await.expect("usage").used, 0);
-}
-
-#[tokio::test]
-async fn releasing_an_unattributed_address_is_none_rather_than_an_error() {
-    // The ordinary case for a blob the ledger never saw. A sweep that treated it as a failure
-    // would stall on the first one.
-    let ledger = InMemoryQuota::new();
-    assert_eq!(
-        ledger
-            .release_attribution(&address(42))
-            .await
-            .expect("the ledger answers"),
-        None
-    );
-}
-
-#[tokio::test]
-async fn a_collector_release_clears_the_over_limit_clock_like_a_user_release() {
-    // Both releases credit the same way, which is why they share one helper: a second copy
-    // would eventually forget `over_since`, leaving an account back under its limit still
-    // carrying the clock that decides when a soft limit becomes a hard one.
-    let ledger = InMemoryQuota::new();
-    let limits = QuotaLimits::new(1_000, 1_500, SignedDuration::from_hours(24));
-    ledger
-        .charge(&user(), &address(43), 2_000, Timestamp::UNIX_EPOCH, limits)
-        .await
-        .expect("the ledger charges");
-    assert!(
-        ledger
-            .usage(&user())
-            .await
-            .expect("usage")
-            .over_since
-            .is_some()
-    );
-
-    ledger
-        .release_attribution(&address(43))
-        .await
-        .expect("the ledger answers")
-        .expect("attributed");
-
-    assert_eq!(
-        ledger.usage(&user()).await.expect("usage").over_since,
-        None,
-        "back under the limit, so a later crossing gets a fresh window"
-    );
 }
