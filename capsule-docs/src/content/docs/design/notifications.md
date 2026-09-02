@@ -64,13 +64,16 @@ write a sentence from.
 A closed enum. Each class's *trigger predicate and thresholds* stay owned by the doc that defines the
 condition; this doc owns the class list, the delivery, and the shared snooze/badge mechanics.
 
-| Class | Trigger owner | Pre-armable |
-| --- | --- | --- |
-| `sync_stale` | [Download & Sync — Notifications](/design/import/download-sync/#notifications) | **Yes** |
-| `recovery_check_due` | [Backup — Schedule and Triggers](/design/backup-recovery/#schedule-and-triggers) | **Yes** |
-| `quota_soft` / `quota_grace_expiring` | [Quota — Thresholds and States](/design/quota/#thresholds-and-states) | No |
-| `quarantine_pending` | [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | No |
-| `drop_pending` | [Web Upload — Drop and Adoption Lifecycle](/design/web-upload/#drop-and-adoption-lifecycle) | No |
+Each class carries **parameters** — plain strings a client interpolates into its own catalog
+string, never text. They are listed with the class below and settled by the trigger owner.
+
+| Class | Trigger owner | Parameters | Pre-armable |
+| --- | --- | --- | --- |
+| `sync_stale` | [Download & Sync — Notifications](/design/import/download-sync/#notifications) | `count`, `days_behind` | **Yes** |
+| `recovery_check_due` | [Backup — Schedule and Triggers](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available` / `spent`), `recovery` (`check` / `rewrap`) | **Yes** |
+| `quota_soft` / `quota_grace_expiring` | [Quota — Thresholds and States](/design/quota/#thresholds-and-states) | `grace` (`counting` / `expired`), on the second only | No |
+| `quarantine_pending` | [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
+| `drop_pending` | [Web Upload — Drop and Adoption Lifecycle](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
 
 Unknown classes are rejected as structural errors, like every other closed enum
 ([Schema Rules](/design/threat-model/schema-rules/)).
