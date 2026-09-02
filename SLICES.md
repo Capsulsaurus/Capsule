@@ -347,7 +347,7 @@ row's remainder now lives.
 | S-I4 | Swift interpolated/plural strings + InfoPlist/LAContext | i18n | — | M | ACTIVE | done | forced an ICU→Apple compiler in the generator |
 | S-I5 | The CLI import arm has no `cli.import.*` catalog namespace | i18n | — | M | ACTIVE | ready | `i18n-guard` never scanned the CLI |
 | S-I6 | Android ships raw ICU to users; the guard never fires | i18n | — | M | ACTIVE | done | `aapt2` unverified — owed-CI |
-| S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done\* | refuses now; evaluating plurals still owed |
+| S-I7 | The Rust runtime formatter cannot do ICU plurals | i18n | — | M | ACTIVE | done | plurals evaluated; `select`/`offset:` still refused |
 | S-I8 | clap `--help` text is unreachable from the catalogs | i18n | — | S | ACTIVE | ready | found widening `i18n-guard` |
 | S-N1 | OIDC relying party (server) | auth | — | L | RETIRED | ready | |
 | S-N2 | SDK/CLI OIDC login flows | auth | S-N1 | M | MIXED | blocked | |
@@ -4853,9 +4853,33 @@ lands on Kynos rather than on Salvo.
   the Android guard whose comment claimed it skipped what it could not translate. Retargeted rather
   than deleted, with a companion test pinning that release builds still pass through and that the
   pass-through reproduces the input exactly.
-- **Owed:** actually evaluating plurals, which needs CLDR rules in the runtime. That is the cost the
-  per-platform renderers avoid by compiling ahead of time, and it is why this runtime was the one
-  left behind.
+- **Second half landed (#414).** `capsule_i18n::plural` carries CLDR integer cardinal rules for the
+  twelve language subtags in `locales/config.json`, and the formatter evaluates `{name, plural, …}`
+  with `=N` arms, category arms, `#`, and nesting. `Bundle::format` was dropping `self.locale`
+  before calling the formatter — that was the API gap, and `format_message_in(locale, …)` closes it
+  while `format_message` keeps its signature and means English. The refusal is **narrowed, not
+  removed**: `select`, `selectordinal`, `offset:`, a malformed plural, and nesting past 32 levels
+  keep the assertion and the pass-through.
+- **An in-house table, not a crate.** `icu_plurals` would be a genuine new dependency — provider,
+  data crate, and a `dependencies.md` row — on a crate whose entire dependency list is `serde_json`
+  and `tracing`, to decide thirteen locales' integer cardinal categories. Licence was not the
+  discriminator (`Unicode-3.0` is allowlisted); volume was.
+- **The table `xtask` already had was the second copy.** `xtask/src/i18n.rs` held its own
+  selectable-category list, which the moment the runtime gained rules had to agree with them.
+  Merged: the generator reads `capsule_i18n::plural::selectable`, and a test pins both directions of
+  every row. Russian is the row worth knowing — it never selects `other` for an *integer*, since its
+  `other` is for fractions, yet every plural resource must still carry that arm.
+- **What the fallback is actually doing.** Every translated plural in `locales/` is still an English
+  `one`/`other` copy, even in `ar` and `ru`. Falling an absent category back to `other` is therefore
+  not a nicety — without it, `few` in Russian would render nothing.
+- **Three defects found reviewing the change before it landed**, none of them plural-specific: a
+  stray `{` abandoned the rest of the template, so one unbalanced brace silently blanked every later
+  argument; recursion was bounded only by the input, so a public formatter could abort the process
+  on a deeply nested template; and a string count was trimmed for selection but not for `#`, so
+  `" 1 "` could pick one arm and print another.
+- **Owed-CI:** `cargo test --release` is not run anywhere. The two tests that pin *production*
+  behaviour — the release build passes a refused construct through instead of crashing — are
+  `cfg(not(debug_assertions))` and therefore never execute in CI. Filed separately.
 
 ### S-I8 — clap `--help` text is unreachable from the catalogs
 
