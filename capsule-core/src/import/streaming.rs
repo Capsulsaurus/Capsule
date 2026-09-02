@@ -10,8 +10,8 @@
 //! 1. Import the next file onto the signed path — with source release *deferred*
 //!    ([`Workspace::import_asset_streaming`](crate::lifecycle::Workspace::import_asset_streaming)).
 //! 2. Upload its bundle via the injected [`AssetUploader`] seam.
-//! 3. Confirm durability + custody through the `S-D4` [`ReleaseGate`](crate::library::ReleaseGate)
-//!    over the injected [`StorageVerifier`](crate::library::StorageVerifier) seam.
+//! 3. Confirm durability + custody through the `S-D4` [`ReleaseGate`] over the injected
+//!    [`StorageVerifier`] seam.
 //! 4. **Release** the local original (and delete the Move-mode source) *only* on the `durable`
 //!    verdict, so the device never drops the only copy of bytes the server has not confirmed.
 //! 5. Advance the window.

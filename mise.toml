@@ -135,15 +135,22 @@ run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
 [tasks.lint-check-rust]
 run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 
-# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link, an ambiguous
-# one, or public documentation pointing at a private item is an error, not a warning. Scoped
-# to the four crates whose public API is frozen; the rest of the workspace still carries 23
-# such spans and is widened in a follow-up. `--no-deps` so a dependency's own doc warnings
-# cannot fail our build.
+# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link or an ambiguous
+# one is an error, not a warning. Scoped to the four crates whose public API is frozen; the rest
+# of the workspace is widened in a follow-up.
+#
+# `--document-private-items` is load-bearing, not thoroughness for its own sake. #399 turned 59
+# submodules of `library`, `import`, `db`, `crypto::keys`, `sidecar` and `domain` into
+# `pub(crate) mod`. A public-only `cargo doc` stops reading their `//!` headers and their items'
+# docs the moment they stop being public — so the gate would have gone blind to exactly the
+# modules the same change touched, and 11 pre-existing broken links in them would have been
+# hidden rather than fixed. With the flag every item in these four crates is linted.
+#
+# `--no-deps` so a dependency's own doc warnings cannot fail our build.
 [tasks.doc-check-rust]
-description = "Rustdoc gate for the frozen crates (intra-doc links, private-item leaks)"
+description = "Rustdoc gate for the frozen crates (intra-doc links, over all items)"
 env = { RUSTDOCFLAGS = "-D warnings" }
-run = "cargo doc --no-deps -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
+run = "cargo doc --no-deps --document-private-items -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
 
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.

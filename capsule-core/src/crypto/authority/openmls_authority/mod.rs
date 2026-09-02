@@ -1,8 +1,8 @@
 //! The live [`AlbumAuthority`] backed by a real OpenMLS group (RFC 9420), pinned to the
 //! X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519` (`0x004D`) via the
 //! formally-verified libcrux provider. This is the design-target authority the offline
-//! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the
-//! same `&dyn AlbumAuthority` seam without touching [`verify_asset`](crate::crypto::verify_asset).
+//! [`ReferenceAuthority`](super::ReferenceAuthority) stands in for — it drops in behind the same
+//! `&dyn AlbumAuthority` seam without touching [`verify_asset`](fn@crate::crypto::verify_asset).
 //!
 //! **Slice S-X1** landed the backend/authority layer: single-member (self) group creation, the
 //! epoch-ledger semantics `verify_asset` consumes (monotonic ceiling, per-epoch write-tier key,
@@ -36,9 +36,8 @@
 //!   vehicle for a future move off the `0x004D` X-Wing suite), `intent_id`-keyed and resumable;
 //! - the **group re-keying ceremony** ([resilience]): a compromise/scheduled response that mints a
 //!   fresh AMK + write-tier key for every member as one `intent_id`-keyed, resumable operation;
-//! - **reconciliation** ([`ReconcileOutcome`](resilience::ReconcileOutcome)): the single
-//!   "bring-me-current" entry point over the server-authoritative commit chain, plus the
-//!   lost-commit retry primitive.
+//! - **reconciliation** ([`ReconcileOutcome`]): the single "bring-me-current" entry point over
+//!   the server-authoritative commit chain, plus the lost-commit retry primitive.
 //!
 //! SSoT: [Cryptography — MLS](https://docs/design/cryptography/mls/),
 //! [Keys — Write Authority](https://docs/design/cryptography/keys/#write-authorization),
@@ -213,8 +212,8 @@ struct EpochState {
     amk: [u8; AMK_LEN],
 }
 
-/// How an epoch's write-tier key material arrives at [`ingest_current_epoch`]
-/// (`OpenMlsAuthority::ingest_current_epoch`).
+/// How an epoch's write-tier key material arrives at
+/// [`OpenMlsAuthority::ingest_current_epoch`].
 enum WriteTierIngest {
     /// This member is the committer: it minted the keypair (holds both halves).
     Minted(HybridSigningKey),
@@ -1430,9 +1429,10 @@ fn describe_content(content: &ProcessedMessageContent) -> &'static str {
     }
 }
 
-/// Turn an incoming MLS message into a [`ProtocolMessage`] (a commit or application message) or a
-/// typed error. Uses OpenMLS's public `try_into_protocol_message` (the `into_protocol_message`
-/// convenience is `test-utils`-gated upstream).
+/// Turn an incoming MLS message into a [`ProtocolMessage`](openmls::prelude::ProtocolMessage) (a
+/// commit or application message) or a typed error. Uses OpenMLS's public
+/// `try_into_protocol_message` (the `into_protocol_message` convenience is `test-utils`-gated
+/// upstream).
 fn protocol_message(message: MlsMessageIn) -> Result<openmls::prelude::ProtocolMessage> {
     message.try_into_protocol_message().map_err(|e| {
         OpenMlsAuthorityError::UnexpectedMessage(format!("not a protocol message: {e:?}"))
