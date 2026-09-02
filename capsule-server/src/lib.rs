@@ -26,7 +26,8 @@
 //!
 //! Each module owns one port and, where it has one, the surface over it. [`routes`] is the only
 //! module that knows about HTTP: everything under it — [`album`], [`directory`], [`discovery`],
-//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`quota`], [`scrub`], [`serve`],
+//! [`enrollment`], [`escrow`], [`gc`], [`index`], [`moderation`], [`negotiation`], [`quota`],
+//! [`scrub`], [`serve`],
 //! [`share`], [`store`],
 //! [`sync`], [`upload`],
 //! [`verify`] — is framework-free and testable without a router, which is why the operator
@@ -68,6 +69,7 @@ pub mod gc;
 pub mod index;
 pub mod limits;
 pub mod moderation;
+pub mod negotiation;
 mod openapi;
 pub mod problem;
 pub mod quota;
@@ -84,6 +86,7 @@ use kynos::middleware::catch_panic::Propagate;
 use kynos::middleware::limits::BodySize;
 use kynos::middleware::stack::Cons;
 use kynos::prelude::*;
+use kynos::router::group::Group;
 use kynos::router::service::Service;
 
 pub use self::app::App;
@@ -104,11 +107,47 @@ pub fn router() -> ServerRouter {
         // and the bearer scheme's `401`/`403` — and fills in the `error.*` code none of those
         // framework-owned types has a seam to carry. See [`problem`], and `S-C36`.
         .intercept(problem::CodedProblems::new())
+        // Inside the coder and outside everything that can refuse: the protocol window rides
+        // **every** response — the body-size `413` below, an extractor's `400`, the bearer
+        // scheme's `401`, the gate's own `426` — because each of those is produced beneath this
+        // and passes back up through it. See [`negotiation`].
+        .intercept(negotiation::Negotiation::new())
         // Mounted on the whole router, not on the operations that happen to take a body today:
         // an oversized body is refused wherever it is sent, and the `413` that refusal produces
         // is declared on every operation it covers because Kynos derives the declaration from
         // the interceptor's own type. See [`limits`].
         .intercept(limits::body_size())
+        // The protocol gate is a `Group`, not a router interceptor, because the design exempts
+        // ten operations from it and a group is how Kynos spells "these and not those": an
+        // operation mounted inside is gated and declares the handshake parameters and the `426`;
+        // one mounted on the router below is not, and still carries the response headers.
+        //
+        // The exempt set the design names (`api-surfaces.md`, "Negotiation Across Transports"):
+        // `GET /v1/version` (the reachability probe a client hits before it knows the window),
+        // the four `/.well-known/capsule/*` records (public discovery, read before any
+        // handshake), the three `/s/{opaque_id}*` share reads (share-links.md requires an
+        // indistinguishable `404`, which a `426` would turn into a probing oracle), and the two
+        // `/d/{opaque_id}*` guest deposits (web-upload.md pins the protocol at link issuance, so
+        // a browser guest has nothing to assert).
+        //
+        // **What is gated today is the upload session's four operations** — the ones that
+        // enforced the handshake per route before this group existed. Every other non-exempt
+        // operation is still mounted on the router below, and moving it in is a one-line change
+        // here — deliberately not made yet, because `capsule-sdk` builds three separate
+        // `reqwest` clients (`auth.rs`, `sync.rs`, `net.rs`) and only the shared one in
+        // `client.rs` sends the handshake; widening the gate before the other two do would
+        // refuse every SDK sign-in. The census test in `tests/conformance.rs` pins the gated set
+        // so the widening is a deliberate edit to both, never an accident of a mount.
+        .group(
+            Group::<App>::new("/")
+                .intercept(negotiation::ProtocolGate::new())
+                .mount(kynos::routes![
+                    routes::upload::create_upload,
+                    routes::upload::append_chunk,
+                    routes::upload::head_upload,
+                    routes::upload::cancel_upload,
+                ]),
+        )
         // Seven `mount` calls, not one. Kynos's `EndpointSet` is implemented for tuples up to
         // sixteen and the seventeenth operation is a compile error, so a split is forced — but
         // grouping by surface rather than cutting at the arbitrary boundary is what makes the
@@ -162,13 +201,10 @@ pub fn router() -> ServerRouter {
             routes::well_known::deprecation_announcements,
             routes::well_known::revoked_jti,
         ])
-        // The asset surfaces: getting bytes in, changing what they mean, and reading them back.
+        // The asset surfaces beside the gated session operations above: changing what bytes
+        // mean, and reading them back.
         .mount(kynos::routes![
-            routes::upload::create_upload,
-            routes::upload::append_chunk,
             routes::sessions::list_upload_sessions,
-            routes::upload::head_upload,
-            routes::upload::cancel_upload,
             routes::receipts::get_upload_receipt,
             routes::ops::apply_op,
             routes::sync::sync_feed,
@@ -202,7 +238,11 @@ pub fn router() -> ServerRouter {
 /// two interceptors answering with one status a compile error rather than a runtime surprise —
 /// so mounting one changes this signature. That is a feature: the alias is the one place the
 /// server's middleware stack is written down.
-pub type ServerRouter = Router<App, Propagate, Cons<BodySize, Cons<problem::CodedProblems, ()>>>;
+pub type ServerRouter = Router<
+    App,
+    Propagate,
+    Cons<BodySize, Cons<negotiation::Negotiation, Cons<problem::CodedProblems, ()>>>,
+>;
 
 /// Builds the service the server and the in-process tests both drive.
 ///
@@ -254,5 +294,10 @@ pub fn openapi() -> kynos::Result<kynos::openapi::Document> {
     // a generator. Filled in with the binary marker so the SDK's client can be generated from
     // the whole document instead of most of it.
     openapi::describe_raw_byte_payloads(&mut document);
+    // Issue #404: Kynos describes an interceptor's response headers on success responses only,
+    // while [`negotiation::Negotiation`] attaches them to every response it forwards — errors
+    // included. The walk files the same three declarations under every other response, so the
+    // document promises exactly what the wire carries.
+    openapi::describe_negotiation_headers(&mut document);
     Ok(document)
 }

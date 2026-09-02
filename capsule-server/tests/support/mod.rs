@@ -2249,13 +2249,83 @@ impl AssetIndex for SwitchableIndex {
     }
 }
 
+/// The fixture's client: Kynos's in-process `TestClient`, sending the protocol handshake.
+///
+/// Every request a real client makes carries `X-Capsule-Protocol` — the SDK sets it as a
+/// default header on its transport — so the fixture does the same, once, here, rather than at
+/// every one of the suite's several hundred request sites. A case about the handshake itself
+/// overrides the header (a later `header` call replaces an earlier one) or reaches for
+/// [`Client::raw`] to send none at all; the two are the only ways a request leaves without it,
+/// which is what keeps "the gate refused this" a deliberate assertion rather than a fixture
+/// accident.
+///
+/// Deliberately not `Deref` to the inner client: a function taking `&TestClient<App>` would
+/// then accept this and silently drive the router without the handshake.
+pub(crate) struct Client {
+    inner: TestClient<App>,
+}
+
+impl Client {
+    pub(crate) fn new(inner: TestClient<App>) -> Self {
+        Self { inner }
+    }
+
+    /// The bare client, for a request that must **not** carry the handshake.
+    pub(crate) fn raw(&self) -> &TestClient<App> {
+        &self.inner
+    }
+
+    fn handshake<'a>(request: TestRequest<'a, App>) -> TestRequest<'a, App> {
+        request.header("x-capsule-protocol", PROTOCOL_VERSION)
+    }
+
+    pub(crate) fn get(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.get(path))
+    }
+
+    pub(crate) fn post(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.post(path))
+    }
+
+    pub(crate) fn put(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.put(path))
+    }
+
+    pub(crate) fn patch(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.patch(path))
+    }
+
+    pub(crate) fn delete(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.delete(path))
+    }
+
+    pub(crate) fn head(&self, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.head(path))
+    }
+
+    /// A request with any method, for a walk driven by the document rather than by a verb.
+    pub(crate) fn method(&self, method: kynos::http::Method, path: &str) -> TestRequest<'_, App> {
+        Self::handshake(self.inner.method(method, path))
+    }
+
+    /// Every response this client observed was one the description predicts.
+    pub(crate) fn assert_conformance(&self) {
+        self.inner.assert_conformance();
+    }
+
+    /// Every response the description predicts was produced through this client.
+    pub(crate) fn assert_declared_responses_covered(&self) {
+        self.inner.assert_declared_responses_covered();
+    }
+}
+
 /// A built server, plus handles on everything behind it.
 ///
 /// The handles matter: an assertion about a session is made against the store the server just
 /// wrote to, not against a second reading of the response body.
 pub(crate) struct Fixture {
-    /// The in-process client. No socket, no port, no runtime flavour.
-    pub(crate) client: TestClient<App>,
+    /// The in-process client, sending the handshake on every request. No socket, no port.
+    pub(crate) client: Client,
     /// The context the client drives, for the one case that has to serve it on a socket.
     app: App,
     /// The store the server opened its sessions in.
@@ -2431,9 +2501,9 @@ impl Fixture {
         });
 
         Self {
-            client: TestClient::new(
+            client: Client::new(TestClient::new(
                 capsule_server::service(app.clone()).expect("the router builds"),
-            ),
+            )),
             app,
             sessions,
             accounts,
@@ -2653,7 +2723,6 @@ impl Fixture {
             .client
             .post("/v1/upload")
             .header("authorization", bearer)
-            .header("x-capsule-protocol", PROTOCOL_VERSION)
             .json(request)
             .send()
             .await
@@ -2664,8 +2733,8 @@ impl Fixture {
 
     /// A well-formed `PATCH` of `payload` at `offset`.
     ///
-    /// Every header the protocol requires is set, so a test that wants one wrong overrides it
-    /// — the later `header` call wins.
+    /// Every header the protocol requires is set — the handshake by the client, the rest here —
+    /// so a test that wants one wrong overrides it: the later `header` call wins.
     pub(crate) fn chunk<'a>(
         &'a self,
         id: &str,
@@ -2676,7 +2745,6 @@ impl Fixture {
         self.client
             .patch(&format!("/v1/upload/{id}"))
             .header("authorization", bearer)
-            .header("x-capsule-protocol", PROTOCOL_VERSION)
             .header("x-capsule-offset", &offset.to_string())
             .header("x-capsule-checksum", &checksum(payload))
             .body("application/octet-stream", payload.to_vec())

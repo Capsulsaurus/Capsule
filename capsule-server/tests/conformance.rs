@@ -417,8 +417,9 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
 
-    // POST 400 / 415 / 422 / 426 / 401 / 403 / 500.
+    // POST 400 / 415 / 422 / 426 / 401 / 403 / 500. The 400 is the gate's: no handshake at all.
     client
+        .raw()
         .post("/v1/upload")
         .header("authorization", &bearer)
         .json(&create_request(&fixture.clock, &whole, "original"))
@@ -479,6 +480,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::OK);
     client
+        .raw()
         .head(&session)
         .header("authorization", &bearer)
         .send()
@@ -612,6 +614,7 @@ async fn every_declared_response_is_exercised() {
         .await
         .assert_status(StatusCode::UPGRADE_REQUIRED);
     client
+        .raw()
         .delete(&session)
         .header("authorization", &bearer)
         .send()
@@ -2496,6 +2499,296 @@ async fn every_declared_response_is_exercised() {
     client.assert_declared_responses_covered();
 }
 
+// ===========================================================================================
+// The protocol handshake census (issue #404)
+// ===========================================================================================
+
+/// The three response headers the design puts on **every** response.
+const WINDOW_HEADERS: [&str; 3] = [
+    "X-Capsule-Protocol-Min",
+    "X-Capsule-Protocol-Max",
+    "X-Capsule-Min-Client-Build",
+];
+
+/// The three request headers the gate reads.
+const HANDSHAKE_HEADERS: [&str; 3] = [
+    "X-Capsule-Protocol",
+    "X-Capsule-Crypto-Suite",
+    "X-Capsule-Sidecar-Schema",
+];
+
+/// The operations the protocol gate covers, by method and path template.
+///
+/// **Pinned on purpose.** The gate is a Kynos `Group` in `lib.rs::router`, so an operation joins
+/// or leaves it by a mount call moving — and a mount call moving must fail this test, because
+/// widening the gate refuses every client that does not send the handshake and narrowing it
+/// silently drops a fail-closed rule. Today the set is the upload session's four operations,
+/// the ones that enforced the handshake per route before the gate existed; the design's target
+/// is every operation except the ten `lib.rs` names as exempt, and the SDK's transports have
+/// to send the handshake before that widening lands.
+const GATED: &[(&str, &str)] = &[
+    ("POST", "/v1/upload"),
+    ("PATCH", "/v1/upload/{id}"),
+    ("HEAD", "/v1/upload/{id}"),
+    ("DELETE", "/v1/upload/{id}"),
+];
+
+/// The operations the design exempts from the gate, whatever else is gated.
+///
+/// Asserted **never** to declare the handshake: `/v1/version` is the reachability probe a
+/// client hits before it knows the window; the `/.well-known/capsule/*` records are public
+/// discovery; the `/s/{opaque_id}*` reads must answer an indistinguishable `404`
+/// (share-links.md), which a `426` would turn into a probing oracle; the `/d/{opaque_id}*`
+/// guest deposits have their protocol pinned at link issuance (web-upload.md).
+const EXEMPT: &[(&str, &str)] = &[
+    ("GET", "/v1/version"),
+    ("GET", "/.well-known/capsule/attestation-keys"),
+    ("GET", "/.well-known/capsule/server-info"),
+    ("GET", "/.well-known/capsule/deprecation"),
+    ("GET", "/.well-known/capsule/revoked-jti"),
+    ("GET", "/s/{opaque_id}"),
+    ("GET", "/s/{opaque_id}/wrapped-secret"),
+    ("GET", "/s/{opaque_id}/blob/{hash}"),
+    ("POST", "/d/{opaque_id}"),
+    ("PATCH", "/d/{opaque_id}/{upload_id}"),
+];
+
+/// The HTTP methods a path item may carry, as the document spells them.
+const METHODS: [&str; 9] = [
+    "get", "put", "post", "delete", "options", "head", "patch", "trace", "query",
+];
+
+/// Every `(METHOD, template, operation)` in the emitted document.
+fn operations(document: &serde_json::Value) -> Vec<(String, String, serde_json::Value)> {
+    let mut found = Vec::new();
+    for (path, item) in document["paths"].as_object().expect("paths") {
+        for (method, operation) in item.as_object().expect("a path item") {
+            if METHODS.contains(&method.as_str()) {
+                found.push((method.to_uppercase(), path.clone(), operation.clone()));
+            }
+        }
+    }
+    assert!(!found.is_empty(), "the document describes no operation");
+    found
+}
+
+/// A template with every `{variable}` replaced by a placeholder, so it can be requested.
+fn concrete(template: &str) -> String {
+    let mut path = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        path.push_str(&rest[..open]);
+        path.push_str("anything");
+        let close = rest[open..].find('}').expect("a balanced template") + open;
+        rest = &rest[close + 1..];
+    }
+    path.push_str(rest);
+    path
+}
+
+/// Whether `operation` declares a header parameter called `name`.
+fn declares_header(operation: &serde_json::Value, name: &str) -> Option<serde_json::Value> {
+    operation["parameters"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|parameter| {
+            parameter["in"] == "header"
+                && parameter["name"]
+                    .as_str()
+                    .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+        })
+        .cloned()
+}
+
+/// Every response of every operation declares the three window headers, required.
+///
+/// Over the emitted document rather than per route, because the property is the router's: the
+/// advertising interceptor is mounted once, and Kynos describes an interceptor's headers on
+/// success responses only, so the walk in `capsule_server::openapi` is what puts them on the
+/// `426` a client needs them on most. This is the test that fails if either half goes missing.
+#[test]
+fn every_response_of_every_operation_declares_the_protocol_window() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut responses = 0_usize;
+    for (method, path, operation) in operations(&json) {
+        for (status, response) in operation["responses"].as_object().expect("responses") {
+            for name in WINDOW_HEADERS {
+                let header = &response["headers"][name];
+                assert!(
+                    header.is_object(),
+                    "{method} {path} -> {status} does not declare {name}"
+                );
+                assert_eq!(
+                    header["required"], true,
+                    "{method} {path} -> {status} declares {name} as optional"
+                );
+            }
+            responses += 1;
+        }
+    }
+    assert!(responses > 100, "only {responses} responses were walked");
+}
+
+/// The operations declaring the handshake are exactly [`GATED`], and none of [`EXEMPT`].
+#[test]
+fn the_handshake_is_declared_on_exactly_the_gated_operations() {
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut gated: Vec<(String, String)> = Vec::new();
+    for (method, path, operation) in operations(&json) {
+        let declared: Vec<&str> = HANDSHAKE_HEADERS
+            .into_iter()
+            .filter(|name| declares_header(&operation, name).is_some())
+            .collect();
+        if declared.is_empty() {
+            continue;
+        }
+        assert_eq!(
+            declared, HANDSHAKE_HEADERS,
+            "{method} {path} declares part of the handshake, which no interceptor does"
+        );
+        let protocol = declares_header(&operation, "X-Capsule-Protocol").expect("declared");
+        assert_eq!(
+            protocol["required"], true,
+            "{method} {path} declares X-Capsule-Protocol as optional and refuses without it"
+        );
+        for status in ["400", "426"] {
+            assert!(
+                operation["responses"][status].is_object(),
+                "{method} {path} is gated and does not declare the gate's {status}"
+            );
+        }
+        gated.push((method, path));
+    }
+    gated.sort();
+
+    let mut expected: Vec<(String, String)> = GATED
+        .iter()
+        .map(|(method, path)| ((*method).to_owned(), (*path).to_owned()))
+        .collect();
+    expected.sort();
+    assert_eq!(
+        gated, expected,
+        "the gated set moved; `lib.rs::router` and this pin change together"
+    );
+
+    let all: Vec<(String, String)> = operations(&json)
+        .into_iter()
+        .map(|(method, path, _)| (method, path))
+        .collect();
+    for (method, path) in EXEMPT {
+        assert!(
+            all.contains(&((*method).to_owned(), (*path).to_owned())),
+            "{method} {path} is named exempt and is not in the document"
+        );
+        assert!(
+            !gated.contains(&((*method).to_owned(), (*path).to_owned())),
+            "{method} {path} is exempt by design and is gated"
+        );
+    }
+}
+
+/// On the wire: every operation answers with the window, and the gated ones refuse on it.
+///
+/// Driven by the document rather than a list, so an operation added tomorrow is walked
+/// tomorrow. Path variables are filled with a placeholder; the gate runs before the path,
+/// the credential or the body is looked at, so a `426` needs none of them to be right — and
+/// an exempt operation answering anything *but* `426` to an ancient protocol is the exemption
+/// observed rather than assumed.
+#[tokio::test]
+async fn the_protocol_window_rides_every_response_on_the_wire() {
+    use capsule_server::upload::policy::{
+        DEFAULT_MIN_CLIENT_BUILD, DEFAULT_PROTOCOL_MAX, DEFAULT_PROTOCOL_MIN,
+    };
+
+    let fixture = Fixture::working();
+    let document = capsule_server::openapi().expect("router describes itself");
+    let json = serde_json::to_value(&document).expect("a document serializes");
+
+    let mut walked = 0_usize;
+    for (method, template, operation) in operations(&json) {
+        let path = concrete(&template);
+        let gated = declares_header(&operation, "X-Capsule-Protocol").is_some();
+        let verb = kynos::http::Method::from_bytes(method.as_bytes()).expect("a method");
+
+        // Ancient, and therefore outside any window this server will ever accept.
+        let ancient = fixture
+            .client
+            .method(verb.clone(), &path)
+            .header("x-capsule-protocol", "2000-01-01")
+            .send()
+            .await;
+        for (name, expected) in [
+            ("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN),
+            ("x-capsule-protocol-max", DEFAULT_PROTOCOL_MAX),
+            ("x-capsule-min-client-build", DEFAULT_MIN_CLIENT_BUILD),
+        ] {
+            assert_eq!(
+                ancient.header(name),
+                Some(expected),
+                "{method} {template} answered {} without {name}",
+                ancient.status()
+            );
+        }
+
+        if !gated {
+            assert_ne!(
+                ancient.status(),
+                StatusCode::UPGRADE_REQUIRED,
+                "{method} {template} is not gated and refused on the protocol"
+            );
+            walked += 1;
+            continue;
+        }
+
+        ancient.assert_status(StatusCode::UPGRADE_REQUIRED);
+        if method != "HEAD" {
+            let body: serde_json::Value = ancient.json();
+            assert_eq!(
+                body["code"], "error.protocol.version_unsupported",
+                "{method} {template}: {body}"
+            );
+        }
+
+        // Each malformed spelling is the gate's coded 400, and each leaves with the window.
+        for (name, value) in [
+            ("x-capsule-protocol", "yesterday"),
+            ("x-capsule-crypto-suite", "9999"),
+            ("x-capsule-crypto-suite", "one"),
+            ("x-capsule-sidecar-schema", "9"),
+        ] {
+            let refused = fixture
+                .client
+                .method(verb.clone(), &path)
+                .header(name, value)
+                .send()
+                .await;
+            refused.assert_status(StatusCode::BAD_REQUEST);
+            refused.assert_header("x-capsule-protocol-min", DEFAULT_PROTOCOL_MIN);
+            if method != "HEAD" {
+                let body: serde_json::Value = refused.json();
+                assert_eq!(
+                    body["code"], "error.request.malformed",
+                    "{method} {template} with {name}: {value}: {body}"
+                );
+            }
+        }
+        fixture
+            .client
+            .raw()
+            .method(verb, &path)
+            .send()
+            .await
+            .assert_status(StatusCode::BAD_REQUEST);
+        walked += 1;
+    }
+    assert_eq!(walked, operations(&json).len());
+}
+
 /// The router builds and describes itself.
 ///
 /// `openapi()` is the only path from this code to a description — there is no document to
@@ -2587,7 +2880,7 @@ fn the_document_declares_openapi_32() {
 /// On an account of its own, for the reason [`profile_block`] uses one: switching a second
 /// factor on for the fixture's shared account would make every later `POST /v1/auth/login` in the
 /// walk answer `202`.
-async fn totp_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+async fn totp_block(client: &support::Client, fixture: &Fixture) {
     const OWN_EMAIL: &str = "totp-walk@example.test";
     const OWN_PASSWORD: &str = "correct horse battery staple";
 
@@ -2865,7 +3158,7 @@ async fn totp_block(client: &kynos::test::TestClient<capsule_server::App>, fixtu
 /// password change on this surface closes every other session of the account it acts on, so
 /// running it against the shared account would sign the rest of the walk out — and the walk
 /// would then be testing the bearer scheme instead of the operations it had reached.
-async fn profile_block(client: &kynos::test::TestClient<capsule_server::App>, fixture: &Fixture) {
+async fn profile_block(client: &support::Client, fixture: &Fixture) {
     const OWN_EMAIL: &str = "profile-walk@example.test";
     const OWN_PASSWORD: &str = "correct horse battery staple";
     const OWN_NEW_PASSWORD: &str = "a different correct horse";
@@ -3110,7 +3403,7 @@ async fn profile_block(client: &kynos::test::TestClient<capsule_server::App>, fi
 /// Extracted so [`every_declared_response_is_exercised`] does not build one generator larger
 /// than a thread stack. Same client, so the recorder still sees these.
 async fn drops_block(
-    client: &kynos::test::TestClient<capsule_server::App>,
+    client: &support::Client,
     fixture: &Fixture,
     bearer: &str,
     refresh_token: &str,
@@ -3570,7 +3863,7 @@ async fn drops_block(
 /// Its own function so the walk's generator stays inside the test thread's stack; see the drops
 /// block for the same note.
 async fn upgrade_block(
-    client: &kynos::test::TestClient<capsule_server::app::App>,
+    client: &support::Client,
     fixture: &Fixture,
     bearer: &str,
     refresh_token: &str,
