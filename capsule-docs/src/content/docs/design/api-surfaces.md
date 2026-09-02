@@ -123,12 +123,41 @@ Every public route applies the same headers:
 
 | Header | Direction |
 | --- | --- |
-| `X-Capsule-Protocol` | request |
-| `X-Capsule-Crypto-Suite` | request for writes |
-| `X-Capsule-Sidecar-Schema` | request |
-| `X-Capsule-Protocol-Min` | response |
-| `X-Capsule-Protocol-Max` | response |
-| `X-Capsule-Min-Client-Build` | response |
+| `X-Capsule-Protocol` | request, required on every gated route |
+| `X-Capsule-Crypto-Suite` | request for writes; validated when present |
+| `X-Capsule-Sidecar-Schema` | request on metadata updates; validated when present |
+| `X-Capsule-Protocol-Min` | response, on every response of every operation |
+| `X-Capsule-Protocol-Max` | response, on every response of every operation |
+| `X-Capsule-Min-Client-Build` | response, on every response of every operation; advisory (`0.0.0` = no cutoff) |
+
+The carriage is two Kynos interceptors in `capsule-server/src/negotiation.rs`, and the split
+is the point: `Negotiation` is mounted on the whole router, outside everything that can refuse,
+so the three response headers ride a `413`, a `401` and a `426` exactly as they ride a `200`
+(an unrouted `404`/`405` is the router's own and carries none — Kynos runs interceptors per
+operation, after routing);
+`ProtocolGate` is mounted on a `Group`, so an operation is gated by being mounted inside it
+and exempt by being mounted outside. Both read one protocol window — the upload policy's,
+built from `PROTOCOL_MIN`/`PROTOCOL_MAX` at boot — so the window a client is told and the
+window it is held to cannot be two numbers. A `426` carries the window on the headers and
+the stable `error.protocol.version_unsupported` code in the body; nothing restates the window
+as a body member.
+
+**Exempt from the request gate** (and still carrying the response headers), ten operations:
+
+- `GET /v1/version` — the reachability probe a client hits before it knows the window.
+- `GET /.well-known/capsule/attestation-keys`, `GET /.well-known/capsule/server-info`,
+  `GET /.well-known/capsule/deprecation`, `GET /.well-known/capsule/revoked-jti` — public
+  discovery, read before any handshake.
+- `GET /s/{opaque_id}`, `GET /s/{opaque_id}/wrapped-secret`, `GET /s/{opaque_id}/blob/{hash}` —
+  [Share Links](/design/share-links/) requires an indistinguishable `404` there, and a `426`
+  would be a probing oracle.
+- `POST /d/{opaque_id}`, `PATCH /d/{opaque_id}/{upload_id}` — the link record pins
+  `protocol_version` and `crypto_suite_id` at issuance ([Web Upload](/design/web-upload/)), so a
+  browser guest has nothing to assert.
+
+`capsule-server/tests/conformance.rs` pins both the gated set and this exempt set against the
+emitted document, and walks every operation on the wire, so a route cannot join or leave the
+gate by accident.
 
 Credentials use `Authorization: Bearer`. Session access tokens and federation capabilities are
 different token types verified by their owning modules, even though both use the standard HTTP
