@@ -246,9 +246,47 @@ pub struct DerivativeCore {
     /// Which kind of derivative.
     pub role: DerivativeRole,
     /// MIME/format string, e.g. `image/avif` or `embedding/mobileclip-b`.
+    ///
+    /// **A `String`, and deliberately so, even though the still formats are a closed set.**
+    /// Two reasons, and both are about keeping a *policy* rejection from becoming a *parse*
+    /// failure:
+    ///
+    /// - the same field carries the embedding-role grammar `embedding/{model_id}`
+    ///   ([`crate::ml`]), which no still-format enum can model, so a single typed field would
+    ///   have to be an enum over both grammars;
+    /// - a `#[serde(try_from = "String")]` newtype would make an *older* manifest naming a
+    ///   future codec fail at deserialisation — before its signature is examined at all —
+    ///   turning "this receiver does not recognise that format" into "this manifest is
+    ///   unreadable".
+    ///
+    /// The closed set is enforced at the two boundaries instead: production, because
+    /// `media::generate_still_derivatives` only ever writes
+    /// [`DerivativeFormat::mime`](crate::derivative_format::DerivativeFormat::mime); and
+    /// verification, via
+    /// [`verify_still_format`](crate::derivative_format::verify_still_format), which rejects a
+    /// still-role manifest whose value is outside the set and leaves the embedding-role grammar
+    /// alone.
+    ///
+    /// Both live in [`crate::derivative_format`], which is **unconditional** — deliberately not
+    /// behind the `media` feature. `capsule-server` and `capsule-wasm` build
+    /// `default-features = false`, and they are exactly the crates that receive a manifest they
+    /// did not author, so a check they could not link would be a closed set only its producer
+    /// could evaluate. SSoT: [Thumbnails](https://docs/design/thumbnails/).
     pub format: String,
     /// Content-address digest over the derivative ciphertext.
     pub ciphertext_hash: Hash32,
+    /// The STREAM nonce prefix the derivative ciphertext was produced under; folded into the
+    /// file-key salt, so it also selects the key.
+    ///
+    /// **Required, not `Option`.** Derivative bytes are encrypted client-side exactly like the
+    /// original ([Encryption](https://docs/design/cryptography/encryption/)), so a receiver that
+    /// cannot recover this cannot decrypt the blob at all — an absent prefix would be an
+    /// unopenable derivative rather than a tolerable gap. It is safe to make it required
+    /// because no real `derivative-manifest/v1` has ever been written to any store: derivatives
+    /// were unconditionally `DeferredNoCodec` until the decoder landed, and `crate::ml`
+    /// constructs no derivative manifest. There is nothing to stay compatible with, so the
+    /// schema string does not move.
+    pub nonce_prefix: [u8; 7],
     /// Device that generated the derivative.
     pub generated_by_device: Uuid,
     /// Generating client version.
@@ -473,6 +511,7 @@ mod tests {
             role: DerivativeRole::Thumbnail,
             format: "image/avif".into(),
             ciphertext_hash: Hash32([0xAB; 32]),
+            nonce_prefix: [9, 8, 7, 6, 5, 4, 3],
             generated_by_device: Uuid::from_u128(0xD1),
             generated_by_client: "capsule-cli/0.1.0".into(),
             model_id: None,

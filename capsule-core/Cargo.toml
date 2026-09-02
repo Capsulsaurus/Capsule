@@ -25,7 +25,15 @@ required-features = ["ffi-bindgen"]
 # `wasm32-unknown-unknown` for the guest web-upload client (see `drop::seal_drop`). Build:
 #   cargo build -p capsule-core --target wasm32-unknown-unknown --no-default-features
 default = ["native"]
-native = ["dep:rusqlite", "dep:sqlite-vec", "mls"]
+native = ["dep:rusqlite", "dep:sqlite-vec", "mls", "media"]
+# `media` links the still-image decode/encode stack (`capsule_core::media`, slices `S-B1`/`S-B13`)
+# over `rawshift-image`. Implied by `native`, so the CLI, the tests and the mobile FFI all carry
+# decoders; **excluded** from the `wasm32-unknown-unknown` sealing build (`--no-default-features`),
+# to which the whole stack is irrelevant. Every enabled codec is pure Rust and links no C, which
+# is what keeps the mobile cross-builds working — see the dependency's own comment for why WebP
+# is not among them. `capsule_core::lqip` stays unconditional and is NOT behind this feature — a
+# placeholder must not depend on which client imported the photo (slice `S-B14`).
+media = ["dep:rawshift-image"]
 # `mls` links the live OpenMLS group backend (`crypto::authority::OpenMlsAuthority`, slice
 # S-X1) pinned to the X-Wing PQ ciphersuite `MLS_256_XWING_CHACHA20POLY1305_SHA256_Ed25519`
 # (`0x004D`) via its formally-verified libcrux provider. Implied by `native` so the default
@@ -77,6 +85,46 @@ chromahash = { version = "0.7.1", default-features = false, features = ["simd"] 
 indexmap = { workspace = true }
 jiff = { workspace = true }
 kamadak-exif = "0.5"
+# Still-image decode/encode for `capsule_core::media` (`media` feature). A **registry**
+# dependency, not the pinned `rawshift/` submodule, which is an uninitialised newer
+# v1-in-progress tree and is not a workspace member. Depended on directly rather than through
+# the `rawshift` facade because only the per-crate dependency gives per-format Cargo control
+# (`rawshift-image`'s own docs say so), and the format set is a licence, build-host and
+# *portability* decision:
+#
+# - `jpeg-decode` / `png-decode` — pure-Rust zune decode for the two formats every library holds.
+#                     **Decode only in the shipping graph.** Their encoders exist and only the
+#                     test fixtures use them, so they ride `[dev-dependencies]` below: shipping
+#                     `jpeg-encode` would put `jpeg-encoder` — and its conjunctive IJG licence
+#                     arm, which cannot be elected away — into every release binary to satisfy
+#                     nothing a user does.
+# - `jxl`           — jxl-oxide decode plus the `zune-jpegxl` encoder that produces the thumbnail
+#                     tier. Pure Rust, and `image/jxl` is the tier table's committed *master*
+#                     format. The backend is `JxlSimpleEncoder`, which is lossless — a thumbnail
+#                     therefore costs more bytes than the table's q=50 intends, and closing that
+#                     needs C libjxl (`jxl-encode-libjxl`: `bindgen` + `pkg-config`).
+# - `tiff-decode` / `gif-decode` — pure Rust, no encoder needed.
+#
+# **`webp` is deliberately absent, and it is not a preference.** It does not compile for any
+# aarch64 target: `codecs/webp.rs:164,177,190` pass `b"EXIF".as_ptr() as *const i8` to
+# `WebPMuxSetChunk`, whose `libwebp-sys` 0.14.4 signature (`ffi.rs:881`) takes
+# `*const core::ffi::c_char` — and `c_char` is `u8` on aarch64, so the cast is an E0308. That
+# module is compiled under `any(webp-decode, webp-encode)`, so decode-only does not escape it.
+# Every mobile target Capsule ships is aarch64, so WebP is a recognised-but-undecodable format
+# here until upstream fixes the cast.
+#
+# Also absent: `heic` (system libheif), `avif` (image's `avif-native` -> system libdav1d for
+# decode; `ravif` -> `rav1e/asm` -> nasm on every x86_64 build host for encode), `svg`, and the
+# RAW families (`experimental`; CR3 pixel decode unimplemented upstream). Each is a typed
+# `media::MediaError::UnsupportedFormat` today rather than a silent gap. MPL-2.0, already
+# allow-listed in `deny.toml`; see the Media row in design/dependencies.md.
+rawshift-image = { version = "0.1.1", default-features = false, features = [
+    "jpeg-decode",
+    "png-decode",
+    "jxl",
+    "tiff-decode",
+    "gif-decode",
+], optional = true }
 # Bundled SQLite (C) — the on-device library index. Optional + gated by `native` because it
 # cannot target `wasm32-unknown-unknown`; the WASM sealing build drops it.
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
@@ -188,6 +236,16 @@ getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] 
 uuid = { workspace = true, features = ["rng-getrandom"] }
 
 [dev-dependencies]
+# The encoders the fixtures need and the shipping graph does not. Cargo unifies features per
+# build, so a `cargo build` links decode only while `cargo test` gets the encoders — which keeps
+# `jpeg-encoder`'s IJG arm out of every release binary while leaving it in the graph
+# `cargo deny --all-features` inspects, so its `deny.toml` exception and NOTICE section stay
+# matched rather than becoming stale. The `media` feature is named explicitly because a
+# dev-dependency does not inherit the optional dependency's gate.
+rawshift-image = { version = "0.1.1", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
 tempfile = "3"
 # Integration tests (e.g. the S-D14 placement audit) build UUIDs to exercise the `library::paths`
 # surface; `uuid` is a normal dependency, so the test crate needs its own dev-dependency on it.

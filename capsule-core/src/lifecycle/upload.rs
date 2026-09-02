@@ -18,16 +18,17 @@ use std::fs;
 
 use uuid::Uuid;
 
-use super::{AssetState, LifecycleError, Result, Workspace, media_dir};
+use super::{AlbumKeys, AssetState, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
 use crate::crypto::encryption::stream;
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::provenance::DerivativeManifest;
 use crate::crypto::provenance::action::{Action, DerivativeRole};
 use crate::crypto::provenance::manifest::KeyMode;
+use crate::media::{DerivativeFormat, verify_still_format};
 
-/// One derivative blob of an asset bundle: the bytes plus the content address its signed
-/// [`DerivativeManifest`] committed to.
+/// One derivative blob of an asset bundle: the **ciphertext** plus the content address its
+/// signed [`DerivativeManifest`] committed to.
 #[derive(Debug, Clone)]
 pub struct DerivativeBlob {
     /// Which derivative this is (`thumbnail` / `preview` / `embedding`).
@@ -36,7 +37,10 @@ pub struct DerivativeBlob {
     pub format: String,
     /// The AMK epoch the derivative manifest was authorized under, when it recorded one.
     pub amk_version: Option<u32>,
-    /// The derivative's transferable bytes.
+    /// The derivative's transferable bytes — **ciphertext**, re-derived from the plaintext the
+    /// library holds using the nonce prefix the manifest recorded. Derivative bytes are
+    /// encrypted client-side exactly like the original
+    /// ([Encryption](https://docs/design/cryptography/encryption/)).
     pub bytes: Vec<u8>,
     /// The content address the signed derivative manifest committed to.
     pub ciphertext_hash: Hash32,
@@ -147,7 +151,7 @@ impl Workspace {
             return Err(LifecycleError::CiphertextMismatch(asset.asset_id));
         }
 
-        let derivatives = self.derivative_blobs(asset);
+        let derivatives = self.derivative_blobs(asset, album, epoch);
         tracing::debug!(
             album_id = %asset.album_id,
             amk_version = epoch,
@@ -184,11 +188,40 @@ impl Workspace {
     }
 
     /// The asset's persisted derivative blobs, read back from
-    /// `media/{YYYY}/{YYYY-MM}/derivatives/`. A derivative whose bytes are missing or no
-    /// longer content-address to its signed manifest is **skipped with a warning** rather
-    /// than failing the bundle: the original and its metadata are what a backup must not
+    /// `media/{YYYY}/{YYYY-MM}/derivatives/` and **encrypted** for the wire.
+    ///
+    /// The library holds derivatives as plaintext, exactly as it holds the original: the local
+    /// gallery paints them, and the ciphertext is re-derived here from the nonce prefix the
+    /// signed manifest recorded — the same round trip
+    /// [`upload_bundle`](Self::upload_bundle) performs for the original. So what leaves this
+    /// function in [`DerivativeBlob::bytes`] is ciphertext, and the field's `ciphertext_hash`
+    /// name is now true of it. A thumbnail is a recognisable low-resolution copy of a private
+    /// photo; the encryption doc admits no exception for it.
+    ///
+    /// **Still roles only.** An embedding-role manifest is skipped at `debug!` and named as out
+    /// of scope: its `embedding/{model_id}` grammar is not in the still format set, and
+    /// `crate::ml` produces no derivative manifest for this reader to have an opinion about.
+    ///
+    /// Five reasons a manifest is skipped rather than shipped, and two of them are quiet:
+    ///
+    /// - the `original` sentinel, which references the original blob and has no bytes of its
+    ///   own — an **expected** absence, logged at `debug!`;
+    /// - an embedding-role manifest, out of scope as above — also `debug!`;
+    /// - a still-role `format` outside the closed set, which is the structural rejection the
+    ///   tier table specifies;
+    /// - an `amk_version` naming an epoch this album does not hold, which would otherwise panic
+    ///   on the key lookup;
+    /// - bytes missing on disk, or bytes whose re-derived ciphertext does not match the signed
+    ///   content address.
+    ///
+    /// None of them fails the bundle: the original and its metadata are what a backup must not
     /// lose, and a stale thumbnail is regenerable.
-    fn derivative_blobs(&self, asset: &AssetState) -> Vec<DerivativeBlob> {
+    fn derivative_blobs(
+        &self,
+        asset: &AssetState,
+        album: &AlbumKeys,
+        epoch: u32,
+    ) -> Vec<DerivativeBlob> {
         let dir = media_dir(&self.root, asset.capture_utc).join("derivatives");
         let stem = asset.asset_id.simple().to_string();
         let bundle_path = dir.join(format!("{stem}.derivatives.cbor"));
@@ -209,10 +242,54 @@ impl Workspace {
 
         let mut blobs = Vec::with_capacity(manifests.len());
         for manifest in manifests {
+            let role_name = derivative_role_name(manifest.core.role);
+
+            // The closed-format check the tier table calls a structural rejection. It answers
+            // `Ok(None)` for an embedding-role manifest, whose `embedding/{model_id}` grammar
+            // this set deliberately does not model, so those pass through untouched.
+            match verify_still_format(&manifest) {
+                Ok(Some(DerivativeFormat::Original)) => {
+                    // A reference to the original blob, not a missing file: the receiver
+                    // resolves it against the original it already has. `debug!`, because an
+                    // expected absence logged as a warning trains people to ignore warnings.
+                    tracing::debug!(
+                        asset_id = %asset.asset_id,
+                        role = role_name,
+                        "upload bundle: `original` sentinel references the original blob; \
+                         nothing to upload for this tier"
+                    );
+                    continue;
+                }
+                Ok(None) => {
+                    // An embedding-role manifest. Its `embedding/{model_id}` grammar is not in
+                    // the still format set, and nothing produces one yet: `crate::ml` writes no
+                    // derivative manifest at all. Rather than invent a reader for an artefact
+                    // with no writer, this reader says plainly that embeddings are out of its
+                    // scope — at `debug!`, because encountering one is not a fault.
+                    tracing::debug!(
+                        asset_id = %asset.asset_id,
+                        role = role_name,
+                        "upload bundle: embedding-role derivatives are outside this reader's \
+                         scope until `crate::ml` produces manifests for them; skipping"
+                    );
+                    continue;
+                }
+                Ok(Some(_)) => {}
+                Err(format) => {
+                    tracing::warn!(
+                        asset_id = %asset.asset_id,
+                        role = role_name,
+                        %format,
+                        "upload bundle: still-role derivative names a format outside the closed \
+                         set; skipping"
+                    );
+                    continue;
+                }
+            }
+
             let core = manifest.core;
-            let role_name = derivative_role_name(core.role);
-            let prefix = format!("{stem}.{role_name}.");
-            let Some(bytes) = read_derivative_bytes(&dir, &prefix) else {
+            let Some(plaintext) = read_derivative_bytes(&dir, &stem, role_name, &core.format)
+            else {
                 tracing::warn!(
                     asset_id = %asset.asset_id,
                     role = role_name,
@@ -220,7 +297,32 @@ impl Workspace {
                 );
                 continue;
             };
-            let observed = hash::hash_bytes(&bytes);
+
+            // Re-derive the ciphertext from the prefix the manifest signed. The prefix is
+            // folded into the file-key salt, so it selects the key as well as the nonces —
+            // there is exactly one ciphertext this manifest can be describing.
+            //
+            // The epoch is **checked**, not indexed. It comes off an unverified `.cbor` on
+            // disk, and `file_key` reaches `album.amks[&epoch]`, which panics on a missing key
+            // — inside a function whose whole contract is that it never fails the bundle. An
+            // album recovered from a backup holds only the epochs it escrowed, so a manifest
+            // naming one it does not hold is reachable without any tampering at all.
+            let key_epoch = core.amk_version.map_or(epoch, |v| v.0);
+            if !album.amks.contains_key(&key_epoch) {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    role = role_name,
+                    epoch = key_epoch,
+                    "upload bundle: derivative manifest names an AMK epoch this album does not \
+                     hold; skipping"
+                );
+                continue;
+            }
+            let file_key = self.file_key(album, key_epoch, &asset.asset_id, &core.nonce_prefix);
+            let (_, ciphertext) =
+                stream::encrypt_asset_vec_with_prefix(&file_key, core.nonce_prefix, &plaintext);
+
+            let observed = hash::hash_bytes(&ciphertext);
             if observed != core.ciphertext_hash {
                 tracing::warn!(
                     asset_id = %asset.asset_id,
@@ -233,7 +335,7 @@ impl Workspace {
                 role: core.role,
                 format: core.format,
                 amk_version: core.amk_version.map(|v| v.0),
-                bytes,
+                bytes: ciphertext,
                 ciphertext_hash: observed,
             });
         }
@@ -250,17 +352,28 @@ fn derivative_role_name(role: DerivativeRole) -> &'static str {
     }
 }
 
-/// The first file in `dir` whose name starts with `prefix` — the derivative's bytes, whose
-/// extension varies with the encoder's chosen format.
-fn read_derivative_bytes(dir: &std::path::Path, prefix: &str) -> Option<Vec<u8>> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut names: Vec<_> = entries
-        .filter_map(std::result::Result::ok)
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.starts_with(prefix))
-        .collect();
-    names.sort();
-    fs::read(dir.join(names.first()?)).ok()
+/// The persisted bytes of one derivative, addressed by **(role, format)** rather than by role
+/// alone.
+///
+/// Role alone was ambiguous the moment a tier could carry more than one format: with a JXL and
+/// an AVIF thumbnail side by side, a prefix match would take whichever sorted first and then
+/// content-address it against the *other* manifest, so both would be skipped as mismatched.
+/// `#437` lands exactly that pair, so this is a latent break rather than a hypothetical one.
+///
+/// Returns `None` for any `format` outside the closed set — including the embedding-role
+/// grammar, which has no still extension. The caller has already skipped both cases, so reaching
+/// this with one is not expected; it answers `None` rather than asserting, because a reader that
+/// panics on a manifest it merely does not understand is worse than one that ships nothing. A stale file left by a
+/// retired format is simply never read — nothing enumerates the directory any more, so an
+/// orphan is inert rather than a candidate, and it is regenerable by design.
+fn read_derivative_bytes(
+    dir: &std::path::Path,
+    stem: &str,
+    role_name: &str,
+    format: &str,
+) -> Option<Vec<u8>> {
+    let extension = DerivativeFormat::parse(format)?.extension()?;
+    fs::read(dir.join(format!("{stem}.{role_name}.{extension}"))).ok()
 }
 
 #[cfg(test)]
