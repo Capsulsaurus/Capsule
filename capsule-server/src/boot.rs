@@ -1,0 +1,601 @@
+//! [`assemble`] — the one composition root, and the only place adapters are chosen.
+//!
+//! # Why this is a library module and not `main`
+//!
+//! Until this slice the only composition root in the tree was `tests/support/mod.rs`, which
+//! assembles seventeen module contexts out of test doubles. Nothing assembled the server. A
+//! composition root that lives in `main` is a composition root nothing tests: "the router
+//! builds", "every port has an adapter" and "the published signing key is the one the tokens
+//! verify under" are all properties of *this function*, and they are asserted below rather than
+//! discovered on a deployment.
+//!
+//! # The seam, and what #402 and #403 change
+//!
+//! Selection is a two-arm `match` on [`Backends`] and not a trait. The `Arc<dyn Port>` fields in
+//! [`Modules`] already **are** the abstraction; a second one over the top would abstract the
+//! composition root from itself. When the Postgres (#402) and Valkey (#403) adapters land they
+//! fill the [`Backends::Durable`] arm, and nothing else here moves.
+//!
+//! Today that arm refuses. `store/mod.rs` has said since `S-C29` that *"Valkey is required; the
+//! server refuses to boot without `VALKEY_URL`"* and that the in-memory adapters are a test
+//! double rather than a deployment profile — and nothing enforced either sentence, because there
+//! was no boot path to enforce it in. Now there is: no `VALKEY_URL` and no `--memory` is a
+//! configuration fault naming `VALKEY_URL` ([`Config::load`]), and `VALKEY_URL` set is
+//! [`BootError::AdapterUnavailable`] naming the issue that will honour it. Neither ever silently
+//! becomes an in-memory server.
+//!
+//! # What the memory profile is, precisely
+//!
+//! Every deterministic in-crate adapter, over a **real** [`FilesystemBlobStore`] and a real
+//! [`SystemClock`]. Two consequences worth stating because an operator will meet both:
+//!
+//! - **The blobs survive a restart and the index does not.** That is not a bug to route around,
+//!   it is the shape of a profile whose durable half is exactly the one adapter that has been
+//!   written. It also makes the profile useful to `scrub`, which compares those two halves and
+//!   will honestly report every blob as an orphan.
+//! - **The collector's marks do not survive either.** [`crate::gc::collect`] marks a blob on one
+//!   pass and sweeps it on a later pass once the grace window has passed, so a fresh process can
+//!   only ever mark. Sweeping needs the durable mark store #402 brings.
+
+use std::sync::Arc;
+
+use jiff::Timestamp;
+
+use crate::album::authority::ProvisionedAuthority;
+use crate::album::{AlbumContext, InMemoryAlbums};
+use crate::app::{App, Modules};
+use crate::attestation::{AttestationContext, InMemoryReceipts, LocalAttestationKey};
+use crate::auth::{
+    AuthCollaborators, AuthContext, Credentials, InMemoryAccounts, InMemoryTotp, SessionTokens,
+    TotpCodes, TotpContext,
+};
+use crate::blob::FilesystemBlobStore;
+use crate::config::{Backends, Config};
+use crate::counter::{CounterContext, InMemoryCounters};
+use crate::directory::{DeviceDirectoryContext, InMemoryDeviceDirectory};
+use crate::discovery::revocation::InMemoryRevocations;
+use crate::discovery::{DiscoveryContext, ProtocolWindow, ServerInfo};
+use crate::drop::{DropContext, InMemoryDrops};
+use crate::enrollment::EnrollmentContext;
+use crate::escrow::{EscrowContext, InMemoryEscrow};
+use crate::gc::CollectionContext;
+use crate::gc::memory::InMemoryCollection;
+use crate::index::memory::InMemoryAssetIndex;
+use crate::moderation::{InMemoryModeration, ModerationContext};
+use crate::quota::{InMemoryQuota, QuotaContext, QuotaLimits};
+use crate::scrub::ScrubContext;
+use crate::serve::ServeContext;
+use crate::share::{InMemoryShares, ShareContext};
+use crate::store::SystemClock;
+use crate::store::memory::{
+    InMemoryAuthState, InMemoryChallenges, InMemoryChannels, InMemoryCohorts, InMemoryEnrollments,
+    InMemoryUploadSessions,
+};
+use crate::sync::{CursorCodec, SyncContext};
+use crate::upload::{UploadContext, UploadPolicy};
+use crate::verify::VerifyContext;
+
+/// Why a process could not be assembled.
+///
+/// Every variant is a **startup** failure. There is deliberately no variant for a degraded boot:
+/// a server that came up with one port missing would answer some requests and 500 on others,
+/// which is harder to diagnose than a process that refused to start and said why.
+#[derive(Debug, thiserror::Error)]
+pub enum BootError {
+    /// The configuration itself is not usable.
+    #[error(transparent)]
+    Configuration(#[from] crate::config::ConfigError),
+    /// A setting [`Config::load`] treats as optional is required by this path.
+    ///
+    /// The backstop behind [`crate::config::Demands`], which is the aggregating front door an
+    /// operator reads. This variant fires only when the two disagree — a subcommand asking for
+    /// more than it declared — which is a programming error rather than a deployment one, and
+    /// failing loudly beats an `expect`.
+    #[error("{key} is required to assemble this server and is not set")]
+    Missing {
+        /// The setting.
+        key: &'static str,
+    },
+    /// The blob root could not be opened.
+    ///
+    /// Refused rather than deferred: a store that cannot be created now is a store every upload
+    /// will fail against at write time, and a server that accepts bytes it cannot keep is worse
+    /// than one that does not start.
+    #[error("the blob store at {root} could not be opened: {detail}")]
+    BlobRoot {
+        /// The path that was tried.
+        root: String,
+        /// The filesystem's own description.
+        detail: String,
+    },
+    /// The token-signing key could not be read.
+    #[error("the server's token-signing key could not be loaded: {detail}")]
+    SigningKey {
+        /// What was wrong with it. Never the key.
+        detail: String,
+    },
+    /// The credential verifier could not be built.
+    #[error("the credential verifier could not be built: {detail}")]
+    Credentials {
+        /// The algorithm's own description.
+        detail: String,
+    },
+    /// A durable backend was selected and its adapter is not written yet.
+    ///
+    /// Named with the issue that will honour it, because "not implemented" without a pointer is
+    /// a dead end for whoever reads it.
+    #[error("{key} selects a durable adapter that is not implemented yet (see {issue})")]
+    AdapterUnavailable {
+        /// The setting that selected it.
+        key: &'static str,
+        /// Where the work is tracked.
+        issue: &'static str,
+    },
+    /// The router's own types do not describe a buildable server.
+    ///
+    /// Unreachable in practice — the conformance suite builds the same router on every test run
+    /// — and kept because the alternative is an `expect` in the composition root.
+    #[error("the router could not be built: {detail}")]
+    Router {
+        /// Kynos's own description.
+        detail: String,
+    },
+}
+
+/// A server, ready to serve or to sweep.
+///
+/// The three things a subcommand can want out of one assembly: the application the router is
+/// built with, and the two operator workers, which have no wire surface at all and therefore
+/// cannot be reached through it.
+#[derive(Debug)]
+pub struct Assembled {
+    /// The application context every operation resolves its dependencies from.
+    pub app: App,
+    /// The collector's collaborators (`gc`, `purge`).
+    pub collection: CollectionContext,
+    /// The integrity scrub's collaborators (`scrub`).
+    pub scrub: ScrubContext,
+}
+
+impl Assembled {
+    /// Build the service the listener drives.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BootError::Router`] if the router's types do not describe a buildable server.
+    pub fn service(&self) -> Result<kynos::router::service::Service<App>, BootError> {
+        crate::service(self.app.clone()).map_err(|error| BootError::Router {
+            detail: error.to_string(),
+        })
+    }
+}
+
+/// Assemble a server from `config`.
+///
+/// # Errors
+///
+/// Returns [`BootError`] for any of the startup failures above. Nothing is left half-built: the
+/// blob root is the only side effect, and it is idempotent.
+pub async fn assemble(config: &Config) -> Result<Assembled, BootError> {
+    match config.backends {
+        Backends::Memory => memory(config).await,
+        // The refusal `store/mod.rs` documents. `Config::load` already turned "no `VALKEY_URL`
+        // and no `--memory`" into a configuration fault naming the variable, so reaching here
+        // means the operator *did* set it — and the honest answer is that nothing reads it yet.
+        Backends::Durable => Err(BootError::AdapterUnavailable {
+            key: "VALKEY_URL",
+            issue: "#403 (Valkey) and #402 (Postgres)",
+        }),
+    }
+}
+
+/// The development profile: every in-crate adapter, over a real blob store and a real clock.
+#[allow(
+    clippy::too_many_lines,
+    reason = "seventeen module contexts, named once each; splitting it would hide the shape"
+)]
+async fn memory(config: &Config) -> Result<Assembled, BootError> {
+    let root = config
+        .blob_root
+        .as_ref()
+        .ok_or(BootError::Missing { key: "BLOB_ROOT" })?;
+    let der = config.signing_key_der.as_ref().ok_or(BootError::Missing {
+        key: "JWT_ED25519_DER",
+    })?;
+    let cursor_key = config.sync_cursor_mac_key.ok_or(BootError::Missing {
+        key: "SYNC_CURSOR_MAC_KEY",
+    })?;
+    let seed = config.attestation_key_seed.ok_or(BootError::Missing {
+        key: "ATTESTATION_KEY_SEED",
+    })?;
+
+    let clock = Arc::new(SystemClock);
+    let blobs =
+        Arc::new(
+            FilesystemBlobStore::open(root)
+                .await
+                .map_err(|error| BootError::BlobRoot {
+                    root: root.display().to_string(),
+                    detail: error.to_string(),
+                })?,
+        );
+
+    // The signer is built from the private key alone and derives its own public half, which is
+    // what lets `ServerInfo` below publish the key tokens actually verify under rather than one
+    // an operator pasted beside it.
+    let tokens = Arc::new(
+        SessionTokens::from_pkcs8(der.expose(), clock.clone()).map_err(|error| {
+            BootError::SigningKey {
+                detail: error.detail,
+            }
+        })?,
+    );
+
+    // One verifier, shared: building it costs an Argon2id hash (the timing-equalized miss's
+    // decoy), and that is a startup cost rather than a per-request one.
+    let credentials = Credentials::new().map_err(|error| BootError::Credentials {
+        detail: error.detail,
+    })?;
+    let accounts = Arc::new(InMemoryAccounts::new(credentials));
+
+    let index = Arc::new(InMemoryAssetIndex::new());
+    let uploads = Arc::new(InMemoryUploadSessions::with_default_ttl(clock.clone()));
+    let albums = Arc::new(InMemoryAlbums::new());
+    let directories = Arc::new(InMemoryDeviceDirectory::new());
+    // The production write authority (`S-C19`/`S-C20`), not a permissive double: it reads the
+    // album's own pin and the account's published device directory, so invariants 6 and 7 mean
+    // what they say even in the development profile.
+    let authority = Arc::new(ProvisionedAuthority::new(
+        albums.clone(),
+        directories.clone(),
+        clock.clone(),
+    ));
+    let quotas = Arc::new(InMemoryQuota::new());
+    let marks = Arc::new(InMemoryCollection::new());
+    let receipts = Arc::new(InMemoryReceipts::new());
+    // Distinct from the token signer, as the design requires: a receipt that verified under the
+    // operational key would let anything holding that key manufacture custody evidence. The
+    // separation is structural here — the seed is a different HKDF `info` over the same input,
+    // so an operator cannot accidentally configure one key for both.
+    let attestation_key = Arc::new(LocalAttestationKey::new(
+        config.server_domain.clone(),
+        capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
+    ));
+
+    let server_info = Arc::new(ServerInfo::new(
+        config.server_domain.clone(),
+        config.api_base_url.clone(),
+        ProtocolWindow {
+            min: config.protocol_min.clone(),
+            max: config.protocol_max.clone(),
+        },
+        tokens.public_key().to_vec(),
+    ));
+
+    let app = App::new(Modules {
+        auth: AuthContext::new(AuthCollaborators {
+            sessions: Arc::new(InMemoryAuthState::with_default_ttl(clock.clone())),
+            accounts: accounts.clone(),
+            registry: accounts.clone(),
+            profiles: accounts.clone(),
+            passwords: accounts.clone(),
+            challenges: Arc::new(InMemoryChallenges::with_default_ttl(clock.clone())),
+            cohorts: Arc::new(InMemoryCohorts::new()),
+            tokens: tokens.clone(),
+            clock: clock.clone(),
+        }),
+        totp: TotpContext::new(
+            Arc::new(InMemoryTotp::new()),
+            // The issuer is what an authenticator app shows beside the code, so it is this
+            // deployment's own name rather than a constant every deployment shares.
+            Arc::new(TotpCodes::new(config.server_domain.clone())),
+        ),
+        upload: UploadContext::new(
+            uploads.clone(),
+            blobs.clone(),
+            index.clone(),
+            authority.clone(),
+            clock.clone(),
+            UploadPolicy::default(),
+        ),
+        sync: SyncContext::new(
+            index.clone(),
+            blobs.clone(),
+            Arc::new(CursorCodec::new(&cursor_key)),
+        ),
+        serve: ServeContext::new(
+            index.clone(),
+            blobs.clone(),
+            marks.clone(),
+            uploads.clone(),
+            crate::serve::owned_assets(),
+        ),
+        verify: VerifyContext::new(index.clone(), blobs.clone(), marks.clone(), clock.clone()),
+        directories: DeviceDirectoryContext::new(directories.clone(), clock.clone()),
+        albums: AlbumContext::new(albums.clone(), clock.clone()),
+        // Unlimited, which is what a self-hosted deployment runs. A configurable ceiling is a
+        // quota policy this slice does not own; `QuotaLimits` already takes one.
+        quota: QuotaContext::new(quotas.clone(), clock.clone(), QuotaLimits::unlimited()),
+        attestation: AttestationContext::new(
+            receipts.clone(),
+            attestation_key,
+            // The published key has been active since the epoch, because the seed is derived
+            // deterministically and has therefore never *not* been this deployment's key.
+            // Publishing a rotation history is `ATTESTATION_KEY_HISTORY`'s job and nobody's yet.
+            Timestamp::UNIX_EPOCH,
+        ),
+        discovery: DiscoveryContext::new(
+            server_info,
+            Arc::new(InMemoryRevocations::new(clock.clone())),
+        ),
+        escrow: EscrowContext::new(Arc::new(InMemoryEscrow::new()), clock.clone()),
+        enrollment: EnrollmentContext::new(
+            Arc::new(InMemoryEnrollments::with_default_ttl(clock.clone())),
+            Arc::new(InMemoryChannels::with_default_ttl(clock.clone())),
+            clock.clone(),
+        ),
+        moderation: ModerationContext::new(Arc::new(InMemoryModeration::new())),
+        share: ShareContext::new(
+            Arc::new(InMemoryShares::new()),
+            blobs.clone(),
+            clock.clone(),
+        ),
+        drops: DropContext::new(
+            Arc::new(InMemoryDrops::new()),
+            uploads.clone(),
+            blobs.clone(),
+            clock.clone(),
+        ),
+        counters: CounterContext::new(Arc::new(InMemoryCounters::new()), clock.clone()),
+    });
+
+    tracing::info!(
+        blob_root = %root.display(),
+        server_id = %config.server_domain,
+        protocol_min = %config.protocol_min,
+        protocol_max = %config.protocol_max,
+        "assembled a server on the in-memory adapters"
+    );
+
+    Ok(Assembled {
+        // One index, one blob store and one mark store behind all three, which is what makes
+        // "upload it, then let the collector see it" a property of the server rather than of
+        // three disconnected assemblies.
+        collection: CollectionContext::new(
+            index.clone(),
+            blobs.clone(),
+            marks,
+            quotas,
+            clock,
+            config.grace_window,
+        ),
+        scrub: ScrubContext::new(index, blobs, uploads),
+        app,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::{BootError, assemble};
+    use crate::config::{Config, Demands, Overrides};
+
+    /// A PKCS#8 v1 Ed25519 key, base64. Signs nothing; see `config`'s own tests.
+    const EXAMPLE_DER: &str = "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF";
+
+    fn memory_config(root: &std::path::Path) -> Config {
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.display().to_string()),
+            ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let overrides = Overrides {
+            memory: true,
+            ..Overrides::default()
+        };
+        Config::load(&environment, &overrides, Demands::Serve).expect("the configuration loads")
+    }
+
+    #[tokio::test]
+    async fn the_memory_profile_assembles_a_server_whose_router_builds() {
+        // The property nothing in this crate asserted before: seventeen module contexts, every
+        // port filled, and a router Kynos will build out of them.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        assembled.service().expect("the router builds");
+    }
+
+    #[tokio::test]
+    async fn the_blob_root_is_created_rather_than_required_to_exist() {
+        let parent = tempfile::tempdir().expect("a scratch directory");
+        let root = parent.path().join("does/not/exist/yet");
+        let assembled = assemble(&memory_config(&root)).await.expect("it assembles");
+        assert!(root.join("blobs").is_dir(), "the store's tree is created");
+        drop(assembled);
+    }
+
+    #[tokio::test]
+    async fn a_signing_key_that_is_not_ed25519_refuses_the_boot() {
+        // `SigningKeyError` has always been documented as a startup failure. This is the startup
+        // it fails.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            (
+                "JWT_ED25519_DER".to_owned(),
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    b"not a PKCS#8 document",
+                ),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        let overrides = Overrides {
+            memory: true,
+            ..Overrides::default()
+        };
+        let config =
+            Config::load(&environment, &overrides, Demands::Serve).expect("it is well-formed");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(matches!(error, BootError::SigningKey { .. }), "{error:?}");
+    }
+
+    #[tokio::test]
+    async fn a_durable_backend_refuses_by_name_rather_than_falling_back() {
+        // The half of `store/mod.rs`'s claim that `Config::load` cannot make: the operator did
+        // set `VALKEY_URL`, and nothing reads it yet. Falling back to the in-memory adapters
+        // here is the one thing that must never happen.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let environment: BTreeMap<String, String> = [
+            ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
+            ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
+            ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
+        ]
+        .into_iter()
+        .collect();
+        let config = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect("it is well-formed");
+        let error = assemble(&config).await.expect_err("it refuses");
+        assert!(
+            matches!(
+                error,
+                BootError::AdapterUnavailable {
+                    key: "VALKEY_URL",
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(format!("{error}").contains("#403"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn the_published_signing_key_is_the_one_the_tokens_verify_under() {
+        // Not a coincidence to be re-checked at every deployment: `ServerInfo` is built from
+        // `tokens.public_key()`, so there is no second copy for an operator to paste wrongly.
+        use crate::auth::SessionTokens;
+        use crate::store::SystemClock;
+
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let expected = SessionTokens::from_pkcs8(
+            config
+                .signing_key_der
+                .as_ref()
+                .expect("the key is configured")
+                .expose(),
+            std::sync::Arc::new(SystemClock),
+        )
+        .expect("the key parses")
+        .public_key()
+        .to_vec();
+
+        // Read back the way a client would, through the surface rather than through a field.
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+        let body: serde_json::Value = client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        let published = body["signing_key"].as_str().expect("it is published");
+        assert_eq!(
+            published,
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &expected)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_published_protocol_window_is_the_configured_one() {
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config(root.path());
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+        let body: serde_json::Value = client
+            .get("/.well-known/capsule/server-info")
+            .header("accept", "application/json")
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        assert_eq!(body["protocol_version"]["min"], config.protocol_min);
+        assert_eq!(body["protocol_version"]["max"], config.protocol_max);
+        assert_eq!(body["server_id"], config.server_domain);
+        assert_eq!(body["api_base_url"], config.api_base_url);
+    }
+
+    #[tokio::test]
+    async fn an_account_can_be_registered_and_signed_in_to() {
+        // The whole point of the amended deliverable boundary: `mise run serve-memory` is a
+        // server a client developer can point at, not a surface they can only read.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        let registered: serde_json::Value = client
+            .post("/v1/auth/register")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        assert!(registered["access_token"].is_string(), "{registered}");
+
+        let signed_in: serde_json::Value = client
+            .post("/v1/auth/login")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK)
+            .json();
+        assert!(signed_in["access_token"].is_string(), "{signed_in}");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_is_refused_rather_than_granted() {
+        // The property that makes the adapter real rather than permissive: the credential
+        // double `tests/support/mod.rs` warns about would accept this.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let assembled = assemble(&memory_config(root.path()))
+            .await
+            .expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+        client
+            .post("/v1/auth/register")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "correct horse battery staple",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK);
+        client
+            .post("/v1/auth/login")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({
+                "email": "somebody@example.test",
+                "password": "the wrong password entirely",
+            }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::UNAUTHORIZED);
+    }
+}

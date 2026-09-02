@@ -38,14 +38,23 @@
 //! would otherwise turn off the control that exists to make a stolen access token insufficient.
 //! The retired surface got this right and it is preserved deliberately.
 //!
-//! # No adapter here
+//! # The one adapter that belongs in `src/`
 //!
-//! Same reason [`AccountDirectory`](super::AccountDirectory) has none: the real one is Postgres,
-//! and a shared-secret store in `src/` is a fake credential store shipped inside the server
-//! binary. The suite's lives in `tests/support/`.
+//! [`InMemoryTotp`] is here, and the account ports' "a double in `src/` is a fake credential
+//! store shipped inside the server binary" reasoning does not reach it. A TOTP secret is
+//! **server-generated**: nothing a caller presents is ever stored, so there is no credential to
+//! be permissive about, and the three properties the port promises — the check-and-write in
+//! [`TotpStore::begin`], the pending-only [`TotpStore::activate`], and the compare-and-set in
+//! [`TotpStore::consume`] — are all expressible over a map without fudging any of them. What it
+//! is missing is durability, which is what makes it the development profile
+//! ([`Backends::Memory`](crate::config::Backends)) rather than a deployment.
+//!
+//! The Postgres adapter is still owed (#402), and it is written against this contract and the
+//! suite over it rather than against this type.
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use jiff::{SignedDuration, Timestamp};
 use subtle::ConstantTimeEq as _;
@@ -357,6 +366,98 @@ impl TotpContext {
     }
 }
 
+/// The second-factor enrollments this process holds.
+///
+/// A real implementation of the port's contract rather than a stub; see the module docs for why
+/// this one belongs in `src/` when the account ports' adapters do not.
+#[derive(Debug, Default)]
+pub struct InMemoryTotp {
+    held: Mutex<BTreeMap<UserId, TotpEnrollment>>,
+}
+
+impl InMemoryTotp {
+    /// An empty store.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Take the lock, recovering rather than propagating a poisoned one.
+    ///
+    /// The same choice [`crate::store::memory`] makes: a panic in one request must not turn
+    /// every later second-factor check into a second panic.
+    fn enrollments(&self) -> MutexGuard<'_, BTreeMap<UserId, TotpEnrollment>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl TotpStore for InMemoryTotp {
+    fn begin(&self, record: TotpEnrollment) -> DirectoryFuture<'_, BeginOutcome> {
+        Box::pin(async move {
+            // One critical section, as the port requires: a caller that read, saw no active
+            // enrollment and then wrote has a window in which a confirmation lands, and the
+            // confirmed factor is then silently replaced.
+            let mut held = self.enrollments();
+            if held
+                .get(&record.user_id)
+                .is_some_and(|existing| existing.state == EnrollmentState::Active)
+            {
+                return Ok(BeginOutcome::AlreadyActive);
+            }
+            // A *pending* enrollment is replaced without ceremony: somebody who abandoned a QR
+            // code and started again is the ordinary case, and nothing is protecting an
+            // unconfirmed secret.
+            held.insert(record.user_id.clone(), record);
+            Ok(BeginOutcome::Started)
+        })
+    }
+
+    fn read<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, Option<TotpEnrollment>> {
+        Box::pin(async move { Ok(self.enrollments().get(user).cloned()) })
+    }
+
+    fn activate<'a>(
+        &'a self,
+        user: &'a UserId,
+        step: u64,
+        at: Timestamp,
+    ) -> DirectoryFuture<'a, ActivateOutcome> {
+        Box::pin(async move {
+            let mut held = self.enrollments();
+            let Some(record) = held.get_mut(user) else {
+                return Ok(ActivateOutcome::NotPending);
+            };
+            if record.state != EnrollmentState::Pending {
+                return Ok(ActivateOutcome::NotPending);
+            }
+            record.state = EnrollmentState::Active;
+            record.activated_at = Some(at);
+            // The confirming code is spent, so it cannot also complete a sign-in.
+            record.last_step = Some(step);
+            Ok(ActivateOutcome::Activated)
+        })
+    }
+
+    fn consume<'a>(&'a self, user: &'a UserId, step: u64) -> DirectoryFuture<'a, ConsumeOutcome> {
+        Box::pin(async move {
+            // Compare-and-set inside one critical section, not a read followed by a write: two
+            // sign-ins racing on the same six digits is exactly the case a read-then-write
+            // loses, and losing it accepts a replay.
+            let mut held = self.enrollments();
+            let Some(record) = held.get_mut(user) else {
+                return Ok(ConsumeOutcome::NotEnrolled);
+            };
+            if record.last_step.is_some_and(|last| step <= last) {
+                return Ok(ConsumeOutcome::Replayed);
+            }
+            record.last_step = Some(step);
+            Ok(ConsumeOutcome::Fresh)
+        })
+    }
+
+    fn disable<'a>(&'a self, user: &'a UserId) -> DirectoryFuture<'a, bool> {
+        Box::pin(async move { Ok(self.enrollments().remove(user).is_some()) })
+    }
+}
 #[cfg(test)]
 mod tests {
     use jiff::Timestamp;
@@ -499,5 +600,144 @@ mod tests {
         let secret = TotpSecret::new("JBSWY3DPEHPK3PXP");
         assert_eq!(format!("{secret:?}"), "TotpSecret(<redacted>)");
         assert!(!format!("{secret:?}").contains("JBSWY"));
+    }
+}
+#[cfg(test)]
+mod memory_tests {
+    use jiff::Timestamp;
+
+    use super::{
+        ActivateOutcome, BeginOutcome, ConsumeOutcome, EnrollmentState, InMemoryTotp, TotpCodes,
+        TotpEnrollment, TotpStore,
+    };
+    use crate::store::UserId;
+
+    fn user() -> UserId {
+        UserId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f")
+    }
+
+    fn pending() -> TotpEnrollment {
+        TotpEnrollment {
+            user_id: user(),
+            secret: TotpCodes::generate_secret(),
+            state: EnrollmentState::Pending,
+            last_step: None,
+            enrolled_at: Timestamp::UNIX_EPOCH,
+            activated_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn an_abandoned_pending_enrollment_is_replaced_without_ceremony() {
+        let store = InMemoryTotp::new();
+        assert_eq!(
+            store.begin(pending()).await.expect("it writes"),
+            BeginOutcome::Started
+        );
+        let second = pending();
+        let expected = second.secret.clone();
+        assert_eq!(
+            store.begin(second).await.expect("it writes"),
+            BeginOutcome::Started
+        );
+        let held = store
+            .read(&user())
+            .await
+            .expect("it answers")
+            .expect("it is held");
+        assert_eq!(held.secret, expected);
+    }
+
+    #[tokio::test]
+    async fn an_active_enrollment_is_never_silently_replaced() {
+        // The one refusal `begin` makes, and the reason it exists: an enroll that overwrote an
+        // active secret would let a stolen session swap the factor for one the attacker holds
+        // without ever presenting a code.
+        let store = InMemoryTotp::new();
+        store.begin(pending()).await.expect("it writes");
+        store
+            .activate(&user(), 7, Timestamp::UNIX_EPOCH)
+            .await
+            .expect("it writes");
+        assert_eq!(
+            store.begin(pending()).await.expect("it answers"),
+            BeginOutcome::AlreadyActive
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_pending_enrollment_activates_and_the_confirming_code_is_spent() {
+        let store = InMemoryTotp::new();
+        assert_eq!(
+            store
+                .activate(&user(), 7, Timestamp::UNIX_EPOCH)
+                .await
+                .expect("it answers"),
+            ActivateOutcome::NotPending,
+            "there is nothing to confirm"
+        );
+        store.begin(pending()).await.expect("it writes");
+        assert_eq!(
+            store
+                .activate(&user(), 7, Timestamp::UNIX_EPOCH)
+                .await
+                .expect("it writes"),
+            ActivateOutcome::Activated
+        );
+        assert_eq!(
+            store
+                .activate(&user(), 8, Timestamp::UNIX_EPOCH)
+                .await
+                .expect("it answers"),
+            ActivateOutcome::NotPending,
+            "an active enrollment is not pending"
+        );
+        // The code that confirmed the enrollment must not also complete a sign-in.
+        assert_eq!(
+            store.consume(&user(), 7).await.expect("it answers"),
+            ConsumeOutcome::Replayed
+        );
+    }
+
+    #[tokio::test]
+    async fn a_step_at_or_below_the_last_used_one_is_a_replay() {
+        // RFC 6238 §5.2: a code is accepted at most once, and a code is valid for three steps
+        // with drift — so re-typing it twelve seconds later is a real attack.
+        let store = InMemoryTotp::new();
+        store.begin(pending()).await.expect("it writes");
+        assert_eq!(
+            store.consume(&user(), 10).await.expect("it answers"),
+            ConsumeOutcome::Fresh
+        );
+        assert_eq!(
+            store.consume(&user(), 10).await.expect("it answers"),
+            ConsumeOutcome::Replayed
+        );
+        assert_eq!(
+            store.consume(&user(), 9).await.expect("it answers"),
+            ConsumeOutcome::Replayed
+        );
+        assert_eq!(
+            store.consume(&user(), 11).await.expect("it answers"),
+            ConsumeOutcome::Fresh
+        );
+    }
+
+    #[tokio::test]
+    async fn consuming_against_nothing_says_so_rather_than_accepting() {
+        let store = InMemoryTotp::new();
+        assert_eq!(
+            store.consume(&user(), 1).await.expect("it answers"),
+            ConsumeOutcome::NotEnrolled
+        );
+    }
+
+    #[tokio::test]
+    async fn disabling_reports_whether_there_was_anything_to_disable() {
+        let store = InMemoryTotp::new();
+        assert!(!store.disable(&user()).await.expect("it answers"));
+        store.begin(pending()).await.expect("it writes");
+        assert!(store.disable(&user()).await.expect("it answers"));
+        assert!(store.read(&user()).await.expect("it answers").is_none());
     }
 }
