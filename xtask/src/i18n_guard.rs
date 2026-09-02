@@ -32,6 +32,8 @@
 //!   argument list of a terminal-output or error macro. See the rule below — the CLI is
 //!   the one Rust surface that renders prose to a human, and it had never been scanned,
 //!   which is how the entire `capsule import` arm printed hardcoded English for months.
+//!   [`NEVER_SCANNED`] carves out `capsule-cli/src/bin/`, which is build tooling rather
+//!   than that surface.
 //!
 //! ## What counts as user-facing in a Rust binary
 //!
@@ -91,6 +93,20 @@ use std::sync::OnceLock;
 use eyre::{Context, ContextCompat, Result, bail};
 use regex::Regex;
 use serde_json::Value;
+
+/// Subtrees inside a scanned root that are not the user-facing surface the root stands for.
+///
+/// `capsule-cli/src/bin/` holds description-artifact emitters — `gen_cli_surface`, and
+/// whatever joins it — that run from `mise` tasks and CI and are never installed. Their
+/// audience is a developer reading a task's output, not a user of `capsule`, so the rule
+/// this module enforces ("every string a user reads is a catalog key") does not apply to
+/// them: routing a build tool's status line through `locales/` would put a string no user
+/// can reach into every translation catalog.
+///
+/// This is a carve-out for an *audience*, which is the distinction the module doc is built
+/// on, not a narrowing of the rule for the surface itself. `capsule-cli/src/**` outside
+/// this prefix is scanned exactly as before.
+const NEVER_SCANNED: &[&str] = &["capsule-cli/src/bin/"];
 
 /// Repo-relative path of the documented allowlist (one `path\tstring` per line;
 /// `#` comments and blank lines ignored). Entries suppress a single known,
@@ -214,6 +230,9 @@ fn scan_surface(
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
+            if NEVER_SCANNED.iter().any(|prefix| file.starts_with(prefix)) {
+                continue;
+            }
             for f in detect(&content) {
                 if is_key(&f.text) {
                     continue;

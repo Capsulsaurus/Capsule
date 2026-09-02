@@ -413,12 +413,11 @@ area: **87 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
 and `part 1 done`; they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Seven rows read `blocked`, and only two of them are waiting on code:
+ordering. Six rows read `blocked`, and only two of them are waiting on code:
 `S-N2` behind `S-N1`, and `S-P4` behind `S-P2`/`S-P3`. The rest are waiting on a
 decision rather than on an implementation — `S-C47` is a legal question, `S-C49`
-and `S-C51` each need a fact the slice that found them could not settle, `S-D24`
-needs a design decision, and `S-Z9` needs the Kynos document
-(`S-C27`/`S-D8`). `S-P1` landing freed the rest of lane P and `S-U19` with it;
+and `S-C51` each need a fact the slice that found them could not settle, and
+`S-D24` needs a design decision. `S-P1` landing freed the rest of lane P and `S-U19` with it;
 lane U was built so the other twenty-two Apple-client slices never waited on that
 chain in the first place. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of

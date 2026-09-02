@@ -15,17 +15,15 @@
 //! `clap::Command` built from compile-time attributes. That is what lets `--check` run in the
 //! Rust check gate beside `openapi-check-kynos`.
 //!
-//! ## Why this binary prints no prose
+//! ## Its output is English on purpose
 //!
-//! `xtask i18n-guard` scans `capsule-cli/src/**` for string literals passed to
-//! `print`/`println`/`eprint`/`eprintln`/`eyre`/`bail`, and `locales/i18n-guard-allowlist.txt`
-//! says in as many words not to add a CLI line to make new output pass. That rule is right for
-//! the `capsule` binary, which renders prose to a user in their own language. This binary is CI
-//! tooling: its audience is a developer reading a task's output, and routing a build tool's
-//! status line through `locales/` would put a string no user can reach into every translation
-//! catalog. So it says what it has to say with a path and an exit code — success writes the
-//! path it wrote, `--check` is silent on success as `cargo fmt --check` is, and the stale-file
-//! message is built with `format!` and carried by the `Result` that `color_eyre` reports.
+//! `xtask i18n-guard` scans `capsule-cli/src/**` because the `capsule` binary renders prose to
+//! a user in their own language. This binary does not: it runs from `mise run cli-surface` and
+//! from CI, is never installed, and its reader is a developer looking at a task's output.
+//! `xtask::i18n_guard::NEVER_SCANNED` carves `capsule-cli/src/bin/` out of that root for
+//! exactly that reason, so the lines below are plain English and stay that way — routing a
+//! build tool's status line through `locales/` would put a string no user can reach into every
+//! translation catalog.
 //!
 //! Usage:
 //! - `gen_cli_surface [FILE]` writes the document (default `capsule-cli/cli-surface.json`).
@@ -34,7 +32,7 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use color_eyre::eyre::{Context, Report, Result};
+use color_eyre::eyre::{Context, Result, bail};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -63,12 +61,13 @@ fn main() -> Result<()> {
             format!("cannot read committed document at {}", cli.output.display())
         })?;
         if committed != json {
-            return Err(Report::msg(format!(
-                "the command-tree document at {} is out of sync with the `capsule` argument \
-                 surface; run `mise run cli-surface` and commit the result",
+            bail!(
+                "command tree at {} is out of sync with the `capsule` argument surface; run \
+                 `mise run cli-surface` and commit the result",
                 cli.output.display()
-            )));
+            );
         }
+        println!("command tree is up to date: {}", cli.output.display());
     } else {
         if let Some(parent) = cli.output.parent() {
             std::fs::create_dir_all(parent)
@@ -76,7 +75,7 @@ fn main() -> Result<()> {
         }
         std::fs::write(&cli.output, &json)
             .wrap_err_with(|| format!("writing {}", cli.output.display()))?;
-        println!("{}", cli.output.display());
+        println!("Wrote {}", cli.output.display());
     }
 
     Ok(())

@@ -427,6 +427,15 @@ mod tests {
     /// its own process, which is what makes mutating the environment here safe.
     #[test]
     fn the_tree_is_identical_under_two_different_locales() {
+        // Captured and put back below. `nextest` gives each test its own process, so this
+        // cannot reach another test — but a leaked `LC_ALL=tr_TR` would still be visible to
+        // anything else in *this* process, and a test that changes global state and does not
+        // change it back is one a reader has to prove harmless every time they see it.
+        let saved: Vec<(&str, Option<String>)> = ["LC_ALL", "LANG"]
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+
         let render = |locale: &str| {
             // SAFETY: single-threaded test body in a process nextest gives this test alone.
             unsafe {
@@ -438,6 +447,17 @@ mod tests {
         let english = render("en_US.UTF-8");
         let turkish = render("tr_TR.UTF-8");
         let japanese = render("ja_JP.UTF-8");
+
+        for (name, value) in saved {
+            // SAFETY: as above.
+            unsafe {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+
         assert_eq!(english, turkish);
         assert_eq!(english, japanese);
         // Guards against the whole comparison passing because every render was empty.
