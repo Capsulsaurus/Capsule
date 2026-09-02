@@ -79,7 +79,7 @@ impl MediaMetadata {
     pub const fn upright_dimensions(&self) -> (u32, u32) {
         let (width, height) = self.stored_dimensions;
         match self.orientation {
-            Some(5 | 6 | 7 | 8) => (height, width),
+            Some(5..=8) => (height, width),
             _ => (width, height),
         }
     }
@@ -237,17 +237,15 @@ pub fn decode_guarded(
     bytes: &[u8],
     ext: &str,
 ) -> Result<DecodedImage, MediaError> {
-    match catch_unwind(AssertUnwindSafe(|| decoder.decode(bytes, ext))) {
-        Ok(result) => result,
-        Err(_) => {
-            tracing::warn!(
-                bytes = bytes.len(),
-                ext,
-                "media: a decoder panicked; the original is imported without a derivative"
-            );
-            Err(MediaError::DecoderPanic)
-        }
+    if let Ok(result) = catch_unwind(AssertUnwindSafe(|| decoder.decode(bytes, ext))) {
+        return result;
     }
+    tracing::warn!(
+        bytes = bytes.len(),
+        ext,
+        "media: a decoder panicked; the original is imported without a derivative"
+    );
+    Err(MediaError::DecoderPanic)
 }
 
 /// Identify a still and refuse anything this build has no codec for, before any decoder runs.
@@ -271,21 +269,23 @@ fn standard_format(format: StillFormat) -> StandardFormat {
         StillFormat::Png => StandardFormat::Png,
         StillFormat::WebP => StandardFormat::WebP,
         StillFormat::Jxl => StandardFormat::Jxl,
-        StillFormat::Tiff => StandardFormat::Tiff,
         StillFormat::Gif => StandardFormat::Gif,
         StillFormat::Ppm => StandardFormat::Ppm,
-        // Unreachable through `gate`. Mapped to the container the bytes actually are rather
-        // than panicking, so a future `is_decodable` widening that forgets this table degrades
-        // to a decode error instead of aborting an import.
         StillFormat::Avif => StandardFormat::Avif,
-        StillFormat::Heic => StandardFormat::Heic,
-        StillFormat::Cr3 => StandardFormat::Heic,
-        StillFormat::Arw
+        // The container, for the formats whose container is all `rawshift-image` models: the
+        // TIFF-based RAW families are a TIFF to it, and Canon's CR3 is an ISO-BMFF file it can
+        // only reach through its HEIC arm. Every one of these is unreachable through `gate`,
+        // which refuses a non-decodable format before this runs. Mapped to the truth rather
+        // than panicking so a future `is_decodable` widening that forgets this table degrades
+        // to a decode error instead of aborting an import.
+        StillFormat::Tiff
+        | StillFormat::Arw
         | StillFormat::Cr2
         | StillFormat::Crw
         | StillFormat::Dng
         | StillFormat::Nef
         | StillFormat::Raf => StandardFormat::Tiff,
+        StillFormat::Heic | StillFormat::Cr3 => StandardFormat::Heic,
     }
 }
 
@@ -310,10 +310,11 @@ fn gamut_of(color_space: ColorSpace) -> Gamut {
         ColorSpace::AdobeRgb => Gamut::AdobeRgb,
         ColorSpace::Rec2020 => Gamut::Bt2020,
         ColorSpace::ProPhotoRgb => Gamut::ProPhotoRgb,
-        ColorSpace::Srgb | ColorSpace::LinearSrgb | ColorSpace::Unknown => Gamut::Srgb,
-        // `ColorSpace` is `#[non_exhaustive]`, so a future wide-gamut variant must land here
-        // rather than fail the build. sRGB is the conservative default: under-saturating a
-        // wide-gamut source is a smaller defect than over-saturating a narrow one.
+        // `Srgb`, `LinearSrgb`, `Unknown`, and — because `ColorSpace` is `#[non_exhaustive]` —
+        // any variant a future release adds. One wildcard rather than an explicit list plus a
+        // catch-all, since the answer is the same and two arms with one body only look like a
+        // distinction. sRGB is the conservative default: under-saturating a wide-gamut source
+        // is a smaller defect than over-saturating a narrow one.
         _ => Gamut::Srgb,
     }
 }

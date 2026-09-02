@@ -68,27 +68,43 @@ pub fn downscale_rgba8(source: &RgbaImage, max_long_edge: u32) -> RgbaImage {
     let (dw, dh) = (dst_w as usize, dst_h as usize);
     let mut out = Vec::with_capacity(dw * dh * 4);
 
+    // Boundary products and the channel accumulator are `u64`, not `usize`/`u32`, and both
+    // widths are load-bearing rather than defensive habit:
+    //
+    // - `(y + 1) * src_h` reaches `dst_edge * src_edge`. For a 1 x 256M frame reduced to a
+    //   256 px long edge that is 6.5e10, which overflows a 32-bit `usize` — and two of the
+    //   CI-gated targets (`armv7-linux-androideabi`, `i686-linux-android`) are 32-bit.
+    // - the per-channel sum reaches `count * 255`, and `count` is the whole frame when this is
+    //   called with a cap of 1 (a `pub` entry point, so that is reachable), i.e. 6.5e10 again —
+    //   past `u32::MAX`.
+    //
+    // Neither is hypothetical-only: a debug build panics on the overflow and a release build
+    // wraps into wrong pixels or an out-of-bounds index.
     for y in 0..dh {
         // The source rows this destination row averages. Floor boundaries, so the destination
         // grid is an exact partition of the source grid — every source pixel contributes to
         // exactly one output pixel. Widened to at least one row because a lopsided cap can put
         // two destination rows inside one source row, and an empty rect would divide by zero.
-        let y0 = y * src_h / dh;
-        let y1 = ((y + 1) * src_h / dh).max(y0 + 1).min(src_h);
+        let y0 = (y as u64 * src_h as u64 / dh as u64) as usize;
+        let y1 = (((y as u64 + 1) * src_h as u64 / dh as u64) as usize)
+            .max(y0 + 1)
+            .min(src_h);
         for x in 0..dw {
-            let x0 = x * src_w / dw;
-            let x1 = ((x + 1) * src_w / dw).max(x0 + 1).min(src_w);
+            let x0 = (x as u64 * src_w as u64 / dw as u64) as usize;
+            let x1 = (((x as u64 + 1) * src_w as u64 / dw as u64) as usize)
+                .max(x0 + 1)
+                .min(src_w);
 
-            let mut acc = [0u32; 4];
-            let count = ((y1 - y0) * (x1 - x0)) as u32;
+            let mut acc = [0u64; 4];
+            let count = ((y1 - y0) * (x1 - x0)) as u64;
             for sy in y0..y1 {
                 let row = sy * src_w * 4;
                 for sx in x0..x1 {
                     let i = row + sx * 4;
-                    acc[0] += u32::from(source.rgba[i]);
-                    acc[1] += u32::from(source.rgba[i + 1]);
-                    acc[2] += u32::from(source.rgba[i + 2]);
-                    acc[3] += u32::from(source.rgba[i + 3]);
+                    acc[0] += u64::from(source.rgba[i]);
+                    acc[1] += u64::from(source.rgba[i + 1]);
+                    acc[2] += u64::from(source.rgba[i + 2]);
+                    acc[3] += u64::from(source.rgba[i + 3]);
                 }
             }
             // Round-half-up on the mean, so a uniform region reproduces its own value exactly

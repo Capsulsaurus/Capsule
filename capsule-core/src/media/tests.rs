@@ -1310,3 +1310,45 @@ fn a_decoded_frame_encodes_an_lqip_at_the_committed_width() {
         "the tier is fixed regardless of the source size"
     );
 }
+
+/// The two integer widths the downscale depends on, exercised at the shapes that would overflow
+/// a narrower one.
+///
+/// A 1 x 300000 frame reduced to a 256 px long edge makes `(y + 1) * src_h` reach 7.7e10, past a
+/// 32-bit `usize` — and `armv7-linux-androideabi` and `i686-linux-android` are both CI-gated
+/// targets. Reducing a frame to a **cap of 1** makes the per-channel accumulator reach
+/// `w * h * 255`, past `u32::MAX` for a frame of any size; `downscale_rgba8` is a `pub` entry
+/// point, so that cap is reachable even though the tier table only ever passes 256.
+#[test]
+fn the_downscale_survives_the_shapes_that_overflow_narrow_arithmetic() {
+    // A tall, one-pixel-wide frame: every destination row averages a large run of source rows.
+    let tall = RgbaImage {
+        width: 1,
+        height: 300_000,
+        rgba: vec![200, 100, 50, 255].repeat(300_000),
+    };
+    let reduced = downscale_rgba8(&tall, 256);
+    assert_eq!((reduced.width, reduced.height), (1, 256));
+    assert_eq!(reduced.rgba.len(), 256 * 4);
+    assert!(
+        reduced
+            .rgba
+            .chunks_exact(4)
+            .all(|px| px == [200, 100, 50, 255]),
+        "a flat frame survives a 1172x row reduction exactly"
+    );
+
+    // A cap of 1: one destination pixel accumulates the entire frame.
+    let wide = RgbaImage {
+        width: 600,
+        height: 400,
+        rgba: vec![255, 255, 255, 255].repeat(600 * 400),
+    };
+    let single = downscale_rgba8(&wide, 1);
+    assert_eq!((single.width, single.height), (1, 1));
+    assert_eq!(
+        single.rgba,
+        vec![255, 255, 255, 255],
+        "240000 samples at 255 each sum past u32::MAX and must still average to 255"
+    );
+}

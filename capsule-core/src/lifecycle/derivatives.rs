@@ -265,10 +265,7 @@ impl Workspace {
         for derivative in derivatives {
             // The `original` sentinel references the source asset, so its bytes carry the
             // source's own extension.
-            let format_ext = derivative
-                .format
-                .extension()
-                .unwrap_or_else(|| asset.ext.as_str());
+            let format_ext = derivative.format.extension().unwrap_or(asset.ext.as_str());
             let path = dir.join(format!(
                 "{stem}.{}.{format_ext}",
                 derivative.tier.role_name()
