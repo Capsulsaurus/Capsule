@@ -2312,7 +2312,7 @@ working on a surface written after it.
   live home is `capsule-server`'s `problem`, `limits` and `body` modules, where the status is part
   of the return type and `tests/conformance.rs` asserts both directions of the agreement this
   extraction existed to keep. `capsule-wire` itself moved to `legacy-review/server-salvo/wire/`
-  beside the 41 `salvo_responses!` call sites that are its only consumers, its manifest disabled,
+  beside the 40 `salvo_responses!` call sites that are its only consumers, its manifest disabled,
   and `architecture-check` lists it as a retired dependency so a member cannot declare it again
   (ADR-0004).
 
