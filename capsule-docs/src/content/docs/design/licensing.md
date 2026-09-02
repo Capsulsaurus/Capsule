@@ -76,7 +76,7 @@ Licence identity alone does not settle whether a binary is distributable. How th
 
 ### The video transcoder seam
 
-`capsule-core::media::video::derivative` defines a `VideoTranscoder` seam with no implementation: core links no media toolchain, and `capsule-sdk` injects a per-platform one — ffmpeg, AVFoundation, or MediaCodec — per [Thumbnails — Video Previews](/design/thumbnails/#video-previews) and slice `S-B5`. It is the most likely route by which copyleft enters Capsule, so the constraint is written before the code:
+`capsule-core::media::video::derivative` **will** define a `VideoTranscoder` seam with no implementation — `capsule-core::media` is on `capsule-docs/planned-modules.txt` and the seam retired to `legacy-review/media-pipeline/` with the rest of the stack in slice `S-C59`, so this section is a constraint on the rebuild rather than a description of the tree. Core links no media toolchain, and `capsule-sdk` injects a per-platform one — ffmpeg, AVFoundation, or MediaCodec — per [Thumbnails — Video Previews](/design/thumbnails/#video-previews) and slice `S-B5`. It is the most likely route by which copyleft enters Capsule, so the constraint is written before the code:
 
 - **Prefer the platform framework.** AVFoundation (Apple) and MediaCodec (Android) are OS-provided, carry no third-party licence, and are the sanctioned implementations on those platforms.
 - **ffmpeg, if used, must be an LGPL-2.1 base build.** Never `--enable-gpl`. Never `libx264` or `libx265` — both are GPL, and enabling either makes the whole ffmpeg binary GPL.

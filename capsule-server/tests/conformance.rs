@@ -4,7 +4,8 @@
 //! These two assertions are opposites and both are needed. Together they are the executable
 //! form of the failure this rebuild exists to remove: the Salvo surface had **thirteen response
 //! variants that rendered a status the published schema never declared** (slice `S-C28`) —
-//! login could answer `423` and `429`, and `capsule-sdk/openapi.json` mentioned neither, so the
+//! login could answer `423` and `429`, and the Salvo document (then committed as
+//! `capsule-sdk/openapi.json`, deleted in `S-C59`) mentioned neither, so the
 //! generated client had no case to map them to. That gap was invisible because it lived between
 //! two hand-written impls, one rendering and one registering, with nothing comparing them.
 //!

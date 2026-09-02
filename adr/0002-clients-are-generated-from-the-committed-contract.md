@@ -35,12 +35,18 @@ serialization versus orchestration**, and it now falls in exactly one place:
   lower correctly as of 0.2.2, so the byte path is generated and a hand-written one would
   now be a deliberate second parser rather than a workaround.
 - `spargen` is a **build-dependency only**. `capsule-sdk/build.rs` lowers the committed
-  `capsule-sdk/openapi.json` into the typed client at build time; its runtime support is
+  `capsule-server/openapi.json` into the typed client at build time; its runtime support is
   embedded into the generated module, so the generator never enters the SDK's runtime tree.
-  Nothing generated is committed.
+  Nothing generated is committed. There is one document: the Salvo-era `capsule-sdk/openapi.json`
+  was deleted in `S-C59`, so no client can be generated from a contract the server does not
+  serve.
 - Since 0.3.0 Spargen enforces runtime dependency contracts, which set the floors on
   `bytes`, `reqwest`, `serde` and `serde_json` in the root manifest. Those bump together or
   generation fails.
 - Progenitor is retired and listed in `xtask`'s retired-dependency set so it cannot return.
-- Four Salvo-emitted operations are narrowed with `spargen::omit!` because they are
-  structurally invalid. That list shrinks as the Kynos surface replaces them.
+- Four operations are narrowed with `spargen::omit!`. The four that carried this line were
+  structurally invalid Salvo output and are gone — Kynos can express neither defect, and all four
+  generate. The four in their place are the ones Capsule serves as `application/cbor`, a media
+  type spargen's `classify_media` does not know; they are signed documents served byte for byte,
+  which is why they are not JSON. Relabelling them `application/octet-stream` to satisfy the
+  generator would tell every client that a document with a schema it knows is opaque bytes.
