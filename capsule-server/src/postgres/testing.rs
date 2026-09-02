@@ -39,7 +39,43 @@ pub(crate) const GATE: &str = "CAPSULE_TEST_POSTGRES";
 /// Pinned rather than left at the module's default (`11-alpine`) for two reasons: the server
 /// targets a currently-supported PostgreSQL, and a floating tag makes "it passed yesterday"
 /// unfalsifiable. Bump it deliberately.
-const POSTGRES_TAG: &str = "18.0";
+///
+/// **One case is weaker against this image than it is in production**, and it is worth saying
+/// so rather than discovering it later: alpine is musl, and musl collates `en_US.utf8`
+/// byte-for-byte, so `index/conformance.rs`'s
+/// `the_row_walk_orders_by_the_identifiers_own_bytes` cannot tell a query that pins
+/// `COLLATE "C"` from one that inherits the database's collation. On a glibc PostgreSQL it can:
+/// glibc orders `walkord-a-b, walkord-ab, walkord-a-c` where bytes order
+/// `walkord-a-b, walkord-a-c, walkord-ab`. The `COLLATE "C"` in `index/postgres.rs` is written
+/// against the glibc behaviour, which is what a Debian-based deployment runs. Moving this pin to
+/// a glibc image would make the case bite here too — `postgres:18.0` was tried and its
+/// entrypoint does not survive `--userns=keep-id`, which is the rootless-podman workaround
+/// below.
+const POSTGRES_TAG: &str = "17-alpine";
+
+/// Where the container keeps its cluster.
+///
+/// Off the image's declared `VOLUME` deliberately. The data of a container that lives for one
+/// test is throwaway by definition, so an anonymous volume buys nothing and costs two things: a
+/// volume to create and reap per test, and — on a rootless runtime, where the volume is created
+/// with an ownership the container's own user cannot `chmod` — an `initdb` that fails before
+/// Postgres ever listens.
+const PGDATA: &str = "/tmp/pgdata";
+
+/// The user-namespace mode to run the container under, when the host needs one.
+///
+/// Unset on an ordinary Docker host and on CI, which is why this is an environment variable
+/// rather than a constant: `keep-id` is podman's spelling and Docker rejects it.
+///
+/// It exists because of a real and non-obvious host shape. Under **rootless podman**, a
+/// container process that is not the container's root maps to a host *subuid*, and that subuid
+/// has to traverse the image store to reach anything — so on a machine whose home directory is
+/// not world-traversable (`drwxrws---`), the official Postgres image dies at
+/// `gosu postgres /usr/local/bin/docker-entrypoint.sh` with a bare "permission denied" that
+/// names the entrypoint and says nothing about why. `--userns=keep-id` maps every container uid
+/// onto the invoking user, which both fixes the traversal and makes the entrypoint skip its
+/// drop-privileges branch entirely.
+const USERNS_MODE: &str = "CAPSULE_TEST_CONTAINER_USERNS";
 
 /// A running Postgres with the server's schema applied.
 ///
@@ -76,18 +112,21 @@ pub(crate) async fn start(case: &str) -> Option<TestDatabase> {
     if !enabled() {
         eprintln!(
             "skipping {case}: the Postgres conformance tier is unavailable. Set {GATE}=1 with a \
-             reachable container runtime — for podman, `systemctl --user start podman.socket` \
-             and `export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock`."
+             reachable container runtime — for rootless podman, `systemctl --user start \
+             podman.socket`, `export DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock` \
+             and `export {USERNS_MODE}=keep-id`."
         );
         return None;
     }
 
-    let container = testcontainers::ImageExt::with_tag(Postgres::default(), POSTGRES_TAG)
-        .start()
-        .await
-        .unwrap_or_else(|error| {
-            panic!("{GATE}=1 was set but a Postgres container could not be started: {error}")
-        });
+    let mut request = testcontainers::ImageExt::with_tag(Postgres::default(), POSTGRES_TAG);
+    request = testcontainers::ImageExt::with_env_var(request, "PGDATA", PGDATA);
+    if let Ok(userns) = std::env::var(USERNS_MODE) {
+        request = testcontainers::ImageExt::with_userns_mode(request, &userns);
+    }
+    let container = request.start().await.unwrap_or_else(|error| {
+        panic!("{GATE}=1 was set but a Postgres container could not be started: {error}")
+    });
     let host = container
         .get_host()
         .await

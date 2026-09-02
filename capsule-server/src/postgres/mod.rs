@@ -99,8 +99,8 @@ pub async fn connect(database_url: &str) -> Result<DatabaseConnection, PostgresE
         .min_connections(2)
         .connect_timeout(Duration::from_secs(5))
         .acquire_timeout(Duration::from_secs(10))
-        .idle_timeout(Duration::from_secs(10 * 60))
-        .max_lifetime(Duration::from_secs(30 * 60))
+        .idle_timeout(Duration::from_mins(10))
+        .max_lifetime(Duration::from_mins(30))
         .sqlx_logging(false);
 
     let connection = Database::connect(options)
@@ -175,7 +175,6 @@ pub async fn assert_schema_current(connection: &DatabaseConnection) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::ConnectionTrait as _;
     use server_migration::MigratorTrait as _;
 
     use super::{EXPECTED_MIGRATIONS, assert_schema_current, testing};
@@ -199,7 +198,10 @@ mod tests {
     }
 
     mod postgres_conformance {
-        use super::{ConnectionTrait as _, EXPECTED_MIGRATIONS, assert_schema_current, testing};
+        use sea_orm::ConnectionTrait as _;
+        use server_migration::MigratorTrait as _;
+
+        use super::{EXPECTED_MIGRATIONS, assert_schema_current, testing};
 
         /// Up, down, up: the schema a rollback leaves behind is one the next deploy can build on.
         #[tokio::test]
