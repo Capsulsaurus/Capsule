@@ -12,6 +12,11 @@ pub enum ImportOutcome {
     /// fully successful import that happens to be missing its derivative (slice `S-B13`).
     Imported {
         derivatives: DerivativeStatus,
+        /// How many `(tier, format)` pairs the tier table commits to and this build cannot
+        /// encode. Orthogonal to `derivatives`: a `Decoded` asset with a renderable WebP
+        /// thumbnail still reports the JXL master and the AVIF delivery variant as deferred, and
+        /// that count is how the gap shrinks visibly as codecs land rather than silently.
+        deferred_formats: u32,
     },
     DuplicateSkipped {
         existing_uuid: String,
@@ -77,11 +82,34 @@ impl ImportExecutionSummary {
                 matches!(
                     o,
                     ImportOutcome::Imported {
-                        derivatives: DerivativeStatus::DeferredNoCodec
+                        derivatives: DerivativeStatus::DeferredNoCodec,
+                        ..
                     }
                 )
             })
             .count()
+    }
+
+    /// The total number of `(tier, format)` pairs across the run that the tier table commits to
+    /// and this build cannot encode (slice `S-B13`).
+    ///
+    /// **Not a failure count, and not comparable to
+    /// [`deferred_derivative_count`](Self::deferred_derivative_count).** That one counts *assets*
+    /// with no thumbnail at all; this one counts *format variants* missing from assets that do
+    /// have one. A library of decodable JPEGs reports zero deferred derivatives and two deferred
+    /// formats per asset — the JXL master and the AVIF delivery variant — which is exactly the
+    /// number that should fall to zero as the encoders land, and the reason it is reported rather
+    /// than left implicit in a doc.
+    pub fn deferred_format_count(&self) -> usize {
+        self.outcomes
+            .iter()
+            .map(|(_, o)| match o {
+                ImportOutcome::Imported {
+                    deferred_formats, ..
+                } => *deferred_formats as usize,
+                _ => 0,
+            })
+            .sum()
     }
 
     /// How many imported assets are in a format this build *does* support but whose bytes did
@@ -94,7 +122,8 @@ impl ImportExecutionSummary {
                 matches!(
                     o,
                     ImportOutcome::Imported {
-                        derivatives: DerivativeStatus::DecodeFailed
+                        derivatives: DerivativeStatus::DecodeFailed,
+                        ..
                     }
                 )
             })
