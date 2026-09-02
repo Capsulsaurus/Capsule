@@ -504,22 +504,19 @@ mod tests {
     }
 
     #[test]
-    fn the_valkey_adapters_and_the_smoke_tier_are_the_only_planned_entries() {
+    fn the_valkey_adapters_are_the_only_planned_entries() {
         // A guard on scope rather than on content: this list is the one place an
         // unused pin can hide, so growing it should be a deliberate edit here.
+        //
+        // `testcontainers` and `testcontainers-modules` left the list with #402. They were
+        // exempted because "no test starts a container yet", and the Postgres conformance
+        // suites are tests that start one — so the exemption stopped describing a decision.
+        // Shrinking this list is the shape a planned pin is meant to leave in: it graduates
+        // into a member's manifest, where `check_dependencies` can see it.
         let names: BTreeSet<&str> = PLANNED_WORKSPACE_DEPENDENCIES
             .iter()
             .map(|(name, _)| *name)
             .collect();
-        assert_eq!(
-            names,
-            BTreeSet::from([
-                "bb8",
-                "bb8-redis",
-                "redis",
-                "testcontainers",
-                "testcontainers-modules",
-            ])
-        );
+        assert_eq!(names, BTreeSet::from(["bb8", "bb8-redis", "redis"]));
     }
 }
