@@ -16,7 +16,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use capsule_core::import::upload::UploadTier;
+use capsule_core::import::UploadTier;
 use tracing::instrument;
 
 /// The closed connection-class enum, evaluated continuously on-device.

@@ -58,7 +58,7 @@ fn chained_manifest_bytes(
     prior: Option<Hash32>,
     seed: u8,
 ) -> Vec<u8> {
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::keys::HybridSigningKey;
     use capsule_core::crypto::provenance::action::Action;
     use capsule_core::crypto::provenance::manifest::AssetManifest;
 
@@ -85,8 +85,7 @@ fn decoded(bytes: &[u8]) -> capsule_core::crypto::provenance::manifest::AssetMan
 /// decodes — but a fixture that hand-rolled a struct with placeholder signature bytes would be
 /// asserting against a shape rather than against the artifact.
 fn manifest_bytes(name: &str, metadata: &ContentAddress) -> Vec<u8> {
-    use capsule_core::crypto::keys::AmkVersion;
-    use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+    use capsule_core::crypto::keys::{AmkVersion, HybridSigningKey};
     use capsule_core::crypto::provenance::action::Action;
     use capsule_core::crypto::provenance::manifest::{
         ASSET_MANIFEST_VERSION, KeyMode, ManifestCore,

@@ -26,8 +26,7 @@ use uuid::Uuid;
 
 use crate::cbor::{self, CanonicalError};
 pub use crate::crypto::receipts::{
-    BlobRole, CustodyReceipt, CustodyReceiptCore, ReceiptExpectations, ReceiptRejection, role_str,
-    verify_receipt,
+    CustodyReceipt, CustodyReceiptCore, ReceiptExpectations, ReceiptRejection, verify_receipt,
 };
 use crate::library::paths::receipts_path;
 
@@ -92,6 +91,7 @@ mod tests {
     use super::*;
     use crate::crypto::hash::Hash32;
     use crate::crypto::keys::{HybridSignature, HybridSigningKey, HybridVerifyingKey};
+    use crate::crypto::receipts::BlobRole;
 
     fn signing_key(seed: u8) -> HybridSigningKey {
         HybridSigningKey::from_seed64(&[seed; 64])

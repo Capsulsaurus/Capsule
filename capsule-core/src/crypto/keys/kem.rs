@@ -28,7 +28,7 @@ use crate::crypto::{CryptoError, rng};
 
 /// Length of the X-Wing secret-key seed. SHAKE256-expanded to 96 bytes: the ML-KEM-768 seed
 /// `d ‖ z` (64) and the X25519 secret scalar (32).
-pub const DEK_SEED_LEN: usize = 32;
+pub(crate) const DEK_SEED_LEN: usize = 32;
 
 /// X-Wing public-key length: `pk_M (1184) ‖ pk_X (32)`.
 pub const DEK_PUBLIC_LEN: usize = 1184 + 32;

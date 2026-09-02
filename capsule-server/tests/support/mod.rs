@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use base64::Engine as _;
-use capsule_core::crypto::keys::hybrid_sig::HybridSigningKey;
+use capsule_core::crypto::keys::HybridSigningKey;
 use capsule_server::App;
 use capsule_server::album::{
     AlbumContext, AlbumRecord, AlbumStore, InMemoryAlbums, ProvisionOutcome,
@@ -2357,7 +2357,7 @@ impl Fixture {
         // anything holding that key manufacture custody evidence.
         let attestation_key = Arc::new(LocalAttestationKey::new(
             SERVER_ORIGIN,
-            capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+            capsule_core::crypto::keys::HybridSigningKey::generate(),
         ));
         let revocations = Arc::new(SwitchableRevocations::new(clock.clone()));
         let challenges = Arc::new(SwitchableChallenges::new(clock.clone()));
@@ -2545,7 +2545,7 @@ impl Fixture {
                 Arc::new(InMemoryReceipts::new()),
                 Arc::new(LocalAttestationKey::new(
                     SERVER_ORIGIN,
-                    capsule_core::crypto::keys::hybrid_sig::HybridSigningKey::generate(),
+                    capsule_core::crypto::keys::HybridSigningKey::generate(),
                 )),
                 Timestamp::UNIX_EPOCH,
             ),

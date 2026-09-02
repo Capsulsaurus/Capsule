@@ -1,17 +1,17 @@
-pub mod default_album;
-pub mod enrichment;
-pub mod executor;
-pub mod executor_cancellation;
-pub mod group;
-pub mod importers;
-pub mod planner;
-pub mod progress;
-pub mod scan;
-pub mod scanner;
-pub mod scope;
-pub mod special;
-pub mod streaming;
-pub mod upload;
+pub(crate) mod default_album;
+pub(crate) mod enrichment;
+pub(crate) mod executor;
+pub(crate) mod executor_cancellation;
+pub(crate) mod group;
+pub(crate) mod importers;
+pub(crate) mod planner;
+pub(crate) mod progress;
+pub(crate) mod scan;
+pub(crate) mod scanner;
+pub(crate) mod scope;
+pub(crate) mod special;
+pub(crate) mod streaming;
+pub(crate) mod upload;
 
 pub use default_album::{
     DefaultAlbumContext, DefaultAlbumError, ResolutionRule, ResolvedAlbum, resolve_default_album,

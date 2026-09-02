@@ -26,7 +26,7 @@
 //!
 //! [Scan & Extract]: https://docs/design/import/pipeline/#scan--extract
 
-pub mod takeout;
+pub(crate) mod takeout;
 
 use std::path::{Path, PathBuf};
 

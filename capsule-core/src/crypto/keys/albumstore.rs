@@ -59,10 +59,10 @@ use crate::utils::paths::tmp_path;
 
 /// The album store's on-disk format version. Bumped only on a breaking layout change; a store
 /// declaring a higher version is refused rather than misread.
-pub const ALBUM_STORE_VERSION: u16 = 1;
+pub(crate) const ALBUM_STORE_VERSION: u16 = 1;
 
 /// The store's filename beneath `{root}/.library/`.
-pub const ALBUM_STORE_FILE: &str = "albums.cbor";
+pub(crate) const ALBUM_STORE_FILE: &str = "albums.cbor";
 
 /// One escrowed album content key: `(album_id, epoch, amk)`.
 ///

@@ -21,9 +21,9 @@
 ///
 /// **Bumping this constant requires appending a step to [`crate::db::migrate::STEPS`]** —
 /// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
-pub const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 
-pub const DDL: &str = r"
+pub(crate) const DDL: &str = r"
 PRAGMA journal_mode = WAL;
 
 CREATE TABLE IF NOT EXISTS assets (

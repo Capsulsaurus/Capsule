@@ -35,14 +35,15 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use capsule_core::crypto::keys::hardware::{HardwareSigner, HardwareSignerError};
-use capsule_core::crypto::keys::{P256HybridSigningKey, Signer};
+use capsule_core::crypto::keys::{
+    HardwareSigner, HardwareSignerError, P256HybridSigningKey, Signer,
+};
 use capsule_core::crypto::primitives::DeviceTier;
 use capsule_core::crypto::verify_asset::VerifyOutcome;
 use capsule_core::lifecycle::{
     QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome, Workspace,
 };
-use capsule_core::sidecar::sidecar_v1::SidecarV1;
+use capsule_core::sidecar::SidecarV1;
 use uuid::Uuid;
 
 use super::{FfiError, FfiUploadRequest};
@@ -463,8 +464,8 @@ fn uuid_from_bytes(field: &str, bytes: &[u8]) -> Result<Uuid, FfiError> {
 /// The ladder tier's stable lowercase name (`index` / `preview` / `original`) — the same three
 /// rungs the download-sync tier ladder names, so an app's progress UI can key on one vocabulary
 /// in both directions.
-fn tier_name(tier: capsule_core::import::upload::UploadTier) -> String {
-    use capsule_core::import::upload::UploadTier;
+fn tier_name(tier: capsule_core::import::UploadTier) -> String {
+    use capsule_core::import::UploadTier;
     match tier {
         UploadTier::Index => "index",
         UploadTier::Preview => "preview",

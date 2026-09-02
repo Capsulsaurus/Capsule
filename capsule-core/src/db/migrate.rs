@@ -68,7 +68,7 @@ use crate::db::schema::{DDL, SCHEMA_VERSION};
 /// Also the version an *unstamped* catalog (one that already has tables but reports
 /// `user_version = 0`) is adopted at — v1 predates nothing, so there is no older shape to
 /// mistake it for.
-pub const BASELINE_VERSION: u32 = 1;
+pub(crate) const BASELINE_VERSION: u32 = 1;
 
 /// A single DDL statement (or batch) in a migration step, plus the condition under which it
 /// runs.
@@ -77,7 +77,7 @@ pub const BASELINE_VERSION: u32 = 1;
 /// visible in its data, and therefore fingerprintable — see the immutability rule in the
 /// module docs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Ddl {
+pub(crate) enum Ddl {
     /// Run unconditionally. Must be idempotent (`IF NOT EXISTS` / `DROP … IF EXISTS`).
     Always(&'static str),
     /// Run only when `table` **has** `column` — used for renames of a column that an
@@ -114,7 +114,7 @@ impl Ddl {
 /// a catalog four versions behind is brought forward by four separate, separately committed
 /// steps rather than one jump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Step {
+pub(crate) struct Step {
     pub from: u32,
     pub to: u32,
     /// Stable identifier used in logs and in the immutability fingerprint.
@@ -275,7 +275,7 @@ const STEP_3_TO_4: Step = Step {
 };
 
 /// Every shipped step, in ascending order. Append only.
-pub const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
+pub(crate) const STEPS: &[Step] = &[STEP_1_TO_2, STEP_2_TO_3, STEP_3_TO_4];
 
 /// SHA-256 (hex) of each shipped step's canonical rendering, parallel to [`STEPS`].
 ///
@@ -385,7 +385,7 @@ pub struct Outcome {
 /// transaction. Catalog already current → nothing runs. Catalog newer than this build →
 /// [`MigrationError::CatalogTooNew`], with nothing written.
 #[tracing::instrument(level = "debug", skip_all, fields(target_version = SCHEMA_VERSION))]
-pub fn migrate(conn: &Connection) -> Result<Outcome, MigrationError> {
+pub(crate) fn migrate(conn: &Connection) -> Result<Outcome, MigrationError> {
     let stamped = read_user_version(conn)?;
 
     if stamped > SCHEMA_VERSION {
