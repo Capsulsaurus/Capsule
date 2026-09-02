@@ -57,8 +57,8 @@ enum ReconcileOutcome {
     Unrecoverable,  // requires re-bootstrap
 }
 
-fn reconcile_with_server(view: ServerChainView) -> Result<ReconcileOutcome, MlsError>;
-fn rekey_group(group: GroupId, reason: RekeyReason) -> Result<(), MlsError>;
+fn reconcile_with_server(&mut self, view: ServerChainView) -> Result<ReconcileOutcome>;
+fn rekey_group(&mut self, reason: RekeyReason) -> Result<RekeyOutcome>;
 ```
 
 ## Validation

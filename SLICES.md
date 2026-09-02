@@ -9,6 +9,12 @@ both halves of the current programme:
   the code 2026-08-21) plus everything needed to exercise the iOS app against a server end
   to end.
 
+**This file tracks slices; [`ROADMAP.md`](ROADMAP.md) tracks packages.** Read this one for
+what a piece of work is and where it stands; read that one for what state a package is in,
+which gate covers it, and which slices are open against it. `ROADMAP.md` cites slice ids and
+never restates a status, and `mise run check-docs-truth` fails if a citation there has no
+detail block here.
+
 It also absorbs the **post-teardown verdict**: the previous Salvo server, the Progenitor
 SDK and the standalone media crate are review material, and the replacement server is one
 **Kynos** REST/OpenAPI application. That verdict is accepted and final.
@@ -47,15 +53,18 @@ an **Area**. Read `Status` through `Area`, never on its own.
 
 | Area | Meaning |
 | --- | --- |
-| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its media/exif trees, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
+| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its `media` tree, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
 | `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live, and the `core-import-media` bucket that sat beside them as a stale twin was deleted rather than quarantined ([#423](https://github.com/Capsulsaurus/Capsule/issues/423), `S-C59`). |
 | `MIXED` | Both: a surviving `capsule-core`/client/app half that ships and stays, and a server, SDK-wire, or media half that must be re-landed. |
 
 **Status — read through Area.**
 
 - On an `ACTIVE` row, `Status` means what it always meant.
-- On a `MIXED` row, `Status` describes **the surviving half only**. The retiring half is
-  owed to the rebuild by construction; it is not a separate `Owed →` pointer.
+- On a `MIXED` row, `Status` describes **the surviving half only**. Where the retiring half
+  has no slice of its own, it is owed to the rebuild by construction and is not a separate
+  `Owed →` pointer. Where a *named* slice carries it, say so: the row is `done*` and `Owed
+  →` points at that slice, exactly as it would on any other area. A remainder with a live
+  home is not "owed by construction" — it is owed to something a reader can go and read.
 - On a `RETIRED` row, `done` is not available. An implemented `RETIRED` slice reverts to
   `ready`, and its detail block records that it **landed in code that is still live in
   this workspace today** — the contract is proven, the deliverable re-scopes onto the
@@ -160,7 +169,12 @@ left, which is what everything below is sequenced against.
 - **The Salvo tree is gone from the workspace.** `capsule-api/**` is
   `legacy-review/server-salvo/`, `capsule_core::media` is `legacy-review/media-pipeline/`,
   and `salvo`, `tonic`, `prost`, `async-graphql`, `webauthn-rs` and — with the last of them
-  — `openssl` left the dependency tree. The `rustls`-only rule now holds with no exception.
+  — `openssl` left the **manifests**. Not all of them left the dependency *graph*, and the
+  difference is the difference between what `architecture-check` proves and what it does
+  not: it reads declared dependencies, so `Cargo.lock` still resolves `prost v0.13.5`
+  transitively through `tzf-rs`, which `capsule-core` takes for timezone lookup. Nothing
+  declares it and nothing calls it as a wire format. The `rustls`-only rule holds with no
+  exception, declared or transitive.
   The consequences are real and are named rather than hidden: there is no server binary and
   no image decoder in the workspace (#401, #410).
 - **`xtask architecture-check` is a gate, not a report.** It runs inside `mise run
@@ -312,13 +326,13 @@ lives.
 | S-C61 | The drop passphrase is provisioned and never checked | server | S-C5, S-C60 | S | RETIRED | done | a gated link admitted anyone holding the opaque id; the web client was posting to paths that no longer exist |
 | S-C62 | The web auth client speaks a surface that is gone | sdk/clients | S-C54, S-C55, S-C56, S-C60 | M | RETIRED | done | passkey and password-reset screens removed, login reads `202`, profile is the four fields the server keeps |
 | S-C63 | The SDK cannot read a second-factor challenge | sdk/clients | S-C55 | M | RETIRED | done | `login` returns an outcome, not a session; `capsule auth login` prompts for the code |
-| S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | MIXED | done | |
-| S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | MIXED | done | |
+| S-D1 | SDK upload client (hand-written, stateful protocol) | sdk/clients | S-C1 | M | MIXED | done\* | E2E case 2 → `S-Q1` (#409) |
+| S-D2 | SDK sync/download client + connection-class budget | sdk/clients | S-C2, S-C9 | L | MIXED | done\* | E2E case 3 → `S-Q1` (#409) |
 | S-D3 | Web guest drop client (WASM) | sdk/clients | S-A6, S-C5 | L | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-D4 | Verify-before-destroy wiring | sdk/clients | S-C3, S-C15 | M | MIXED | done | |
 | S-D5 | CLI auth/sync/list | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
 | S-D6 | Web server gateway (key-free reads) | sdk/clients | S-D2, S-C60 | L | MIXED | done\* | live browser smoke → `S-Q5`; decode boundary → post-v1 |
-| S-D7 | SDK auth/session foundation + auto token refresh | sdk/clients | — | M | MIXED | done | |
+| S-D7 | SDK auth/session foundation + auto token refresh | sdk/clients | — | M | MIXED | done\* | typed-path 401-retry-once → `S-D17` (#408) |
 | S-D8 | spargen REST client integration | sdk/clients | — | M | MIXED | done\* | 401-retry-once → `S-D17` |
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | MIXED | done | |
@@ -429,7 +443,7 @@ lives.
 **Row counts.** 205 rows — the 129 from the v1 campaign and wave 2, the 51 the
 server rebuild added, the 23 of lane U, and the 2 of the notification lane. By
 area: **87 ACTIVE / 75 RETIRED / 43 MIXED**. By status:
-**98 done / 57 done\* / 28 ready / 9 part / 9 blocked / 4 post-v1**
+**95 done / 60 done\* / 28 ready / 9 part / 9 blocked / 4 post-v1**
 (`S-C8`, `S-C27`, `S-C39`, and `S-U9`–`S-U14` — the table spells these `part`
 and `part 1 done`; they are counted together).
 
@@ -738,8 +752,10 @@ workspace at all**, so every still import is a `DeferredNoCodec` until Rawshift 
   derivatives; planner determinism suite unchanged.
 - **Tier:** Unit (planner) + Smoke (executor).
 - **Landed:** `capsule-core/src/import/executor.rs` is the new signed executor and is
-  `ACTIVE` — it survives. Its *derivative and EXIF inputs* are `RETIRED`, which is why
-  the row is `MIXED`. **Owed:** durable album keys → `S-A10` (landed).
+  `ACTIVE` — it survives. Its *derivative* input is `RETIRED`, which is why the row is
+  `MIXED`; its **EXIF input is not** (corrected 2026-09-01) — `capsule-core::exif` is live
+  and tested, as the `RETIRED` legend above records. **Owed:** durable album keys → `S-A10`
+  (landed).
 
 ### S-B3 — Streaming import
 
@@ -3942,9 +3958,14 @@ them was incidental:
 - **`MIXED | done`, not `RETIRED | ready` (corrected 2026-09-01).** The row was `RETIRED`
   because the SDK's wire contract was re-sourced, not because the crate was review material
   (Sequencing). That re-source landed: `capsule-sdk/build.rs` generates from
-  `capsule-server/openapi.json`, the Kynos document, and the crate depends on no retired
-  package. The client half therefore ships, which is what `Status` reports on a `MIXED` row;
-  the server half it drives is what is still being rebuilt (#401, #404).
+  `capsule-server/openapi.json`, the Kynos document, and the crate's manifest declares no
+  retired dependency — `prost` still resolves transitively through `capsule-core`'s `tzf-rs`,
+  which is a timezone table and not a wire format. The client half therefore ships, which is
+  what `Status` reports on a `MIXED` row; the server half it drives is what is still being
+  rebuilt (#401, #404).
+- **`done*`, not `done` (decision 12).** The row's own "Done when" ends "E2E case 2 lives",
+  and that case has a named home: `S-Q1` (#409). A remainder a reader can go and read is an
+  `Owed →` pointer, not something owed by construction.
 
 ### S-D2 — SDK sync/download client
 
@@ -3964,8 +3985,10 @@ them was incidental:
   `capsule-sdk/src/sync.rs` drives `GET /v1/sync` through the generated REST client, the
   opaque server-MAC'd cursor round-trips verbatim, and `tonic`, `tonic-prost` and `prost`
   are out of `capsule-sdk/Cargo.toml`. `SyncState`'s anti-rewind and forward-version rules
-  never depended on the transport and did not move. The row is `MIXED | done`: the client
-  half ships; the feed it reads is served by the server still being rebuilt.
+  never depended on the transport and did not move. The client half ships; the feed it reads
+  is served by the server still being rebuilt.
+- **`done*`, not `done` (decision 12).** "Done when" ends "E2E case 3 lives", which `S-Q1`
+  (#409) carries.
 
 ### S-D3 — Web guest drop client
 
@@ -4037,9 +4060,10 @@ them was incidental:
   server's own paths, not a retired copy of them. Being outside the generated client is
   deliberate and no longer a spargen gap: what lives here is token *orchestration*, which
   `ADR-0002` puts outside generated code by contract.
-- **`MIXED | done`, not `RETIRED | ready` (corrected 2026-09-01).** The Kynos re-point is what
-  the `RETIRED` marking was for, and it landed. The 401-retry-once half is still owed on the
-  *typed* path — see `S-D17`, which keeps its own row.
+- **`MIXED | done*`, not `RETIRED | ready` (corrected 2026-09-01).** The Kynos re-point is
+  what the `RETIRED` marking was for, and it landed. The 401-retry-once half is still owed on
+  the *typed* path, and `S-D17` (#408) carries it — which is what makes this `done*` rather
+  than `done`, on the same rule `S-D8` was already read by (decision 12).
 
 ### S-D8 — spargen REST client integration
 
