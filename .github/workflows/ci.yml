@@ -56,7 +56,14 @@ jobs:
               - 'capsule-cli/**'
               - 'capsule-core/**'
               - 'capsule-sdk/**'
+              - 'capsule-core-ffi/**'
+              - 'capsule-wasm/**'
               - 'xtask/**'
+              # `check-rust` reads the catalogs directly: `i18n-check` and
+              # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
+              # so a catalog-only change must still pay the Rust gate. The
+              # `swift` filter already lists it for the same reason.
+              - 'locales/**'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
