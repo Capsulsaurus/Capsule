@@ -145,4 +145,17 @@ pub mod keys {
     pub const SHOW_AMBIGUOUS: &str = "cli.show.ambiguous";
     pub const SHOW_INVALID_SELECTOR: &str = "cli.show.invalid_selector";
     pub const SHOW_FAILED: &str = "cli.show.failed";
+    // `capsule repair capture-time` — the capture-timestamp repair pass (slice `S-B17`).
+    pub const REPAIR_CAPTURE_TIME_CHECKED: &str = "cli.repair.capture_time.checked";
+    pub const REPAIR_CAPTURE_TIME_DRY_RUN_NOTICE: &str = "cli.repair.capture_time.dry_run_notice";
+    pub const REPAIR_CAPTURE_TIME_ROW: &str = "cli.repair.capture_time.row";
+    pub const REPAIR_CAPTURE_TIME_ROW_UNPARSEABLE: &str = "cli.repair.capture_time.row_unparseable";
+    pub const REPAIR_CAPTURE_TIME_UNREADABLE: &str = "cli.repair.capture_time.unreadable";
+    pub const REPAIR_CAPTURE_TIME_CORRECTED: &str = "cli.repair.capture_time.corrected";
+    pub const REPAIR_CAPTURE_TIME_LIMIT_NOTICE: &str = "cli.repair.capture_time.limit_notice";
+    pub const REPAIR_CAPTURE_TIME_SUMMARY: &str = "cli.repair.capture_time.summary";
+    pub const REPAIR_CAPTURE_TIME_NOTHING: &str = "cli.repair.capture_time.nothing";
+    pub const REPAIR_CAPTURE_TIME_DRIFT_NOTICE: &str = "cli.repair.capture_time.drift_notice";
+    pub const REPAIR_CAPTURE_TIME_FAILED_ASSET: &str = "cli.repair.capture_time.failed_asset";
+    pub const REPAIR_FAILED: &str = "cli.repair.failed";
 }

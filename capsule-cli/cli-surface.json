@@ -466,6 +466,60 @@
       "name": "push"
     },
     {
+      "about": "Repair a local library in place, one signed correction per affected asset",
+      "name": "repair",
+      "subcommands": [
+        {
+          "about": "Re-read each original's EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update",
+          "args": [
+            {
+              "help": "Path to the Capsule library",
+              "id": "library",
+              "long": "library",
+              "positional": false,
+              "repeatable": false,
+              "required": true,
+              "takes_value": true,
+              "value_names": [
+                "PATH"
+              ]
+            },
+            {
+              "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+              "id": "passphrase_stdin",
+              "long": "passphrase-stdin",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset's chain",
+              "id": "apply",
+              "long": "apply",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": false
+            },
+            {
+              "help": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)",
+              "id": "limit",
+              "long": "limit",
+              "positional": false,
+              "repeatable": false,
+              "required": false,
+              "takes_value": true,
+              "value_names": [
+                "COUNT"
+              ]
+            }
+          ],
+          "name": "capture-time"
+        }
+      ]
+    },
+    {
       "about": "Reset all local CLI data",
       "args": [
         {

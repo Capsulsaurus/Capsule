@@ -21,7 +21,7 @@ use capsule_core::library::{Library, LibraryError, init_library, open_library, r
 use capsule_core::lifecycle::Workspace;
 use capsule_core::metadata::FileMetadata;
 use capsule_sdk::net::ConnectionClass;
-use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands};
+use cli::{AuthCommands, Cli, Commands, ImportProviderArg, LibraryCommands, RepairCommands};
 use colored::*;
 use dialoguer::{Confirm, Input, Password};
 use eyre::{Result, eyre};
@@ -37,6 +37,7 @@ pub mod db;
 pub mod demo;
 pub mod i18n;
 pub mod remote;
+pub mod repair;
 pub mod session;
 pub mod show;
 pub mod status;
@@ -531,6 +532,30 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 }
             }
         }
+
+        // ── Repair ────────────────────────────────────────────────────────
+        Commands::Repair { command } => match command {
+            RepairCommands::CaptureTime {
+                library,
+                passphrase_stdin,
+                apply,
+                limit,
+            } => {
+                let bundle = i18n::cli_bundle();
+                let request = repair::RepairRequest { apply, limit };
+                let mut ws = open_workspace(&library, passphrase_stdin)?;
+                match repair::run(&mut ws, request) {
+                    Ok(summary) => print!("{}", repair::render(&bundle, request, &summary)),
+                    Err(error) => {
+                        let reason = repair::describe_error(&bundle, &error);
+                        return Err(eyre!(
+                            "{}",
+                            bundle.format(keys::REPAIR_FAILED, &[("reason", Value::Str(&reason))])
+                        ));
+                    }
+                }
+            }
+        },
 
         // ── Demo ──────────────────────────────────────────────────────────
         Commands::Demo { workdir, image } => {

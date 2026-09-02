@@ -1,12 +1,25 @@
-//! Slice `S-B18` (`capsule show`) across a real process boundary, by spawning the `capsule`
-//! binary the way `import_round_trip.rs` and `takeout_import.rs` do — and for the same
-//! reason: `show` proves what a library *reopened from disk* says about an asset.
+//! Slices `S-B18` (`capsule show`) and `S-B17` (`capsule repair capture-time`) across a real
+//! process boundary, by spawning the `capsule` binary the way `import_round_trip.rs` and
+//! `takeout_import.rs` do — and for the same reason: `show` proves what a library *reopened
+//! from disk* says about an asset, and a repair that only looked right inside the process
+//! that wrote it would prove nothing.
 //!
 //! **The fixture image** is a synthesized JPEG carrying a real EXIF APP1 segment with
 //! `DateTimeOriginal` **and** `OffsetTimeOriginal`, so its capture time resolves to a fixed
-//! UTC instant — the case the importer writes as the capture timestamp since `S-B16`. The
-//! Argon2id seeding is the fast-cost trick `import_round_trip.rs` explains; nothing here
-//! weakens what the spawned processes run.
+//! UTC instant — the case the importer writes as the capture timestamp since `S-B16`, and
+//! therefore the case the repair can recover. The Argon2id seeding is the fast-cost trick
+//! `import_round_trip.rs` explains; nothing here weakens what the spawned processes run.
+//!
+//! **The pre-`S-B16` library** the repair exists for is reproduced by importing under the
+//! fixed parser and then stamping one asset's sidecar with the import clock through the very
+//! API the repair uses (`Workspace::set_capture_timestamp`). That reproduces the half the
+//! repair reads — a signed sidecar carrying `now` under a still-EXIF-bearing original — and it
+//! is the only way to produce it from a build whose importer no longer has the bug. It does
+//! **not** reproduce the other half of the old shape: the bug also sharded the bundle into the
+//! import month, whereas here the shard is the EXIF month, so the post-repair
+//! directory-vs-timestamp drift and `Workspace::open`'s reconciliation of it are exercised by
+//! `capsule-core`'s `lifecycle::metadata` unit test (a no-EXIF import corrected to 2001), not
+//! here.
 //!
 //! ## Test list
 //!
@@ -14,6 +27,11 @@
 //!   a hash prefix from `shasum` and the asset id both resolve, and the page carries the
 //!   EXIF-derived values.
 //! - `show_refuses_a_malformed_or_unknown_selector` — non-zero exit with a localized reason.
+//! - `repair_is_a_no_op_on_a_library_imported_after_the_parser_fix` — the `S-B17`
+//!   "no-op post-`S-B16`" criterion.
+//! - `repair_reports_by_default_and_corrects_under_apply` — detects the reproduced bug,
+//!   writes nothing without `--apply`, corrects with it, keeps the bundle in its original
+//!   month directory, survives `capsule library rebuild`, and finds nothing on a second run.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -350,4 +368,158 @@ fn show_refuses_a_malformed_or_unknown_selector() {
 
     let short = fx.run_fails(&["show", "abcdef", "--library", library, "--passphrase-stdin"]);
     assert!(short.contains("at least 8"), "{short}");
+}
+
+// ── `capsule repair capture-time` (S-B17) ────────────────────────────────────
+
+impl Fixture {
+    /// `capsule repair capture-time --library <library> [--apply]`.
+    fn repair(&self, apply: bool) -> String {
+        let mut args = vec![
+            "repair",
+            "capture-time",
+            "--library",
+            path(&self.library),
+            "--passphrase-stdin",
+        ];
+        if apply {
+            args.push("--apply");
+        }
+        self.run(&args)
+    }
+
+    /// The month directory holding the asset's original, relative to the library root.
+    fn month_dir(&self, ws: &Workspace, id: Uuid) -> PathBuf {
+        ws.original_path(&id)
+            .expect("original")
+            .parent()
+            .expect("month directory")
+            .strip_prefix(&self.library)
+            .expect("inside the library")
+            .to_path_buf()
+    }
+}
+
+/// **The "no-op after `S-B16`" half of the criterion.** Every asset here was imported by the
+/// fixed parser, so each sidecar already carries its EXIF instant, and the pass reports nothing.
+#[test]
+fn repair_is_a_no_op_on_a_library_imported_after_the_parser_fix() {
+    let fx = fixture(2);
+    let out = fx.repair(false);
+    assert!(out.contains("Checked 2 asset(s)"), "{out}");
+    assert!(out.contains("nothing to repair"), "{out}");
+    assert!(!out.contains("affected,"), "{out}");
+    let ws = fx.reopen();
+    for image in &fx.images {
+        let id = fx.asset_for(&ws, image);
+        assert_eq!(ws.asset(&id).expect("asset").chain.records().len(), 1);
+    }
+}
+
+/// **The repair itself**, across process boundaries: one of two assets is stamped with the
+/// import clock (the pre-`S-B16` shape); a dry run reports it and writes nothing; `--apply`
+/// corrects it as a signed record without moving the bundle; `capsule show` and a
+/// `capsule library rebuild` both read the corrected instant; a second `--apply` finds nothing.
+#[test]
+fn repair_reports_by_default_and_corrects_under_apply() {
+    let fx = fixture(2);
+    let (broken_image, good_image) = (&fx.images[0], &fx.images[1]);
+
+    // Reproduce the bug on one asset, in-process, and remember where its bundle lives.
+    let (broken, month_before) = {
+        let mut ws = fx.reopen();
+        let broken = fx.asset_for(&ws, broken_image);
+        ws.set_capture_timestamp(&broken, jiff::Timestamp::now())
+            .expect("reproduce the pre-S-B16 stamp");
+        let month = fx.month_dir(&ws, broken);
+        (broken, month)
+    };
+    assert!(
+        !fx.show(&broken.to_string()).contains(EXIF_CAPTURE),
+        "the reproduced stamp is no longer the EXIF instant"
+    );
+
+    // Dry run (the default): reported, not written.
+    let dry = fx.repair(false);
+    assert!(dry.contains("Checked 2 asset(s)"), "{dry}");
+    assert!(dry.contains("Dry run"), "{dry}");
+    assert!(dry.contains(&broken.to_string()), "{dry}");
+    assert!(
+        dry.contains(EXIF_CAPTURE),
+        "the recovered instant is named:\n{dry}"
+    );
+    assert!(
+        dry.contains("1 affected, 0 corrected, 1 already correct"),
+        "{dry}"
+    );
+    {
+        let ws = fx.reopen();
+        assert_eq!(ws.asset(&broken).expect("asset").chain.records().len(), 2);
+        assert!(
+            !ws.asset(&broken)
+                .expect("asset")
+                .sidecar
+                .capture_timestamp
+                .starts_with("2019")
+        );
+    }
+
+    // `--apply`: corrected as a third signed record; the bundle stays where it was.
+    let applied = fx.repair(true);
+    assert!(!applied.contains("Dry run"), "{applied}");
+    assert!(
+        applied.contains("1 affected, 1 corrected, 1 already correct"),
+        "{applied}"
+    );
+    assert!(
+        applied.contains("month directory"),
+        "the drift notice:\n{applied}"
+    );
+    {
+        let ws = fx.reopen();
+        let asset = ws.asset(&broken).expect("asset");
+        assert_eq!(asset.sidecar.capture_timestamp, EXIF_CAPTURE);
+        assert_eq!(asset.chain.records().len(), 3);
+        assert_eq!(
+            fx.month_dir(&ws, broken),
+            month_before,
+            "the bundle is not relocated"
+        );
+        assert!(ws.original_path(&broken).expect("original").is_file());
+        let good = fx.asset_for(&ws, good_image);
+        assert_eq!(
+            ws.asset(&good).expect("asset").chain.records().len(),
+            1,
+            "untouched"
+        );
+    }
+    let page = fx.show(&broken.to_string());
+    assert!(
+        page.contains(&format!("Captured:        {EXIF_CAPTURE}")),
+        "{page}"
+    );
+    assert!(
+        page.contains("Provenance:      3 signed record(s)"),
+        "{page}"
+    );
+
+    // The two index projections agree: a rebuild from disk reads the same corrected instant.
+    let rebuilt = capsule(&fx.home, &["library", "rebuild", path(&fx.library)], false);
+    assert!(rebuilt.contains("Index rebuilt successfully."), "{rebuilt}");
+    {
+        let library = capsule_core::library::open_library(&fx.library).expect("open");
+        let row = library
+            .db
+            .find_by_uuid(&broken.to_string())
+            .expect("query")
+            .expect("indexed");
+        assert_eq!(row.capture_timestamp, 1_551_675_967, "2019-03-04T05:06:07Z");
+    }
+    assert!(fx.show(&broken.to_string()).contains(EXIF_CAPTURE));
+
+    // Idempotent: nothing left to do.
+    let again = fx.repair(true);
+    assert!(again.contains("nothing to repair"), "{again}");
+    let ws = fx.reopen();
+    assert_eq!(ws.asset(&broken).expect("asset").chain.records().len(), 3);
 }

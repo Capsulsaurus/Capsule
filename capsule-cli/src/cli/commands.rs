@@ -146,6 +146,11 @@ pub(crate) enum Commands {
         #[command(subcommand)]
         command: LibraryCommands,
     },
+    /// Repair a local library in place, one signed correction per affected asset
+    Repair {
+        #[command(subcommand)]
+        command: RepairCommands,
+    },
     /// Run the offline end-to-end data-plane showcase (real cryptography, no network)
     Demo {
         /// Working directory for the demo libraries (a temp dir is used if omitted)
@@ -214,6 +219,29 @@ pub(crate) enum LibraryCommands {
     Rebuild {
         /// Path to the library
         path: PathBuf,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum RepairCommands {
+    /// Re-read each original's EXIF capture time and report every asset whose signed capture
+    /// timestamp disagrees with it; with --apply, correct each one as a signed metadata update
+    CaptureTime {
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+        /// Write the corrections. Without this flag the pass only reports what it would
+        /// change; each correction is an irreversible signed record on the asset's chain.
+        #[arg(long)]
+        apply: bool,
+        /// Correct at most this many affected assets in one --apply run (the report still
+        /// covers the whole library)
+        #[arg(long, value_name = "COUNT")]
+        limit: Option<usize>,
     },
 }
 

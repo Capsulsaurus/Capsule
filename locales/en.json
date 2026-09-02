@@ -7103,6 +7103,30 @@
     "message": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly",
     "context": "clap --help: help for the `--staged` flag of `capsule push`."
   },
+  "cli.help.repair.about": {
+    "message": "Repair a local library in place, one signed correction per affected asset",
+    "context": "clap --help: the one-line description of `capsule repair`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.repair.capture-time.about": {
+    "message": "Re-read each original's EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update",
+    "context": "clap --help: the one-line description of `capsule repair capture-time`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.repair.capture-time.arg.apply": {
+    "message": "Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset's chain",
+    "context": "clap --help: help for the `--apply` flag of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.limit": {
+    "message": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)",
+    "context": "clap --help: help for the `--limit` option of `capsule repair capture-time`."
+  },
+  "cli.help.repair.capture-time.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule repair capture-time`."
+  },
   "cli.help.reset.about": {
     "message": "Reset all local CLI data",
     "context": "clap --help: the one-line description of `capsule reset`. Shown in the parent's command list and at the top of its own --help."
@@ -7278,6 +7302,54 @@
   "cli.push.up_to_date": {
     "message": "Everything in this library is already on the server.",
     "context": "CLI line when `capsule push` finds every blob already held server-side."
+  },
+  "cli.repair.capture_time.checked": {
+    "message": "Checked {count} asset(s) against the EXIF capture time of their originals.",
+    "context": "CLI status line from `capsule repair capture-time` after every asset's original has been re-read. {count} is the number of assets examined."
+  },
+  "cli.repair.capture_time.corrected": {
+    "message": "  {asset_id}: corrected",
+    "context": "CLI one-line confirmation in `capsule repair capture-time --apply` that the asset's capture timestamp was rewritten as a signed metadata update."
+  },
+  "cli.repair.capture_time.drift_notice": {
+    "message": "Corrected assets stay in the month directory they were imported into; that drift between directory and capture date is expected after a correction and is not a fault.",
+    "context": "CLI note printed after `capsule repair capture-time --apply` corrected at least one asset: the media files are not moved to a new date directory."
+  },
+  "cli.repair.capture_time.dry_run_notice": {
+    "message": "Dry run: nothing was written. Re-run with --apply to correct the affected sidecars.",
+    "context": "CLI notice from `capsule repair capture-time` when run without --apply (the default). `--apply` is a command-line flag, shown verbatim."
+  },
+  "cli.repair.capture_time.failed_asset": {
+    "message": "Correcting {asset_id} failed: {reason}. Assets corrected before it stay corrected; nothing after it was touched.",
+    "context": "CLI failure detail from `capsule repair capture-time --apply` when the library refuses a correction. {reason} is an English error detail."
+  },
+  "cli.repair.capture_time.limit_notice": {
+    "message": "Stopped after {corrected} correction(s) because of --limit; re-run to continue.",
+    "context": "CLI notice from `capsule repair capture-time --apply --limit N` when affected assets remain after N corrections. `--limit` is a command-line flag, shown verbatim."
+  },
+  "cli.repair.capture_time.nothing": {
+    "message": "Every capture timestamp agrees with its original's EXIF; nothing to repair.",
+    "context": "CLI line from `capsule repair capture-time` when no asset is affected and every original was readable."
+  },
+  "cli.repair.capture_time.row": {
+    "message": "  {asset_id}: recorded {recorded}, EXIF says {recovered} (off by {delta} s)",
+    "context": "CLI one-line report of one affected asset in `capsule repair capture-time`. {recorded} is the capture timestamp the signed sidecar holds, {recovered} the instant its original's EXIF resolves to, {delta} the difference in seconds (recovered minus recorded, may be negative)."
+  },
+  "cli.repair.capture_time.row_unparseable": {
+    "message": "  {asset_id}: recorded {recorded} (not a timestamp), EXIF says {recovered}",
+    "context": "CLI one-line report of one affected asset in `capsule repair capture-time` whose recorded capture timestamp does not parse, so no difference can be computed."
+  },
+  "cli.repair.capture_time.summary": {
+    "message": "Capture-time repair: {affected} affected, {corrected} corrected, {agrees} already correct, {no_instant} without a recoverable EXIF instant, {unreadable} unreadable.",
+    "context": "CLI summary line of `capsule repair capture-time`. All placeholders are asset counts."
+  },
+  "cli.repair.capture_time.unreadable": {
+    "message": "  {asset_id}: original could not be read ({reason}); skipped",
+    "context": "CLI one-line report in `capsule repair capture-time` for an asset whose original file could not be opened. {reason} is an English I/O error detail. Distinct from an original that merely carries no EXIF, which is counted, not listed."
+  },
+  "cli.repair.failed": {
+    "message": "Repair failed: {reason}",
+    "context": "CLI failure line for `capsule repair`. {reason} is a localized or English error detail."
   },
   "cli.show.album": {
     "message": "  Album:           {value}",

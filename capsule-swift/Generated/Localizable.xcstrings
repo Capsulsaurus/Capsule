@@ -30581,6 +30581,66 @@
         }
       }
     },
+    "cli.help.repair.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repair a local library in place, one signed correction per affected asset"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-read each original's EXIF capture time and report every asset whose signed capture timestamp disagrees with it; with --apply, correct each one as a signed metadata update"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.apply": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Write the corrections. Without this flag the pass only reports what it would change; each correction is an irreversible signed record on the asset's chain"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.limit": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correct at most this many affected assets in one --apply run (the report still covers the whole library)"
+          }
+        }
+      }
+    },
+    "cli.help.repair.capture-time.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
     "cli.help.reset.about": {
       "localizations": {
         "en": {
@@ -31449,6 +31509,126 @@
           "stringUnit": {
             "state": "translated",
             "value": "Everything in this library is already on the server."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.checked": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked %@ asset(s) against the EXIF capture time of their originals."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.corrected": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %@: corrected"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.drift_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Corrected assets stay in the month directory they were imported into; that drift between directory and capture date is expected after a correction and is not a fault."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.dry_run_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dry run: nothing was written. Re-run with --apply to correct the affected sidecars."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.failed_asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Correcting %1$@ failed: %2$@. Assets corrected before it stay corrected; nothing after it was touched."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.limit_notice": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stopped after %@ correction(s) because of --limit; re-run to continue."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.nothing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Every capture timestamp agrees with its original's EXIF; nothing to repair."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.row": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: recorded %2$@, EXIF says %3$@ (off by %4$@ s)"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.row_unparseable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: recorded %2$@ (not a timestamp), EXIF says %3$@"
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.summary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capture-time repair: %1$@ affected, %2$@ corrected, %3$@ already correct, %4$@ without a recoverable EXIF instant, %5$@ unreadable."
+          }
+        }
+      }
+    },
+    "cli.repair.capture_time.unreadable": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  %1$@: original could not be read (%2$@); skipped"
+          }
+        }
+      }
+    },
+    "cli.repair.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Repair failed: %@"
           }
         }
       }
