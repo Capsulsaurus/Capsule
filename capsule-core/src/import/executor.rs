@@ -182,10 +182,9 @@ pub fn execute_with_source_metadata(
 
 /// The signed-sidecar enrichment for one member path, with the fold decision logged.
 ///
-/// The single place a [`SourceMetadataIndex`] is turned into a
-/// [`SidecarEnrichment`](crate::lifecycle::SidecarEnrichment), shared by this executor and the
-/// [streaming window](crate::import::streaming) so a *streamed* third-party import writes exactly
-/// what a bulk one does (`S-B11` closed the gap `S-B10` left open). A path the index does not
+/// The single place a [`SourceMetadataIndex`] is turned into a [`SidecarEnrichment`], shared by
+/// this executor and the [streaming window](crate::import::streaming) so a *streamed*
+/// third-party import writes exactly what a bulk one does (`S-B11` closed the gap `S-B10` left open). A path the index does not
 /// cover, or a record that folds to nothing, yields [`None`] — the untouched write path.
 pub(crate) fn member_enrichment(
     source: &SourceMetadataIndex,

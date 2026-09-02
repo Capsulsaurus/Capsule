@@ -131,6 +131,19 @@ pub enum BootError {
         /// Where the work is tracked.
         issue: &'static str,
     },
+    /// An operator command was run without `--memory` and there is no durable index to read.
+    ///
+    /// Deliberately not [`Self::AdapterUnavailable`]: that one names `VALKEY_URL`, which an
+    /// operator running `capsule-server scrub` has typically never set, and pointing them at a
+    /// variable that would not have helped is worse than saying nothing.
+    #[error(
+        "this command needs `--memory`: it compares the index against the blob store, and the \
+         only index adapter written is the in-memory one (see {issue})"
+    )]
+    MaintenanceNeedsMemory {
+        /// Where the work is tracked.
+        issue: &'static str,
+    },
     /// The router's own types do not describe a buildable server.
     ///
     /// Unreachable in practice — the conformance suite builds the same router on every test run
@@ -218,7 +231,15 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
             );
             Ok(maintenance)
         }
-        Backends::Durable => Err(durable()),
+        // **Not** `durable()`. A maintenance command reaching here has almost always set no
+        // backend variable at all — `gc`/`purge`/`scrub` never demand `VALKEY_URL`, so naming it
+        // would send an operator to configure a variable that would not have helped. What is
+        // actually missing is the durable **index**: these two workers compare the index against
+        // the blob store, and the only index this crate has is the in-memory one, which is what
+        // `--memory` selects.
+        Backends::Durable => Err(BootError::MaintenanceNeedsMemory {
+            issue: "#402 (the Postgres index)",
+        }),
     }
 }
 
@@ -342,7 +363,12 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     let credentials = Credentials::new().map_err(|error| BootError::Credentials {
         detail: error.detail,
     })?;
-    let accounts = Arc::new(InMemoryAccounts::new(credentials));
+    let accounts = Arc::new(InMemoryAccounts::new(
+        credentials,
+        clock.clone(),
+        config.lockout_attempts,
+        config.lockout_window,
+    ));
 
     let albums = Arc::new(InMemoryAlbums::new());
     let directories = Arc::new(InMemoryDeviceDirectory::new());
@@ -356,9 +382,13 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
     ));
     let receipts = Arc::new(InMemoryReceipts::new());
     // Distinct from the token signer, as the design requires: a receipt that verified under the
-    // operational key would let anything holding that key manufacture custody evidence. The
-    // separation is structural here — the seed is a different HKDF `info` over the same input,
-    // so an operator cannot accidentally configure one key for both.
+    // operational key would let anything holding that key manufacture custody evidence.
+    //
+    // Which is why a durable deployment has to **supply** `ATTESTATION_KEY_SEED` rather than
+    // have it derived (`config`, the key-material section). A different HKDF `info` over the
+    // same input is not a separation at all — anyone holding `JWT_ED25519_DER` recomputes it —
+    // and it read as one, which is worse than no comment. The derivation survives only under
+    // `Backends::Memory`, where the server is a development act whose state is discarded.
     let attestation_key = Arc::new(LocalAttestationKey::new(
         config.server_domain.clone(),
         capsule_core::crypto::keys::HybridSigningKey::from_seed64(&seed),
@@ -471,24 +501,57 @@ fn memory(config: &Config, stores: Stores) -> Result<Assembled, BootError> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{BootError, assemble};
+    use super::{App, BootError, assemble};
     use crate::config::{Config, Demands, Overrides};
 
     /// A PKCS#8 v1 Ed25519 key, base64. Signs nothing; see `config`'s own tests.
     const EXAMPLE_DER: &str = "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF";
 
     fn memory_config(root: &std::path::Path) -> Config {
-        let environment: BTreeMap<String, String> = [
+        memory_config_with(root, &[])
+    }
+
+    /// The same, with `extra` on top of the environment.
+    fn memory_config_with(root: &std::path::Path, extra: &[(&str, &str)]) -> Config {
+        let mut environment: BTreeMap<String, String> = [
             ("BLOB_ROOT".to_owned(), root.display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
         ]
         .into_iter()
         .collect();
+        for (key, value) in extra {
+            environment.insert((*key).to_owned(), (*value).to_owned());
+        }
         let overrides = Overrides {
             memory: true,
             ..Overrides::default()
         };
         Config::load(&environment, &overrides, Demands::Serve).expect("the configuration loads")
+    }
+
+    /// Register the account the auth cases sign in with, through the surface.
+    async fn register(client: &kynos::test::TestClient<App>, password: &str) {
+        client
+            .post("/v1/auth/register")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
+            .send()
+            .await
+            .assert_status(kynos::http::StatusCode::OK);
+    }
+
+    /// Attempt a sign-in and return the status the route answered with.
+    async fn login(
+        client: &kynos::test::TestClient<App>,
+        password: &str,
+    ) -> kynos::http::StatusCode {
+        client
+            .post("/v1/auth/login")
+            .header("accept", "application/json")
+            .json(&serde_json::json!({ "email": "somebody@example.test", "password": password }))
+            .send()
+            .await
+            .status()
     }
 
     #[tokio::test]
@@ -548,6 +611,15 @@ mod tests {
             ("BLOB_ROOT".to_owned(), root.path().display().to_string()),
             ("JWT_ED25519_DER".to_owned(), EXAMPLE_DER.to_owned()),
             ("VALKEY_URL".to_owned(), "redis://127.0.0.1:6379".to_owned()),
+            // A durable deployment supplies its own attestation identity rather than having one
+            // derived from the token signer; `config` refuses without it.
+            (
+                "ATTESTATION_KEY_SEED".to_owned(),
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    [9_u8; 64].as_slice(),
+                ),
+            ),
         ]
         .into_iter()
         .collect();
@@ -659,6 +731,73 @@ mod tests {
             .assert_status(kynos::http::StatusCode::OK)
             .json();
         assert!(signed_in["access_token"].is_string(), "{signed_in}");
+    }
+
+    #[tokio::test]
+    async fn a_locked_account_recovers_through_the_login_route_once_the_window_passes() {
+        // Asserted through the **route** rather than against the adapter, because that is where
+        // the property actually has to hold: `login` asks the directory first and answers `423`
+        // before it verifies anything, so a lockout that did not decay would be an account no
+        // request could ever open again — there is no unlock operation on any surface.
+        //
+        // A one-attempt threshold, a one-second window and a real wait. Both numbers are
+        // settings rather than constants precisely so this is expressible: driving the default
+        // ten-failure ceiling through the route would cost ten Argon2id verifications, and on a
+        // loaded machine the gaps between them can themselves exceed a short window — a test
+        // whose setup races its own subject. The alternative was a clock seam through the whole
+        // composition root for one case, and the composition root is the thing under test.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let config = memory_config_with(
+            root.path(),
+            &[
+                ("LOCKOUT_MAX_ATTEMPTS", "1"),
+                ("LOCKOUT_WINDOW_SECONDS", "1"),
+            ],
+        );
+        let assembled = assemble(&config).await.expect("it assembles");
+        let client = kynos::test::TestClient::new(assembled.service().expect("the router builds"));
+
+        register(&client, "correct horse battery staple").await;
+        assert_eq!(
+            login(&client, "wrong").await,
+            kynos::http::StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            login(&client, "correct horse battery staple").await,
+            kynos::http::StatusCode::LOCKED,
+            "the ceiling engages, and a correct password is told so rather than refused"
+        );
+
+        tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
+        assert_eq!(
+            login(&client, "correct horse battery staple").await,
+            kynos::http::StatusCode::OK,
+            "the window passed, so the account is the owner's again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_maintenance_command_is_told_it_needs_memory_and_not_valkey() {
+        // An operator running `capsule-server scrub` has typically set no backend variable at
+        // all. Naming `VALKEY_URL` would send them to configure something that would not have
+        // helped; what is missing is the durable index these workers read.
+        let root = tempfile::tempdir().expect("a scratch directory");
+        let environment: BTreeMap<String, String> =
+            [("BLOB_ROOT".to_owned(), root.path().display().to_string())]
+                .into_iter()
+                .collect();
+        let config = Config::load(&environment, &Overrides::default(), Demands::Maintenance)
+            .expect("maintenance demands nothing else");
+        let error = super::assemble_maintenance(&config)
+            .await
+            .expect_err("it refuses");
+        assert!(
+            matches!(error, BootError::MaintenanceNeedsMemory { .. }),
+            "{error:?}"
+        );
+        let message = format!("{error}");
+        assert!(message.contains("--memory"), "{message}");
+        assert!(!message.contains("VALKEY_URL"), "{message}");
     }
 
     #[tokio::test]

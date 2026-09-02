@@ -135,15 +135,22 @@ run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
 [tasks.lint-check-rust]
 run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
 
-# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link, an ambiguous
-# one, or public documentation pointing at a private item is an error, not a warning. Scoped
-# to the four crates whose public API is frozen; the rest of the workspace still carries 23
-# such spans and is widened in a follow-up. `--no-deps` so a dependency's own doc warnings
-# cannot fail our build.
+# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link or an ambiguous
+# one is an error, not a warning. Scoped to the four crates whose public API is frozen; the rest
+# of the workspace is widened in a follow-up.
+#
+# `--document-private-items` is load-bearing, not thoroughness for its own sake. #399 turned 59
+# submodules of `library`, `import`, `db`, `crypto::keys`, `sidecar` and `domain` into
+# `pub(crate) mod`. A public-only `cargo doc` stops reading their `//!` headers and their items'
+# docs the moment they stop being public — so the gate would have gone blind to exactly the
+# modules the same change touched, and 11 pre-existing broken links in them would have been
+# hidden rather than fixed. With the flag every item in these four crates is linted.
+#
+# `--no-deps` so a dependency's own doc warnings cannot fail our build.
 [tasks.doc-check-rust]
-description = "Rustdoc gate for the frozen crates (intra-doc links, private-item leaks)"
+description = "Rustdoc gate for the frozen crates (intra-doc links, over all items)"
 env = { RUSTDOCFLAGS = "-D warnings" }
-run = "cargo doc --no-deps -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
+run = "cargo doc --no-deps --document-private-items -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
 
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.
@@ -258,13 +265,16 @@ description = "Run the server on the in-memory adapters (development only)"
 # A server you can point a client at: register, sign in, upload, sync. The blob store is real
 # and lives under `target/`; everything else is lost when the process exits.
 #
-# The fallback key is the **published** example from capsule-server/.env.example. Every token
-# this mints is forgeable by anyone who has read this repository, which is exactly why this task
-# is `serve-memory` and not `serve` — set `JWT_ED25519_DER` yourself and it is used instead.
+# Loopback, not the `0.0.0.0` default. That default is right for a deployment behind an ingress
+# and wrong here: the fallback key below is the **published** example from
+# capsule-server/.env.example, so every token this mints is forgeable by anyone who has read this
+# repository — and a forgeable server reachable from the office network is a different thing from
+# one reachable only from your own machine. That is also why this task is `serve-memory` and not
+# `serve`; set `JWT_ED25519_DER` yourself and it is used instead.
 run = """
 JWT_ED25519_DER=${JWT_ED25519_DER:-MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF} \
 BLOB_ROOT=${BLOB_ROOT:-./target/capsule-server-blobs} \
-cargo run -p capsule-server -- serve --memory
+cargo run -p capsule-server -- serve --memory --listen 127.0.0.1:3000
 """
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
