@@ -5,6 +5,7 @@
 //! `Workspace` directly, which — with this file importing `ml` — made the two modules mutually
 //! recursive; the trait inverts that edge without moving any behaviour.
 
+use jiff::Timestamp;
 use uuid::Uuid;
 
 use super::{LifecycleError, Result, Workspace, now_rfc3339};
@@ -32,6 +33,45 @@ impl Workspace {
         self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
             s.caption.set(caption, ts, device);
         })
+    }
+
+    /// Correct the asset's signed `capture_timestamp` to `capture`, as a new signed revision:
+    /// one `metadata-update` record, with the sidecar re-signed and its sealed blob re-sealed
+    /// under a fresh nonce, exactly as any other metadata edit lands (slice `S-B17`).
+    ///
+    /// The **media bundle is not relocated.** `capture_timestamp` is authoritative for the
+    /// asset's date; the `media/{YYYY}/{YYYY-MM}` directory is only the shard fixed at import
+    /// (`AssetState::capture_utc`), and the design treats bucket-vs-timestamp drift after a
+    /// capture correction as expected rather than as a fault (Maintenance — Structural
+    /// Validation). Moving the bundle here would orphan the old directory for every writer
+    /// that still resolves it, so the shard stays and every path keeps resolving; the index
+    /// row follows the sidecar (`asset_row_from_state`), so the timeline shows the corrected
+    /// instant immediately rather than after a rebuild.
+    ///
+    /// Takes a [`Timestamp`] rather than raw seconds so an out-of-range instant is
+    /// unrepresentable at the call site instead of being clamped to the epoch here.
+    #[tracing::instrument(skip(self), fields(asset_id = %asset_id, capture = %capture))]
+    pub fn set_capture_timestamp(&mut self, asset_id: &Uuid, capture: Timestamp) -> Result<()> {
+        let recorded = self
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| LifecycleError::NotFound(format!("asset {asset_id}")))?
+            .sidecar
+            .capture_timestamp
+            .clone();
+        let corrected = capture.to_string();
+        self.append_lifecycle(asset_id, Action::MetadataUpdate, None, move |s, _add_id| {
+            s.capture_timestamp = corrected;
+        })?;
+        let head = self.assets[asset_id].chain.head();
+        tracing::info!(
+            asset_id = %asset_id,
+            recorded = %recorded,
+            corrected = %capture,
+            chain_head = ?head,
+            "capture timestamp corrected as a signed metadata-update"
+        );
+        Ok(())
     }
 
     // ── AI metadata containment (SSoT: metadata § Tag Provenance, ai § AI Output Containment) ──
@@ -175,6 +215,7 @@ mod tests {
 
     use super::super::fast_workspace;
     use super::*;
+    use crate::crypto::verify_asset::VerifyOutcome;
     use crate::ml::{CANONICAL_PARTITION, FixtureRunner, TaskKind};
     use crate::sidecar::sidecar_v1::{SIDECAR_SCHEMA_V1, SidecarV1};
 
@@ -298,6 +339,111 @@ mod tests {
         );
         // The sidecar retains both (it is the source of truth).
         assert_eq!(ws.ai_tags(&id).unwrap().len(), 2);
+    }
+
+    // ── Capture-time correction (S-B17) ──────────────────────────────────────────────────────
+
+    /// The `S-B17` write, end to end: the correction lands as a new signed revision, the bundle
+    /// stays in the directory the import chose, the index row follows the sidecar at once, and
+    /// a rebuild from disk agrees with the live row — the two projections
+    /// (`asset_row_from_state` and `rebuild::signed_asset_row`) name the same instant.
+    #[test]
+    fn a_capture_correction_is_a_signed_revision_that_leaves_the_bundle_in_place() {
+        use crate::library::{open_library, rebuild_index};
+
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, id) = workspace_with(&lib, &src, b"\xFF\xD8\xFF capture correction bytes");
+
+        // No EXIF in those bytes, so the import stamped the import clock — the pre-`S-B16`
+        // shape every affected asset has.
+        let before = ws.asset(&id).unwrap();
+        let shard = before.capture_utc;
+        let original = ws
+            .original_path(&id)
+            .expect("a managed asset has an original");
+        assert!(original.is_file());
+        assert_eq!(before.chain.records().len(), 1);
+        let recorded = before.sidecar.capture_timestamp.clone();
+
+        let corrected = Timestamp::from_second(1_000_000_000).unwrap();
+        ws.set_capture_timestamp(&id, corrected).unwrap();
+
+        // A new signed revision: one more record, a `metadata-update`, and the asset verifies.
+        let after = ws.asset(&id).unwrap();
+        assert_eq!(after.sidecar.capture_timestamp, "2001-09-09T01:46:40Z");
+        assert_ne!(after.sidecar.capture_timestamp, recorded);
+        assert_eq!(after.chain.records().len(), 2);
+        assert_eq!(
+            after.chain.records().last().unwrap().manifest.core.action,
+            Action::MetadataUpdate
+        );
+        assert!(after.sidecar.signature.is_some());
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+
+        // The shard — and therefore every artifact path — is exactly where it was.
+        assert_eq!(after.capture_utc, shard, "the bundle is not relocated");
+        assert_eq!(ws.original_path(&id).unwrap(), original);
+        assert!(original.is_file());
+        assert!(!original.to_string_lossy().contains("2001-09"));
+
+        // The live index row follows the sidecar immediately, not the shard.
+        let row = ws
+            .db()
+            .find_by_uuid(&id.to_string())
+            .unwrap()
+            .expect("indexed");
+        assert_eq!(row.capture_timestamp, 1_000_000_000);
+        assert_eq!(row.capture_utc, Some(1_000_000_000));
+
+        // Reopened from disk, the correction holds and the files stay reachable.
+        let root = lib.path().to_path_buf();
+        drop(ws);
+        let ws = Workspace::open(
+            &root,
+            b"passphrase",
+            crate::crypto::primitives::Argon2Params {
+                mem_kib: 64,
+                t_cost: 1,
+                p_cost: 1,
+            },
+        )
+        .unwrap();
+        let reopened = ws.asset(&id).unwrap();
+        assert_eq!(reopened.sidecar.capture_timestamp, "2001-09-09T01:46:40Z");
+        // `open` reconciles a sidecar that no longer names its directory by taking the shard
+        // from the directory itself (the month's first instant), which is the same directory.
+        assert_ne!(
+            reopened.capture_utc, 1_000_000_000,
+            "the shard is not the corrected instant"
+        );
+        assert_eq!(ws.original_path(&id).unwrap(), original);
+        assert!(ws.read_plaintext(&id).is_ok());
+        assert_eq!(ws.verify(&id).unwrap(), VerifyOutcome::Accept);
+
+        // A rebuild from the artifacts on disk projects the same instant the live row did.
+        drop(ws);
+        std::fs::remove_file(root.join("index/library.sqlite")).unwrap();
+        let library = open_library(&root).unwrap();
+        rebuild_index(&library).unwrap();
+        let rebuilt = library
+            .db
+            .find_by_uuid(&id.to_string())
+            .unwrap()
+            .expect("back in the rebuilt index");
+        assert_eq!(rebuilt.capture_timestamp, 1_000_000_000);
+        assert_eq!(rebuilt.capture_utc, Some(1_000_000_000));
+    }
+
+    #[test]
+    fn a_capture_correction_on_an_unknown_asset_is_refused() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, _) = workspace_with(&lib, &src, b"\xFF\xD8\xFF some bytes");
+        let err = ws
+            .set_capture_timestamp(&Uuid::now_v7(), Timestamp::UNIX_EPOCH)
+            .unwrap_err();
+        assert!(matches!(err, LifecycleError::NotFound(_)), "{err:?}");
     }
 
     // ── The inference seam (`ml::AiTagSink` / `ml::AssetSource`) ─────────────────────────────

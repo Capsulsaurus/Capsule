@@ -553,6 +553,20 @@ impl Workspace {
         self.assets.keys().copied().collect()
     }
 
+    /// The on-disk path of a managed asset's plaintext original, or `None` for an unknown id.
+    ///
+    /// The path is derived from the asset's **shard** (`AssetState::capture_utc`), which is
+    /// fixed at import — so it keeps resolving after a capture-time correction
+    /// ([`set_capture_timestamp`](Self::set_capture_timestamp)) even though the sidecar's
+    /// timestamp no longer names the month directory. Exposed for the repair pass, which has
+    /// to re-read each original's EXIF without loading every file through
+    /// [`read_plaintext`](Self::read_plaintext).
+    pub fn original_path(&self, asset_id: &Uuid) -> Option<PathBuf> {
+        self.assets
+            .get(asset_id)
+            .map(|asset| self.media_path(asset))
+    }
+
     /// A managed asset's current state.
     pub fn asset(&self, asset_id: &Uuid) -> Option<&AssetState> {
         self.assets.get(asset_id)
