@@ -157,11 +157,19 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
             .as_ref()
             .map_or((None, false), |s| (Some(s.stack_id.clone()), s.hidden)),
     };
+    // Capture time is projected from the **signed sidecar**, not from `AssetState::capture_utc`
+    // — exactly as `library::rebuild::signed_asset_row` projects it, so the write path and a
+    // rebuild agree. The two values are equal at import; they part ways after a capture-time
+    // correction (`Workspace::set_capture_timestamp`, `S-B17`), which by design re-signs the
+    // sidecar and leaves the `media/{YYYY}/{YYYY-MM}` shard — and therefore `capture_utc`,
+    // which names it — where the files already are. Reading the shard here would keep the
+    // timeline on the wrong date until the next rebuild while the rebuild read the right one.
+    let capture_utc = rfc3339_to_secs(&asset.sidecar.capture_timestamp);
     AssetRow {
         uuid: asset.asset_id.to_string(),
         asset_type: asset_type_for(&asset.sidecar.content_type),
-        capture_timestamp: asset.capture_utc,
-        capture_utc: Some(asset.capture_utc),
+        capture_timestamp: capture_utc,
+        capture_utc: Some(capture_utc),
         capture_tz_source: None,
         import_timestamp: rfc3339_to_secs(&asset.sidecar.import_timestamp),
         hash_sha256: asset.sidecar.hash.to_hex(),
@@ -997,5 +1005,50 @@ mod tests {
         assert!(ws.db().query_timeline(0, 100).unwrap().is_empty());
         ws.restore(&id).unwrap();
         assert_eq!(ws.db().query_timeline(0, 100).unwrap().len(), 1);
+    }
+
+    // ── The index projection of capture time (S-B17 precondition) ───────────────
+
+    /// The live `assets` row is projected from the **signed sidecar's** capture timestamp, as
+    /// a rebuild projects it — not from the `capture_utc` shard, which is fixed at import and
+    /// stays put through a capture-time correction. Equal at import; this test drives the two
+    /// apart the way `set_capture_timestamp` will and asserts the row follows the sidecar.
+    #[test]
+    fn the_live_index_row_projects_capture_time_from_the_sidecar() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let img = src.path().join("p.jpg");
+        fs::write(&img, b"\xFF\xD8\xFF capture projection bytes").unwrap();
+        let mut ws = fast_workspace(lib.path());
+        let album = ws.create_album("A").unwrap();
+        let id = ws.import_asset(album, &img).unwrap();
+
+        // At import the shard and the sidecar name the same instant.
+        let asset = ws.assets.get(&id).unwrap();
+        let row = asset_row_from_state(asset);
+        assert_eq!(row.capture_timestamp, asset.capture_utc);
+        assert_eq!(row.capture_utc, Some(asset.capture_utc));
+        assert_eq!(
+            rfc3339_to_secs(&asset.sidecar.capture_timestamp),
+            asset.capture_utc
+        );
+
+        // Drive them apart in memory: the sidecar says 2001, the shard still says now.
+        let corrected = 1_000_000_000;
+        ws.assets.get_mut(&id).unwrap().sidecar.capture_timestamp = capture_rfc3339(corrected);
+        let asset = ws.assets.get(&id).unwrap();
+        assert_ne!(asset.capture_utc, corrected, "the shard is untouched");
+        let row = asset_row_from_state(asset);
+        assert_eq!(
+            row.capture_timestamp, corrected,
+            "the row follows the sidecar"
+        );
+        assert_eq!(row.capture_utc, Some(corrected));
+
+        // An unparseable sidecar timestamp indexes as the epoch, as `rebuild_index` does.
+        ws.assets.get_mut(&id).unwrap().sidecar.capture_timestamp = "not a timestamp".into();
+        let row = asset_row_from_state(ws.assets.get(&id).unwrap());
+        assert_eq!(row.capture_timestamp, 0);
+        assert_eq!(row.capture_utc, Some(0));
     }
 }
