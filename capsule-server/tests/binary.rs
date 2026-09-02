@@ -44,6 +44,14 @@ use capsule_server::store::SystemClock;
 /// sides can name.
 const EXAMPLE_DER: &str = "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF";
 
+/// A 64-byte attestation seed, base64.
+///
+/// A durable deployment has to supply its own — it is deliberately not derived from
+/// `JWT_ED25519_DER`, because a receipt that verified under the operational key would let
+/// anything holding that key manufacture custody evidence.
+const EXAMPLE_SEED: &str =
+    "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==";
+
 /// The address the operating system will pick a port under.
 const EPHEMERAL: &str = "127.0.0.1:0";
 
@@ -292,9 +300,51 @@ fn a_durable_backend_refuses_with_the_issue_that_will_honour_it() {
         &root.path().display().to_string(),
     ])
     .env("JWT_ED25519_DER", EXAMPLE_DER)
+    .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
     .env("VALKEY_URL", "redis://127.0.0.1:6379"));
     assert_ne!(code, Some(0), "{stderr}");
     assert!(stderr.contains("#403"), "{stderr}");
+}
+
+#[test]
+fn a_durable_serve_is_refused_without_an_attestation_seed_of_its_own() {
+    // The attestation key must be distinct from the token signer — `attestation/mod.rs` requires
+    // it so that holding the operational key does not let anything manufacture custody evidence.
+    // Deriving the seed from `JWT_ED25519_DER` under a different HKDF label is not a separation:
+    // anyone with the token key recomputes it. So a real deployment is made to say what its
+    // attestation identity is, and only `--memory` keeps the derivation.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) = run(server(&[
+        "serve",
+        "--listen",
+        EPHEMERAL,
+        "--blob-root",
+        &root.path().display().to_string(),
+    ])
+    .env("JWT_ED25519_DER", EXAMPLE_DER)
+    .env("VALKEY_URL", "redis://127.0.0.1:6379"));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("ATTESTATION_KEY_SEED"), "{stderr}");
+}
+
+#[test]
+fn the_memory_profile_still_needs_only_one_key() {
+    // The other side of the same decision: a development server derives its attestation seed, so
+    // `serve --memory` comes up on one variable rather than two. Asserted through `gc`'s sibling
+    // path — a full `serve` is covered by the socket case above — by checking that the config
+    // layer raises no seed fault for `--memory`.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) =
+        run(server(&["serve", "--memory", "--listen", EPHEMERAL])
+            .env("JWT_ED25519_DER", EXAMPLE_DER));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("BLOB_ROOT"), "{stderr}");
+    assert!(
+        !stderr.contains("ATTESTATION_KEY_SEED"),
+        "the development profile derives it, so naming it would send a developer looking for a \
+         variable it does not want: {stderr}"
+    );
+    let _ = root;
 }
 
 #[test]
@@ -485,6 +535,24 @@ fn the_operator_commands_need_no_key_material() {
             !stderr.contains("JWT_ED25519_DER"),
             "{subcommand}: {stderr}"
         );
+    }
+}
+
+#[test]
+fn an_operator_command_without_memory_is_told_that_and_not_about_valkey() {
+    // An operator running `capsule-server scrub` has typically set no backend variable at all.
+    // Naming `VALKEY_URL` — which these commands never demand — would send them to configure
+    // something that would not have helped; what is missing is the durable index they read.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    for subcommand in ["gc", "purge", "scrub"] {
+        let (code, _, stderr) = run(&mut server(&[
+            subcommand,
+            "--blob-root",
+            &root.path().display().to_string(),
+        ]));
+        assert_ne!(code, Some(0), "{subcommand}: {stderr}");
+        assert!(stderr.contains("--memory"), "{subcommand}: {stderr}");
+        assert!(!stderr.contains("VALKEY_URL"), "{subcommand}: {stderr}");
     }
 }
 

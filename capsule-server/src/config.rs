@@ -58,6 +58,29 @@ const DEFAULT_SHUTDOWN_TIMEOUT: u64 = 25;
 /// The accepted-connection ceiling, matching Kynos's own default.
 const DEFAULT_MAX_CONNECTIONS: usize = 10_000;
 
+/// How long an account stays locked after enough failed credential presentations.
+///
+/// Fifteen minutes. `design/authentication.md` names no figure — it says only that a locked
+/// account is locked at password change too — so this is a decision recorded here rather than a
+/// value read from somewhere: long enough that an online guessing run is throttled to
+/// uselessness, short enough that a person who mistyped their password four times gets back into
+/// their own account without an operator.
+///
+/// It has to decay at all, because there is **no unlock endpoint and no operator command that
+/// clears it**: every route that could reset the state (`login`, `reauthenticate`,
+/// `password`) refuses on `Locked` before it verifies anything, so a permanent lockout is
+/// a permanently lost account. Seconds rather than minutes as the unit so a test can pick a
+/// window it can actually wait out.
+const DEFAULT_LOCKOUT_WINDOW_SECONDS: u64 = 15 * 60;
+
+/// How many consecutive failures inside that window lock an account.
+///
+/// The companion number to the window — a lockout is not one policy but two, and a deployment
+/// that wants a tighter one needs to move both. Ten is
+/// [`MAX_FAILED_ATTEMPTS`](crate::auth::accounts_memory::MAX_FAILED_ATTEMPTS), which is where the
+/// reasoning for the figure lives.
+const DEFAULT_LOCKOUT_ATTEMPTS: u32 = crate::auth::accounts_memory::MAX_FAILED_ATTEMPTS;
+
 /// The seed [`HybridSigningKey`](capsule_core::crypto::keys::HybridSigningKey) is built from.
 const ATTESTATION_SEED_LEN: usize = 64;
 
@@ -276,6 +299,10 @@ pub struct Config {
     pub protocol_max: String,
     /// How long a blob sits at zero references before the collector may sweep it.
     pub grace_window: SignedDuration,
+    /// How long an account stays locked after too many failed credential presentations.
+    pub lockout_window: SignedDuration,
+    /// How many consecutive failures inside that window lock it.
+    pub lockout_attempts: u32,
     /// How long a shutdown may take to drain.
     pub shutdown_timeout: std::time::Duration,
     /// The accepted-connection ceiling.
@@ -384,20 +411,31 @@ impl Config {
             decode_fixed::<CURSOR_KEY_LEN>(env, "SYNC_CURSOR_MAC_KEY", &mut faults);
         let attestation_key_seed = decode_seed(env, &mut faults);
 
-        // Both are HKDF-derived from the token-signing key when unset, which is the right
-        // default for a single-server deployment and the reason the two variables are optional:
-        // an operator sets them explicitly only to rotate one independently of the token key, or
-        // to share an attestation identity across replicas.
-        let (sync_cursor_mac_key, attestation_key_seed) = match &signing_key_der {
-            Some(der) => (
-                sync_cursor_mac_key
-                    .or_else(|| derive::<CURSOR_KEY_LEN>(der.expose(), CURSOR_KEY_INFO)),
-                attestation_key_seed.or_else(|| {
-                    derive::<ATTESTATION_SEED_LEN>(der.expose(), ATTESTATION_SEED_INFO)
-                }),
+        // The sync-cursor MAC key is HKDF-derived from the token-signing key when unset. That is
+        // sound: a cursor MAC and a session token are the same trust domain — both are
+        // operational secrets this server holds to authenticate its own output — so deriving one
+        // from the other adds no capability to anybody who holds either.
+        //
+        // **The attestation seed is not, outside the development profile**, and that is a
+        // correction rather than a preference. `attestation/mod.rs` requires the attestation key
+        // to be distinct from the operational key precisely so that holding the operational key
+        // does not let anything manufacture custody evidence. Deriving the seed from
+        // `JWT_ED25519_DER` collapses exactly that distinction: anyone with the token-signing key
+        // recomputes the attestation key and signs receipts. So a real deployment must set
+        // `ATTESTATION_KEY_SEED` (see the `Demands::Serve` arm below), and only
+        // `Backends::Memory` — an explicit `--memory`, a development act, where the whole
+        // application state is discarded on exit — keeps the derivation, so `serve --memory`
+        // needs one variable rather than two.
+        let sync_cursor_mac_key = sync_cursor_mac_key.or_else(|| {
+            derive::<CURSOR_KEY_LEN>(signing_key_der.as_ref()?.expose(), CURSOR_KEY_INFO)
+        });
+        let attestation_key_seed = attestation_key_seed.or_else(|| match backends {
+            Backends::Memory => derive::<ATTESTATION_SEED_LEN>(
+                signing_key_der.as_ref()?.expose(),
+                ATTESTATION_SEED_INFO,
             ),
-            None => (sync_cursor_mac_key, attestation_key_seed),
-        };
+            Backends::Durable => None,
+        });
 
         // ── Protocol window ─────────────────────────────────────────────────────────────
         let protocol_max = env
@@ -420,6 +458,32 @@ impl Config {
             .map_or(crate::gc::DEFAULT_GRACE_WINDOW, |hours| {
                 SignedDuration::from_hours(i64::try_from(hours).unwrap_or(i64::MAX))
             });
+        let lockout_window = SignedDuration::from_secs(
+            parse_number::<i64>(env, "LOCKOUT_WINDOW_SECONDS", &mut faults).map_or_else(
+                || {
+                    i64::try_from(DEFAULT_LOCKOUT_WINDOW_SECONDS)
+                        .expect("the built-in lockout window fits")
+                },
+                |seconds| seconds.max(0),
+            ),
+        );
+        let lockout_attempts = parse_number::<u32>(env, "LOCKOUT_MAX_ATTEMPTS", &mut faults)
+            .and_then(|attempts| {
+                if attempts == 0 {
+                    // Zero would lock every account on its first wrong keystroke and never
+                    // unlock it before the window passed, which is a denial of service dressed
+                    // as a policy. Refused rather than clamped to one: an operator who typed it
+                    // meant something, and guessing what is worse than saying it is not allowed.
+                    faults.push(ConfigFault::Invalid {
+                        key: "LOCKOUT_MAX_ATTEMPTS",
+                        detail: "zero would lock every account on its first failure".to_owned(),
+                    });
+                    None
+                } else {
+                    Some(attempts)
+                }
+            })
+            .unwrap_or(DEFAULT_LOCKOUT_ATTEMPTS);
         let shutdown_timeout = std::time::Duration::from_secs(
             parse_number::<u64>(env, "SHUTDOWN_TIMEOUT_SECONDS", &mut faults)
                 .unwrap_or(DEFAULT_SHUTDOWN_TIMEOUT),
@@ -474,8 +538,19 @@ impl Config {
                 // The refusal `store/mod.rs` has always documented and nothing has ever
                 // enforced: Valkey is required, and the in-memory adapters are a development
                 // profile an operator opts into rather than something to fall back on.
-                if backends == Backends::Durable && valkey_url.is_none() {
-                    faults.push(ConfigFault::Missing { key: "VALKEY_URL" });
+                if backends == Backends::Durable {
+                    if valkey_url.is_none() {
+                        faults.push(ConfigFault::Missing { key: "VALKEY_URL" });
+                    }
+                    // Required rather than derived; see the key-material section above for what
+                    // deriving it from the token-signing key would give away. Demanded only on
+                    // the durable path because `--memory` derives it, so a development server
+                    // still comes up on one variable.
+                    if attestation_key_seed.is_none() {
+                        faults.push(ConfigFault::Missing {
+                            key: "ATTESTATION_KEY_SEED",
+                        });
+                    }
                 }
             }
         }
@@ -494,6 +569,8 @@ impl Config {
                 protocol_min,
                 protocol_max,
                 grace_window,
+                lockout_window,
+                lockout_attempts,
                 shutdown_timeout,
                 max_connections,
                 log_format,
@@ -634,6 +711,8 @@ fn derive<const N: usize>(secret: &[u8], info: &[u8]) -> Option<[u8; N]> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use jiff::SignedDuration;
+
     use super::{Backends, Config, Demands, LogFormat, Overrides};
 
     /// A PKCS#8 v1 Ed25519 key, base64, from the retired deployment's own `.env.example`.
@@ -720,6 +799,15 @@ mod tests {
         assert!(error.names("MAX_CONNECTIONS"), "{error}");
         assert!(error.names("BLOB_ROOT"), "{error}");
         assert!(error.names("JWT_ED25519_DER"), "{error}");
+        // Not `ATTESTATION_KEY_SEED`: `--memory` derives it, so naming it here would send a
+        // developer looking for a variable the development profile does not want.
+        assert!(!error.names("ATTESTATION_KEY_SEED"), "{error}");
+
+        // The durable path names both of its own, alongside everything else.
+        let error = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect_err("it refuses");
+        assert!(error.names("VALKEY_URL"), "{error}");
+        assert!(error.names("ATTESTATION_KEY_SEED"), "{error}");
     }
 
     #[test]
@@ -768,7 +856,34 @@ mod tests {
     }
 
     #[test]
+    fn a_durable_serve_must_be_given_an_attestation_seed() {
+        // The attestation key must be distinct from the operational key — `attestation/mod.rs`
+        // requires it so that holding the token signer does not let anything manufacture custody
+        // evidence. Deriving the seed from `JWT_ED25519_DER` collapses exactly that, so a real
+        // deployment is made to say what its attestation identity is.
+        let environment = env(&[
+            ("BLOB_ROOT", "/blobs"),
+            ("JWT_ED25519_DER", EXAMPLE_DER),
+            ("VALKEY_URL", "redis://127.0.0.1:6379"),
+        ]);
+        let error = Config::load(&environment, &Overrides::default(), Demands::Serve)
+            .expect_err("it refuses");
+        assert!(error.names("ATTESTATION_KEY_SEED"), "{error}");
+
+        let mut with_seed = environment.clone();
+        with_seed.insert(
+            "ATTESTATION_KEY_SEED".to_owned(),
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [9_u8; 64]),
+        );
+        let config = Config::load(&with_seed, &Overrides::default(), Demands::Serve)
+            .expect("it loads with a seed of its own");
+        assert_eq!(config.attestation_key_seed, Some([9; 64]));
+    }
+
+    #[test]
     fn the_cursor_key_and_the_attestation_seed_are_derived_from_the_signing_key() {
+        // The **development** profile only. A durable deployment is made to set the seed; see
+        // the case above.
         let first = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
         let second = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
 
@@ -790,6 +905,36 @@ mod tests {
             &cursor[..],
             "the two infos separate the outputs"
         );
+    }
+
+    #[test]
+    fn the_lockout_threshold_is_configurable_and_may_not_be_zero() {
+        // A lockout is two numbers, not one, and a deployment that wants a tighter policy has to
+        // be able to move both.
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.lockout_attempts, 10);
+
+        let mut environment = serveable();
+        environment.insert("LOCKOUT_MAX_ATTEMPTS".to_owned(), "3".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.lockout_attempts, 3);
+
+        environment.insert("LOCKOUT_MAX_ATTEMPTS".to_owned(), "0".to_owned());
+        let error = Config::load(&environment, &memory(), Demands::Serve).expect_err("it refuses");
+        assert!(error.names("LOCKOUT_MAX_ATTEMPTS"), "{error}");
+    }
+
+    #[test]
+    fn the_lockout_window_defaults_to_fifteen_minutes_and_is_configurable() {
+        // It has to decay at all: no route resets a lockout — every one of them refuses on
+        // `Locked` before it verifies anything — so a permanent lockout is a lost account.
+        let config = Config::load(&serveable(), &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.lockout_window, SignedDuration::from_mins(15));
+
+        let mut environment = serveable();
+        environment.insert("LOCKOUT_WINDOW_SECONDS".to_owned(), "1".to_owned());
+        let config = Config::load(&environment, &memory(), Demands::Serve).expect("it loads");
+        assert_eq!(config.lockout_window, SignedDuration::from_secs(1));
     }
 
     #[test]

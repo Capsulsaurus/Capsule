@@ -57,10 +57,14 @@ mise run hooks-install # installs the git hooks (hk)
 ```text
 capsule-server [--config PATH] <SUBCOMMAND>
   serve       [--listen HOST:PORT] [--memory] [--blob-root PATH]
-  gc          [--apply] [--grace-window-hours N] [--memory] [--blob-root PATH]
-  purge       [--apply] [--limit N] [--memory] [--blob-root PATH]
-  scrub       [--deep] [--budget BYTES] [--memory] [--blob-root PATH]
+  gc          [--apply] [--grace-window-hours N] --memory --blob-root PATH
+  purge       [--apply] [--limit N]              --memory --blob-root PATH
+  scrub       [--deep] [--budget BYTES]          --memory --blob-root PATH
   gen-openapi [FILE] [--check]
+
+`--memory` is written as required on the three operator commands because today it is: they
+compare the index against the blob store, and the only index adapter written is the in-memory
+one. Without it they refuse and say so. It becomes optional when #402 lands.
 ```
 
 ### The development profile
@@ -86,9 +90,10 @@ adapter that has been written. Two consequences worth knowing before they surpri
   grace window has passed — and the mark store does not outlive the process.
 
 The signing key `serve-memory` falls back to is the published example in
-`capsule-server/.env.example`. Every token it mints is forgeable by anyone who has read this
-repository, which is why that task is `serve-memory` and not `serve`. Set `JWT_ED25519_DER`
-yourself and it is used instead:
+`capsule-server/.env.example` — commented out there, so a `cp .env.example .env` cannot silently
+produce a forgeable deployment. Every token the task mints under it is forgeable by anyone who has
+read this repository, which is why it is `serve-memory` and not `serve`, and why it binds
+`127.0.0.1` rather than every interface. Set `JWT_ED25519_DER` yourself and it is used instead:
 
 ```bash
 JWT_ED25519_DER="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr -d '\n')" \
@@ -98,8 +103,8 @@ JWT_ED25519_DER="$(openssl genpkey -algorithm ed25519 -outform DER | base64 | tr
 ### A configured server
 
 ```bash
-cp capsule-server/.env.example capsule-server/.env   # then edit it
-mise run serve-deps                                  # Postgres 18 + Valkey 9
+cp capsule-server/.env.example capsule-server/.env   # then edit it: two keys are commented out
+mise run serve-deps                                  # Postgres 18 + Valkey 9, on loopback
 mise run serve
 ```
 
@@ -113,6 +118,14 @@ the variable — the refusal `capsule-server/src/store/mod.rs` has documented si
 nothing could enforce until there was a boot path; with `VALKEY_URL` set it exits non-zero naming
 the issue that will honour it. Neither ever silently falls back to the in-memory adapters, which
 is the whole point: a deployment that forgot a variable must fail closed.
+
+A configured server also has to supply `ATTESTATION_KEY_SEED`. It is **not** derived from
+`JWT_ED25519_DER`, and that is deliberate: the attestation key signs custody receipts and has to
+be distinct from the key that signs session tokens, or anyone holding the operational key could
+manufacture custody evidence — see
+[Cryptography — Failure Modes](/design/cryptography/failure-modes/). A different HKDF label over
+the same input is not a separation. `serve --memory` derives it, because a development server's
+whole state is discarded when it exits.
 
 Every configuration fault is reported in **one** message with exit code 2, so bringing a
 deployment up is one read of one log line rather than one restart per variable.
@@ -140,6 +153,10 @@ is `pretty` in a debug build and `json` in a release one; `RUST_LOG` is the usua
 [Filesystem — Maintenance](/design/filesystem/maintenance/) describes. They need a blob root and
 deliberately **no key material**: a maintenance host that had to hold the production
 token-signing key to sweep a directory would be a reason to put the key on a maintenance host.
+
+They do need `--memory` today, and they say so rather than naming a variable that would not have
+helped: all three compare the index against the blob store, and the in-memory one is the only
+index adapter written.
 
 Dry run is the default for the two that write; `--apply` opts in, and the report says which
 posture produced it. `scrub` mutates nothing at all and exits non-zero on a non-empty report,

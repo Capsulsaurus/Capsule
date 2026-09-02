@@ -140,8 +140,7 @@ impl ImportActionPlan {
     /// planner's single rejection point — call it at confirmation with the run's
     /// `policy` and whether a streaming import was chosen (`use_streaming`); a
     /// conflicting combination returns [`StagedStreamingConflict`] instead of ever
-    /// entering the executor. Delegates to the pure
-    /// [`ensure_streaming_compatible`](crate::import::ensure_streaming_compatible)
+    /// entering the executor. Delegates to the pure [`ensure_streaming_compatible`]
     /// invariant so the rule lives in one place.
     pub fn confirm_upload_policy(
         &self,

@@ -40,9 +40,9 @@
 //! than describing how to do it.
 
 use std::collections::BTreeMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 
 use super::credential::{CredentialError, Credentials};
 use super::directory::{AccountDirectory, Authentication, DirectoryError, DirectoryFuture};
@@ -50,7 +50,7 @@ use super::profile::{
     AccountProfiles, PasswordChange, PasswordChanged, ProfileRecord, ProfileUpdate,
 };
 use super::registry::{AccountRegistry, Registration};
-use crate::store::UserId;
+use crate::store::{Clock, UserId};
 
 /// How many consecutive failures put an account into [`Authentication::Locked`].
 ///
@@ -73,14 +73,28 @@ struct Account {
     display_name: Option<String>,
     /// When it was created.
     created_at: Timestamp,
-    /// Consecutive failed credential presentations.
+    /// Consecutive failed credential presentations, since the last success or decay.
     failures: u32,
+    /// When the most recent one was, if there has been one.
+    ///
+    /// The lockout's whole clock. Without it the count is a one-way door: **nothing in this
+    /// server can clear a lockout.** `login`, `reauthenticate` and `password` each ask the
+    /// directory first and refuse on `Locked` before verifying anything, there is no unlock
+    /// operation on any surface, and no operator command reaches this state — so a permanent
+    /// lockout is a permanently lost account.
+    last_failure_at: Option<Timestamp>,
 }
 
 impl Account {
-    /// Whether enough failures have accumulated to refuse a correct password.
-    fn locked(&self) -> bool {
-        self.failures >= MAX_FAILED_ATTEMPTS
+    /// Whether enough recent failures have accumulated to refuse a correct password.
+    ///
+    /// Recent is the operative word. The window is measured from the last **counted** failure, so
+    /// a person who mistyped their password ten times and walked away gets back in.
+    fn locked(&self, now: Timestamp, threshold: u32, window: SignedDuration) -> bool {
+        self.failures >= threshold
+            && self
+                .last_failure_at
+                .is_some_and(|at| now.duration_since(at) < window)
     }
 
     /// The profile view of this account.
@@ -104,18 +118,32 @@ impl Account {
 #[derive(Debug)]
 pub struct InMemoryAccounts {
     credentials: Credentials,
+    clock: Arc<dyn Clock>,
+    lockout_attempts: u32,
+    lockout_window: SignedDuration,
     accounts: Mutex<BTreeMap<String, Account>>,
 }
 
 impl InMemoryAccounts {
-    /// An empty directory over `credentials`.
+    /// An empty directory over `credentials`, locking an account out for `lockout_window` after
+    /// `lockout_attempts` consecutive failures ([`MAX_FAILED_ATTEMPTS`] by default).
     ///
     /// The verifier is passed in rather than constructed here because building one costs an
     /// Argon2id hash (the decoy), and a composition root that builds several adapters should pay
-    /// that once.
-    pub fn new(credentials: Credentials) -> Self {
+    /// that once. The clock is injected for the reason every other adapter in this crate injects
+    /// one: expiry that reads the wall clock directly is expiry a test can only assert by
+    /// sleeping.
+    pub fn new(
+        credentials: Credentials,
+        clock: Arc<dyn Clock>,
+        lockout_attempts: u32,
+        lockout_window: SignedDuration,
+    ) -> Self {
         Self {
             credentials,
+            clock,
+            lockout_attempts,
+            lockout_window,
             accounts: Mutex::new(BTreeMap::new()),
         }
     }
@@ -156,18 +184,32 @@ impl InMemoryAccounts {
     ///
     /// One place, so the reset-on-success half cannot be forgotten at one of the two call sites.
     fn record(&self, email: &str, granted: bool) {
+        let now = self.clock.now();
+        let window = self.lockout_window;
         if let Some(held) = self.accounts().get_mut(email) {
             if granted {
                 held.failures = 0;
-            } else {
-                held.failures = held.failures.saturating_add(1);
-                if held.failures == MAX_FAILED_ATTEMPTS {
-                    tracing::warn!(
-                        user = %held.user_id,
-                        failures = held.failures,
-                        "an account reached the failed-attempt ceiling and is locked out"
-                    );
-                }
+                held.last_failure_at = None;
+                return;
+            }
+            // A failure after the window has passed starts a fresh run rather than tipping a
+            // stale count over. Otherwise ten mistypes spread over a year would lock an account
+            // on the tenth, which is not a guessing run and not what the ceiling is counting.
+            if held
+                .last_failure_at
+                .is_some_and(|at| now.duration_since(at) >= window)
+            {
+                held.failures = 0;
+            }
+            held.failures = held.failures.saturating_add(1);
+            held.last_failure_at = Some(now);
+            if held.failures == self.lockout_attempts {
+                tracing::warn!(
+                    user = %held.user_id,
+                    failures = held.failures,
+                    window = %window,
+                    "an account reached the failed-attempt ceiling and is locked out"
+                );
             }
         }
     }
@@ -188,7 +230,7 @@ impl InMemoryAccounts {
             self.credentials.absorb_miss(password);
             return Ok(Authentication::Refused);
         };
-        if held.locked() {
+        if held.locked(self.clock.now(), self.lockout_attempts, self.lockout_window) {
             // Still absorbed: a locked account that returned instantly would tell an attacker
             // which addresses they have already spent attempts on.
             self.credentials.absorb_miss(password);
@@ -266,6 +308,7 @@ impl AccountRegistry for InMemoryAccounts {
                     display_name: None,
                     created_at: at,
                     failures: 0,
+                    last_failure_at: None,
                 },
             );
             tracing::info!(%user, "an account was created in the in-memory directory");
@@ -317,6 +360,7 @@ impl PasswordChange for InMemoryAccounts {
             // leaving the lockout behind would bar somebody from an account they just proved
             // they own.
             held.failures = 0;
+            held.last_failure_at = None;
             tracing::info!(%user, "an account's password was replaced");
             Ok(PasswordChanged::Yes)
         })
@@ -325,13 +369,16 @@ impl PasswordChange for InMemoryAccounts {
 
 #[cfg(test)]
 mod tests {
-    use jiff::Timestamp;
+    use std::sync::Arc;
+
+    use jiff::{SignedDuration, Timestamp};
 
     use super::{Credentials, InMemoryAccounts, MAX_FAILED_ATTEMPTS};
     use crate::auth::directory::{AccountDirectory, Authentication};
     use crate::auth::profile::{AccountProfiles, PasswordChange, PasswordChanged, ProfileUpdate};
     use crate::auth::registry::{AccountRegistry, Registration};
     use crate::store::UserId;
+    use crate::store::memory::ManualClock;
 
     const EMAIL: &str = "somebody@example.test";
     const PASSWORD: &str = "correct horse battery staple";
@@ -340,9 +387,17 @@ mod tests {
         UserId::new("018f3f1e-4b7a-7c9d-8e2f-1a2b3c4d5e6f")
     }
 
-    /// A directory with one registered account.
-    async fn seeded() -> InMemoryAccounts {
-        let accounts = InMemoryAccounts::new(Credentials::new().expect("the platform hashes"));
+    /// A fifteen-minute lockout window, as a deployment gets by default.
+    const WINDOW: SignedDuration = SignedDuration::from_mins(15);
+
+    /// A directory with one registered account, over a clock the test drives.
+    async fn seeded_on(clock: Arc<ManualClock>) -> InMemoryAccounts {
+        let accounts = InMemoryAccounts::new(
+            Credentials::new().expect("the platform hashes"),
+            clock,
+            MAX_FAILED_ATTEMPTS,
+            WINDOW,
+        );
         assert_eq!(
             accounts
                 .create(EMAIL, PASSWORD, &user(), Timestamp::UNIX_EPOCH)
@@ -351,6 +406,18 @@ mod tests {
             Registration::Created(user())
         );
         accounts
+    }
+
+    /// The same, for a case with nothing to say about time.
+    async fn seeded() -> InMemoryAccounts {
+        seeded_on(Arc::new(ManualClock::default())).await
+    }
+
+    /// Present a wrong password `times` times.
+    async fn fail(accounts: &InMemoryAccounts, times: u32) {
+        for _ in 0..times {
+            let _ = accounts.authenticate(EMAIL, "wrong").await;
+        }
     }
 
     #[tokio::test]
@@ -443,6 +510,101 @@ mod tests {
                 .await
                 .expect("it answers"),
             Authentication::Locked
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lockout_decays_because_nothing_else_can_clear_it() {
+        // There is no unlock operation on any surface, and `login`, `reauthenticate` and
+        // `password` all refuse on `Locked` before they verify anything — so without a decay a
+        // lockout is a permanently lost account rather than a throttle.
+        let clock = Arc::new(ManualClock::default());
+        let accounts = seeded_on(clock.clone()).await;
+        fail(&accounts, MAX_FAILED_ATTEMPTS).await;
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Locked
+        );
+
+        // One second short of the window: still locked. The boundary is asserted because an
+        // off-by-one here is a lockout that never engages.
+        clock.advance(WINDOW - SignedDuration::from_secs(1));
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Locked
+        );
+
+        clock.advance(SignedDuration::from_secs(1));
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Granted(user())
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_during_a_lockout_do_not_extend_it() {
+        // Deliberate, and the direction is not obvious. Extending the window on every attempt
+        // would keep a live guessing run permanently locked out — and would hand anybody who can
+        // reach the endpoint a way to keep *somebody else's* account locked forever by hammering
+        // it, which is a denial of service on an account rather than a defence of it. So the
+        // window runs from the last **counted** failure, and an attempt made while locked is
+        // refused without being counted.
+        //
+        // What that costs is bounded and small: a run gets `MAX_FAILED_ATTEMPTS` guesses per
+        // window and no more, which is four a minute at the default. What bounds an attacker
+        // across *many* accounts is a rate limiter, and the counter port that would carry one
+        // has no trusted client address to key on (`registry`, the disclosure section).
+        let clock = Arc::new(ManualClock::default());
+        let accounts = seeded_on(clock.clone()).await;
+        fail(&accounts, MAX_FAILED_ATTEMPTS).await;
+        for _ in 0..3 {
+            clock.advance(SignedDuration::from_mins(1));
+            fail(&accounts, 1).await;
+        }
+        // Still inside the window measured from the tenth *counted* failure: locked.
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Locked
+        );
+        // Past it: open, and the hammering did not move the deadline.
+        clock.advance(WINDOW);
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Granted(user())
+        );
+    }
+
+    #[tokio::test]
+    async fn failures_spread_wider_than_the_window_never_accumulate() {
+        // Ten mistypes over a year is not a guessing run, and counting them as one would lock an
+        // account on a tenth attempt made months after the ninth.
+        let clock = Arc::new(ManualClock::default());
+        let accounts = seeded_on(clock.clone()).await;
+        for _ in 0..MAX_FAILED_ATTEMPTS * 2 {
+            fail(&accounts, 1).await;
+            clock.advance(WINDOW + SignedDuration::from_secs(1));
+        }
+        assert_eq!(
+            accounts
+                .authenticate(EMAIL, PASSWORD)
+                .await
+                .expect("it answers"),
+            Authentication::Granted(user())
         );
     }
 

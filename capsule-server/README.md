@@ -43,8 +43,10 @@ and `auth::totp`'s `InMemoryTotp`. The account ports' docs say a double in `src/
 credential directory shipped inside the server binary", and that reasoning is about a **double** —
 `tests/support/mod.rs`'s, which accepts whatever password it was told to accept. These verify with
 the same Argon2id helper (`auth::credential`) a Postgres adapter will, store PHC strings and no
-plaintext, take the timing-equalized miss, and lock an account out after enough failures. What they
-lack is durability, which is what makes them a development profile rather than a deployment.
+plaintext, take the timing-equalized miss, and lock an account out after enough failures — for a
+window, because no route and no operator command can clear a lockout, so one that never expired
+would be a permanently lost account. What they lack is durability, which is what makes them a
+development profile rather than a deployment.
 
 ## Running the tests
 
@@ -79,16 +81,26 @@ One binary, several subcommands:
 ```text
 capsule-server [--config PATH] <SUBCOMMAND>
   serve       [--listen HOST:PORT] [--memory] [--blob-root PATH]
-  gc          [--apply] [--grace-window-hours N] [--memory] [--blob-root PATH]
-  purge       [--apply] [--limit N] [--memory] [--blob-root PATH]
-  scrub       [--deep] [--budget BYTES] [--memory] [--blob-root PATH]
+  gc          [--apply] [--grace-window-hours N] --memory --blob-root PATH
+  purge       [--apply] [--limit N]              --memory --blob-root PATH
+  scrub       [--deep] [--budget BYTES]          --memory --blob-root PATH
   gen-openapi [FILE] [--check]
+
+`--memory` is written as required on the three operator commands because today it is: they
+compare the index against the blob store, and the only index adapter written is the in-memory
+one. Without it they refuse and say so. It becomes optional when #402 lands.
 ```
 
 `config` reads every setting an operator decides — command-line flag over environment over
 default — and reports **every** fault in one message, because an operator otherwise restarts the
 process once per variable. `capsule-server/.env.example` is the full list. There is no
 configuration file; `--config PATH` is accepted and refused with a sentence saying why.
+
+A real deployment supplies **two** independent secrets: `JWT_ED25519_DER` signs session tokens,
+and `ATTESTATION_KEY_SEED` signs custody receipts. The second is deliberately not derived from
+the first — a receipt that verified under the operational key would let anything holding that key
+manufacture custody evidence, and a different HKDF label over the same input is not a separation.
+`serve --memory` derives it, because a development server's whole state is discarded on exit.
 
 `boot::assemble` is the one composition root. `--memory` takes every in-crate adapter over a real
 filesystem blob store; anything else refuses, so a deployment that forgot `VALKEY_URL` fails
