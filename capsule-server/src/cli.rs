@@ -22,14 +22,18 @@
 //! parsing a log line. `capsule-cli/tests/cull_round_trip.rs` has to set `RUST_LOG=off` to keep
 //! stdout parseable, which is the failure mode being avoided here.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
-use color_eyre::eyre::{Context as _, Result, bail};
+use clap::{Args, Parser, Subcommand};
+use color_eyre::eyre::{Context as _, Result, bail, eyre};
+use kynos::server::Server;
+use kynos::server::shutdown::Shutdown;
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
+use crate::boot::{self, Assembled};
 use crate::config::{Config, Demands, Environment, LogFormat, Overrides, ProcessEnvironment};
 
 /// The exit code a configuration refusal produces.
@@ -62,9 +66,41 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// Where a subcommand's state lives.
+///
+/// Flattened into every subcommand that touches a store rather than declared once on [`Cli`],
+/// because `gen-openapi` touches none and a global `--blob-root` would advertise otherwise.
+#[derive(Debug, Args)]
+pub struct BackendArgs {
+    /// The filesystem tree ciphertext blobs are written to (`BLOB_ROOT`).
+    #[arg(long, value_name = "PATH")]
+    pub blob_root: Option<PathBuf>,
+
+    /// Run on the in-memory adapters instead of Postgres and Valkey.
+    ///
+    /// A development profile, and an explicit act: a deployment that merely forgot `VALKEY_URL`
+    /// must fail closed rather than come up holding state it loses on the next restart.
+    #[arg(long)]
+    pub memory: bool,
+}
+
 /// The things this binary does.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Accept requests until a termination signal, then drain.
+    Serve {
+        /// The address to bind (`SERVER_HOST`/`SERVER_PORT`, default `0.0.0.0:3000`).
+        ///
+        /// Port `0` asks the operating system to choose one, and the chosen address is written
+        /// to stdout — see [`serve`].
+        #[arg(long, value_name = "HOST:PORT")]
+        listen: Option<SocketAddr>,
+
+        /// Where state lives.
+        #[command(flatten)]
+        backend: BackendArgs,
+    },
+
     /// Emit the OpenAPI 3.2 document the SDK's client is generated from.
     ///
     /// Needs no database, no Valkey, no key material, no disk and no network: the router is
@@ -84,8 +120,26 @@ impl Command {
     /// What this subcommand needs from the configuration.
     fn demands(&self) -> Demands {
         match self {
+            Self::Serve { .. } => Demands::Serve,
             Self::GenOpenapi { .. } => Demands::Nothing,
         }
+    }
+
+    /// What this subcommand overrides on the command line.
+    fn overrides(&self, config_file: Option<PathBuf>) -> Overrides {
+        let mut overrides = Overrides {
+            config_file,
+            ..Overrides::default()
+        };
+        match self {
+            Self::Serve { listen, backend } => {
+                overrides.listen = *listen;
+                overrides.blob_root.clone_from(&backend.blob_root);
+                overrides.memory = backend.memory;
+            }
+            Self::GenOpenapi { .. } => {}
+        }
+        overrides
     }
 }
 
@@ -100,10 +154,7 @@ impl Command {
 pub async fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     let environment = ProcessEnvironment;
-    let overrides = Overrides {
-        config_file: cli.config.clone(),
-        ..Overrides::default()
-    };
+    let overrides = cli.command.overrides(cli.config.clone());
 
     install_tracing(&environment, &overrides);
 
@@ -119,6 +170,7 @@ pub async fn run() -> Result<ExitCode> {
     };
 
     match cli.command {
+        Command::Serve { .. } => serve(&config).await,
         // The document is a property of the router's types, so the configuration is loaded only
         // to refuse `--config` and is deliberately not logged: `mise run openapi-check-kynos` is
         // a check gate, and a settings dump on its stderr is noise in every CI log that runs it.
@@ -127,6 +179,59 @@ pub async fn run() -> Result<ExitCode> {
             gen_openapi(&output, check)
         }
     }
+}
+
+/// Assemble the server from `config`, logging what it came up on.
+///
+/// Shared by every subcommand that needs a store, so the settings dump an operator reads after
+/// an incident is written once and says the same thing whichever command produced it.
+async fn assemble(config: &Config) -> Result<Assembled> {
+    tracing::debug!(?config, "loaded the configuration");
+    Ok(boot::assemble(config).await?)
+}
+
+/// Accept requests until a termination signal, then drain.
+///
+/// # The bound address goes to stdout
+///
+/// It is logged at `INFO` **and** written to stdout as one `listening on <url>` line. That is
+/// not a duplicate: `--listen 127.0.0.1:0` is a request for the operating system to choose a
+/// port, and a caller that asked for that has no other way to learn which one it got. Making
+/// them parse a log format — which `LOG_FORMAT` can change under them — would be a contract
+/// nobody wrote down. Rust's stdout is line-buffered, so the line is readable the moment it is
+/// written.
+///
+/// # No TLS
+///
+/// `design/cryptography/failure-modes.md` is explicit that "application servers do not terminate
+/// TLS", and scopes in-code TLS to the SDK client, LAN peering and server-to-server egress —
+/// none of which is this listener. Kynos's `tls` feature stays off, so a certificate cannot be
+/// configured by accident.
+async fn serve(config: &Config) -> Result<ExitCode> {
+    let assembled = assemble(config).await?;
+    let bound = Server::new(assembled.service()?)
+        .bind(config.listen)
+        // SIGINT and SIGTERM, with a second one forcing. Kynos keeps its listeners alive
+        // through the drain, so an impatient operator's second Ctrl-C is honoured rather than
+        // ignored.
+        .graceful_shutdown(Shutdown::signals())
+        .shutdown_timeout(config.shutdown_timeout)
+        .max_connections(config.max_connections)
+        .prepare()
+        .await
+        .map_err(|error| eyre!("binding {}: {error}", config.listen))?;
+
+    for address in bound.local_addrs() {
+        tracing::info!(%address, "listening");
+        println!("listening on http://{address}");
+    }
+
+    bound
+        .serve()
+        .await
+        .map_err(|error| eyre!("serving: {error}"))?;
+    tracing::info!("drained and stopped");
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Install the log stream, on stderr.
@@ -237,9 +342,52 @@ mod tests {
     #[test]
     fn gen_openapi_defaults_to_the_committed_document() {
         let cli = Cli::parse_from(["capsule-server", "gen-openapi"]);
-        let Command::GenOpenapi { output, check } = cli.command;
+        let Command::GenOpenapi { output, check } = cli.command else {
+            panic!("that is the subcommand that was parsed")
+        };
         assert_eq!(output, std::path::Path::new("capsule-server/openapi.json"));
         assert!(!check, "writing is the default; checking is opt-in");
+    }
+
+    #[test]
+    fn serve_carries_its_flags_into_the_overrides_the_loader_reads() {
+        // The command line's half of the precedence table. A flag that parsed but never reached
+        // `Config::load` would be a flag that silently does nothing.
+        let cli = Cli::parse_from([
+            "capsule-server",
+            "serve",
+            "--memory",
+            "--listen",
+            "127.0.0.1:6000",
+            "--blob-root",
+            "/var/lib/capsule/blobs",
+        ]);
+        let overrides = cli.command.overrides(None);
+        assert!(overrides.memory);
+        assert_eq!(
+            overrides.listen,
+            Some("127.0.0.1:6000".parse().expect("a literal address parses"))
+        );
+        assert_eq!(
+            overrides.blob_root.as_deref(),
+            Some(std::path::Path::new("/var/lib/capsule/blobs"))
+        );
+    }
+
+    #[test]
+    fn serving_demands_a_key_and_describing_the_router_demands_nothing() {
+        assert_eq!(
+            Cli::parse_from(["capsule-server", "serve"])
+                .command
+                .demands(),
+            crate::config::Demands::Serve
+        );
+        assert_eq!(
+            Cli::parse_from(["capsule-server", "gen-openapi"])
+                .command
+                .demands(),
+            crate::config::Demands::Nothing
+        );
     }
 
     #[test]
