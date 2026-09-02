@@ -24,16 +24,34 @@ hk install          # wires up the git hooks
 Run tasks with `mise run <task>` — `mise tasks` lists them all (plain name = auto-fix,
 `-check` suffix = verify-only). The pre-commit hook auto-formats and **stages** your
 changes; `convco` validates every commit message as a
-[Conventional Commit](https://www.conventionalcommits.org); and pre-push runs every
-toolchain's format/lint checks, the Rust and web test suites, and the cheap boundary
-gates — `i18n-check`, `i18n-guard`, `architecture-check` and `license-check`.
+[Conventional Commit](https://www.conventionalcommits.org); and pre-push runs the
+format/lint checks for every toolchain except the FFI crate's, the Rust and web test
+suites, and the cheap boundary gates — `i18n-check`, `i18n-guard`, `architecture-check`
+and `license-check`.
 
 Pre-push is a fast subset of CI, not the whole of it. What it leaves to CI: the Kotlin,
-Swift and docs test suites, and the gates that cost minutes of fresh compilation —
-`openapi-check-kynos`, `translate-readme-check`, the `build-*` steps, `gen-bindings` and
-`verify-examples`. To run exactly what CI runs before you open a pull request, use the
-per-toolchain entrypoints: `mise run check-rust`, `check-web`, `check-docs`,
-`check-kotlin`, `check-swift`.
+Swift and docs test suites; `lint-check-ffi`, the one lint no hook runs; and the gates
+that cost minutes of fresh compilation — `openapi-check-kynos`, `translate-readme-check`,
+the `build-*` steps, `gen-bindings` and `verify-examples`.
+
+To run what CI runs before you open a pull request, use the per-toolchain entrypoints,
+each of which maps 1:1 to a CI job:
+
+```sh
+mise run check-rust        # fmt, clippy, i18n, boundaries, licences, builds, bindings
+mise run test-rust         # the test job — blocking, and not part of check-rust
+mise run check-web         # format, lint, bun test, bundle
+mise run check-docs        # format, lint, test, build
+mise run check-docs-truth  # every name the docs claim resolves in the tree
+mise run check-kotlin      # ktlint + detekt
+mise run check-swift       # format, lint, unit tests, iPhone UI sweep (macOS only)
+mise run check-vision      # format + lint
+mise run check-md          # markdownlint
+```
+
+The one CI job with no local entrypoint is `rust-cross`: it cross-compiles for Android,
+Windows and linux-arm64 on their own runners, so reproducing it locally means the
+individual `build-*` recipes and the matching toolchains.
 
 > **Coming from the old `just` + `lefthook` setup?** Re-run `mise install && hk install`
 > (hk overwrites the stale `.git/hooks` that called lefthook). The `justfile` is gone —
