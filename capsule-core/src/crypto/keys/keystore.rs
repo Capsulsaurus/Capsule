@@ -41,8 +41,9 @@ use crate::crypto::{CryptoError, pwkdf};
 ///
 /// Both expose the same two operations — publish a public encapsulation key, decapsulate a
 /// ciphertext sealed to it — so every caller is agnostic to where the classical half lives. The
-/// two byte formats are length-disjoint (see [`P256HybridDek`](super::P256HybridDek)), so a ciphertext for
-/// one is rejected outright by the other rather than silently recovering a wrong secret.
+/// two byte formats are length-disjoint — X-Wing's [`DekKeypair`] and the P-256 hybrid's
+/// [`P256HybridDek`] publish and accept different lengths — so a ciphertext for one is rejected
+/// outright by the other rather than silently recovering a wrong secret.
 pub enum DeviceDek {
     /// **Software fallback.** X-Wing (X25519 + ML-KEM-768), both halves in software. The
     /// composition every host can run, including those with no secure element and the TPM-1.2 /
