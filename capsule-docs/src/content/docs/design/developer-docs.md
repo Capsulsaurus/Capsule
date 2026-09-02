@@ -83,8 +83,8 @@ in the docs gate, which cannot run it.
 
 | Surface | Description artifact | Emitted by | Drift gate | Page | Status |
 | --- | --- | --- | --- | --- | --- |
-| REST | Kynos OpenAPI 3.2 document | `capsule-server::openapi()` via an emitter binary | `openapi-check-kynos` | `/reference/api/` | **Emitter and gate landed; rendering blocked** |
-| CLI | command-tree JSON, man pages, shell completions | `capsule-cli` (clap) | new `--check` on the dump | `/reference/cli/` | Planned |
+| REST | Kynos OpenAPI 3.2 document | `capsule-server::openapi()` via `gen_openapi` | `openapi-check-kynos` | `/reference/api/` | **Landed** |
+| CLI | command-tree JSON | `capsule_cli::cli::command_tree()` via `gen_cli_surface` | `cli-surface-check` | `/reference/cli/` | **Landed** |
 | Rust SDK | rustdoc HTML (uncommitted) | `cargo doc -p capsule-sdk` | broken intra-doc links denied | `/reference/sdk/rust/` → `/reference/crates/` | Planned |
 | Swift bindings | uniffi surface JSON, dumped from the compiled cdylib | a dump step on `mise-tasks/gen-bindings` | new `--check` on the dump | `/reference/sdk/swift/` | Planned |
 | Kotlin bindings | as above | as above | as above | `/reference/sdk/kotlin/` | Planned |

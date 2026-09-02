@@ -63,8 +63,18 @@ jobs:
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
+            # Every artifact the docs build reads, not just `capsule-docs/**` — the
+            # generator turns two committed description artifacts into the `/reference/`
+            # pages, so a filter that names only the site lets a stale reference page
+            # publish on a change to the surface it describes. See
+            # design/developer-docs.md, "Artifacts cross the boundary, not toolchains".
             docs:
               - 'capsule-docs/**'
+              - 'capsule-cli/cli-surface.json'
+              - 'capsule-server/openapi.json'
+              # `capsule-docs/biome.jsonc` extends the root one, so a change there can fail
+              # this job's format and lint steps from outside `capsule-docs/**`.
+              - 'biome.jsonc'
               - 'mise.toml'
               - 'mise-tasks/**'
               - '.github/workflows/ci.yml'
@@ -81,6 +91,10 @@ jobs:
               - 'capsule-docs/endpoint-census-allowlist.txt'
               - 'capsule-docs/planned-modules.txt'
               - 'capsule-server/openapi.json'
+              # No check reads this one today; it is here because the cross-links check
+              # resolves any repo-relative path a document names, and the reference prose
+              # now names this artifact. Cheap: the job installs nothing.
+              - 'capsule-cli/cli-surface.json'
               - 'capsule-*/src/**'
               - '**/*.md'
               - '**/*.mdx'
