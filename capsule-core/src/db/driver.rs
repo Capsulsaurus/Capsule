@@ -17,11 +17,27 @@ pub struct DatabaseDriver {
 }
 
 impl DatabaseDriver {
+    /// Open (or create) the catalog at `path` and bring it to the crate's `SCHEMA_VERSION`.
+    ///
+    /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here
+    /// because this signature is consumed by `capsule-core-ffi`; the crate's own library
+    /// opener goes through [`Self::open_typed`] so a catalog newer than this build surfaces
+    /// as a typed refusal rather than a message inside a `SqliteFailure`.
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
+        Self::open_typed(path).map_err(rusqlite::Error::from)
+    }
+
+    /// As [`open`](Self::open), keeping the migrator's typed error.
+    ///
+    /// [`MigrationError::CatalogTooNew`] is the one variant a caller acts on differently: the
+    /// catalog was left untouched and the recovery is to update the app, so `library::open`
+    /// maps it to [`LibraryError::CatalogTooNew`](crate::library::LibraryError::CatalogTooNew)
+    /// instead of folding it into a generic database error (slice `S-D23`).
+    pub(crate) fn open_typed(path: &Path) -> Result<Self, MigrationError> {
         crate::db::vector::ensure_vec_extension();
         let conn = Connection::open(path)?;
         let driver = Self::new(conn);
-        driver.init_schema()?;
+        driver.migrate()?;
         Ok(driver)
     }
 

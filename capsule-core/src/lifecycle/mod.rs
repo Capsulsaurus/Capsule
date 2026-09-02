@@ -63,7 +63,7 @@ use crate::crypto::verify_asset::{MetadataBinding, VerifyOutcome};
 use crate::db::DatabaseDriver;
 use crate::drop::{DropId, UploadLinkId};
 use crate::federation::AlbumGroupAssertion;
-use crate::library::Library;
+use crate::library::{Library, LibraryError};
 use crate::metadata::crdt::Counter;
 use crate::sharing::{ShareLinkId, ShareLinkRecord};
 use crate::sidecar::sidecar_v1::{Gps, SidecarV1, StackMembership, StackRole};
@@ -97,6 +97,11 @@ pub enum LifecycleError {
     /// Library index (SQLite) error.
     #[error("db: {0}")]
     Db(String),
+    /// The on-disk library could not be opened. Typed rather than stringified so a caller
+    /// can act on the one open failure with its own recovery — a catalog stamped by a newer
+    /// build ([`LibraryError::CatalogTooNew`], slice `S-D23`) — instead of matching on text.
+    #[error("open library: {0}")]
+    Library(#[from] LibraryError),
     /// The durable album-key store could not be read or written (slice `S-A10`). Never
     /// swallowed: losing album keys silently is exactly the failure this store exists to fix.
     #[error(transparent)]
