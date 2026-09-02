@@ -16,7 +16,6 @@ whether something exists today, find its slice: `rg 'S-C16' SLICES.md`.
 | `capsule-core` | Cryptography (including the MLS album authority), canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite and vector index, import scan/plan/execute, culling, LQIP, share and drop crypto, aggregated federation views, ML orchestration |
 | `capsule-server` | The Kynos REST/OpenAPI application — see [Server Modules](#server-modules) |
 | `capsule-sdk` | The Spargen-generated REST client plus the orchestration over it Capsule owns: auth and session refresh, the resumable upload state machine, sync, recovery, protocol-version negotiation, LAN peering |
-| `capsule-wire` | The response taxonomy shared by server and SDK. Framework-free by construction: `serde` is its only dependency, so neither side's transport choices reach the other |
 | `capsule-wasm` | The browser sealing surface `capsule-web` loads — share-link open and guest-drop sealing over `capsule-core` with default features off. Built by `mise run build-wasm`; never committed |
 | `capsule-i18n` + `xtask::i18n` | Canonical ICU catalogs, runtime localization, generated platform catalogs |
 | `capsule-core-ffi` | UniFFI bindings for native Swift and Kotlin consumers, on one UniFFI version across both surfaces |
