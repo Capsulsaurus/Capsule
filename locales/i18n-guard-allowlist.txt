@@ -32,6 +32,14 @@
 # the `…Key:` argument label and cannot tell the two apart.
 capsule-swift/Modules/ImagePipeline/Sources/ViewerMediaLoader.swift	fileSize
 
+# `AssetInfoFormatting.hdrName(_:)` names an HDR encoding "as its owner spells it" (its own
+# doc comment). "Dolby Vision" is a Dolby trademark, spelled the same in every locale — the
+# allowlist's stated category, and the same reason the sibling arms "HDR10" and "HLG" never
+# tripped the guard. Surfaced when `S-I7` widened `swift-computed-property` to `func`
+# members; the alternative would be a `locales/` key whose thirteen translations are all
+# the identical trademark.
+capsule-swift/Modules/FeatureViewer/Sources/Info/AssetInfoFormatting.swift	Dolby Vision
+
 # `capsule demo` — the offline showcase command (`S-A10`). Every one of these is a
 # terse `eyre!` step label ("shamir: {e}") written for whoever is watching the demo run,
 # not a message a photo-library user would ever hit. It is the weakest case for
