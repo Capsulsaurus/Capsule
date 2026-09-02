@@ -131,10 +131,22 @@ impl From<LifecycleError> for FfiError {
 
 impl From<RecoveryError> for FfiError {
     fn from(err: RecoveryError) -> Self {
-        // An auth failure under an escrow call keeps its auth identity so callers can trigger
-        // interactive re-authentication, exactly as the upload mapping does.
-        if let RecoveryError::Auth(auth) = err {
-            return auth.into();
+        // A refused credential under an escrow call keeps its auth identity so callers can
+        // trigger interactive re-authentication, exactly as the upload mapping does. Before
+        // the escrow calls moved onto the generated client this arrived as
+        // `RecoveryError::Auth`; routing `Unauthorized` here is what stops the move from
+        // silently downgrading "sign in again" into "escrow failed".
+        if let RecoveryError::Unauthorized { code, detail } = err {
+            return Self::Auth {
+                code,
+                message: detail,
+            };
+        }
+        // A malformed argument is the caller's, not the escrow surface's.
+        if let RecoveryError::InvalidBaseUrl { .. } = err {
+            return Self::InvalidArgument {
+                message: err.to_string(),
+            };
         }
         Self::Escrow {
             message: err.to_string(),
@@ -758,7 +770,7 @@ impl FfiSession {
         Ok(page.into())
     }
 
-    /// Store or replace this account's **master-key escrow blob** (`PUT /backup/escrow`).
+    /// Store or replace this account's **master-key escrow blob** (`PUT /v1/auth/escrow`).
     /// `blob` is the opaque canonical CBOR
     /// [`FfiWorkspace::escrow_blob`](FfiWorkspace::escrow_blob) minted — the master key itself
     /// never crosses this boundary in either direction.
@@ -773,17 +785,17 @@ impl FfiSession {
             capsule_core::cbor::from_slice(&blob).map_err(|e| FfiError::InvalidArgument {
                 message: format!("escrow blob is not a canonical WrappedSecret: {e}"),
             })?;
-        RecoveryClient::new(self.session.clone(), &api_base_url)
+        RecoveryClient::new(self.session.clone(), &api_base_url)?
             .store_escrow(&blob)
             .await?;
         Ok(())
     }
 
-    /// Fetch this account's escrow blob (`GET /backup/escrow`) as opaque canonical CBOR — the
+    /// Fetch this account's escrow blob (`GET /v1/auth/escrow`) as opaque canonical CBOR — the
     /// bytes [`FfiWorkspace::verify_escrow_blob`](FfiWorkspace::verify_escrow_blob) checks and
     /// a recovery flow unwraps. Fails with an `Escrow` error when no escrow is enrolled yet.
     pub async fn escrow_get(&self, api_base_url: String) -> Result<Vec<u8>, FfiError> {
-        let cache = RecoveryClient::new(self.session.clone(), &api_base_url)
+        let cache = RecoveryClient::new(self.session.clone(), &api_base_url)?
             .fetch_escrow()
             .await?;
         capsule_core::cbor::to_canonical_vec(cache.blob()).map_err(|e| FfiError::Escrow {

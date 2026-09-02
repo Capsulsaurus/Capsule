@@ -3,7 +3,7 @@
 //! Re-Wrap]).
 //!
 //! This module owns the **client half** of the master-key recovery story that the
-//! server escrow surface (slice `S-C12`, `PUT`/`GET /backup/escrow`) and the core
+//! server escrow surface (slice `S-C12`, `PUT`/`GET /v1/auth/escrow`) and the core
 //! crypto ([`capsule_core::backup`]) make possible. It has two cohesive halves:
 //!
 //! - **[`cadence`]** — the pure, network-free scheduler and prompt state machine
@@ -19,10 +19,26 @@
 //! [`WrappedSecret`] — byte-identical to what the server stores verbatim and to what the
 //! core restore path unwraps.
 //!
+//! # The wire is the generated client, not a path this module builds
+//!
+//! Both escrow operations are `application/octet-stream` in each direction, which is a media
+//! type `spargen` lowers, so both are **generated** and neither is narrowed out in
+//! `build.rs`. [`RecoveryClient`] therefore orchestrates
+//! [`AuthenticatedClient::fetch_escrow`](crate::rest::Client::fetch_escrow) and
+//! [`store_escrow`](crate::rest::Client::store_escrow) and hand-writes no request. That is
+//! not a preference: `AGENTS.md` requires that everything which parses or serializes is
+//! generated, *including* the byte-serving endpoints, and the reason is this module's own
+//! history. It used to build `{api_root}/backup/escrow` from a `const` — the Salvo document's
+//! path — and when the contract was re-sourced from Kynos to `/v1/auth/escrow` nothing
+//! noticed, because a route in a string constant is checked by no gate and this module's own
+//! mock answered whichever path it was handed.
+//!
 //! [Backup — Recovery Verification Cadence]: https://docs/design/backup-recovery/#recovery-verification-cadence
 //! [§ On Repeated Failure: Guided Re-Wrap]: https://docs/design/backup-recovery/#on-repeated-failure-guided-re-wrap
 
 pub mod cadence;
+
+use std::sync::Arc;
 
 pub use cadence::{
     BACKOFF_INTERVAL_SECS, CAP_INTERVAL_SECS, INITIAL_INTERVAL_SECS, MAX_CONSECUTIVE_SNOOZES,
@@ -33,26 +49,53 @@ use capsule_core::backup::{VerifyOutcome, split_seed_2of3, verify_recovery_secre
 use capsule_core::crypto::primitives::{Argon2Params, DeviceTier};
 use capsule_core::crypto::pwkdf::{self, WrappedSecret};
 use capsule_core::crypto::rng;
+use capsule_i18n::error_codes;
 use tracing::instrument;
 
-use crate::auth::{AuthError, Session};
-
-/// The escrow endpoint path, appended to the caller's API base.
-const ESCROW_PATH: &str = "backup/escrow";
+use crate::auth::Session;
+use crate::client::{AuthenticatedClient, ClientError};
+use crate::rest;
 
 /// Everything the networked recovery flows can fail with. Callers switch on the typed
-/// variant, never a bare HTTP status.
+/// variant (or its stable `error.*` code), never a bare HTTP status.
 #[derive(Debug, thiserror::Error)]
 pub enum RecoveryError {
-    /// The authenticated request itself failed (transport, session expiry, refresh).
-    #[error(transparent)]
-    Auth(#[from] AuthError),
-    /// Reading the escrow response body off the wire failed.
-    #[error("reading escrow response body failed: {0}")]
-    Body(#[source] reqwest::Error),
+    // There is deliberately no `Auth(AuthError)` variant any more. The session used to build
+    // these requests itself, so a dead session surfaced as its own typed `AuthError`; the
+    // generated client attaches the bearer through a token-provider seam that flattens our
+    // `AuthError` to a string, so the same event now arrives as `Unauthorized` — which is
+    // where the FFI's `Auth` mapping reads it from. An unconstructible variant would be a
+    // promise no code path can keep.
+    /// The API root is not a URL the generated client can hang operation paths off.
+    #[error("invalid base URL {url:?}: {reason}")]
+    InvalidBaseUrl {
+        /// The offending URL.
+        url: String,
+        /// Why the generated client rejected it.
+        reason: String,
+    },
+    /// The call did not complete: DNS, TLS, timeout, a malformed response, or the store
+    /// answering `500`. Transient — the cadence's next tick tries again.
+    #[error("the escrow endpoint could not be reached: {0}")]
+    Transport(String),
+    /// The credential was refused (`401`/`403`) and a refresh did not recover it. The stable
+    /// code distinguishes an expired session from the outage the revocation ledger also
+    /// renders as `401`, so a client can tell "sign in again" from "try later".
+    #[error("the escrow endpoint refused the credential: {detail}")]
+    Unauthorized {
+        /// The stable `error.*` catalog code the problem body carried, when it had one.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
     /// The caller has no escrow stored yet (server returned `404`). Enroll one first.
     #[error("no escrow stored for this account")]
     NotEnrolled,
+    /// The server refused the blob as one that cannot be an escrow at any version — empty,
+    /// past the coarse ceiling (`400`), or not the declared media type (`415`). Retrying the
+    /// same bytes changes nothing.
+    #[error("the server rejected the escrow blob as malformed: {0}")]
+    Malformed(String),
     /// The escrow bytes could not be (de)serialized as the canonical `WrappedSecret`.
     #[error("escrow blob codec error: {0}")]
     Codec(String),
@@ -65,6 +108,20 @@ pub enum RecoveryError {
         /// The HTTP status code the server returned.
         status: u16,
     },
+}
+
+impl RecoveryError {
+    /// The stable `error.*` catalog code a client localizes, when one applies. The English
+    /// [`Display`](std::fmt::Display) form stays the developer/log detail.
+    #[must_use]
+    pub fn error_code(&self) -> Option<&str> {
+        match self {
+            Self::Unauthorized { code, .. } => code.as_deref(),
+            Self::NotEnrolled => Some(error_codes::ESCROW_NOT_STORED),
+            Self::Malformed(_) => Some(error_codes::ESCROW_MALFORMED),
+            _ => None,
+        }
+    }
 }
 
 /// A client-side cached copy of the server escrow blob.
@@ -208,68 +265,75 @@ pub struct GuidedRewrap {
 }
 
 /// The networked recovery client: escrow cache/refresh, stale-cache-aware local
-/// verification, and the guided re-wrap. It borrows an authenticated [`Session`], so
-/// every call rides the SDK's bearer/refresh machinery.
+/// verification, and the guided re-wrap.
+///
+/// It holds one [`AuthenticatedClient`], so every call rides the generated operation paths
+/// and the SDK's bearer/refresh machinery, and this module states no route of its own. The
+/// client is behind an [`Arc`] only so [`RecoveryClient`] stays [`Clone`] — the cadence hands
+/// one client to several prompts.
 #[derive(Clone)]
 pub struct RecoveryClient {
-    session: Session,
-    escrow_url: String,
+    client: Arc<AuthenticatedClient>,
 }
 
 impl RecoveryClient {
-    /// Build a recovery client against the API base URL (the same base the auth session
-    /// authenticates against, e.g. `https://api.example.com`).
-    #[must_use]
-    pub fn new(session: Session, api_base_url: &str) -> Self {
-        let escrow_url = format!("{}/{ESCROW_PATH}", api_base_url.trim_end_matches('/'));
-        Self {
-            session,
-            escrow_url,
-        }
+    /// Build a recovery client against the **API root** — the origin the generated operation
+    /// paths hang off (e.g. `https://api.example.com`), which is the same base
+    /// [`AuthenticatedClient`] and [`crate::sync::SyncConsumer`] take.
+    ///
+    /// # Errors
+    ///
+    /// [`RecoveryError::InvalidBaseUrl`] when `api_base_url` is not a URL operation paths can
+    /// hang off. Fallible where the old hand-written `format!` was not, because the generated
+    /// client parses the base once at construction rather than per call.
+    pub fn new(session: Session, api_base_url: &str) -> Result<Self, RecoveryError> {
+        let client =
+            AuthenticatedClient::new(api_base_url, session).map_err(|error| match error {
+                ClientError::InvalidBaseUrl { url, reason } => {
+                    RecoveryError::InvalidBaseUrl { url, reason }
+                }
+            })?;
+        Ok(Self {
+            client: Arc::new(client),
+        })
     }
 
-    /// Fetch the current escrow blob from the server (`GET /backup/escrow`) into a fresh
+    /// Fetch the current escrow blob from the server (`GET /v1/auth/escrow`) into a fresh
     /// [`EscrowCache`]. `404` maps to [`RecoveryError::NotEnrolled`].
     #[instrument(skip_all)]
     pub async fn fetch_escrow(&self) -> Result<EscrowCache, RecoveryError> {
-        let response = self.session.execute(|c| c.get(&self.escrow_url)).await?;
-        let status = response.status();
-        match status {
-            reqwest::StatusCode::OK => {
-                let bytes = response.bytes().await.map_err(RecoveryError::Body)?;
-                tracing::debug!(len = bytes.len(), "fetched escrow blob");
-                EscrowCache::from_wire(&bytes)
-            }
-            reqwest::StatusCode::NOT_FOUND => Err(RecoveryError::NotEnrolled),
-            other => Err(RecoveryError::Unexpected {
-                status: other.as_u16(),
-            }),
-        }
+        let bytes = self
+            .client
+            .fetch_escrow()
+            .await
+            .map_err(fetch_escrow_error)?
+            .into_inner();
+        tracing::debug!(len = bytes.len(), "fetched escrow blob");
+        EscrowCache::from_wire(&bytes)
     }
 
-    /// Store or replace the caller's escrow blob (`PUT /backup/escrow`). Single active
+    /// Store or replace the caller's escrow blob (`PUT /v1/auth/escrow`). Single active
     /// escrow: the server overwrites any prior blob in the same transaction (S-C12).
+    ///
+    /// The canonical CBOR goes on the wire verbatim; `replaced` and `stored_at` are logged
+    /// rather than returned, because no caller has asked for them yet and a return type is
+    /// harder to widen than a log line.
     #[instrument(skip_all)]
     pub async fn store_escrow(&self, blob: &WrappedSecret) -> Result<(), RecoveryError> {
         let body = capsule_core::cbor::to_canonical_vec(blob)
             .map_err(|e| RecoveryError::Codec(e.to_string()))?;
-        let response = self
-            .session
-            .execute(|c| {
-                c.put(&self.escrow_url)
-                    .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
-                    .body(body.clone())
-            })
-            .await?;
-        let status = response.status();
-        if status.is_success() {
-            tracing::info!("escrow blob stored (single active escrow: any prior blob replaced)");
-            Ok(())
-        } else {
-            Err(RecoveryError::Unexpected {
-                status: status.as_u16(),
-            })
-        }
+        let stored = self
+            .client
+            .store_escrow(&rest::types::RequestBody::from(body))
+            .await
+            .map_err(store_escrow_error)?
+            .into_inner();
+        tracing::info!(
+            stored_at = %stored.stored_at,
+            replaced = stored.replaced,
+            "escrow blob stored (single active escrow: any prior blob replaced)"
+        );
+        Ok(())
     }
 
     /// Local recovery-secret verification with the **stale-cache rule** (SSoT § Local
@@ -367,6 +431,111 @@ impl RecoveryClient {
     }
 }
 
+/// Map a `GET /v1/auth/escrow` refusal onto its typed variant.
+///
+/// Kept as one readable status table rather than a match buried in the request path, and kept
+/// exhaustive over the generated enum so a status the document gains cannot be silently
+/// swallowed — adding one stops the build here.
+fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryError {
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            rest::FetchEscrowError::Status404(_) => RecoveryError::NotEnrolled,
+            rest::FetchEscrowError::Status401(problem)
+            | rest::FetchEscrowError::Status403(problem) => refused(&problem),
+            rest::FetchEscrowError::Status500(problem) => transport(&problem),
+            // Declared by the transport backstop and unreachable on a body-less `GET`; kept
+            // honest rather than folded into a class it does not belong to.
+            rest::FetchEscrowError::Status413 => RecoveryError::Unexpected { status: 413 },
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// Map a `PUT /v1/auth/escrow` refusal onto its typed variant.
+fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryError {
+    match error {
+        rest::Error::Api(response) => match response.into_inner() {
+            // `400` and `415` are the same answer to the caller: these bytes are not an
+            // escrow, and sending them again will not help.
+            rest::StoreEscrowError::Status400(problem)
+            | rest::StoreEscrowError::Status415(problem) => {
+                RecoveryError::Malformed(detail(&problem))
+            }
+            rest::StoreEscrowError::Status401(problem)
+            | rest::StoreEscrowError::Status403(problem) => refused(&problem),
+            rest::StoreEscrowError::Status500(problem) => transport(&problem),
+            // The body-size backstop carries no problem body at all, so the message is ours.
+            rest::StoreEscrowError::Status413 => RecoveryError::Malformed(
+                "the escrow blob exceeds the server's request-body limit".to_owned(),
+            ),
+        },
+        other => wire_error(&other),
+    }
+}
+
+/// A refused credential, carrying the problem body's stable code.
+fn refused(problem: &rest::types::CodedProblem) -> RecoveryError {
+    RecoveryError::Unauthorized {
+        code: Some(problem.code.clone()),
+        detail: detail(problem),
+    }
+}
+
+/// The store could not answer — transient, and the caller's cadence retries.
+fn transport(problem: &rest::types::CodedProblem) -> RecoveryError {
+    RecoveryError::Transport(detail(problem))
+}
+
+/// The problem body's English detail, or its code when the server sent no detail.
+fn detail(problem: &rest::types::CodedProblem) -> String {
+    problem
+        .detail
+        .clone()
+        .unwrap_or_else(|| problem.code.clone())
+}
+
+/// Map the generated client's non-`Api` taxonomy classes: an undocumented status keeps its
+/// number, and everything else is a wire failure with its source chain preserved.
+fn wire_error<E>(error: &rest::Error<E>) -> RecoveryError
+where
+    E: std::error::Error + 'static,
+{
+    match error {
+        rest::Error::UnexpectedStatus { status, .. } => RecoveryError::Unexpected {
+            status: status.as_u16(),
+        },
+        // Both escrow operations take no path parameter, no query parameter and (for the
+        // store) a body that cannot fail to serialize, and the base URL was parsed when the
+        // client was built. So the *only* way either can fail before a byte leaves is the
+        // bearer credential's async provider — a session that cannot produce a token. That is
+        // the same event the server answers `401` for, and it must reach a caller as one:
+        // reporting a dead session as a transport blip would tell a client to retry where it
+        // needs to re-authenticate.
+        rest::Error::RequestConstruction(_) => RecoveryError::Unauthorized {
+            code: None,
+            detail: describe(error),
+        },
+        other => RecoveryError::Transport(describe(other)),
+    }
+}
+
+/// Render a generated-client failure together with its source chain. The taxonomy's own
+/// `Display` is a one-word class name (`"transport failed"`), which on its own tells a log
+/// reader nothing about *what* failed.
+fn describe<E>(error: &rest::Error<E>) -> String
+where
+    E: std::error::Error + 'static,
+{
+    let mut rendered = error.to_string();
+    let mut source = std::error::Error::source(error);
+    while let Some(cause) = source {
+        rendered.push_str(": ");
+        rendered.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    rendered
+}
+
 #[cfg(test)]
 mod tests {
     use std::future::Future;
@@ -392,9 +561,19 @@ mod tests {
 
     // ── Binary-capable mock escrow server ─────────────────────────────────────
     //
-    // The escrow surface is `application/octet-stream` in both directions, so unlike the
-    // auth mock (JSON strings) this one stores and serves raw bytes. A single shared
-    // slot models the server's single-active-escrow row.
+    // The escrow surface is `application/octet-stream` on the way out, so unlike the auth
+    // mock (JSON strings) this one stores and serves raw bytes. A single shared slot models
+    // the server's single-active-escrow row.
+    //
+    // Two things it must now do that it did not have to when this module built its own URL.
+    // It **routes on the path**, answering `501` to anything that is not `/v1/auth/escrow`,
+    // because a mock that replies to whatever it is handed is exactly why a wrong route
+    // survived here. And its refusals carry a real RFC 9457 problem body: the generated
+    // client decodes a documented non-success status into `CodedProblem`, so a bare status
+    // with an empty body would arrive as a decode failure rather than the typed variant.
+
+    /// The one path the escrow operations are served on, per the committed document.
+    const ESCROW_ROUTE: &str = "/v1/auth/escrow";
 
     #[derive(Clone, Default)]
     struct EscrowStore {
@@ -403,12 +582,52 @@ mod tests {
 
     struct MockRequest {
         method: String,
+        path: String,
         body: Vec<u8>,
     }
 
     struct MockResponse {
         status: u16,
+        content_type: &'static str,
         body: Vec<u8>,
+    }
+
+    impl MockResponse {
+        /// An `application/octet-stream` payload — the escrow itself.
+        fn bytes(status: u16, body: Vec<u8>) -> Self {
+            Self {
+                status,
+                content_type: "application/octet-stream",
+                body,
+            }
+        }
+
+        /// A JSON payload — `StoreEscrowResponse`, which the generated client decodes.
+        fn json(status: u16, body: serde_json::Value) -> Self {
+            Self {
+                status,
+                content_type: "application/json",
+                body: body.to_string().into_bytes(),
+            }
+        }
+
+        /// An RFC 9457 problem, shaped as `CodedProblem` so the generated client can parse it
+        /// into the operation's typed error.
+        fn problem(status: u16, code: &str, detail: &str) -> Self {
+            Self {
+                status,
+                content_type: "application/problem+json",
+                body: serde_json::json!({
+                    "type": "about:blank",
+                    "title": "Refused",
+                    "status": status,
+                    "detail": detail,
+                    "code": code,
+                })
+                .to_string()
+                .into_bytes(),
+            }
+        }
     }
 
     type BoxFut = Pin<Box<dyn Future<Output = MockResponse> + Send>>;
@@ -452,11 +671,9 @@ mod tests {
         let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
         let mut lines = head.split("\r\n");
         let request_line = lines.next().unwrap_or_default();
-        let method = request_line
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .to_string();
+        let mut request_parts = request_line.split_whitespace();
+        let method = request_parts.next().unwrap_or_default().to_string();
+        let path = request_parts.next().unwrap_or_default().to_string();
 
         let mut content_length = 0usize;
         let mut authorized = false;
@@ -484,17 +701,15 @@ mod tests {
 
         // Every escrow call is owner-scoped: reject anything without a bearer token.
         let response = if authorized {
-            handler(MockRequest { method, body }).await
+            handler(MockRequest { method, path, body }).await
         } else {
-            MockResponse {
-                status: 401,
-                body: Vec::new(),
-            }
+            MockResponse::problem(401, "error.auth.unauthorized", "no bearer credential")
         };
 
         let payload = format!(
-            "HTTP/1.1 {} STATUS\r\ncontent-type: application/octet-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            "HTTP/1.1 {} STATUS\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
             response.status,
+            response.content_type,
             response.body.len()
         );
         let mut out = payload.into_bytes();
@@ -505,33 +720,42 @@ mod tests {
     }
 
     /// A handler backed by the shared single-active-escrow slot: `PUT` overwrites it,
-    /// `GET` serves it verbatim (or 404).
+    /// `GET` serves it verbatim (or `404`).
+    ///
+    /// Anything off `/v1/auth/escrow` is `501`, which arrives as
+    /// [`RecoveryError::Unexpected`] rather than as a plausible-looking `NotEnrolled` — so a
+    /// route regression fails loudly here instead of reading as "no escrow stored".
     fn escrow_handler(store: EscrowStore) -> Handler {
         Arc::new(move |req| {
             let store = store.clone();
             Box::pin(async move {
+                if req.path != ESCROW_ROUTE {
+                    return MockResponse::bytes(501, Vec::new());
+                }
                 match req.method.as_str() {
                     "PUT" => {
-                        *store.blob.lock().unwrap() = Some(req.body);
-                        MockResponse {
-                            status: 204,
-                            body: Vec::new(),
-                        }
+                        let replaced = store.blob.lock().unwrap().replace(req.body).is_some();
+                        MockResponse::json(
+                            200,
+                            serde_json::json!({
+                                "stored_at": "2026-01-01T00:00:00Z",
+                                "replaced": replaced,
+                            }),
+                        )
                     }
                     "GET" => match store.blob.lock().unwrap().clone() {
-                        Some(bytes) => MockResponse {
-                            status: 200,
-                            body: bytes,
-                        },
-                        None => MockResponse {
-                            status: 404,
-                            body: Vec::new(),
-                        },
+                        Some(bytes) => MockResponse::bytes(200, bytes),
+                        None => MockResponse::problem(
+                            404,
+                            error_codes::ESCROW_NOT_STORED,
+                            "no escrow has been stored for this account",
+                        ),
                     },
-                    _ => MockResponse {
-                        status: 405,
-                        body: Vec::new(),
-                    },
+                    _ => MockResponse::problem(
+                        405,
+                        error_codes::ESCROW_MALFORMED,
+                        "the escrow surface serves GET and PUT",
+                    ),
                 }
             })
         })
@@ -560,7 +784,7 @@ mod tests {
     async fn escrow_store_fetch_round_trip() {
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store)).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x11u8; 32];
         let blob = wrap(&master, b"correct horse battery staple");
@@ -578,7 +802,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_without_escrow_is_not_enrolled() {
         let base = start_mock(escrow_handler(EscrowStore::default())).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
         assert!(matches!(
             client.fetch_escrow().await,
             Err(RecoveryError::NotEnrolled)
@@ -591,7 +815,7 @@ mod tests {
     async fn verify_correct_secret_against_cache() {
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store)).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x22u8; 32];
         let blob = wrap(&master, b"the-right-secret");
@@ -614,7 +838,7 @@ mod tests {
     async fn verify_refreshes_stale_cache_then_passes() {
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store.clone())).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x33u8; 32];
         // Enroll and cache the OLD wrap.
@@ -646,7 +870,7 @@ mod tests {
     async fn verify_wrong_secret_fails_after_refresh() {
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store)).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x44u8; 32];
         let blob = wrap(&master, b"real-secret");
@@ -679,7 +903,7 @@ mod tests {
 
         let store = EscrowStore::default();
         let base = start_mock(escrow_handler(store)).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
 
         let master = [0x55u8; 32];
         let old_secret = b"the-old-lost-secret";
@@ -741,7 +965,7 @@ mod tests {
     #[tokio::test]
     async fn guided_rewrap_no_shamir_when_not_enrolled() {
         let base = start_mock(escrow_handler(EscrowStore::default())).await;
-        let client = RecoveryClient::new(session_for(&base), &base);
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
         let master = [0x66u8; 32];
         client.store_escrow(&wrap(&master, b"old")).await.unwrap();
 
@@ -750,6 +974,76 @@ mod tests {
             .await
             .unwrap();
         assert!(rewrap.shamir.is_none());
+    }
+
+    /// The mock's route guard is live: a client pointed one segment off the documented path
+    /// gets a loud `Unexpected`, not a plausible-looking `NotEnrolled`.
+    ///
+    /// This is the regression this slice exists for, asserted as a property of the *test
+    /// harness*: without it the mock would answer any path at all, and a wrong route would
+    /// once again read as "this account has escrowed nothing" — which is what let
+    /// `backup/escrow` survive a contract re-source.
+    #[tokio::test]
+    async fn a_call_off_the_documented_route_is_not_mistaken_for_an_empty_escrow() {
+        let base = start_mock(escrow_handler(EscrowStore::default())).await;
+        let client =
+            RecoveryClient::new(session_for(&base), &format!("{base}/not-the-contract")).unwrap();
+        let error = client
+            .fetch_escrow()
+            .await
+            .expect_err("a path the server does not serve is not an empty escrow");
+        assert!(
+            matches!(error, RecoveryError::Unexpected { status: 501 }),
+            "got {error:?}"
+        );
+    }
+
+    /// A `400` refusal becomes the typed `Malformed` and carries the code a client localizes
+    /// — not the `Unexpected { status }` the hand-written path used to collapse it into.
+    #[tokio::test]
+    async fn a_refused_blob_is_malformed_with_its_catalog_code() {
+        let handler: Handler = Arc::new(|_req| {
+            Box::pin(async move {
+                MockResponse::problem(
+                    400,
+                    error_codes::ESCROW_MALFORMED,
+                    "the escrow blob is empty",
+                )
+            })
+        });
+        let base = start_mock(handler).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let error = client
+            .store_escrow(&wrap(&[0x77u8; 32], b"whatever"))
+            .await
+            .expect_err("the server refused the blob");
+        assert!(
+            matches!(error, RecoveryError::Malformed(_)),
+            "got {error:?}"
+        );
+        assert_eq!(error.error_code(), Some(error_codes::ESCROW_MALFORMED));
+    }
+
+    /// A refused credential keeps the problem body's `error.auth.*` code, so a client can
+    /// tell an expired session from the outage the revocation ledger also renders as `401`.
+    #[tokio::test]
+    async fn a_refused_credential_keeps_the_problem_code() {
+        // No bearer reaches the mock's handler at all: it answers `401` at the door, which is
+        // precisely the shape a revoked token produces.
+        let handler: Handler = Arc::new(|_req| {
+            Box::pin(async move { MockResponse::problem(401, "error.auth.expired", "expired") })
+        });
+        let base = start_mock(handler).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let error = client
+            .fetch_escrow()
+            .await
+            .expect_err("the credential was refused");
+        assert!(
+            matches!(error, RecoveryError::Unauthorized { .. }),
+            "got {error:?}"
+        );
+        assert_eq!(error.error_code(), Some("error.auth.expired"));
     }
 
     /// The minted secret clears the ≥128-bit entropy floor (256-bit) and never prints

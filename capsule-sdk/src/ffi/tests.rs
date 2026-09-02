@@ -294,6 +294,12 @@ fn enroll(root: &std::path::Path) -> Arc<FfiWorkspace> {
 /// The escrow endpoints are **stateful** — a `PUT` stores the bytes verbatim and a `GET`
 /// serves them back, exactly as the single-active-escrow contract says — so `escrow_put`
 /// and `escrow_get` can be asserted as a real round trip rather than two isolated calls.
+///
+/// They are served on `/v1/auth/escrow` under the API root, which is the path the committed
+/// document declares and the generated client therefore requests. The `PUT` answers a JSON
+/// `StoreEscrowResponse` and the empty-escrow `GET` answers an RFC 9457 problem, because a
+/// generated operation decodes both — a bare `204` or a body-less `404` would arrive as a
+/// decode failure rather than as the typed outcome this test is asserting.
 async fn flow_server() -> MockServer {
     let escrow: Arc<std::sync::Mutex<Vec<u8>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
     MockServer::start(
@@ -310,17 +316,36 @@ async fn flow_server() -> MockServer {
                     .to_string(),
                 ),
             ("PATCH", "/upload/sess-1") => MockResponse::new(200, "OK"),
-            ("PUT", "/api/backup/escrow") => {
-                if let Ok(mut stored) = escrow.lock() {
+            ("PUT", "/api/v1/auth/escrow") => {
+                let replaced = if let Ok(mut stored) = escrow.lock() {
+                    let replaced = !stored.is_empty();
                     stored.clone_from(&req.body);
-                }
-                MockResponse::new(204, "No Content")
+                    replaced
+                } else {
+                    false
+                };
+                MockResponse::new(200, "OK").json_body(
+                    serde_json::json!({
+                        "stored_at": "2026-01-01T00:00:00Z",
+                        "replaced": replaced,
+                    })
+                    .to_string(),
+                )
             }
-            ("GET", "/api/backup/escrow") => {
+            ("GET", "/api/v1/auth/escrow") => {
                 let stored = escrow.lock().map(|s| s.clone()).unwrap_or_default();
                 if stored.is_empty() {
                     // Nothing enrolled yet — the typed `NotEnrolled` path.
-                    MockResponse::new(404, "Not Found")
+                    MockResponse::new(404, "Not Found").json_body(
+                        serde_json::json!({
+                            "type": "about:blank",
+                            "title": "Not found",
+                            "status": 404,
+                            "detail": "no escrow has been stored for this account",
+                            "code": "error.escrow.not_stored",
+                        })
+                        .to_string(),
+                    )
                 } else {
                     let mut response = MockResponse::new(200, "OK")
                         .header("Content-Type", "application/octet-stream");

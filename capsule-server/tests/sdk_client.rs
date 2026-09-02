@@ -287,3 +287,59 @@ async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
         .expect("the code completes the sign-in");
     assert!(session.is_authenticated().await);
 }
+
+/// The escrow round trip, over a socket, against the router that actually serves it.
+///
+/// This is the case the slice was missing. `capsule_sdk::recovery` used to build
+/// `{api_root}/backup/escrow` by hand — the Salvo document's path — and its own in-module mock
+/// answered whatever path it was handed, so every escrow test passed while no real server had
+/// that route. Only a client pointed at the router can tell the difference, and the bytes are
+/// the ones a KDF runs against: a wrap that comes back re-encoded is a lost master key.
+#[tokio::test]
+async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::crypto::pwkdf;
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+
+    // Fast Argon2id params: the crypto is `capsule-core`'s and proven there; what is under test
+    // is the wire.
+    let params = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+
+    let fixture = Fixture::working();
+    let base_url = serve(&fixture).await;
+    let client =
+        RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
+
+    // Nothing stored yet: the typed refusal a cadence reads as "enroll first", carrying the
+    // code a client localizes.
+    let missing = client
+        .fetch_escrow()
+        .await
+        .expect_err("a fresh account has escrowed nothing");
+    assert!(
+        matches!(missing, RecoveryError::NotEnrolled),
+        "got {missing:?}"
+    );
+    assert_eq!(missing.error_code(), Some("error.escrow.not_stored"));
+
+    let master = [0x5Au8; 32];
+    let blob = pwkdf::wrap_with(&master, b"correct horse battery staple", params)
+        .expect("the master key wraps");
+    client.store_escrow(&blob).await.expect("the escrow stores");
+
+    let cache = client.fetch_escrow().await.expect("and comes back");
+    assert_eq!(
+        cache.blob(),
+        &blob,
+        "the escrow is ciphertext served verbatim; a re-encoded wrap no longer opens"
+    );
+    assert_eq!(
+        capsule_core::backup::recover_master_key(cache.blob(), b"correct horse battery staple")
+            .expect("the fetched wrap opens"),
+        master,
+    );
+}
