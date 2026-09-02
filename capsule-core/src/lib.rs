@@ -58,6 +58,15 @@ pub mod lifecycle;
 pub mod metadata;
 #[cfg(feature = "native")]
 pub mod ml;
+// `notify` — alert classes and their trigger predicates (`S-D29`): one shared decision
+// function every platform evaluates, so the taxonomy is not reimplemented per client.
+// `native`-gated because an alert is composed from *decrypted device state*, and the
+// un-gated surface here is the key-free guest sealing path, which holds none of it. The
+// rationale lives as a plain comment rather than a doc comment because rustdoc merges an
+// outer `mod` doc with the module's own `//!` block and then resolves the whole thing at
+// the declaration site — which would break every short intra-doc link in `notify/mod.rs`.
+#[cfg(feature = "native")]
+pub mod notify;
 #[cfg(feature = "native")]
 pub mod sidecar;
 #[cfg(feature = "native")]

@@ -36,10 +36,17 @@ Three distinct things, three words. The collision this table resolves is the rea
 A hint is a *pull prompt between infrastructure*. A wake is a hint applied at the client edge. An
 alert is the only one a human ever sees, and it is never produced by a server.
 
-**Where this lives.** Alert classes and their trigger predicates belong in `capsule-core::notify`
-(**Planned**) so every platform evaluates one shared decision function; only *delivery* is native
-per client. This is the [minimal-divergence split](/design/clients/#design-priorities) applied to
-alerts. No server module is planned for v1 — Tier 0 has no server half.
+**Where this lives.** Alert classes and their trigger predicates live in `capsule-core::notify`
+so every platform evaluates one shared decision function; only *delivery* is native per client.
+This is the [minimal-divergence split](/design/clients/#design-priorities) applied to alerts. No
+server module is planned for v1 — Tier 0 has no server half.
+
+**Status.** `capsule-core::notify` is **built** (slice `S-D29`, core half): one pure decision
+function returns the classes true at an instant, a second returns the instant to arm per class,
+and `capsule-sdk::ffi` carries both to the apps. Every predicate input is caller-supplied,
+because the core holds none of the trigger state. What is still owed is the *delivery* half —
+the per-platform scheduling and presentation below, the `notification.*` catalog keys, and the
+permission request — so no alert on this page reaches a user yet.
 
 ## Tier 0 — Local Alerts
 
@@ -57,13 +64,16 @@ write a sentence from.
 A closed enum. Each class's *trigger predicate and thresholds* stay owned by the doc that defines the
 condition; this doc owns the class list, the delivery, and the shared snooze/badge mechanics.
 
-| Class | Trigger owner | Pre-armable |
-| --- | --- | --- |
-| `sync_stale` | [Download & Sync — Notifications](/design/import/download-sync/#notifications) | **Yes** |
-| `recovery_check_due` | [Backup — Schedule and Triggers](/design/backup-recovery/#schedule-and-triggers) | **Yes** |
-| `quota_soft` / `quota_grace_expiring` | [Quota — Thresholds and States](/design/quota/#thresholds-and-states) | No |
-| `quarantine_pending` | [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | No |
-| `drop_pending` | [Web Upload — Drop and Adoption Lifecycle](/design/web-upload/#drop-and-adoption-lifecycle) | No |
+Each class carries **parameters** — plain strings a client interpolates into its own catalog
+string, never text. They are listed with the class below and settled by the trigger owner.
+
+| Class | Trigger owner | Parameters | Pre-armable |
+| --- | --- | --- | --- |
+| `sync_stale` | [Download & Sync — Notifications](/design/import/download-sync/#notifications) | `count`, `days_behind` | **Yes** |
+| `recovery_check_due` | [Backup — Schedule and Triggers](/design/backup-recovery/#schedule-and-triggers) | `snooze_budget` (`available` / `spent`), `recovery` (`check` / `rewrap`) | **Yes** |
+| `quota_soft` / `quota_grace_expiring` | [Quota — Thresholds and States](/design/quota/#thresholds-and-states) | `grace` (`counting` / `expired`), on the second only | No |
+| `quarantine_pending` | [Threat Model — Quarantine Surfaces](/design/threat-model/scenarios/#quarantine-surfaces) | `count` | No |
+| `drop_pending` | [Web Upload — Drop and Adoption Lifecycle](/design/web-upload/#drop-and-adoption-lifecycle) | `count` | No |
 
 Unknown classes are rejected as structural errors, like every other closed enum
 ([Schema Rules](/design/threat-model/schema-rules/)).

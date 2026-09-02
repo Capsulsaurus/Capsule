@@ -13,6 +13,5 @@
 # module-layer answer to "what has been designed and not built?"
 
 capsule-core::media	The Capsule-side owner of decode, metadata extraction and derivative generation, which will consume Rawshift once Rawshift stabilizes. Rawshift is a pinned submodule today and is not a workspace dependency, so nothing consumes it and this module has no body to write yet. Lane B in SLICES.md.
-capsule-core::notify	Alert classes and their trigger predicates, so every platform evaluates one shared decision function rather than reimplementing the taxonomy. Contract: design/notifications.md. Tier 0 has no server half, so this is client-only work.
 capsule-core::import::camera	The PTP/IP tethered-camera source adapter (S-B9). Post-v1; the contract exists so the adapter seam is fixed before anything implements it.
 capsule-server::federation	Server-to-server federation pull. The whole surface is post-v1 — `capsule-server` has no federation route, no capability-token verifier and no per-peer budget enforcement.
