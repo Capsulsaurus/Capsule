@@ -44,9 +44,6 @@ kynos = { workspace = true }
 # refuse-by-default invariants — and the crypto types they read. The default `native` feature pulls
 # SQLite, sqlite-vec, OpenMLS and libcrux, none of which a key-free server touches.
 capsule-core = { path = "../capsule-core", default-features = false }
-# The framework-free wire contracts (slice `S-C27`). The response taxonomy lives here so it
-# outlives whichever framework renders it.
-capsule-wire = { path = "../capsule-wire" }
 serde = { workspace = true }
 # The state ports (slice `S-C29`). `thiserror` because these are a library surface;
 # `jiff` because every record and every TTL is a time and chrono is banned; `tracing` because

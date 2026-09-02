@@ -4,8 +4,9 @@
 //!
 //! The previous server was Salvo, and its wire-contract types were themselves salvo-typed, so
 //! replacing it was never a transport swap (`SLICES.md`, the salvo→kynos row). `S-C27` moved the
-//! response taxonomy into the framework-free [`capsule_wire`]; this crate is where the surfaces
-//! that taxonomy describes get rebuilt.
+//! response taxonomy into a framework-free crate so the contract could outlive the transport;
+//! that crate retired with the Salvo tree it adapted (ADR-0004), and this crate is where the
+//! surfaces the taxonomy described get rebuilt. `problem`, `limits` and `body` own it now.
 //!
 //! # What the framework buys, and why it was chosen
 //!
