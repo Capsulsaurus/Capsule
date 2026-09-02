@@ -527,14 +527,27 @@ impl SyncConsumer {
                 .filter(|value| !value.is_empty())
                 .map(str::to_owned),
             page_size: Some(i64::from(page_size)),
+            // The suite and the sidecar schema are validated when present and a feed pull has
+            // no use for either; the suite already rides the transport's default headers.
+            ..rest::SyncFeedParams::default()
         };
-        Ok(self.client.sync_feed(params).await?.into_inner())
+        // The protocol date is a required parameter of every gated operation in the document,
+        // so the generated signature asks for it; the value is the build's own, the same one the
+        // transport's default header carries.
+        Ok(self
+            .client
+            .sync_feed(capsule_core::crypto::primitives::PROTOCOL_VERSION, params)
+            .await?
+            .into_inner())
     }
 }
 
 /// A generated client for `base_url` carrying `credential` under the bearer scheme.
 fn build_client(base_url: &str, credential: rest::Credential) -> Result<rest::Client, SyncError> {
-    let client = rest::Client::with_client(reqwest::Client::new(), base_url)
+    // The SDK's one HTTP client, so the feed pull carries the protocol handshake.
+    let http =
+        crate::net::http_client().map_err(|error| SyncError::Transport(error.to_string()))?;
+    let client = rest::Client::with_client(http, base_url)
         .map_err(|error| SyncError::Transport(error.to_string()))?
         .with_credential(BEARER_SCHEME, credential);
     Ok(client)
@@ -585,9 +598,13 @@ fn map_error(error: rest::Error<rest::SyncFeedError>) -> SyncError {
     match error {
         rest::Error::Api(response) => {
             let (code, message) = match response.into_inner() {
+                // 400 and 426 include the protocol gate's answers (issue #404); the code the
+                // body carries is the one a caller switches on, `error.protocol.version_unsupported`
+                // being the one that means "update the client".
                 rest::SyncFeedError::Status400(problem)
                 | rest::SyncFeedError::Status401(problem)
                 | rest::SyncFeedError::Status403(problem)
+                | rest::SyncFeedError::Status426(problem)
                 | rest::SyncFeedError::Status500(problem) => (
                     Some(problem.code.clone()),
                     problem.detail.clone().unwrap_or_default(),

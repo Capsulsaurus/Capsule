@@ -19,8 +19,6 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-
 use crate::auth::Session;
 use crate::rest::{self, Client, Credential};
 
@@ -48,7 +46,10 @@ pub enum ClientError {
 /// Cheap to build; holds one [`rest::Client`](crate::rest::Client) whose bearer credential is
 /// an async provider backed by the session. Because the provider is consulted per request,
 /// token rotation (refresh) is picked up with no rebuild. Deref-transparent: call any
-/// generated operation directly, e.g. `client.get_quota().await`.
+/// generated operation directly, e.g. `client.get_quota(PROTOCOL_VERSION, None).await` — every
+/// gated operation takes the protocol date as its first argument, because the document
+/// declares `X-Capsule-Protocol` required there (issue #404); the transport sends the same value
+/// as a default header regardless.
 pub struct AuthenticatedClient {
     base_url: String,
     session: Session,
@@ -128,43 +129,11 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
     Ok(client)
 }
 
-/// The request half of the protocol handshake, as default headers for a `reqwest` client.
-///
-/// Every route the server gates requires `X-Capsule-Protocol` and refuses without it (issue
-/// #404: `capsule-server/src/negotiation.rs`), and `X-Capsule-Crypto-Suite` names the suite
-/// this build seals under. Both are constants of the build, so they belong on the transport
-/// once rather than on every call: a `reqwest` default header rides every request the client
-/// sends, the spargen-generated operations included, with no per-operation argument for a
-/// value no caller chooses. A header set explicitly on a request still wins, which is how the
-/// hand-written upload path keeps pinning a per-transport protocol date.
-///
-/// `X-Capsule-Sidecar-Schema` is deliberately absent: the design scopes it to metadata updates,
-/// and a schema number is a property of one write rather than of the transport.
-///
-/// Public so a transport this module does not build — the auth client's, the sync consumer's,
-/// a platform app's own — can carry the same handshake from the same source.
-#[must_use]
-pub fn protocol_headers() -> HeaderMap {
-    let mut headers = HeaderMap::with_capacity(2);
-    headers.insert(
-        HeaderName::from_static("x-capsule-protocol"),
-        HeaderValue::from_static(capsule_core::crypto::primitives::PROTOCOL_VERSION),
-    );
-    headers.insert(
-        HeaderName::from_static("x-capsule-crypto-suite"),
-        HeaderValue::from(capsule_core::crypto::primitives::CRYPTO_SUITE_ID),
-    );
-    headers
-}
-
-/// The generated client's transport: rustls only (the SDK's `reqwest` has no default features
-/// and only `rustls-tls`), matching the rest of the SDK's network stack — and carrying the
-/// protocol handshake on every request it sends.
+/// The generated client's transport: the SDK's one HTTP client
+/// ([`crate::net::http_client`]) — rustls only, carrying the protocol handshake on every request
+/// it sends, the generated operations included.
 fn reqwest_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .default_headers(protocol_headers())
-        .build()
-        .expect("a default rustls reqwest client is always constructible")
+    crate::net::http_client().expect("a default rustls reqwest client is always constructible")
 }
 
 #[cfg(test)]
@@ -420,7 +389,11 @@ mod tests {
         let session = session_with(&server.base_url, "access-1", "refresh-1", far_future());
         let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-        let quota = client.get_quota().await.unwrap().into_inner();
+        let quota = client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(quota.used, 0);
 
         let requests = server.requests.lock().unwrap();
@@ -475,7 +448,11 @@ mod tests {
         );
         let client = AuthenticatedClient::new(&server.base_url, session).unwrap();
 
-        let quota = client.get_quota().await.unwrap().into_inner();
+        let quota = client
+            .get_quota(capsule_core::crypto::primitives::PROTOCOL_VERSION, None)
+            .await
+            .unwrap()
+            .into_inner();
         assert_eq!(quota.used, 7);
 
         assert_eq!(
