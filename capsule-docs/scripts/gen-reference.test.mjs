@@ -287,6 +287,19 @@ describe('demoteHeadings', () => {
         expect(() => demoteHeadings('Title\n-----\n', 2)).toThrow(/Title/);
     });
 
+    // CommonMark's underline is `= +` / `- +`, not two or more. Requiring two let the
+    // single-character form through the check that exists to catch it — the defect arriving
+    // through the guard against the defect.
+    it('refuses a single-character setext underline', () => {
+        expect(() => demoteHeadings('Title\n-\n', 2)).toThrow(/setext/i);
+        expect(() => demoteHeadings('Title\n=\n', 2)).toThrow(/setext/i);
+    });
+
+    it('refuses an indented or trailing-spaced single-character underline', () => {
+        expect(() => demoteHeadings('Title\n   -\n', 2)).toThrow(/setext/i);
+        expect(() => demoteHeadings('Title\n= \n', 2)).toThrow(/setext/i);
+    });
+
     it('does not mistake a thematic break or a table for a setext underline', () => {
         expect(() => demoteHeadings('para\n\n---\n', 2)).not.toThrow();
         expect(() => demoteHeadings('| a |\n| --- |\n', 2)).not.toThrow();
@@ -738,6 +751,44 @@ describe('readOpenApiDocument', () => {
         writeOpenApi(document);
         expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
         expect(() => readOpenApiDocument(root)).toThrow(new RegExp(keyword));
+    });
+
+    // Checking only the root is the shape of the bug it prevents: a composition one level
+    // down falls through `typeOf` to `object` and renders as a row claiming the field is a
+    // plain object — a confident lie about a union.
+    it.each([
+        'properties.choice',
+        'items',
+        'additionalProperties',
+    ])('refuses a composition nested at %s, naming the schema and the path', (where) => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        const composed = {
+            oneOf: [{ type: 'string' }, { type: 'integer' }],
+        };
+        const target = { type: 'object', title: 'TokenResponse' };
+        if (where === 'properties.choice') {
+            target.properties = { choice: composed };
+        } else if (where === 'items') {
+            target.items = composed;
+        } else {
+            target.additionalProperties = composed;
+        }
+        document.components.schemas.TokenResponse = target;
+        writeOpenApi(document);
+        expect(() => readOpenApiDocument(root)).toThrow(/TokenResponse/);
+        expect(() => readOpenApiDocument(root)).toThrow(/oneOf/);
+    });
+
+    // A `$ref` is scanned on the target's own pass. Following it would report the same
+    // composition once per reference, under whichever name was scanned first.
+    it('reports a composed schema once, under its own name', () => {
+        const document = structuredClone(MINIMAL_OPENAPI);
+        document.components.schemas.TokenKind = {
+            title: 'TokenKind',
+            oneOf: [{ type: 'string' }, { type: 'integer' }],
+        };
+        writeOpenApi(document);
+        expect(() => readOpenApiDocument(root)).toThrow(/schema TokenKind/);
     });
 
     it('accepts the committed document', () => {
