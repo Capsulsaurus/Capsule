@@ -17,7 +17,7 @@
  * edited, so committing one only creates a copy that can disagree with its source. Fix the
  * clap `about` or the schema description and regenerate.
  *
- * Three failure modes are deliberately fatal rather than degraded, because
+ * Six failure modes are deliberately fatal rather than degraded, because
  * `developer-docs.md` calls a stale reference page worse than a missing one — a missing page
  * is obvious and a wrong one is believed:
  *
@@ -109,8 +109,18 @@ const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 /** A line that *closes* one: the same run with nothing after it but whitespace. */
 const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
 
-/** A setext underline: a run of `=` or `-` alone on its line. */
-const SETEXT_UNDERLINE = /^\s{0,3}(={2,}|-{2,})\s*$/;
+/**
+ * A setext underline: a run of `=` or `-` alone on its line.
+ *
+ * **One character is enough.** CommonMark's `setext heading underline` is `= +` or `- +`,
+ * not two or more, so `Title` over a lone `-` is an h2 exactly as `Title` over `---` is.
+ * Requiring two let a single-character underline through the check that exists to catch it,
+ * which shipped an undemoted heading into a page body — the defect, arriving through the
+ * guard against the defect.
+ *
+ * Up to three leading spaces, and trailing whitespace, both per the spec.
+ */
+const SETEXT_UNDERLINE = /^\s{0,3}(={1,}|-{1,})\s*$/;
 
 /**
  * Shift every ATX heading in `markdown` down by `offset` levels, clamped at h6.
@@ -688,16 +698,55 @@ function assertRenderable(document) {
     for (const [name, schema] of Object.entries(
         document.components?.schemas ?? {},
     )) {
-        const composed = COMPOSITION_KEYWORDS.filter((word) => schema?.[word]);
-        if (composed.length > 0) {
-            throw new Error(
-                `schema ${name} composes with ${composed.join(' and ')}, which this ` +
-                    'generator cannot express: it flattens a schema to a property table, ' +
-                    'and a union or an intersection is not a property table. It would ' +
-                    `render as an empty or a half-true model. Teach ${GENERATED_BY} to ` +
-                    'render composition before the server starts emitting it.',
-            );
-        }
+        assertNoComposition(name, name, schema);
+    }
+}
+
+/**
+ * Refuse `oneOf`/`allOf`/`anyOf` anywhere in a named schema, not only at its root.
+ *
+ * Checking the root alone is the shape of the bug it was meant to prevent: a composition one
+ * level down, in `properties.<name>` or in `items`, falls through `typeOf` to the string
+ * `object` and renders as a row claiming the field is a plain object. That is a confident
+ * lie about a union, which is exactly what this check exists to stop, and it passed.
+ *
+ * Only *inline* subschemas are walked. A `$ref` is not followed, because its target is a
+ * named schema that this scan reaches on its own pass — following it would report the same
+ * composition once per reference, under whichever name happened to be scanned first.
+ *
+ * @param {string} name The named schema this subtree belongs to.
+ * @param {string} at A readable path to the subschema, for the error.
+ * @param {unknown} schema The subschema.
+ * @throws {Error} naming the schema and the path within it.
+ */
+function assertNoComposition(name, at, schema) {
+    if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return;
+    if (schema.$ref) return;
+
+    const composed = COMPOSITION_KEYWORDS.filter((word) => schema[word]);
+    if (composed.length > 0) {
+        throw new Error(
+            `schema ${name} composes with ${composed.join(' and ')} at ${at}, which this ` +
+                'generator cannot express: it flattens a schema to a property table, ' +
+                'and a union or an intersection is not a property table. It would ' +
+                `render as an empty or a half-true model. Teach ${GENERATED_BY} to ` +
+                'render composition before the server starts emitting it.',
+        );
+    }
+
+    for (const [property, subschema] of Object.entries(
+        schema.properties ?? {},
+    )) {
+        assertNoComposition(name, `${at}.${property}`, subschema);
+    }
+    assertNoComposition(name, `${at}[]`, schema.items);
+    // `additionalProperties` is a schema when it is an object, and `true`/`false` otherwise.
+    if (typeof schema.additionalProperties === 'object') {
+        assertNoComposition(
+            name,
+            `${at}.additionalProperties`,
+            schema.additionalProperties,
+        );
     }
 }
 
