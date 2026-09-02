@@ -63,7 +63,21 @@ jobs:
               # `i18n-guard` are `cargo run -p xtask -- i18n …` over `locales/`,
               # so a catalog-only change must still pay the Rust gate. The
               # `swift` filter already lists it for the same reason.
+              #
+              # `i18n-check` compares `locales/` against its *generated* outputs,
+              # and drift is drift whichever side moved — a hand-edit to a
+              # generated catalog is the case it exists to catch. `check-rust` is
+              # the only task that runs it and the `rust` job is the only job that
+              # runs `check-rust`, so these four globs are what makes the CI gate
+              # at least as wide as the local one — hk.pkl's `i18n-check` step
+              # lists the same generated targets (the two remaining entries of
+              # that glob, `capsule-i18n/src/**` and `xtask/src/i18n.rs`, are
+              # already covered here by `capsule-i18n/**` and `xtask/**`). Keep
+              # the two in step.
               - 'locales/**'
+              - 'capsule-web/src/i18n/messages/**'
+              - 'capsule-swift/Generated/**'
+              - 'capsule-android/src/androidMain/res/values*/strings.xml'
               - '.github/workflows/ci.yml'
             web:
               - 'capsule-web/**'
