@@ -70,6 +70,18 @@ impl AlertClass {
         }
     }
 
+    /// The inverse of [`as_str`](Self::as_str): parse a wire name, rejecting anything that is
+    /// not one of the six.
+    ///
+    /// The enum is closed, so an unrecognized name is `None` — a structural error for the
+    /// caller to report, never a class that is silently dropped. This exists so a boundary that
+    /// carries the name as a plain string (the uniffi FFI's suppression map, a persisted
+    /// client preference) has one table to parse against rather than its own copy.
+    #[must_use]
+    pub fn from_wire(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|class| class.as_str() == name)
+    }
+
     /// How loudly a client should present this class. A property of the class, not of the
     /// instant it fired, so it lives here rather than being decided per-[`Alert`].
     #[must_use]
@@ -196,6 +208,23 @@ mod tests {
                 serde_json::from_str::<AlertClass>(&format!("\"{name}\"")).unwrap(),
                 class
             );
+        }
+    }
+
+    /// `from_wire` is exactly the inverse of `as_str`, and rejects everything else.
+    #[test]
+    fn from_wire_round_trips_and_rejects_the_rest() {
+        for class in AlertClass::ALL {
+            assert_eq!(AlertClass::from_wire(class.as_str()), Some(class));
+        }
+        for name in [
+            "",
+            "SyncStale",
+            "sync-stale",
+            "sync_stale ",
+            "telemetry_ready",
+        ] {
+            assert_eq!(AlertClass::from_wire(name), None, "{name:?}");
         }
     }
 

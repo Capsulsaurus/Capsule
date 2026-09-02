@@ -57,6 +57,16 @@ pub use workspace::{
     FfiWorkspace,
 };
 
+/// The local-alert surface (`S-D29`): the shared `capsule_core::notify` predicate, flattened.
+/// Separated from both blocks above because it touches neither a transport nor a workspace —
+/// it is a pure function of caller-supplied device state, and the two free exports say so.
+mod notify;
+
+pub use notify::{
+    FfiAlert, FfiAlertClass, FfiAlertSeverity, FfiNotifyInput, FfiQuotaAdvisory, evaluate_alerts,
+    next_alert_deadline,
+};
+
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
 /// Every failure the FFI flows can surface, flattened by originating layer. Each
