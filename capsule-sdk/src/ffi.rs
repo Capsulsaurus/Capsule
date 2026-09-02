@@ -63,7 +63,7 @@ pub use workspace::{
 /// variant carries the stable `error.*` catalog `code` (when one applies — clients
 /// localize it) and the English detail `message` (stays English), mirroring the
 /// SDK's `{ error, code }` contract so foreign apps switch on the code, never a
-/// bare HTTP/gRPC status.
+/// bare HTTP status.
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 pub enum FfiError {
     /// An authentication flow (login/register/refresh/logout) failed.

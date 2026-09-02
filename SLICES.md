@@ -302,12 +302,12 @@ row's remainder now lives.
 | S-D9 | capsule-sdk uniffi FFI bindings | sdk/clients | S-F1, S-D7 | M | RETIRED | ready | Swift harness → `S-P8`; Kotlin harness → owed-CI |
 | S-D10 | Adverse-network hardening | sdk/clients | S-D1, S-D2 | M | RETIRED | ready | |
 | S-D11 | Client cohort emission + devices grouping UI | sdk/clients | S-C13, S-D7 | M | MIXED | done\* | iOS reader → `S-P6`; devices screen → post-v1; device_id → `S-N3` |
-| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | |
+| S-D12 | Recovery verification cadence + guided re-wrap | sdk/clients | S-C12 | M | MIXED | done | `store_escrow` discards `stored_at`/`replaced` → issue #442 |
 | S-D13 | Culling workflow client UX | sdk/clients | — | M | ACTIVE | done | |
 | S-D14 | Local-gallery security gates | sdk/clients | — | S | ACTIVE | done | |
 | S-D15 | Exact client build identification | sdk/clients | — | S | MIXED | done | |
 | S-D16 | Standalone `capsule cull` command | sdk/clients | S-A10 | S | ACTIVE | done | |
-| S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | RETIRED | ready | |
+| S-D17 | Typed REST client reactive 401-retry-once | sdk/clients | — | S | MIXED | done | |
 | S-D18 | `capsule push` — drive `capsule_sdk::upload` from CLI | sdk/clients | S-A10 | M | MIXED | done | |
 | S-D19 | Hidden-view DB projection + gate wiring | sdk/clients | — | S | ACTIVE | done | rebuild un-hides → `S-D21` |
 | S-D21 | Index rebuild loses gated state (two sidecar shapes) | sdk/clients | S-D19 | M | ACTIVE | done | importer stacks → `S-B15`; unsigned migration → `S-D24`; no hidden writer → `S-D25` |
@@ -4129,6 +4129,24 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Tier:** Unit + Smoke.
 - **Landed:** the cadence scheduler, the verifier, and the re-wrap are `ACTIVE` core; only
   the escrow store/replace calls re-scope.
+- **Gap** (found 2026-09-01, issue #408): **the networked half never worked against a real
+  server.** `capsule-sdk/src/recovery/mod.rs` built `{api_root}/backup/escrow` from a `const`
+  — the Salvo document's path — and sent it with hand-written `reqwest` calls, while the Kynos
+  contract serves `GET`/`PUT /v1/auth/escrow`. So enroll, the stale-cache refresh and the
+  guided re-wrap's escrow replace all failed on a live server while this row read `done`. It
+  survived `S-D28`'s re-source because a route in a string constant is checked by no gate and
+  the module's own mock answered whichever path it was handed.
+- **Closed:** the two operations are `application/octet-stream` in each direction, which
+  `spargen` lowers, so both were already generated and neither was narrowed in `build.rs`.
+  `RecoveryClient` now holds an `AuthenticatedClient` and orchestrates
+  `fetch_escrow`/`store_escrow`, so the path is a function of the committed document and
+  cannot drift again. Both in-repo mocks route on `/v1/auth/escrow` and answer `501` off it,
+  and `capsule-server/tests/sdk_client.rs` asserts the route against the real router from both
+  ends — what the SDK stored is read back at `/v1/auth/escrow`, and a rotation seeded there is
+  what the SDK fetches next.
+- **Owed:** `store_escrow` logs `stored_at`/`replaced` instead of returning them, so the
+  stale-cache rule still refreshes on a failed compare rather than on a known-stale timestamp
+  and `guided_rewrap` cannot tell a first enrollment from a rotation → issue #442.
 
 ### S-D13 — Culling workflow client UX
 
@@ -4196,8 +4214,31 @@ Kynos server, which cannot be written until `S-C53` gives the server a way to cr
 - **Done when:** a mocked-clock race test passes (expired-at-server, valid-at-client →
   one refresh, one retry, no loop). **Tier:** Unit.
 - **Note:** the layer sits above the generated client, so write it once and it survives
-  the schema re-source; it is `RETIRED` only because the client under it is regenerated
-  from Kynos.
+  the schema re-source. That is why the row is `MIXED` rather than `RETIRED`: the client
+  underneath is regenerated from Kynos, but the layer itself is live code in this workspace
+  and nothing about it re-scopes.
+- **Landed** (2026-09-01, issue #408): `capsule_sdk::client::RefreshOn401`, an
+  `rest::HttpBackend` wrapping `ReqwestBackend`, installed by `AuthenticatedClient` through
+  `Client::with_backend`. On a `401` it refreshes once through a new `pub(crate)
+  Session::refresh_rejected` — `ensure_refreshed(Rejected(stale))`, so the existing
+  single-flight gate coalesces on the exact token the server refused — and replays the request
+  once. No generated code is touched and every generated operation is covered at once.
+  - **Not spargen's `Middleware`:** `Next::run` takes `self` by value and `Next` is neither
+    `Clone` nor constructible outside the generated runtime, so a middleware cannot send twice.
+    `RetryBackend` is the precedent followed instead, including its rule that a request whose
+    `try_clone()` is `None` (a one-shot streaming body) is executed once and never replayed.
+  - **Exactly once by construction**, not by a loop counter. A refresh that itself fails
+    surfaces the *server's* `401` rather than a synthesized transport error, so the typed
+    `Status401` mapping still fires and the caller reads the `error.*` code — which matters
+    because an unreadable revocation ledger is also rendered as `401`.
+  - **Proven** by four unit cases in `capsule-sdk/src/client.rs` and, over a socket against
+    the real router, by `a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed`
+    in `capsule-server/tests/sdk_client.rs`: the server validates `exp` against its injected
+    clock, so advancing the fixture past `ACCESS_TOKEN_TTL` revokes the access token for real
+    while the refresh token lives.
+  - **`capsule_sdk::sync` keeps its own per-call `401` loop**, deliberately: it builds its own
+    `rest::Client`, supports a static-token mode with no session to refresh, and interleaves
+    the `401` path with the shared retry engine's transient class.
 
 ### S-D18 — `capsule push`
 

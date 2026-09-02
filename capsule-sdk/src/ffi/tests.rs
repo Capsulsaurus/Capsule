@@ -17,10 +17,11 @@
 //! publish. Every verb reaches `capsule-core` for its crypto; what is under test here
 //! is the wiring, the shapes, and the verdicts.
 //!
-//! `sync_pull` itself is gRPC and is exercised by the native harness against the real
-//! server; its Rust-side shape is compiled here (the surface builds) but not
-//! behaviorally driven — the sync-apply test below feeds `apply_sync_entry` the exact
-//! three byte strings a feed entry carries, which is the half `S-P1` owns.
+//! `sync_pull` itself rides the generated `GET /v1/sync` operation (`S-D28` retired the gRPC
+//! feed) and is exercised over a socket in `capsule-server/tests/sdk_client.rs` against the
+//! real router; its Rust-side shape is compiled here (the surface builds) but not behaviorally
+//! driven — the sync-apply test below feeds `apply_sync_entry` the exact three byte strings a
+//! feed entry carries, which is the half `S-P1` owns.
 
 use std::sync::Arc;
 
