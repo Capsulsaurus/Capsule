@@ -440,7 +440,7 @@ impl WasmLqipImage {
 /// threw on a malformed `dominant_color` while the native FFI painted black for the same input —
 /// one record, two behaviours, decided by which client opened it. That is exactly the
 /// client-dependent divergence `capsule-core::lqip` exists to prevent, so both surfaces now
-/// paint [`FALLBACK_FILL`] and say so.
+/// paint the same fallback fill (black, the conventional empty cell) and say so.
 #[wasm_bindgen(js_name = decodeLqip)]
 pub fn decode_lqip(
     format_version: u16,
