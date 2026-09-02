@@ -226,11 +226,11 @@ run = "cargo deny --all-features check licenses"
 # to point at each stage. `S-C59` retired the Salvo one; this is now the contract, singular.
 [tasks.openapi-kynos]
 description = "Dump the Kynos OpenAPI 3.2 document to capsule-server/openapi.json"
-run = "cargo run -q -p capsule-server --bin gen_openapi"
+run = "cargo run -q -p capsule-server -- gen-openapi"
 
 [tasks.openapi-check-kynos]
 description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
-run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
+run = "cargo run -q -p capsule-server -- gen-openapi --check"
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.

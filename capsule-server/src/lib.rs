@@ -56,6 +56,7 @@ pub mod auth;
 pub mod blob;
 pub mod body;
 pub mod boot;
+pub mod cli;
 pub mod config;
 pub mod counter;
 pub mod directory;
