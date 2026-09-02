@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use ciborium::value::Value;
 use jiff::Timestamp;
 use uuid::Uuid;
 
@@ -189,12 +190,54 @@ fn asset_row_from_state(asset: &AssetState) -> AssetRow {
     }
 }
 
+/// Whether `a` and `b` resolve to the same existing file.
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
+/// One signed create, as [`Workspace::commit_signed_create`] takes it: everything a caller
+/// decides *before* the sealing order starts. A fresh import fills the defaults; the
+/// unsigned-sidecar migration (`S-D24`) is the one caller that pins an id, a bucket, an import
+/// time, and a fold.
+pub(super) struct CreateRequest<'a> {
+    /// The asset id. An import mints `Uuid::now_v7()`; the migration keeps the legacy id.
+    pub asset_id: Uuid,
+    /// The owning album; must be held with write capability.
+    pub album_id: Uuid,
+    /// The plaintext to admit. When this already *is* the asset's own media path, the bytes are
+    /// left where they are rather than rewritten over themselves.
+    pub src: &'a Path,
+    /// The sidecar's `import_timestamp`; `None` stamps now.
+    pub import_timestamp: Option<String>,
+    /// The `media/{YYYY}/{YYYY-MM}` bucket the asset's files live in, as UTC seconds. `None`
+    /// derives it from the resolved capture time (a fresh import); the migration pins the
+    /// bucket the files already sit in, so nothing moves.
+    pub media_bucket: Option<i64>,
+    /// `_unknown` entries the signed sidecar carries from birth — empty for an import.
+    pub extra_unknown: BTreeMap<String, Value>,
+    /// Move-mode release, stack placement, and exporter enrichment.
+    pub opts: &'a SignedImportOptions,
+}
+
 impl Workspace {
     pub(super) fn write_asset_files(&self, asset: &AssetState, plaintext: &[u8]) -> Result<()> {
         let dir = media_dir(&self.root, asset.capture_utc);
         fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
         fs::write(self.media_path(asset), plaintext)
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
+        self.write_signed_artifacts(asset)
+    }
+
+    /// The signed half of [`write_asset_files`](Self::write_asset_files): the sidecar, the
+    /// provenance chain, and the sealed metadata blob — everything but the plaintext. Used on
+    /// its own when the plaintext is already in place (the unsigned-sidecar migration signs
+    /// bytes that never move).
+    pub(super) fn write_signed_artifacts(&self, asset: &AssetState) -> Result<()> {
+        let dir = media_dir(&self.root, asset.capture_utc);
+        fs::create_dir_all(&dir).map_err(|e| LifecycleError::Io(e.to_string()))?;
         fs::write(self.sidecar_path(asset), asset.sidecar.to_canonical_vec())
             .map_err(|e| LifecycleError::Io(e.to_string()))?;
         let prov = cbor::to_canonical_vec(&asset.chain.records().to_vec())
@@ -326,12 +369,36 @@ impl Workspace {
         src: &Path,
         opts: &SignedImportOptions,
     ) -> Result<SignedImport> {
+        self.commit_signed_create(&CreateRequest {
+            asset_id: Uuid::now_v7(),
+            album_id,
+            src,
+            import_timestamp: None,
+            media_bucket: None,
+            extra_unknown: BTreeMap::new(),
+            opts,
+        })
+    }
+
+    /// The signed create commit every import — and the unsigned-sidecar migration — goes
+    /// through: EXIF scan, encrypt, derivatives, author + sign the sidecar, seal it, build +
+    /// sign the create manifest, self-verify, write, index. The [`CreateRequest`] carries the
+    /// few things a caller decides beforehand; the sealing order and the self-checks are the
+    /// same for every caller, which is the point of there being one of these.
+    #[tracing::instrument(
+        skip_all,
+        fields(asset_id = %req.asset_id, album_id = %req.album_id, src = %req.src.display())
+    )]
+    pub(super) fn commit_signed_create(&mut self, req: &CreateRequest<'_>) -> Result<SignedImport> {
+        let src = req.src;
+        let asset_id = req.asset_id;
+        let album_id = req.album_id;
+        let opts = req.opts;
         let plaintext = fs::read(src)
             .map_err(|e| LifecycleError::Io(format!("read {}: {e}", src.display())))?;
         let ext = src
             .extension()
             .map_or_else(|| "bin".into(), |e| e.to_string_lossy().to_lowercase());
-        let asset_id = Uuid::now_v7();
 
         // Scan & extract: capture time, dimensions, and GPS from the file's EXIF. Missing values
         // degrade cleanly (capture → now; dimensions/GPS → absent).
@@ -401,6 +468,11 @@ impl Workspace {
         // address and this nonce prefix, neither of which exists until now.
         let (enc, ciphertext, _file_key) = encrypt_asset_rekey(&amk, &asset_id, &plaintext, None)?;
 
+        // The media bucket every file of this asset resolves to. A fresh import buckets by the
+        // resolved capture time; the migration pins the bucket the files already sit in, and
+        // the sidecar's `capture_timestamp` below still carries the resolved truth.
+        let bucket = req.media_bucket.unwrap_or(capture_utc);
+
         // Still-derived sidecar metadata, from one decode pass over the plaintext: the
         // header-derived `content_type`, pixel `dimensions`, the chromahash `lqip`, and the
         // signed thumbnail derivatives to persist once the asset's own files are durable. Each
@@ -427,7 +499,7 @@ impl Workspace {
             },
             asset_id,
             album_id,
-            capture_utc,
+            bucket,
             &amk,
             &enc,
         )?;
@@ -440,7 +512,7 @@ impl Workspace {
             uuid: asset_id,
             hash: hash::hash_bytes(&plaintext),
             capture_timestamp: capture_rfc3339(capture_utc),
-            import_timestamp: now_rfc3339(),
+            import_timestamp: req.import_timestamp.clone().unwrap_or_else(now_rfc3339),
             // Header-derived wherever the bytes name a still Capsule models; the extension
             // table is the fallback for everything else (video, unknown suffixes).
             content_type: format.map_or_else(|| content_type_for(&ext), |f| f.mime().to_string()),
@@ -466,7 +538,7 @@ impl Workspace {
             session_id: Uuid::now_v7(),
             gps,
             provenance_chain_hash: None,
-            unknown: BTreeMap::new(),
+            unknown: req.extra_unknown.clone(),
             signature: None,
         };
         sidecar.sign(&self.account.user_ik);
@@ -534,7 +606,7 @@ impl Workspace {
             asset_id,
             album_id,
             ext,
-            capture_utc,
+            capture_utc: bucket,
             chain,
             sidecar,
             metadata_blob,
@@ -542,7 +614,15 @@ impl Workspace {
             // reaches `AssetState::stack` by any other route.
             stack: opts.stack.as_ref().map(StackPlacement::from_membership),
         };
-        self.write_asset_files(&asset, &plaintext)?;
+        // Bytes already at their own media path (the migration) are signed where they lie: a
+        // same-bytes rewrite of an original would only add a crash window in which the one
+        // copy is truncated.
+        let in_place = is_same_file(src, &self.media_path(&asset));
+        if in_place {
+            self.write_signed_artifacts(&asset)?;
+        } else {
+            self.write_asset_files(&asset, &plaintext)?;
+        }
         // After the asset's own files, and deliberately: a derivative is regenerable, so a
         // failure to write one must never fail an import whose signed original is already
         // durable. `persist_derivatives` logs and continues rather than returning.
@@ -553,7 +633,7 @@ impl Workspace {
         // Move mode: release the source only after the durable, self-verified commit — unless
         // the caller defers release to its server-side verify-before-destroy gate (S-D4/S-B3),
         // where the source is the only copy until the *server* durably holds it.
-        if opts.move_source && !opts.defer_source_release {
+        if opts.move_source && !opts.defer_source_release && !in_place {
             let _ = fs::remove_file(src);
         }
 

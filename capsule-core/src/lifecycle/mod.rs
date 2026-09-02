@@ -31,6 +31,7 @@ mod drops;
 mod groups;
 mod import;
 mod metadata;
+mod migrate_unsigned;
 mod open;
 mod organize;
 mod provenance;
@@ -47,6 +48,10 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use self::drops::{InboxEntry, IssuedLink};
+pub use self::migrate_unsigned::{
+    LEGACY_FOLD_KEY, MigrationSkip, UnmigratedShape, UnmigratedSidecar, UnsignedMigrationOptions,
+    UnsignedMigrationReport,
+};
 pub use self::open::HardwareDekBinding;
 pub use self::sync_apply::{QuarantineReason, RemoteAssetFacts, RemoteEntry, SyncApplyOutcome};
 pub use self::upload::{DerivativeBlob, UploadBundle};
@@ -453,6 +458,11 @@ pub struct Workspace {
     /// **Deliberately session-scoped** (`S-A10`): the server's staging store is the authority and
     /// a client refills this from it, so there is nothing here to lose.
     inbox: HashMap<DropId, InboxEntry>,
+    /// The `{uuid}.cbor` files under `media/` that no provenance chain anchors, found at
+    /// [`open`](Self::open): unsigned pre-signed-path sidecars awaiting
+    /// [`migrate_unsigned_sidecars`](Self::migrate_unsigned_sidecars), or the debris of an
+    /// interrupted run (`S-D24`). Recomputed by the verb; empty for a signed-only library.
+    unmigrated: Vec<UnmigratedSidecar>,
 }
 
 fn now_rfc3339() -> String {

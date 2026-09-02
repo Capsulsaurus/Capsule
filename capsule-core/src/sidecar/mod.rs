@@ -2,6 +2,7 @@ pub(crate) mod asset_sidecar;
 pub(crate) mod io;
 pub(crate) mod library_config;
 pub(crate) mod library_version;
+pub(crate) mod shape;
 pub(crate) mod sidecar_v1;
 pub(crate) mod stack_hint;
 

@@ -21,8 +21,8 @@ impl DatabaseDriver {
     ///
     /// The migrator's typed [`MigrationError`] is flattened into `rusqlite::Error` here
     /// because this signature is consumed by `capsule-core-ffi`; the crate's own library
-    /// opener goes through [`Self::open_typed`] so a catalog newer than this build surfaces
-    /// as a typed refusal rather than a message inside a `SqliteFailure`.
+    /// opener goes through the crate-private `open_typed` so a catalog newer than this build
+    /// surfaces as a typed refusal rather than a message inside a `SqliteFailure`.
     pub fn open(path: &Path) -> Result<Self, rusqlite::Error> {
         Self::open_typed(path).map_err(rusqlite::Error::from)
     }
