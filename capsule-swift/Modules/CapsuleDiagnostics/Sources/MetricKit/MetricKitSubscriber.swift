@@ -31,7 +31,9 @@ final class MetricKitSubscriber: NSObject, MXMetricManagerSubscriber, MetricsCol
     }
 
     func didReceive(_ payloads: [MXDiagnosticPayload]) {
-        for payload in payloads { handle(payload) }
+        for payload in payloads {
+            handle(payload)
+        }
     }
 
     private func handle(_ payload: MXDiagnosticPayload) {

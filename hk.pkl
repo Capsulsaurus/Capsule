@@ -60,6 +60,11 @@ hooks {
       ["lint-check-swift"]    { glob = "{capsule-swift,capsule-core-swift}/**/*.swift"; check = "mise run lint-check-swift" }
 
       ["lint-check-md"]       { glob = "**/*.md"; check = "mise run lint-check-md" }
+
+      // Verify-only (no fixer), so pre-push rather than pre-commit. Mirrors the
+      // `docs-truth` paths filter in ci.yml — astro.config.mjs is in it because
+      // that is where the published origin comes from.
+      ["check-docs-truth"]    { glob = List("**/*.md", "**/*.mdx", "LICENSE", "NOTICE", "capsule-docs/scripts/**", "capsule-docs/astro.config.mjs", "capsule-docs/endpoint-census-allowlist.txt", "capsule-docs/planned-modules.txt", "capsule-server/openapi.json", "capsule-*/src/**"); check = "mise run check-docs-truth" }
     }
   }
 

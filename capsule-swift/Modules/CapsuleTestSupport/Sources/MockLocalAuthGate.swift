@@ -26,7 +26,7 @@ public final class MockLocalAuthGate: LocalAuthGate, @unchecked Sendable {
         return challenges
     }
 
-    public func authenticate(view: GatedView) throws {
+    public func authenticate(view _: GatedView) throws {
         lock.lock()
         challenges += 1
         lock.unlock()

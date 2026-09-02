@@ -51,7 +51,7 @@ For each file in the plan, in [upload prioritization](#upload-prioritization) or
 
 Step 1–3 can be parallelized across files. The executor is cancellation-aware: a partially-executed plan can be aborted cleanly and resumed (re-running the import re-derives the plan and skips already-completed work via the deterministic planner).
 
-**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The `import::executor` drives imports entirely onto this signed path (`S-B2`), and the legacy **unsigned** `AssetSidecar` write path has been removed (`S-G4`). The unsigned sidecar survives only as a *read* model: the recovery-first index rebuild (`capsule-core::library::rebuild`) still ingests unsigned `.cbor` sidecars left by pre-signed-path libraries. The executor's media half is being rebuilt over Rawshift (with Capsule calling Chromahash directly after its v1 release); the old plaintext decode/extract path is review-only under `legacy-review/core-import-media/`.
+**Status note.** The signed path in step 2 — encrypt, manifest, provenance — is implemented in `capsule-core::lifecycle::Workspace` and writes through to the shared `library.sqlite` index. The `import::executor` drives imports entirely onto this signed path (`S-B2`), and the legacy **unsigned** `AssetSidecar` write path has been removed (`S-G4`). The unsigned sidecar survives only as a *read* model: the recovery-first index rebuild (`capsule-core::library::rebuild`) still ingests unsigned `.cbor` sidecars left by pre-signed-path libraries. The executor's media half is being rebuilt over Rawshift (with Capsule calling Chromahash **0.7.1** directly); the old plaintext decode/extract path is review-only under `legacy-review/core-import-media/`.
 
 ## Import-Upload Streaming Mode
 
@@ -63,7 +63,7 @@ It is **auto-detected**: when the [free-space probe](#plan--confirm) reports `to
 
 1. Import the next file (or a small window of files) into the library — encrypt, sign the [manifest](/design/cryptography/provenance/#asset-manifest), generate derivatives — exactly as the normal [Execute](#execute) step.
 2. Upload its bundle via the [upload protocol](/design/import/upload-protocol/).
-3. Confirm the asset is durably stored with [`POST /storage/verify`](/design/import/storage-verification/#verify-before-destroy).
+3. Confirm the asset is durably stored with [`POST /v1/storage/verify`](/design/import/storage-verification/#verify-before-destroy).
 4. **Release** the local original (and delete the [Move-mode](#execute) source, if any) only after the `durable` verdict; the asset becomes an ordinary server-only, re-fetchable representation (see [Space Recovery](/design/filesystem/client/#space-recovery)).
 5. Advance the window to the next file.
 

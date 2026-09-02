@@ -16,8 +16,8 @@
     "target": "## الميزات"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **أصلي ومتعدد المنصات**: يتوفر Capsule على جميع منصات سطح المكتب والجوال الشائعة. وهو سريع وأصلي على جميعها."
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **أصلي ومتعدّد المنصّات**: يُبنى Capsule كتطبيق أصلي حقيقي لكل منصّة بدل تطبيق ويب واحد داخل عدّة أغلفة، فيكون كلٌّ منها سريعًا ومنسجمًا مع المنصّة التي يعمل عليها. يُقصد بكل عميل أصلي أن ينتهي مكتمل الميزات ومتكاملًا مع منصّته؛ والجدول أدناه يبيّن الموجود اليوم."
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **مفتوح المصدر**: Capsule مفتوح المصدر إلى الأبد ويمكنك استضافة خادمك الخاص."
+  },
+  {
+    "source": "## Clients",
+    "target": "## العملاء"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "يذكر كل صف **النطاق المقصود** للعميل و**حالته اليوم** — وقد فُصل الاثنان عن قصد، لأن النطاق التزام والحالة لقطة لحظية. يُقصد بكل عميل أصلي أن ينتهي مكتمل الميزات ومتكاملًا مع منصّته؛ وترتيب وصولها إلى ذلك مسجَّل في [وثيقة تصميم العملاء](https://capsule.justinchung.net/design/clients/). عميل الويب هو الاستثناء المقصود الوحيد، وهو للقراءة فقط بصفة دائمة."
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| العميل | النطاق المقصود | الحالة اليوم |\n| --- | --- | --- |\n| iOS | مكتمل الميزات ومتكامل مع المنصّة | بُنيت كل الشاشات الرئيسية وتعمل على بيانات في الذاكرة؛ ولا تتصل بخادم بعد |\n| Android (الهاتف) | مكتمل الميزات ومتكامل مع المنصّة | هيكل مبكّر |\n| iPadOS | مكتمل الميزات؛ يشارك واجهاته مع macOS | يأتي مع تطبيق iOS |\n| macOS | مكتمل الميزات وبأسلوب سطح المكتب | يأتي مع تطبيق iOS |\n| حاسوب Android اللوحي | مكتمل الميزات؛ يشارك تخطيطاته مع الهاتف | لم يبدأ |\n| Windows وLinux | مكتمل الميزات ومتكامل مع المنصّة | لم يبدأ |\n| Web | **للقراءة فقط بصفة دائمة.** تصفّح مكتبتك الخاصة، إضافة إلى روابط المشاركة العامة وروابط رفع الضيوف. لا يكتب أبدًا ولا يسجّل جهازًا أبدًا. يقدّمه خادمك ويحدّد إصداره بدل أن تثبّته أنت. | قابل للاستخدام؛ ويجري تحويله إلى واجهة برمجة الخادم الجديدة |"
   },
   {
     "source": "## Is Capsule for you?",

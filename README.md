@@ -11,13 +11,27 @@ Open-source, federated, E2E encrypted photo management and sharing service built
 
 ## Features
 
-- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.
+- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.
 - **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!
 - **Data is always optimized**: Capsule rigorously caches and optimizes any heavy content for seamless delivery (our methodology is [documented](https://capsule.justinchung.net/design/thumbnails/)). If something feels slow, let us know.
 - **Privacy**: Your data is yours and end-to-end encrypted.
 - **Fully-featured access**: Capsule implements several powerful features like real-time viewing, semantic search, AI organization, and more.
 - **Federated**: Capsule users can share their assets with users of other servers seamlessly. Think of it like [Matrix](https://en.wikipedia.org/wiki/Matrix_(protocol)) for photos.
 - **Open-source**: Capsule is open-source forever and you can host your own server.
+
+## Clients
+
+Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.
+
+| Client | Intended scope | Status today |
+| --- | --- | --- |
+| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |
+| Android (phone) | Fully featured, platform-integrated | Early scaffold |
+| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |
+| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |
+| Android tablet | Fully featured; shares its layouts with the phone | Not started |
+| Windows, Linux | Fully featured, platform-integrated | Not started |
+| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |
 
 ## Is Capsule for you?
 

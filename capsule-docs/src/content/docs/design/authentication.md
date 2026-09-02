@@ -120,7 +120,7 @@ Because the IK signs the move and every device cross-signs to that IK, no server
 
 ## Session and Access Tokens
 
-These are the two token shapes consumers depend on. Both will be issued by `capsule-server::auth::session` after a successful authentication ceremony.
+These are the two token shapes consumers depend on. Both will be issued by `capsule-server::routes::sessions` after a successful authentication ceremony.
 
 ### Session ID
 

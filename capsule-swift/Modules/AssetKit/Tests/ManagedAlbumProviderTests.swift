@@ -59,10 +59,25 @@ struct ManagedAlbumProviderTests {
     func compositeMergesManagedAlbums() async throws {
         let (managed, _) = makeProvider()
         try await managed.createUserAlbum(named: "Merged")
-        let composite = CompositeAlbumProvider(providers: [PhotoKitAlbumProvider(), managed])
+        // Paired with a mock rather than a real `PhotoKitAlbumProvider`: the claim
+        // under test is that the composite surfaces its managed provider's albums
+        // alongside another provider's, which needs no system photo library. It
+        // also keeps this a unit test — reaching the real Photos library from a
+        // test bundle with no usage description is a TCC violation that hard-fails
+        // the process on macOS.
+        let other = MockAlbumProvider(albums: [
+            AlbumSummary(
+                id: .smart(localIdentifier: "smart-1"),
+                title: "Favourites",
+                count: 3,
+                coverAssetID: nil
+            ),
+        ])
+        let composite = CompositeAlbumProvider(providers: [other, managed])
 
         let albums = await composite.loadAlbums()
 
         #expect(albums.contains { $0.title == "Merged" })
+        #expect(albums.contains { $0.title == "Favourites" })
     }
 }

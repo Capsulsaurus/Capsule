@@ -53,8 +53,9 @@ class StrongBoxSigner(
     }
 
     override fun classicalPublicKey(keyAlias: String): ByteArray {
-        val pub = keyStore.getCertificate(keyAlias)?.publicKey as? ECPublicKey
-            ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
+        val pub =
+            keyStore.getCertificate(keyAlias)?.publicKey as? ECPublicKey
+                ?: throw HardwareSignerException.NotFound("no StrongBox key for alias $keyAlias")
         // Emit uncompressed SEC1 (0x04‖x‖y, 65 bytes) — the shape `P256HybridSigningKey` ingests —
         // rather than the JCA default X.509 SubjectPublicKeyInfo, which the Rust side cannot parse.
         val w = pub.w
@@ -90,8 +91,11 @@ class StrongBoxSigner(
     private companion object {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
 
-        /// Write `value` as a fixed 32-byte big-endian field into `out` at `offset`, left-padding
-        /// with zeros and dropping any BigInteger sign byte — the SEC1 coordinate encoding.
+        /**
+         * Write [value] as a fixed 32-byte big-endian field into `out` at `offset`,
+         * left-padding with zeros and dropping any BigInteger sign byte — the SEC1
+         * coordinate encoding.
+         */
         private fun fixedField(
             value: java.math.BigInteger,
             out: ByteArray,

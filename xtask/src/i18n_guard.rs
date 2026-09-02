@@ -19,7 +19,7 @@
 //! - **SwiftUI** (`capsule-swift/{App,Modules}/**/*.swift`): the string argument of
 //!   `Text("…")`, `.navigationTitle("…")`, `Label("…", …)`, `Button("…", …)`,
 //!   `Section("…")`, `.accessibilityLabel("…")`, `Toggle("…", …)`, `.alert("…", …)`.
-//!   A migrated call passes a catalog KEY (`Text("ios.settings.title")`); a literal
+//!   A migrated call passes a catalog KEY (`Text("app.settings.title")`); a literal
 //!   (`Text("Settings")`) is not a key, so it fails. Slice `S-I4` added two more Swift
 //!   detectors: *interpolated* literals in those same positions (`Text("Delete \(n)")`),
 //!   which `S-I1` had to skip because they had no catalog mechanism yet, and the key
@@ -91,6 +91,13 @@ use serde_json::Value;
 /// intentionally-untranslated finding at that file for that exact captured string.
 const ALLOWLIST_PATH: &str = "locales/i18n-guard-allowlist.txt";
 
+/// The hand-written Swift mirror of the server's stable error codes.
+///
+/// Its Rust counterpart, [`capsule_i18n::error_codes`], is *generated* from the
+/// catalog and therefore cannot drift. This one can, which is the whole reason
+/// the check below exists.
+const SWIFT_ERROR_CODE_PATH: &str = "capsule-swift/Modules/CapsuleDomain/Sources/ErrorCode.swift";
+
 /// One detector hit: the 1-based line and the exact captured string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Finding {
@@ -151,6 +158,10 @@ pub(crate) fn run(root: &Path) -> Result<()> {
     )?;
 
     violations.retain(|v| !allowlist.contains(&(v.file.clone(), v.text.clone())));
+
+    // Runs before the literal verdict so a tree with both problems reports both
+    // rather than hiding one behind the other's `bail!`.
+    check_swift_error_codes(root, &keys)?;
 
     if violations.is_empty() {
         println!(
@@ -324,7 +335,117 @@ fn swift_literal_findings(content: &str) -> Vec<Finding> {
         )
         .expect("static regex is valid")
     });
-    matched_findings(content, re, "swift-literal")
+    let mut findings = matched_findings(content, re, "swift-literal");
+    findings.extend(swift_key_parameter_findings(content));
+    findings.extend(swift_computed_property_findings(content));
+    findings
+}
+
+/// Detect catalog keys passed to a `…Key:` parameter.
+///
+/// The app's own convention is that any parameter whose label ends in `Key`
+/// carries a catalog key — `titleKey:`, `labelKey:`, `emptyDescriptionKey:`, and
+/// a dozen more. [`swift_findings`] cannot see them, because it only knows the
+/// stock SwiftUI call shapes, which left several hundred keys outside the gate:
+/// a typo'd or never-added key there compiles, renders as its own raw text, and
+/// nothing fails.
+///
+/// The same catalog membership test applies, so a real key passes and a literal
+/// or a missing key is reported.
+fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    // `[A-Za-z]*Key:` — a labelled argument whose name ends in `Key`. The
+    // leading class excludes `.` as well as identifier characters, because an
+    // argument label is never preceded by a dot but an enum case in a switch
+    // always is: `case .masterKey: "key.fill"` is a pattern returning an SF
+    // Symbol name, not a catalog reference. As in
+    // `swift_findings`, `[^"\\]*` keeps this to simple literals, so
+    // interpolated keys (`"app.x.\(raw).title"`) stay a documented blind spot.
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?:^|[^A-Za-z0-9_.])[A-Za-z]*Key:\s*"([^"\\]*[A-Za-z][^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+    matched_findings(content, re, "swift-key-param")
+}
+
+/// Detect display text returned from a `String`-typed computed property.
+///
+/// The blind spot that hid twenty-two English strings from this gate. A view
+/// that writes `Text("Places")` is caught by ``swift_findings``; a view that
+/// writes `Text(category.title)` is not, and neither is the property behind it:
+///
+/// ```swift
+/// var title: String {
+///     switch self {
+///     case .places: "Places"          // never seen by the gate
+///     }
+/// }
+/// ```
+///
+/// The literal reaches the screen through a variable, so no call site carries
+/// it and no argument label ends in `Key`. Non-English users read those in
+/// English, and the gate reported zero findings the whole time.
+///
+/// Scoped to `case .foo: "Bar"` inside a property named like display text
+/// (`title`, `message`, `label`, `name`, `description`, `subtitle`) — the shape
+/// that actually produced the bug. A `String` property returning a symbol name
+/// or a raw value is not display text and must not be flagged, which is why the
+/// literal must also start with a capital and contain a space *or* be a known
+/// display-ish word: `case .heic: "HEIC"` is a file format, not a sentence.
+fn swift_computed_property_findings(content: &str) -> Vec<Finding> {
+    static PROPERTY: OnceLock<Regex> = OnceLock::new();
+    static CASE: OnceLock<Regex> = OnceLock::new();
+    let property = PROPERTY.get_or_init(|| {
+        Regex::new(
+            r"var\s+[A-Za-z]*(?i:title|message|label|name|description|subtitle)\s*:\s*String\s*\{",
+        )
+        .expect("static regex is valid")
+    });
+    // `case .foo: "Some words"` — a capital, then a space, so an acronym or an
+    // identifier-like token does not match.
+    let case = CASE.get_or_init(|| {
+        Regex::new(r#"case\s+\.[A-Za-z0-9_]+:\s*"([A-Z][^"\\]*\s[^"\\]*)""#)
+            .expect("static regex is valid")
+    });
+
+    let mut findings = Vec::new();
+    for property_match in property.find_iter(content) {
+        let open = property_match.end() - 1;
+        let Some(body) = brace_body(content, open) else {
+            continue;
+        };
+        for capture in case.captures_iter(body) {
+            let group = capture.get(1).expect("group 1 exists");
+            findings.push(Finding {
+                // Offsets are into `body`, which starts one byte past the
+                // brace — so the absolute position is that plus the local one.
+                line: line_of(content, open + 1 + group.start()),
+                text: group.as_str().to_string(),
+                kind: "swift-computed-property",
+            });
+        }
+    }
+    findings
+}
+
+/// The text between the brace at `open` and its match, or `None` if unbalanced.
+fn brace_body(content: &str, open: usize) -> Option<&str> {
+    let bytes = content.as_bytes();
+    debug_assert_eq!(bytes[open], b'{');
+    let mut depth = 0usize;
+    for (offset, byte) in bytes[open..].iter().enumerate() {
+        match byte {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return content.get(open + 1..open + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Detect *interpolated* literals in the same watched positions — `Text("Delete \(n)")`.
@@ -350,7 +471,7 @@ fn swift_interpolation_findings(content: &str) -> Vec<Finding> {
 /// `LocalizedStringKey` positions (`LAContext` reasons, view-model strings, enum labels).
 ///
 /// The capture is the *key*, checked against the catalog by the runner, so
-/// `String(localized: "Photos")` fails while `String(localized: "ios.media_type.photo")`
+/// `String(localized: "Photos")` fails while `String(localized: "app.media.photo")`
 /// passes. The `defaultValue:` argument is deliberately not captured — it is the English
 /// source text the ICU arguments hang off, and is expected to be a literal.
 fn swift_localized_key_findings(content: &str) -> Vec<Finding> {
@@ -648,6 +769,136 @@ fn load_allowlist(root: &Path) -> Result<BTreeSet<(String, String)>> {
     Ok(set)
 }
 
+/// Fail when Swift's `ErrorCode` enum names an `error.*` code the catalog does
+/// not define.
+///
+/// The server error codes are a stable contract shared by three surfaces. Two of
+/// them are generated: `capsule_i18n::error_codes` comes out of the catalog, and
+/// the web reads the catalog directly. The Swift side is a hand-written enum
+/// whose raw values *are* the catalog keys, so it is the one surface where the
+/// contract can rot silently — and it rots into the worst possible symptom, a
+/// lookup miss that renders a blank or raw-key message on exactly the screens a
+/// user reaches when something has already gone wrong.
+///
+/// **The two directions are deliberately not symmetric.**
+///
+/// - A code in Swift that the catalog lacks is **fatal**. There is no message to
+///   show; the client is asking for a key that does not exist.
+/// - A code in the catalog that no Swift source mentions is **reported, not
+///   fatal**. The enum's `unknown(String)` case is load-bearing by design — a
+///   newer server may legitimately send a code this build predates, and the raw
+///   value *is* the catalog key, so the string still localizes. Making this
+///   fatal would force a Swift change for every server-side error addition,
+///   which is exactly the coupling `unknown` exists to avoid. It is still worth
+///   naming: each is a recovery the client cannot offer an affordance for.
+///
+/// The second direction is measured against **every Swift source, not just the
+/// enum**. Some catalog error strings are client-local and are reached
+/// deliberately through `unknown(_)` rather than through a case —
+/// `error.client.unclassified` is the generic fallback a screen shows when it
+/// has no code at all. Those are handled; calling them "codes with no case"
+/// would be a gate that reports noise, and a gate that reports noise is a gate
+/// people learn to skim.
+fn check_swift_error_codes(root: &Path, catalog_keys: &BTreeSet<String>) -> Result<()> {
+    let path = root.join(SWIFT_ERROR_CODE_PATH);
+    let Ok(content) = fs::read_to_string(&path) else {
+        // Not an error: the Swift client may not be checked out in every
+        // context this runs in (a sparse checkout, a docs-only CI lane).
+        return Ok(());
+    };
+
+    let swift_codes = swift_error_codes(&content);
+    if swift_codes.is_empty() {
+        bail!(
+            "i18n-guard: {SWIFT_ERROR_CODE_PATH} declares no `error.*` raw values. \
+             Either the file moved or its shape changed — this check would silently \
+             pass forever, so it fails loudly instead."
+        );
+    }
+
+    let catalog_codes: BTreeSet<&String> = catalog_keys
+        .iter()
+        .filter(|k| k.starts_with("error."))
+        .collect();
+
+    let dangling: Vec<&String> = swift_codes
+        .iter()
+        .filter(|code| !catalog_keys.contains(*code))
+        .collect();
+
+    let referenced = swift_referenced_error_codes(root)?;
+    let unhandled: Vec<&&String> = catalog_codes
+        .iter()
+        .filter(|code| !referenced.contains(**code))
+        .collect();
+
+    if !unhandled.is_empty() {
+        println!(
+            "i18n-guard: {} error code(s) are defined in the catalog but named nowhere \
+             in the Swift client. They still localize through `unknown(_)`, but no \
+             screen can offer a specific recovery for them:",
+            unhandled.len()
+        );
+        for code in &unhandled {
+            println!("  {code}");
+        }
+    }
+
+    if dangling.is_empty() {
+        println!(
+            "i18n-guard: Swift `ErrorCode` matches the catalog ({} codes).",
+            swift_codes.len()
+        );
+        return Ok(());
+    }
+
+    eprintln!(
+        "i18n-guard: Swift `ErrorCode` names {} code(s) that `locales/en.json` does not\n\
+         define. Each is a lookup miss — the user sees a blank or raw-key message on a\n\
+         failure screen. Add the key to the catalog, or correct the raw value:\n",
+        dangling.len()
+    );
+    for code in &dangling {
+        eprintln!("  {SWIFT_ERROR_CODE_PATH}: {code:?}");
+    }
+    bail!(
+        "i18n-guard failed: {} Swift error code(s) missing from the catalog",
+        dangling.len()
+    );
+}
+
+/// Every `error.*` code named anywhere in the Swift client.
+///
+/// Broader than the enum on purpose — see [`check_swift_error_codes`].
+fn swift_referenced_error_codes(root: &Path) -> Result<BTreeSet<String>> {
+    let mut codes = BTreeSet::new();
+    for rel in ["capsule-swift/App", "capsule-swift/Modules"] {
+        let dir = root.join(rel);
+        if !dir.exists() {
+            continue;
+        }
+        for path in collect_files(&dir, "swift")? {
+            let content =
+                fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+            codes.extend(swift_error_codes(&content));
+        }
+    }
+    Ok(codes)
+}
+
+/// Every `"error.*"` string literal in a Swift source file.
+///
+/// A plain literal scan rather than a parse of the `rawValue` switch: the switch
+/// is the only place these strings appear, and a scanner cannot be broken by the
+/// enum being reorganised into extensions or split across files.
+pub(crate) fn swift_error_codes(content: &str) -> BTreeSet<String> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r#""(error\.[a-z0-9_.]+)""#).expect("valid regex"));
+    re.captures_iter(content)
+        .map(|c| c[1].to_string())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,7 +950,7 @@ mod tests {
     #[test]
     fn swift_flags_literal_but_not_verbatim_or_dynamic() {
         let src = r#"Text("Settings")
-            Text("ios.settings.title")
+            Text("app.settings.title")
             Text(verbatim: "raw")
             Text(model.title)
             .navigationTitle("Albums")
@@ -709,7 +960,7 @@ mod tests {
         assert!(t.contains(&"Settings"));
         assert!(t.contains(&"Albums"));
         // The dotted key IS captured; the runner filters it against the catalog.
-        assert!(t.contains(&"ios.settings.title"));
+        assert!(t.contains(&"app.settings.title"));
         // `verbatim:` and dynamic args are never captured.
         assert!(!t.contains(&"raw"));
     }
@@ -744,7 +995,7 @@ mod tests {
         // position holds no literal at all and the `defaultValue:` text is not captured.
         let src = r#"Button(
                 String(
-                    localized: "ios.timeline.delete_selected.confirm",
+                    localized: "app.timeline.delete_selected.confirm",
                     defaultValue: "Delete \(count) Items"
                 ),
                 role: .destructive
@@ -752,19 +1003,19 @@ mod tests {
         "#;
         let f = swift_findings(src);
         // Only the catalog key is captured; the runner then matches it against the catalog.
-        assert_eq!(texts(&f), vec!["ios.timeline.delete_selected.confirm"]);
+        assert_eq!(texts(&f), vec!["app.timeline.delete_selected.confirm"]);
     }
 
     #[test]
     fn swift_flags_a_string_localized_key_that_is_not_a_catalog_key() {
         let src = r#"String(localized: "Photos")
-            String(localized: "ios.media_type.photo")
+            String(localized: "app.media.photo")
         "#;
         let f = swift_findings(src);
         let t = texts(&f);
         // Both are captured; the runner keeps only the one that is not a catalog key.
         assert!(t.contains(&"Photos"));
-        assert!(t.contains(&"ios.media_type.photo"));
+        assert!(t.contains(&"app.media.photo"));
     }
 
     #[test]
@@ -780,6 +1031,45 @@ mod tests {
         assert!(t.contains(&"Hello"));
         assert!(t.contains(&"Back arrow"));
         assert_eq!(t.len(), 2, "stringResource and dynamic args are ignored");
+    }
+
+    #[test]
+    fn swift_computed_properties_are_scanned() {
+        // The shape that hid twenty-two English strings: display text returned
+        // from a `String` property, reaching the screen through a variable so
+        // no call site ever carries the literal.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .places: "Places and Trips"
+                case .people: "People and Pets"
+                }
+            }
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert!(texts.contains(&"Places and Trips".to_string()));
+        assert!(texts.contains(&"People and Pets".to_string()));
+    }
+
+    #[test]
+    fn swift_computed_properties_ignore_identifier_like_values() {
+        // A `String` property is not automatically display text. Symbol names,
+        // raw values and file formats are single tokens; requiring a space is
+        // what separates a sentence from an identifier.
+        let src = r#"
+            var title: String {
+                switch self {
+                case .heic: "HEIC"
+                case .dng: "DNG"
+                }
+            }
+            var systemImage: String {
+                switch self {
+                case .places: "Map Pin Icon"
+                }
+            }
+        "#;
+        assert!(swift_findings(src).is_empty());
     }
 
     #[test]
@@ -954,5 +1244,87 @@ mod tests {
         let src = "line1\nline2 Text(\"x\")\n";
         assert_eq!(line_of(src, 0), 1);
         assert_eq!(line_of(src, 6), 2);
+    }
+
+    #[test]
+    fn swift_key_parameters_are_scanned() {
+        let src = r#"
+        SettingsRow(titleKey: "app.settings.storage.title", labelKey: "app.common.done")
+        EmptyState(emptyDescriptionKey: "app.import.plan.empty.description")
+        "#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert!(texts.contains(&"app.settings.storage.title".to_string()));
+        assert!(texts.contains(&"app.common.done".to_string()));
+        assert!(texts.contains(&"app.import.plan.empty.description".to_string()));
+    }
+
+    /// The whole point of widening the gate: a key nobody added to the catalog
+    /// used to compile, render as its own raw text, and fail nothing.
+    #[test]
+    fn swift_key_parameters_catch_a_key_that_was_never_added() {
+        let src = r#"Row(titleKey: "app.settings.totally.made.up")"#;
+        let texts: Vec<String> = swift_findings(src).into_iter().map(|f| f.text).collect();
+        assert_eq!(texts, vec!["app.settings.totally.made.up".to_string()]);
+    }
+
+    /// A switch over an enum whose case ends in `Key` is not a call site. This
+    /// exact shape — `case .masterKey: "key.fill"` returning an SF Symbol —
+    /// was the first false positive the widened detector produced.
+    #[test]
+    fn swift_key_parameters_ignore_enum_case_patterns() {
+        let src = r#"
+        public var symbolName: String {
+            switch self {
+            case .masterKey: "key.fill"
+            case .userIdentityKey: "person.badge.key.fill"
+            }
+        }
+        "#;
+        assert_eq!(swift_key_parameter_findings(src), Vec::new());
+    }
+
+    /// A parameter that merely contains "key" is not a catalog reference.
+    #[test]
+    fn swift_key_parameters_require_the_label_to_end_in_key() {
+        let src = r#"Signer(publicKeyPem: "-----BEGIN PUBLIC KEY-----", keyring: "default")"#;
+        assert_eq!(swift_key_parameter_findings(src), Vec::new());
+    }
+
+    #[test]
+    fn swift_error_codes_reads_the_raw_value_switch() {
+        let src = r#"
+        public var rawValue: String {
+            switch self {
+            case .protocolVersionUnsupported: "error.protocol.version_unsupported"
+            case .authInvalidCredentials: "error.auth.invalid_credentials"
+            case let .unknown(raw): raw
+            }
+        }
+        "#;
+        let codes = swift_error_codes(src);
+        assert_eq!(codes.len(), 2);
+        assert!(codes.contains("error.protocol.version_unsupported"));
+        assert!(codes.contains("error.auth.invalid_credentials"));
+    }
+
+    /// The scanner must not mistake an ordinary catalog key for an error code —
+    /// the check's whole value is that its two sets are the *same* contract.
+    #[test]
+    fn swift_error_codes_ignores_ui_keys_and_prose() {
+        let src = r#"
+        Text("app.settings.title")
+        // an error.something mentioned in a comment, unquoted
+        Label("app.error.banner", systemImage: "x")
+        "#;
+        assert!(swift_error_codes(src).is_empty());
+    }
+
+    /// A real regression this guards: a typo'd raw value still compiles, still
+    /// round-trips through `init(rawValue:)`, and fails only at lookup time.
+    #[test]
+    fn swift_error_codes_captures_a_typo_verbatim() {
+        let src = r#"case .authRateLimited: "error.auth.rate_limted""#;
+        let codes = swift_error_codes(src);
+        assert!(codes.contains("error.auth.rate_limted"));
     }
 }

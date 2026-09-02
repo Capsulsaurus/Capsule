@@ -32,7 +32,9 @@ public actor ConsentStore: ConsentReading {
         guard updated != consent else { return consent }
         consent = updated
         persist()
-        for continuation in observers.values { continuation.yield(updated) }
+        for continuation in observers.values {
+            continuation.yield(updated)
+        }
         return updated
     }
 

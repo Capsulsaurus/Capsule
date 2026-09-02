@@ -6,7 +6,7 @@ import ManagedStore
 /// The ``AlbumProvider`` over editable Capsule user albums, stored in the
 /// catalog's `albums` table with membership in `assets.album_id`.
 public actor ManagedAlbumProvider: AlbumProvider {
-    private static let albumAssetLimit = 10_000
+    private static let albumAssetLimit = 10000
 
     private let library: ManagedLibrary
     private var observers: [UUID: AsyncStream<Void>.Continuation] = [:]
@@ -23,7 +23,7 @@ public actor ManagedAlbumProvider: AlbumProvider {
         }
         var summaries: [AlbumSummary] = []
         for album in albums {
-            let rows = (try? await catalog.albumAssets(
+            let rows = await (try? catalog.albumAssets(
                 albumID: album.id, offset: 0, limit: Self.albumAssetLimit
             )) ?? []
             summaries.append(AlbumSummary(

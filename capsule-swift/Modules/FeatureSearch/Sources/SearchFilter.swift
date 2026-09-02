@@ -12,26 +12,35 @@ public enum DateRangeOption: String, CaseIterable, Sendable, Equatable, Identifi
 
     public var id: String { rawValue }
 
-    /// The label shown in the filter control.
+    /// The label shown in the filter control, localized. See
+    /// ``SearchSuggestion/title`` for why this resolves rather than staying a
+    /// key.
     public var title: String {
+        String(localized: String.LocalizationValue(titleKey))
+    }
+
+    /// The catalog key for the label shown in the filter control.
+    ///
+    /// A key, not the text. Returned through a variable, English here was
+    /// invisible to `i18n-guard` and shipped untranslated to every locale.
+    public var titleKey: String {
         switch self {
-        case .anytime: String(localized: "ios.search.date_range.anytime")
-        case .today: String(localized: "ios.search.date_range.today")
-        case .thisWeek: String(localized: "ios.search.date_range.this_week")
-        case .thisMonth: String(localized: "ios.search.date_range.this_month")
-        case .thisYear: String(localized: "ios.search.date_range.this_year")
+        case .anytime: "app.search.filter.date.anytime"
+        case .today: "app.search.filter.date.today"
+        case .thisWeek: "app.search.filter.date.this_week"
+        case .thisMonth: "app.search.filter.date.this_month"
+        case .thisYear: "app.search.filter.date.this_year"
         }
     }
 
     /// The concrete date window, or `nil` for ``anytime``.
     func range(referenceDate: Date, calendar: Calendar) -> ClosedRange<Date>? {
-        let component: Calendar.Component?
-        switch self {
-        case .anytime: component = nil
-        case .today: component = .day
-        case .thisWeek: component = .weekOfYear
-        case .thisMonth: component = .month
-        case .thisYear: component = .year
+        let component: Calendar.Component? = switch self {
+        case .anytime: nil
+        case .today: .day
+        case .thisWeek: .weekOfYear
+        case .thisMonth: .month
+        case .thisYear: .year
         }
         guard let component,
               let interval = calendar.dateInterval(of: component, for: referenceDate)

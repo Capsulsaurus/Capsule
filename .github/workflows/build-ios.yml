@@ -1,4 +1,4 @@
-name: Build iOS app
+name: Build Apple client (Rust-backed lane)
 
 on:
   push:
@@ -30,7 +30,7 @@ env:
 
 jobs:
   build:
-    name: Build & test Capsule.app
+    name: Build & test Capsule.app against the Rust core
     # macOS 26 host: provides libswiftCompatibilitySpan.dylib natively, which the
     # Xcode 26 / Swift 6.2 toolchain's prebuilt CLIs (tuist, xcbeautify) link
     # against via @rpath. On macos-15 dyld can't find it and `tuist generate`
@@ -53,11 +53,24 @@ jobs:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
 
+      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
+      # prost-build, which shells out to protoc; the macOS image does not carry it.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build Rust FFI xcframework
         run: bash capsule-swift/Scripts/build-rust-ffi.sh
 
-      - name: Generate Xcode project
+      # TUIST_FFI=1 selects the Rust-backed graph: `CapsuleCatalogFFI` joins the
+      # project, compiling the generated uniffi glue and linking the xcframework
+      # built above. Without it the app builds against the in-memory catalog, which
+      # is what the fast `swift` job in ci.yml covers.
+      - name: Generate Xcode project (FFI lane)
         working-directory: capsule-swift
+        env:
+          TUIST_FFI: "1"
         run: mise exec -- tuist generate --no-open
 
       - name: Build & test
@@ -73,6 +86,19 @@ jobs:
             -scheme Capsule \
             -configuration Debug \
             -destination "id=$sim_id" \
+            CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify
+
+      # The Rust core must link into the Mac app too, not just the simulator —
+      # macOS is a first-class destination and its staticlib slice is the one most
+      # likely to rot unnoticed.
+      - name: Build for macOS
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -workspace capsule-swift/Capsule.xcworkspace \
+            -scheme Capsule \
+            -configuration Debug \
+            -destination "platform=macOS" \
             CODE_SIGNING_ALLOWED=NO | mise -C capsule-swift exec -- xcbeautify
 
   # On-device Secure Enclave lane. The Secure Enclave is real hardware — the iOS
@@ -96,6 +122,13 @@ jobs:
         with:
           working_directory: capsule-swift
           install_args: tuist xcbeautify
+
+      # capsule-sdk's build script compiles the capsule.sync.v1 proto with
+      # prost-build, which shells out to protoc; the macOS image does not carry it.
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Rust FFI xcframework
         run: bash capsule-swift/Scripts/build-rust-ffi.sh

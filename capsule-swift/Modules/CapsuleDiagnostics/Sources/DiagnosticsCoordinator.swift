@@ -10,8 +10,8 @@ import Foundation
 /// - track clean shutdown for the "crashed last launch?" prompt;
 /// - build redacted report bundles and, when opted in, upload them.
 ///
-/// Main-actor isolated: it is owned by the (`@MainActor`) `AppEnvironment` and
-/// reads `UIDevice` when assembling metadata.
+/// Main-actor isolated: it is owned by the (`@MainActor`) `AppEnvironment`,
+/// whose lifecycle events it is driven by.
 @MainActor
 public final class DiagnosticsCoordinator {
     private let diagnostics: Diagnostics
@@ -130,7 +130,9 @@ public final class DiagnosticsCoordinator {
         diagnostics.install(osLogSink)
         if consent.diagnosticsEnabled {
             diagnostics.install(breadcrumbs)
-            if !metricsRunning { metrics.start(); metricsRunning = true }
+            if !metricsRunning { metrics.start()
+                metricsRunning = true
+            }
         } else if metricsRunning {
             metrics.stop()
             metricsRunning = false

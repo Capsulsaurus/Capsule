@@ -1,6 +1,7 @@
 ---
 title: Local Development
 description: The mise task graph, the services a local server needs, and which gates actually run on a developer machine.
+status: draft
 ---
 
 Every command in this repository runs through **[mise](https://mise.jdx.dev/)**. `mise.toml` at the repo root pins the shared toolchain and defines the whole task graph; anything too long for a TOML line lives as a shebang script in `mise-tasks/`. CI jobs map 1:1 onto the `check-*` tasks below, so a green local `check-*` is the same command CI runs.
