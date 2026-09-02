@@ -421,7 +421,10 @@ fn swift_key_parameter_findings(content: &str) -> Vec<Finding> {
 /// # What is scanned
 ///
 /// A member whose name ends in one of [`SWIFT_DISPLAY_STEMS`] and whose type is
-/// `String` — a `var`, or (since #394) a `func` such as `hdrName(_:) -> String`. Inside
+/// `String` — a `var`, or (since #394) a `func` such as `hdrName(_:) -> String`. The
+/// function form reads the signature with `\([^)]*\)`, so one whose parameters contain a
+/// nested `)` (a closure type) is not matched: a remaining blind spot, but a narrowing
+/// one, never a false positive. Inside
 /// its body, four literal positions, because a property returns display text in more
 /// shapes than a `switch`: a `case` arm, an explicit `return`, a bare literal on its own
 /// line (an implicit return, or an `if` branch), and a dictionary value. Hits are keyed by
@@ -456,8 +459,12 @@ fn swift_computed_property_findings(content: &str) -> Vec<Finding> {
             format!(r#"return\s+"({SWIFT_DISPLAY_LITERAL})""#),
             // A bare literal statement: an implicit return, or an `if`/`else` branch.
             format!(r#"(?m)^\s*"({SWIFT_DISPLAY_LITERAL})"\s*$"#),
-            // A dictionary or array value: `[.places: "Places"]`.
-            format!(r#":\s*"({SWIFT_DISPLAY_LITERAL})"\s*[,\]]"#),
+            // A dictionary or array value: `[.places: "Places"]`. The key must start
+            // with `.`, so a *labelled argument* is not mistaken for one — in
+            // particular `String(localized:defaultValue:)`, whose `defaultValue:` is the
+            // English source text and is deliberately never captured (see
+            // [`swift_localized_key_findings`]).
+            format!(r#"\.[A-Za-z0-9_]+\s*:\s*"({SWIFT_DISPLAY_LITERAL})"\s*[,\]]"#),
         ]
         .iter()
         .map(|pattern| Regex::new(pattern).expect("static regex is valid"))
@@ -1223,6 +1230,28 @@ mod tests {
         let findings = swift_findings(src);
         assert_eq!(findings.len(), 1, "{findings:?}");
         assert_eq!(findings[0].text, "Places and trips");
+    }
+
+    #[test]
+    fn swift_display_members_ignore_a_localized_default_value() {
+        // `String(localized:defaultValue:)` is the *migrated* shape: the key is checked
+        // against the catalog and the default value is the English source the ICU
+        // arguments hang off. Neither is a hardcoded literal, and the dictionary-value
+        // pattern must not read `defaultValue:` as a dictionary key.
+        let src = r#"
+            var title: String {
+                String(
+                    localized: "app.timeline.delete_selected.confirm",
+                    defaultValue: "Delete Items",
+                    comment: "Confirm button"
+                )
+            }
+        "#;
+        let texts: Vec<String> = swift_computed_property_findings(src)
+            .into_iter()
+            .map(|f| f.text)
+            .collect();
+        assert_eq!(texts, Vec::<String>::new());
     }
 
     #[test]
