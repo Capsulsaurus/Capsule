@@ -231,7 +231,7 @@ pub enum StreamingEvent {
 /// Everything the streaming window needs beyond the plan, the workspace, and the event sink.
 ///
 /// One struct rather than six positionals: the two entry points this replaced differed only in
-/// `source`, and both carried eight arguments behind a
+/// `source` and carried eight and nine arguments respectively, both behind a
 /// `#[allow(clippy::too_many_arguments)]`. A caller that wants no source-adapter enrichment
 /// passes `&SourceMetadataIndex::empty()`, which is exactly what the thinner of the two
 /// entry points did for it.

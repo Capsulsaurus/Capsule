@@ -423,11 +423,25 @@ mod tests {
         assert_eq!(open_code(&SharingError::NotFound), err::MALFORMED);
     }
 
-    /// A `SharingError` variant added upstream without a boundary code must fail the build
-    /// here rather than reach the viewer as an unmapped string: the match is exhaustive.
+    /// Every code the boundary can emit. The viewer maps exactly this set to catalog keys, so
+    /// a code outside it reaches the UI as an unmapped string.
+    const DECLARED_CODES: [&str; 6] = [
+        err::MALFORMED,
+        err::PASSPHRASE_REQUIRED,
+        err::WRONG_SECRET,
+        err::SCOPE_UNAVAILABLE,
+        err::TAMPERED,
+        err::SEAL_FAILED,
+    ];
+
+    /// Two guards on adding a `SharingError` variant upstream. The match is exhaustive, so a
+    /// new variant fails the build here rather than reaching the viewer unmapped; and both
+    /// codes must be one of [`DECLARED_CODES`], so the arm you are forced to add cannot answer
+    /// with an ad-hoc literal the viewer has no catalog key for.
     #[test]
-    fn every_variant_carries_a_non_empty_code_on_both_paths() {
-        for e in &every_sharing_error() {
+    fn every_sharing_error_variant_maps_to_a_declared_code() {
+        let all = every_sharing_error();
+        for e in &all {
             match e {
                 SharingError::ScopeUnavailable
                 | SharingError::NotFound
@@ -435,9 +449,27 @@ mod tests {
                 | SharingError::WrongPassphrase
                 | SharingError::Crypto(_) => {}
             }
-            assert!(!sharing_code(e).is_empty(), "no sharing code for {e:?}");
-            assert!(!open_code(e).is_empty(), "no open code for {e:?}");
+            assert!(
+                DECLARED_CODES.contains(&sharing_code(e)),
+                "sharing_code({e:?}) = {:?} is not a declared boundary code",
+                sharing_code(e)
+            );
+            assert!(
+                DECLARED_CODES.contains(&open_code(e)),
+                "open_code({e:?}) = {:?} is not a declared boundary code",
+                open_code(e)
+            );
         }
+
+        // `every_sharing_error` is hand-written, so guard it against silently listing the same
+        // variant twice and thereby covering one fewer than the array length claims.
+        let mut kinds: Vec<_> = all.iter().map(std::mem::discriminant).collect();
+        kinds.dedup();
+        assert_eq!(
+            kinds.len(),
+            all.len(),
+            "every_sharing_error repeats a variant"
+        );
     }
 
     #[test]

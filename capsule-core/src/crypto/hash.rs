@@ -12,9 +12,7 @@
 //!
 //! [Cryptography — Primitives § Cryptographic Hash]: https://docs/design/cryptography/primitives/#cryptographic-hash
 
-use std::fs::File;
 use std::io::{self, Read};
-use std::path::Path;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use sha2::{Digest, Sha256};
@@ -165,8 +163,14 @@ pub fn hash_reader<R: Read>(mut reader: R) -> io::Result<Hash32> {
 ///
 /// Opens `path` and feeds it through [`hash_reader`] rather than reading the whole file
 /// into memory, so arbitrarily large originals hash with bounded memory.
-pub fn hash_file(path: &Path) -> io::Result<Hash32> {
-    let file = File::open(path)?;
+///
+/// `native`-gated, unlike the rest of this module: the browser sealing build
+/// (`--no-default-features`, `wasm32-unknown-unknown`) has no filesystem, so an ungated
+/// `hash_file` would compile there and then fail at runtime on every call. Its two callers
+/// — the import planner and the file-metadata reader — are `native` anyway.
+#[cfg(feature = "native")]
+pub fn hash_file(path: &std::path::Path) -> io::Result<Hash32> {
+    let file = std::fs::File::open(path)?;
     hash_reader(io::BufReader::new(file))
 }
 
@@ -212,6 +216,7 @@ mod tests {
         assert_eq!(hash_reader(&data[..]).unwrap(), one_shot);
     }
 
+    #[cfg(feature = "native")]
     #[test]
     fn hash_file_matches_one_shot() {
         let dir = tempfile::tempdir().unwrap();
@@ -223,6 +228,7 @@ mod tests {
         assert_eq!(hash_file(&path).unwrap(), hash_bytes(&data));
     }
 
+    #[cfg(feature = "native")]
     #[test]
     fn hash_file_reports_a_missing_path() {
         let dir = tempfile::tempdir().unwrap();
