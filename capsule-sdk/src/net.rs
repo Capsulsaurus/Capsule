@@ -762,7 +762,6 @@ pub fn protocol_headers() -> reqwest::header::HeaderMap {
 /// the one place it is installed. A transport built any other way sends no handshake and is
 /// refused by every gated route, which is why nothing in this crate calls
 /// `reqwest::Client::builder()` directly outside tests.
-#[must_use]
 pub fn http_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder().default_headers(protocol_headers())
 }
