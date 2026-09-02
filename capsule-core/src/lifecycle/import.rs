@@ -29,7 +29,7 @@ use crate::exif::extract::extract_exif;
 use crate::exif::timezone::resolve_timezone;
 use crate::metadata::crdt::{Lww, OrSet};
 use crate::sidecar::sidecar_v1::{
-    Dimensions, Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
+    Gps, GpsSource, SIDECAR_SCHEMA_V1, SidecarV1, StackMembership, StackRole,
 };
 
 /// Render a Unix-second capture time as the sidecar's RFC 3339 `capture_timestamp`.

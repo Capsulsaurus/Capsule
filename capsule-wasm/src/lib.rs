@@ -30,6 +30,17 @@
 //!    fragment. Byte-identical to the server's stored verifier, so the guest proves possession
 //!    without transmitting the passphrase (SSoT: [Web Upload] — Optional passphrase abuse gate).
 //!
+//! The crate additionally carries the **LQIP decode** entry point (slices `S-B14`/`S-B1`), which
+//! is the one surface here that is not about crypto:
+//!
+//! 6. [`decode_lqip`] (`decodeLqip`) — render a sidecar `lqip` record to packed RGBA the viewer
+//!    can hand straight to `CanvasRenderingContext2D.putImageData`. The placeholder lives inside
+//!    the *encrypted* metadata blob, so the browser only ever holds it after opening a share
+//!    link — which is why this belongs in the same crate as the open path rather than beside a
+//!    server route. It is the same [`capsule_core::lqip`] implementation the import pipeline
+//!    encodes with and the native apps decode with, so a photo's placeholder does not depend on
+//!    which client is painting it.
+//!
 //! The drop surface is deliberately **contribute-only**: there is no open/decapsulate/decrypt
 //! entry point for drops (only the provisioning user's *native* client, holding the Drop Key
 //! private half, can adopt). Keep new browser entry points here behind the same thin-glue
@@ -51,6 +62,7 @@ use capsule_core::crypto::encryption::stream::{NONCE_PREFIX_LEN, decrypt_asset_v
 use capsule_core::crypto::primitives::Argon2Params;
 use capsule_core::crypto::pwkdf;
 use capsule_core::drop::{SealedDrop, seal_drop, seal_drop_derand};
+use capsule_core::lqip::{RgbaImage, render as lqip_render};
 use capsule_core::sharing::{
     LINK_SECRET_LEN, OPAQUE_ID_LEN, ScopeMaterial, SharingError, WrappedScope, open_scope,
 };
@@ -372,6 +384,102 @@ pub fn drop_passphrase_proof(
 // `JsValue`. The wasm-side behaviour of the `#[wasm_bindgen]` entry points is covered by
 // `capsule-web`'s bun KATs.
 
+// ─────────────────────────── LQIP placeholder decode (slice S-B14) ──────────────────────────
+
+/// A decoded LQIP placeholder: packed RGBA8, ready for `putImageData`.
+///
+/// A struct rather than a bare `Vec<u8>` because the caller cannot know the dimensions in
+/// advance: `decode_capped` returns the largest frame that fits *inside* the requested box while
+/// preserving the source aspect ratio, so the answer is `(width, height, rgba)` or nothing.
+#[wasm_bindgen]
+pub struct WasmLqipImage {
+    image: RgbaImage,
+}
+
+#[wasm_bindgen]
+impl WasmLqipImage {
+    /// Frame width in pixels — at most the `maxWidth` that was requested.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn width(&self) -> u32 {
+        self.image.width
+    }
+
+    /// Frame height in pixels — at most the `maxHeight` that was requested.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn height(&self) -> u32 {
+        self.image.height
+    }
+
+    /// Packed RGBA8 samples, `width * height * 4` bytes — the exact layout
+    /// `new ImageData(rgba, width, height)` takes.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn rgba(&self) -> Vec<u8> {
+        self.image.rgba.clone()
+    }
+}
+
+/// Render a sidecar `lqip` record to a paintable placeholder, band-limited to the box being
+/// painted.
+///
+/// - `format_version` — the record's `lqip.format_version`.
+/// - `chromahash` — the record's `lqip.chromahash` payload (32 bytes at the committed tier).
+/// - `dominant_color` — the record's `lqip.dominant_color`, exactly 3 bytes (opaque RGB).
+/// - `max_width` / `max_height` — the box the caller is about to paint. Decoding to the box
+///   rather than to a fixed size is the point of `decode_capped`: a grid cell never scales down
+///   a larger decode.
+///
+/// **Infallible by design, except on a malformed `dominant_color`.** An unrecognised
+/// `format_version` or a payload the parser rejects yields the 1x1 solid fallback fill rather
+/// than a throw, because a reader must never misrender a payload it does not understand and a
+/// missing placeholder is not an error worth failing a gallery over. Only a `dominant_color`
+/// that is not three bytes throws `malformed` — there is no colour to fall back *to*, so
+/// guessing one would invent pixels.
+#[wasm_bindgen(js_name = decodeLqip)]
+pub fn decode_lqip(
+    format_version: u16,
+    chromahash: &[u8],
+    dominant_color: &[u8],
+    max_width: u32,
+    max_height: u32,
+) -> Result<WasmLqipImage, JsError> {
+    render_lqip_record(
+        format_version,
+        chromahash,
+        dominant_color,
+        max_width,
+        max_height,
+    )
+    .map(|image| WasmLqipImage { image })
+    .ok_or_else(|| JsError::new(err::MALFORMED))
+}
+
+/// [`decode_lqip`] without the JS boundary — the whole of its logic, so the host unit tests can
+/// exercise it.
+///
+/// The split is not ceremony: `JsError` cannot be *constructed* off-wasm (its host shim aborts),
+/// so a test that reached the error arm through the exported function would abort the test
+/// binary rather than fail an assertion. Keeping the boundary to a `map`/`ok_or_else` is also
+/// the thin-glue discipline the module docs ask for.
+fn render_lqip_record(
+    format_version: u16,
+    chromahash: &[u8],
+    dominant_color: &[u8],
+    max_width: u32,
+    max_height: u32,
+) -> Option<RgbaImage> {
+    let fill: [u8; 3] = dominant_color.try_into().ok()?;
+    Some(lqip_render(
+        format_version,
+        chromahash,
+        fill,
+        max_width,
+        max_height,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,6 +590,89 @@ mod tests {
         let decoded = hex_array::<LINK_SECRET_LEN>(&format!("  {encoded}\n"))
             .expect("a canonical 64-char hex field decodes");
         assert_eq!(decoded, bytes);
+    }
+
+    // ── LQIP decode (slice S-B14) ───────────────────────────────────────────
+
+    /// A gradient frame, the shape `Lqip::encode` takes.
+    fn gradient(width: u32, height: u32) -> Vec<u8> {
+        let (w, h) = (width as usize, height as usize);
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        for y in 0..h {
+            for x in 0..w {
+                rgba.extend_from_slice(&[
+                    (x * 255 / w) as u8,
+                    (y * 255 / h) as u8,
+                    ((x + y) * 255 / (w + h)) as u8,
+                    255,
+                ]);
+            }
+        }
+        rgba
+    }
+
+    /// The browser decodes the same bytes the import pipeline encoded, to the same pixels the
+    /// core `decode_capped` produces — the `S-B14` cross-surface criterion, at the one boundary
+    /// where a second implementation could have crept in.
+    #[test]
+    fn decode_lqip_matches_the_core_decoder_for_a_real_payload() {
+        use capsule_core::lqip::{Gamut, LQIP_FORMAT_V1, Lqip};
+
+        let lqip = Lqip::encode(200, 150, &gradient(200, 150), Gamut::Srgb).expect("encode");
+        let payload = lqip.as_bytes();
+        assert_eq!(payload.len(), 32, "the committed tier is 32 bytes");
+
+        let decoded = render_lqip_record(LQIP_FORMAT_V1, payload, &lqip.dominant_color(), 64, 64)
+            .expect("a well-formed record decodes");
+        assert_eq!(
+            decoded,
+            lqip.decode_capped(64, 64),
+            "byte-identical to the core decoder"
+        );
+        assert_eq!(
+            decoded.rgba.len() as u32,
+            decoded.width * decoded.height * 4,
+            "the buffer is exactly what `new ImageData(rgba, w, h)` requires"
+        );
+        assert!(
+            decoded.width <= 64 && decoded.height <= 64,
+            "the decode is capped to the box being painted, not to a fixed size"
+        );
+    }
+
+    /// An unrecognised version and an undecodable payload both paint the stored fallback colour
+    /// rather than throwing: a reader must never misrender, and a missing placeholder is not
+    /// worth failing a gallery over.
+    #[test]
+    fn decode_lqip_falls_back_to_the_dominant_colour_instead_of_throwing() {
+        use capsule_core::lqip::LQIP_FORMAT_V1;
+
+        let fill = [12u8, 34, 56];
+        for (version, payload) in [
+            (LQIP_FORMAT_V1 + 999, vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            (LQIP_FORMAT_V1, vec![0xDE, 0xAD, 0xBE, 0xEF]),
+            (LQIP_FORMAT_V1, Vec::new()),
+        ] {
+            let decoded = render_lqip_record(version, &payload, &fill, 32, 32)
+                .expect("the fallback never fails");
+            assert_eq!((decoded.width, decoded.height), (1, 1));
+            assert_eq!(decoded.rgba, vec![12, 34, 56, 255]);
+        }
+    }
+
+    /// The one throwing case: there is no colour to fall back *to*, so guessing one would invent
+    /// pixels.
+    #[test]
+    fn decode_lqip_rejects_a_malformed_dominant_colour() {
+        use capsule_core::lqip::LQIP_FORMAT_V1;
+
+        for fill in [&[][..], &[1][..], &[1, 2][..], &[1, 2, 3, 4][..]] {
+            assert!(
+                render_lqip_record(LQIP_FORMAT_V1, &[0; 32], fill, 16, 16).is_none(),
+                "a {}-byte dominant_color is malformed",
+                fill.len()
+            );
+        }
     }
 
     #[test]
