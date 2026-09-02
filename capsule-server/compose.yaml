@@ -1,0 +1,76 @@
+# The two external services a Capsule deployment needs, for local development.
+#
+# Bring them up with `mise run serve-deps` and the server up with `mise run serve`. The two are
+# deliberately separate tasks: a task that silently starts containers is a task that leaks them.
+#
+# **Nothing reads these yet.** The Postgres adapter is issue #402 and the Valkey adapter is #403;
+# until they land, `capsule-server serve` refuses to boot with `VALKEY_URL` set and the way to
+# run a server is `mise run serve-memory`. This file exists now because the compose stack went
+# with the Salvo tree in `S-C59` and re-deriving it later is re-doing work — and because
+# dependabot needs a live file to track the images against.
+#
+# There is deliberately **no object store**. Blobs are written to the filesystem `BLOB_ROOT`,
+# which is the blob backend and not a cache in front of one (design/filesystem/server.md); a
+# MinIO service used to sit here and was never wired to anything.
+#
+# Podman-first: the `:Z,U` volume labels relabel for SELinux and chown to the container user, and
+# `docker compose` accepts both. Every image is fully qualified, because podman prompts for a
+# registry otherwise.
+
+services:
+  postgres:
+    image: docker.io/library/postgres:18
+    ports:
+      # Loopback only. `"5432:5432"` publishes on every interface, and these are development
+      # credentials in a checked-in file — a database anyone on the network can open with
+      # capsule/capsule.
+      - "127.0.0.1:5432:5432"
+    environment:
+      # Development credentials, matching capsule-server/.env.example's DATABASE_URL. Override
+      # them in the environment or a .env file; nothing here is a secret worth keeping.
+      POSTGRES_USER: capsule
+      POSTGRES_PASSWORD: capsule
+      POSTGRES_DB: capsule
+    healthcheck:
+      # `serve-deps` returns as soon as compose has started the containers, so a developer who
+      # runs `mise run serve` immediately afterwards would otherwise race the database's own
+      # startup. `pg_isready` is what makes "up" mean "accepting connections".
+      test: ["CMD-SHELL", "pg_isready -U capsule -d capsule"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - postgres_data:/var/lib/postgresql/data:Z,U
+
+  valkey:
+    image: docker.io/valkey/valkey:9.0.4
+    ports:
+      # Loopback only, and here it is load-bearing rather than tidy: `--protected-mode no` below
+      # is safe *because* nothing outside this machine can reach the port, and the two have to
+      # agree.
+      - "127.0.0.1:6379:6379"
+    environment:
+      # Carried over from the retired deployment verbatim, because these are the flags the
+      # session and upload-session stores were sized against: `volatile-lru` so a key with a TTL
+      # is what gets evicted under pressure and a key without one never is, `appendonly` with
+      # `everysec` so a restart loses at most a second of session state rather than all of it,
+      # and the `lazyfree-*` set so an eviction does not block the command that triggered it.
+      # `protected-mode no` is a development-only concession, and it is only a concession because
+      # the port above is published to loopback rather than to every interface.
+      #
+      # These flags do reach the server. `VALKEY_EXTRA_FLAGS` is often described as a Bitnami
+      # convention, but the official image honours it too: `valkey/valkey:9.0.4`'s own
+      # `/usr/local/bin/docker-entrypoint.sh` ends with `exec "$@" $VALKEY_EXTRA_FLAGS`,
+      # unquoted, so the variable word-splits into arguments of `valkey-server`.
+      VALKEY_EXTRA_FLAGS: "--maxmemory 4G --maxmemory-policy volatile-lru --save 900 1 300 10 --appendonly yes --appendfsync everysec --no-appendfsync-on-rewrite yes --auto-aof-rewrite-percentage 100 --auto-aof-rewrite-min-size 64mb --lazyfree-lazy-eviction yes --lazyfree-lazy-expire yes --lazyfree-lazy-server-del yes --replica-lazy-flush yes --protected-mode no --tcp-keepalive 60 --loglevel notice --slowlog-log-slower-than 10000 --slowlog-max-len 128 --io-threads 4"
+    healthcheck:
+      test: ["CMD-SHELL", "valkey-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes:
+      - valkey_data:/data:Z,U
+
+volumes:
+  postgres_data:
+  valkey_data:
