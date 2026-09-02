@@ -25,6 +25,11 @@ pub mod push;
 pub mod recovery;
 pub mod staged;
 pub mod sync;
+/// The album-upgrade proposal client (`S-C24`). Hand-written for one reason only: its request
+/// body is `application/cbor`, which `spargen` 0.4 cannot lower, so `build.rs` narrows the
+/// operation out of the generated client. The `GET` and `DELETE` on the same path are JSON and
+/// *are* generated — reach them through [`client::AuthenticatedClient`].
+pub mod upgrade;
 pub mod upload;
 pub mod verify;
 

@@ -460,3 +460,104 @@ async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed
          accepted a token it had already stopped honouring"
     );
 }
+
+/// The album-upgrade proposal, over a socket, against the server that verifies the signature.
+///
+/// This one cannot be proven against a mock at all. The intent is signed with the proposing
+/// device's DSK and verified against the account's **published** device directory, so a mock
+/// that answered `200` would prove only that the client can post bytes. Here the directory is
+/// anchored, the album provisioned, and the intent signed by `capsule-core` with the *same*
+/// types the server verifies with — so what is asserted is that the bytes the SDK put on the
+/// wire are the bytes that verify.
+///
+/// The `409` half matters as much: only one ceremony may hold an album, and a client that read
+/// that refusal as "malformed, re-sign" would have an admin re-signing intents forever.
+#[tokio::test]
+async fn the_sdk_proposes_an_album_upgrade_over_a_socket() {
+    use capsule_sdk::upgrade::{UpgradeClient, UpgradeError};
+    use support::{
+        device, identity_header, identity_key, signed_directory_with_device, signed_upgrade_intent,
+    };
+    use uuid::Uuid;
+
+    let intent_id = Uuid::parse_str("019a0000-0000-7000-8000-00000000cafe").expect("a uuid");
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let identity = identity_key();
+    let device_key = identity_key();
+
+    // Anchor the directory holding the proposing device, then provision the album. Without the
+    // first, every proposal is `403` however well signed — the directory *is* the trust anchor.
+    fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &identity_header(&identity))
+        .body(
+            "application/cbor",
+            signed_directory_with_device(
+                &identity,
+                1,
+                device(),
+                &device_key,
+                "1970-01-01T00:00:00Z",
+            ),
+        )
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    fixture
+        .client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "album_id": album().as_str() }))
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::CREATED);
+
+    let base_url = serve(&fixture).await;
+    let client = UpgradeClient::new(session(&base_url).await, &base_url);
+    let album_id = Uuid::parse_str(album().as_str()).expect("the seeded album id is a uuid");
+    let intent = signed_upgrade_intent(&device_key, device(), intent_id, "2030-01-01", 300);
+
+    let phase = client
+        .begin(album_id, &intent)
+        .await
+        .expect("a signed proposal from an anchored device is accepted");
+    assert_eq!(phase.album_id, album_id);
+    assert_eq!(
+        phase.intent_id,
+        Some(intent_id),
+        "the ceremony the server now holds is the one the client proposed"
+    );
+    assert_eq!(phase.to_protocol_version.as_deref(), Some("2030-01-01"));
+    assert_eq!(phase.in_flight, 0, "nothing is draining on a fresh album");
+    assert!(
+        phase.expires_at.is_some(),
+        "the deadline is the server's to set, and it must reach the client as an instant"
+    );
+
+    // A second ceremony under a different id is refused with the live one — and with the code
+    // a client localizes, parsed out of a problem body that crossed a socket.
+    let second = Uuid::parse_str("019a0000-0000-7000-8000-00000000beef").expect("a uuid");
+    let error = client
+        .begin(
+            album_id,
+            &signed_upgrade_intent(&device_key, device(), second, "2030-01-01", 300),
+        )
+        .await
+        .expect_err("only one ceremony may hold an album");
+    let UpgradeError::InFlight {
+        intent_id: live, ..
+    } = &error
+    else {
+        panic!("expected an in-flight refusal, got {error:?}");
+    };
+    assert_eq!(live.as_deref(), Some(intent_id.to_string().as_str()));
+    assert_eq!(
+        error.error_code(),
+        Some("error.album.upgrade_in_flight"),
+        "got {error:?}"
+    );
+}
