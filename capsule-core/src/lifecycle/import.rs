@@ -8,7 +8,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use uuid::Uuid;
 
-use super::derivatives::PreparedStill;
+use super::derivatives::{PreparedStill, StillSource};
 use super::{
     AssetState, LifecycleError, Result, SidecarEnrichment, SignedImport, SignedImportOptions,
     StackPlacement, StreamedImport, Workspace, asset_is_deleted, media_dir, now_rfc3339,
@@ -418,7 +418,18 @@ impl Workspace {
             derivatives,
             deferred_formats,
             status: derivative_status,
-        } = self.prepare_still(&plaintext, &ext, src, &exif, asset_id, album_id, &amk, &enc)?;
+        } = self.prepare_still(
+            &StillSource {
+                plaintext: &plaintext,
+                ext: &ext,
+                src,
+                exif: &exif,
+            },
+            asset_id,
+            album_id,
+            &amk,
+            &enc,
+        )?;
 
         // Sealing order (1) the prior head `H` is `None` on a create; (2) author + sign the
         // sidecar with `provenance_chain_hash = H`.

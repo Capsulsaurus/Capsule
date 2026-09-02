@@ -24,7 +24,7 @@ use std::path::Path;
 
 use uuid::Uuid;
 
-use super::{AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir};
+use super::{AssetState, DerivativeStatus, Result, Workspace, media_dir};
 use crate::cbor;
 use crate::crypto::encryption::encrypt_asset_rekey;
 use crate::crypto::encryption::stream::AssetEncryption;
@@ -38,6 +38,24 @@ use crate::media::{
     generate_still_derivatives, guarded,
 };
 use crate::sidecar::sidecar_v1::{Dimensions, Lqip as SidecarLqip};
+
+/// The file under import, as [`prepare_still`](Workspace::prepare_still) needs to see it.
+///
+/// A parameter object rather than four positional arguments: these four are one thing — the
+/// bytes on the way in and what the scanner already learned about them — and they are always
+/// passed together. The alternative was silencing `clippy::too_many_arguments`, which would have
+/// hidden that the signature had grown two *kinds* of input (the file, and the crypto identity
+/// it commits under) without saying so.
+pub(super) struct StillSource<'a> {
+    /// The file's bytes.
+    pub(super) plaintext: &'a [u8],
+    /// Its lowercase extension without the dot, `""` when it has none.
+    pub(super) ext: &'a str,
+    /// Where it came from — for logs only; the bytes above are authoritative.
+    pub(super) src: &'a Path,
+    /// What `capsule_core::exif` read off it, the fallback for dimensions.
+    pub(super) exif: &'a ExifExtract,
+}
 
 /// Everything one still yields in a single decode pass: the sidecar fields, the signed
 /// derivatives to persist after the durable commit, and the reason for anything missing.
@@ -197,19 +215,22 @@ impl Workspace {
     #[tracing::instrument(
         level = "debug",
         skip_all,
-        fields(asset_id = %asset_id, src = %src.display(), bytes = plaintext.len())
+        fields(asset_id = %asset_id, src = %source.src.display(), bytes = source.plaintext.len())
     )]
     pub(super) fn prepare_still(
         &self,
-        plaintext: &[u8],
-        ext: &str,
-        src: &Path,
-        exif: &ExifExtract,
+        source: &StillSource<'_>,
         asset_id: Uuid,
         album_id: Uuid,
         amk: &Amk,
         original: &AssetEncryption,
     ) -> Result<PreparedStill> {
+        let StillSource {
+            plaintext,
+            ext,
+            src,
+            exif,
+        } = *source;
         let exif_dimensions = exif
             .width
             .zip(exif.height)
