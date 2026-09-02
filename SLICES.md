@@ -318,7 +318,7 @@ row's remainder now lives.
 | S-D26 | CLI drops the rotated token pair, forcing re-login | sdk/clients | — | S | MIXED | ready | fix in the REST client, not the old one |
 | S-D27 | The SDK test mock never shuts its listener down | sdk/clients | — | S | ACTIVE | done\* | fixed a real leak; the LEAK signal is partly noise |
 | S-D28 | The SDK's second transport, and the document it generates from | client SDK | S-D8, S-C2 | L | MIXED | done\* | gRPC retires; the client generates from the Kynos document; four `application/cbor` operations stay hand-written |
-| S-D29 | Local alert surface (`capsule-core::notify` + native delivery) | sdk/clients | S-Z11 | M | ACTIVE | ready | |
+| S-D29 | Local alert surface (`capsule-core::notify` + native delivery) | sdk/clients | S-Z11 | M | ACTIVE | ready | core half landed (`capsule-core::notify` + FFI); native delivery, `notification.*` keys, permission placement owed |
 | S-D20 | CLI truthfulness pass (status/register/endpoints/flags) | sdk/clients | — | M | MIXED | done | |
 | S-E1 | Share-link end-to-end serving | fed/sharing | S-C4 | M | MIXED | done\* | live-browser smoke → `S-Q5`; seeds → gates |
 | S-E2 | Federation capabilities + pulls | fed/sharing | S-C2, S-A3 | L | RETIRED | ready | capability gate on the live read method → `S-E5` |
@@ -5735,6 +5735,26 @@ table hides what it would cost.
   to a badge, and a refused authorization degrading to a badge without error; a per-platform
   smoke fires a pre-armed alert with the app terminated; `i18n-guard` passes with the new
   namespace consumed. **Tier:** unit + smoke.
+- **Core half landed — verified 2026-09-01.** `capsule-core::notify` is the whole shared
+  decision function: `evaluate(&NotifyInput, now)` reports the classes true at an instant and
+  `next_deadline(&NotifyInput, now)` reports the one instant to arm, both pure with `now` as an
+  argument. `capsule-sdk::ffi` exports them as free functions (`evaluate_alerts`,
+  `next_alert_deadline`) with RFC 3339 timestamps, and `RecoveryCadence::notify_facts` projects
+  the S-D12 scheduler into the recovery half of the input. The module left
+  `planned-modules.txt`; `notifications.md` no longer calls it planned.
+- **Why `ready` and not `done*`.** Every predicate input is caller-supplied, because the core
+  holds none of the trigger state — no persisted last-sync instant, no client-side quota type,
+  no quarantine table (a refused sync entry is a per-entry verdict, not a row). So the predicate
+  is proven and *nothing on a device evaluates it yet*: the remainder is the client half, and it
+  is the larger half. `next_deadline` is deliberately narrower than `evaluate` for the same
+  reason the pre-arm rule exists — an armed notification fires with the app not running and
+  cannot be re-checked on arrival, so a deadline is returned only when the alert is certain to
+  be true when it gets there.
+- **Owed, and where.** Native scheduling and presentation
+  (`UNUserNotificationCenter`/`AlarmManager`), the `notification.*` catalog keys — blocked on a
+  live consumer by the i18n guard, which is the client half by construction — the
+  permission-at-first-use placement, and the per-platform terminated-app smoke. Filed as the
+  S-D29 client half.
 
 ## Post-v1 Register
 

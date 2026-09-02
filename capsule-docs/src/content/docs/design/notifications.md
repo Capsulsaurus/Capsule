@@ -36,10 +36,17 @@ Three distinct things, three words. The collision this table resolves is the rea
 A hint is a *pull prompt between infrastructure*. A wake is a hint applied at the client edge. An
 alert is the only one a human ever sees, and it is never produced by a server.
 
-**Where this lives.** Alert classes and their trigger predicates belong in `capsule-core::notify`
-(**Planned**) so every platform evaluates one shared decision function; only *delivery* is native
-per client. This is the [minimal-divergence split](/design/clients/#design-priorities) applied to
-alerts. No server module is planned for v1 — Tier 0 has no server half.
+**Where this lives.** Alert classes and their trigger predicates live in `capsule-core::notify`
+so every platform evaluates one shared decision function; only *delivery* is native per client.
+This is the [minimal-divergence split](/design/clients/#design-priorities) applied to alerts. No
+server module is planned for v1 — Tier 0 has no server half.
+
+**Status.** `capsule-core::notify` is **built** (slice `S-D29`, core half): one pure decision
+function returns the classes true at an instant, a second returns the instant to arm, and
+`capsule-sdk::ffi` carries both to the apps. Every predicate input is caller-supplied, because
+the core holds none of the trigger state. What is still owed is the *delivery* half — the
+per-platform scheduling and presentation below, the `notification.*` catalog keys, and the
+permission request — so no alert on this page reaches a user yet.
 
 ## Tier 0 — Local Alerts
 
