@@ -53,7 +53,7 @@ an **Area**. Read `Status` through `Area`, never on its own.
 
 | Area | Meaning |
 | --- | --- |
-| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its `media` tree — `exif` stayed, see the `RETIRED` row below — `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
+| `ACTIVE` | The whole surface survives the teardown (`capsule-core` minus its `media` tree, `capsule-core-ffi`/`-swift`/`-kotlin`, the apps, `capsule-cli` local paths, `capsule-web` local paths, `locales/`, `xtask`, the docs site). Implementable against the live workspace today and unaffected by the Kynos rebuild. |
 | `RETIRED` | The target sits in a `legacy-review/` bucket — `server-salvo` (the whole Salvo tree), `sdk-progenitor`, or `media-pipeline` (`capsule_core::media` and its lifecycle adapter). The deliverable must be re-landed on the replacement: Kynos for the server, the Rawshift-backed pipeline for media, the spargen SDK for the client. **`capsule_core::exif` and `import/{executor_cancellation, progress}.rs` are not on this list**, against the original teardown: this branch rebuilt them and they are live, and the `core-import-media` bucket beside them is a stale twin awaiting deletion ([#423](https://github.com/Capsulsaurus/Capsule/issues/423)), not a quarantine (`S-C59`). |
 | `MIXED` | Both: a surviving `capsule-core`/client/app half that ships and stays, and a server, SDK-wire, or media half that must be re-landed. |
 
