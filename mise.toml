@@ -349,10 +349,14 @@ run = "cargo run -q -p xtask -- drop-kat"
 # test-web loads the wasm module + both KAT fixtures. Naming `drop-kat` alone is enough: it
 # pulls in `share-kat`, which pulls in `build-wasm`. Listing all three would say nothing extra
 # and would invite someone to "parallelise" them again — see the note on `share-kat`.
+#
+# No `--pass-with-no-tests`: suites exist under capsule-web/src/**, so bare `bun test` is green
+# today and red the moment discovery stops finding them. The flag turned exactly that regression
+# — a moved directory, a changed default glob, a broken `dir` — into a passing gate.
 [tasks.test-web]
 dir = "capsule-web"
 depends = ["drop-kat"]
-run = "bun test --pass-with-no-tests"
+run = "bun test"
 
 # build-web bundles the guest share viewer, which imports the generated wasm glue.
 [tasks.build-web]
