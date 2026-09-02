@@ -34,7 +34,6 @@
 //!
 //! [Versioning — Album Upgrade Ceremony]: https://docs/design/versioning/#album-upgrade-ceremony
 
-use capsule_i18n::error_codes;
 use jiff::Timestamp;
 use serde::Deserialize;
 use tracing::instrument;
@@ -283,11 +282,14 @@ impl UpgradeClient {
 
 /// Map a refusal onto its typed variant, keeping the code the server stamped.
 ///
-/// One readable status table rather than a match buried in the request path. `413` is the
-/// transport's body backstop and carries no problem body at all, so its code is ours — and it
-/// is `error.request.too_large` rather than the intent-malformed code, because a client
-/// localizing the latter would tell an admin their signed intent is corrupt when it is
-/// merely too big.
+/// One readable status table rather than a match buried in the request path.
+///
+/// `413` is the transport's body backstop and carries no problem body at all, so it has no
+/// code — and this client does not mint one. Every code here is the code the *server* stamped;
+/// a code invented on this side would assert that the server said something it did not, and a
+/// client localizing it would read the SDK's guess as the server's judgement. The variant
+/// already carries the actionable half ("these bytes will not do"), and the English detail
+/// carries the reason.
 fn refusal(status: u16, problem: ProblemWire) -> UpgradeError {
     let ProblemWire {
         code,
@@ -306,7 +308,7 @@ fn refusal(status: u16, problem: ProblemWire) -> UpgradeError {
             detail,
         },
         413 => UpgradeError::Malformed {
-            code: Some(error_codes::REQUEST_TOO_LARGE.to_owned()),
+            code: None,
             detail: "the signed upgrade intent exceeds the server's body limit".to_owned(),
         },
         500 => UpgradeError::Unavailable { code, detail },
@@ -347,6 +349,8 @@ fn decode_phase(wire: UpgradePhaseWire) -> Result<UpgradePhase, UpgradeError> {
 mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use capsule_i18n::error_codes;
 
     use super::*;
     use crate::auth::{AuthClient, PersistedSession};
@@ -520,10 +524,11 @@ mod tests {
         }
     }
 
-    /// The body-size backstop carries no problem body, so the client supplies both the variant
-    /// and a code that says what actually happened.
+    /// The body-size backstop carries no problem body, so the client supplies the variant —
+    /// and **no code**. Minting one here would put words in the server's mouth, and every other
+    /// code this module reports is the server's own.
     #[tokio::test]
-    async fn a_body_too_large_is_not_reported_as_a_corrupt_intent() {
+    async fn a_body_too_large_carries_no_invented_code() {
         let server = MockServer::start(move |_req: &MockRequest| {
             MockResponse::new(413, "Payload Too Large")
         })
@@ -534,10 +539,14 @@ mod tests {
             .await
             .expect_err("the server refused the size");
         assert!(
-            matches!(error, UpgradeError::Malformed { .. }),
+            matches!(error, UpgradeError::Malformed { code: None, .. }),
             "got {error:?}"
         );
-        assert_eq!(error.error_code(), Some(error_codes::REQUEST_TOO_LARGE));
+        assert_eq!(
+            error.error_code(),
+            None,
+            "a code the server never sent is not this client's to supply"
+        );
     }
 
     /// An undeclared status is surfaced as itself rather than guessed at.

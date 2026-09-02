@@ -499,12 +499,14 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             rest::StoreEscrowError::Status401(problem)
             | rest::StoreEscrowError::Status403(problem) => refused(&problem),
             rest::StoreEscrowError::Status500(problem) => unavailable(&problem),
-            // The body-size backstop carries no problem body at all, so both the code and the
-            // message are ours. It is `error.request.too_large` and not
-            // `error.escrow.malformed`: a client localizing the latter would tell the user
-            // their recovery blob is corrupt when it is merely too big.
+            // The body-size backstop carries no problem body at all, so there is no code to
+            // carry and this client does not invent one. Every other code in this module is
+            // the server's own, and a code minted here would assert that the server said
+            // something it did not — a client localizing it would be reading the SDK's guess
+            // as the server's judgement. The English detail says what happened instead; the
+            // variant already says "these bytes will not do, do not resend them".
             rest::StoreEscrowError::Status413 => RecoveryError::Malformed {
-                code: Some(error_codes::REQUEST_TOO_LARGE.to_owned()),
+                code: None,
                 detail: "the escrow blob exceeds the server's request-body limit".to_owned(),
             },
         },
@@ -844,6 +846,20 @@ mod tests {
             .unwrap()
     }
 
+    /// A session over the mock whose access token expired an hour ago, so any call
+    /// pre-flight-refreshes — and the escrow mock serves no `/refresh`, so that refresh fails.
+    /// The result is a [`Session`] that cannot produce a bearer at all.
+    fn dead_session_for(base: &str) -> Session {
+        AuthClient::new(base)
+            .unwrap()
+            .resume(PersistedSession {
+                access_token: "test-access".to_string().into(),
+                refresh_token: "test-refresh".to_string().into(),
+                access_expires_at_unix: jiff::Timestamp::now().as_second() - 3_600,
+            })
+            .unwrap()
+    }
+
     fn wrap(master: &[u8; 32], secret: &[u8]) -> WrappedSecret {
         pwkdf::wrap_with(master, secret, fast_params()).unwrap()
     }
@@ -1145,6 +1161,47 @@ mod tests {
             "an unreachable endpoint must be transport, got {error:?}"
         );
         assert_eq!(error.error_code(), None);
+    }
+
+    /// **A session that cannot mint a bearer is an auth failure, not a network one.**
+    ///
+    /// This is the other side of `an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one`
+    /// and it pins the discrimination that separates them. Both arrive as the generated
+    /// taxonomy's `RequestConstruction`; the only thing telling them apart is the boxed source,
+    /// which is the runtime's own `AuthError` when — and only when — the bearer provider is
+    /// what failed. Without this case, a spargen change to how a provider failure is boxed
+    /// would silently demote every expired refresh token to `Transport`, and the FFI would tell
+    /// a user to retry where it must tell them to sign in again. The escrow calls themselves
+    /// never leave the process here: there is no bearer to send them with.
+    #[tokio::test]
+    async fn a_session_that_cannot_mint_a_bearer_is_an_auth_failure() {
+        let base = start_mock(escrow_handler(EscrowStore::default())).await;
+        let client = RecoveryClient::new(dead_session_for(&base), &base).unwrap();
+
+        let error = client
+            .fetch_escrow()
+            .await
+            .expect_err("the session cannot produce a token");
+        assert!(
+            matches!(error, RecoveryError::Unauthorized { code: None, .. }),
+            "a dead session must reach the caller as an auth failure, got {error:?}"
+        );
+        assert_eq!(
+            error.error_code(),
+            None,
+            "no server answered, so there is no catalog code to carry"
+        );
+
+        // And the same on the write path, which has a body to construct and still fails before
+        // it is sent.
+        let error = client
+            .store_escrow(&wrap(&[0x99u8; 32], b"whatever"))
+            .await
+            .expect_err("the session cannot produce a token");
+        assert!(
+            matches!(error, RecoveryError::Unauthorized { code: None, .. }),
+            "got {error:?}"
+        );
     }
 
     /// A refusal whose body is not the coded problem the document promises — an intermediary

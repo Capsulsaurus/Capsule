@@ -263,6 +263,14 @@ fn build_client(base_url: &str, session: Session) -> Result<Client, ClientError>
 /// per-client transport would mean a fresh TLS handshake for every escrow read on a device
 /// that does several during one cadence prompt. Nothing here is configured per instance, so
 /// there is nothing to vary: the same client serves them all.
+///
+/// **What that does not fix.** `Client::with_backend` still builds its *own* default
+/// `reqwest::Client` internally, one per `AuthenticatedClient`. That one only assembles
+/// requests — every byte is executed through the backend below, and therefore through this
+/// shared client — so it opens no connection and costs nothing on the wire; what it costs is
+/// one throwaway allocation per construction. Removing even that needs a
+/// `with_client_and_backend` constructor spargen does not expose, which is generator work of
+/// exactly the same kind as the `application/cbor` gap, and lands where that lands.
 fn reqwest_client() -> reqwest::Client {
     static SHARED: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
     SHARED
