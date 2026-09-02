@@ -483,9 +483,11 @@ jobs:
 
   # Single aggregated status check. Mark THIS ("CI / required") as the required
   # check in branch protection — path-filtered jobs report "skipped", which this
-  # treats as a pass. Every job in `needs` is verified below, `rust-test`
-  # included: it became blocking with `S-C59` (see the note on that job), and a
-  # job listed in `needs` but absent from the loop is a gate that cannot fail.
+  # treats as a pass. Every job in `needs` is verified below: the loop covers the
+  # eleven gates (`rust-test` included — it became blocking with `S-C59`, see the
+  # note on that job), and `changes` is checked ahead of it under a stricter rule,
+  # because "skipped" is only trustworthy when the filter that skipped it ran.
+  # A job in `needs` but absent from both checks is a gate that cannot fail.
   required:
     name: required
     if: always()
@@ -494,6 +496,19 @@ jobs:
     steps:
       - name: Verify required jobs succeeded
         run: |
+          # `changes` must have SUCCEEDED, not merely "not failed". Every filtered
+          # job's `if:` reads needs.changes.outputs.*; if that job dies (a checkout
+          # hiccup, a paths-filter error) those outputs are empty, so every gate
+          # evaluates false and reports "skipped" — and `if: always()` still runs
+          # this one. Treating those skips as passes would green-light a merge with
+          # zero toolchain gates executed, which is the failure mode this whole job
+          # exists to prevent. It is the one `needs` entry that cannot be skipped:
+          # unlike `commit-lint` (push events) or the filtered gates, it has no `if:`.
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "The path-filter job did not succeed (result: ${{ needs.changes.result }})."
+            echo "Every filtered gate would report skipped, so this aggregate proves nothing."
+            exit 1
+          fi
           for r in "${{ needs.commit-lint.result }}" "${{ needs.rust.result }}" \
                    "${{ needs.rust-test.result }}" "${{ needs.rust-cross.result }}" \
                    "${{ needs.web.result }}" \
