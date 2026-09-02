@@ -11,6 +11,34 @@ use clap::{Arg, ArgAction, Command, CommandFactory, Parser};
 pub(crate) use commands::*;
 use serde_json::{Map, Value};
 
+/// Every field name the command-tree document uses, named once.
+///
+/// The document is hand-built rather than derived from a struct, because its shape is a
+/// projection of `clap`'s builder API and no Rust type in this crate has that shape. Naming
+/// the keys here is what keeps that from meaning "spelled ad hoc": this block is the
+/// vocabulary `capsule-docs/scripts/gen-reference.mjs` reads on the other side, and a typo
+/// in a key is a field the generator silently never finds.
+mod field {
+    pub(super) const SCHEMA: &str = "schema";
+    pub(super) const NAME: &str = "name";
+    pub(super) const ABOUT: &str = "about";
+    pub(super) const LONG_ABOUT: &str = "long_about";
+    pub(super) const ARGS: &str = "args";
+    pub(super) const SUBCOMMANDS: &str = "subcommands";
+    pub(super) const ID: &str = "id";
+    pub(super) const POSITIONAL: &str = "positional";
+    pub(super) const REQUIRED: &str = "required";
+    pub(super) const TAKES_VALUE: &str = "takes_value";
+    pub(super) const REPEATABLE: &str = "repeatable";
+    pub(super) const LONG: &str = "long";
+    pub(super) const SHORT: &str = "short";
+    pub(super) const VALUE_NAMES: &str = "value_names";
+    pub(super) const POSSIBLE_VALUES: &str = "possible_values";
+    pub(super) const DEFAULT_VALUES: &str = "default_values";
+    pub(super) const HELP: &str = "help";
+    pub(super) const LONG_HELP: &str = "long_help";
+}
+
 /// Schema version of the emitted command-tree document.
 ///
 /// Bumped only when a consumer must change to keep reading it — adding an optional field is
@@ -68,7 +96,7 @@ pub(crate) struct Cli {
 pub fn command_tree() -> Value {
     let mut root = describe_command(&Cli::command());
     root.insert(
-        "schema".to_owned(),
+        field::SCHEMA.to_owned(),
         Value::from(u64::from(COMMAND_TREE_SCHEMA)),
     );
     Value::Object(root)
@@ -80,17 +108,17 @@ pub fn command_tree() -> Value {
 /// cycle to guard against and no depth limit to pick.
 fn describe_command(command: &Command) -> Map<String, Value> {
     let mut out = Map::new();
-    out.insert("name".to_owned(), Value::from(command.get_name()));
+    out.insert(field::NAME.to_owned(), Value::from(command.get_name()));
 
     if let Some(about) = command.get_about() {
-        out.insert("about".to_owned(), Value::from(about.to_string()));
+        out.insert(field::ABOUT.to_owned(), Value::from(about.to_string()));
     }
     // Emitted only when it says something `about` does not, so the artifact does not carry
     // the same paragraph twice for every command whose doc comment is one line long.
     if let Some(long_about) = command.get_long_about() {
         let long_about = long_about.to_string();
         if Some(long_about.as_str()) != command.get_about().map(ToString::to_string).as_deref() {
-            out.insert("long_about".to_owned(), Value::from(long_about));
+            out.insert(field::LONG_ABOUT.to_owned(), Value::from(long_about));
         }
     }
 
@@ -100,7 +128,7 @@ fn describe_command(command: &Command) -> Map<String, Value> {
         .map(|arg| Value::Object(describe_arg(arg)))
         .collect();
     if !args.is_empty() {
-        out.insert("args".to_owned(), Value::from(args));
+        out.insert(field::ARGS.to_owned(), Value::from(args));
     }
 
     let mut subcommands: Vec<&Command> = command
@@ -113,7 +141,7 @@ fn describe_command(command: &Command) -> Map<String, Value> {
             .into_iter()
             .map(|subcommand| Value::Object(describe_command(subcommand)))
             .collect();
-        out.insert("subcommands".to_owned(), Value::from(described));
+        out.insert(field::SUBCOMMANDS.to_owned(), Value::from(described));
     }
 
     out
@@ -123,17 +151,26 @@ fn describe_command(command: &Command) -> Map<String, Value> {
 /// says about it.
 fn describe_arg(arg: &Arg) -> Map<String, Value> {
     let mut out = Map::new();
-    out.insert("id".to_owned(), Value::from(arg.get_id().as_str()));
-    out.insert("positional".to_owned(), Value::from(arg.is_positional()));
-    out.insert("required".to_owned(), Value::from(arg.is_required_set()));
-    out.insert("takes_value".to_owned(), Value::from(takes_value(arg)));
-    out.insert("repeatable".to_owned(), Value::from(is_repeatable(arg)));
+    out.insert(field::ID.to_owned(), Value::from(arg.get_id().as_str()));
+    out.insert(
+        field::POSITIONAL.to_owned(),
+        Value::from(arg.is_positional()),
+    );
+    out.insert(
+        field::REQUIRED.to_owned(),
+        Value::from(arg.is_required_set()),
+    );
+    out.insert(field::TAKES_VALUE.to_owned(), Value::from(takes_value(arg)));
+    out.insert(
+        field::REPEATABLE.to_owned(),
+        Value::from(is_repeatable(arg)),
+    );
 
     if let Some(long) = arg.get_long() {
-        out.insert("long".to_owned(), Value::from(long));
+        out.insert(field::LONG.to_owned(), Value::from(long));
     }
     if let Some(short) = arg.get_short() {
-        out.insert("short".to_owned(), Value::from(short.to_string()));
+        out.insert(field::SHORT.to_owned(), Value::from(short.to_string()));
     }
     // Both of these are asked only of a value-taking argument, because the derive answers
     // them for a flag too and both answers are internal detail rather than surface. A
@@ -147,7 +184,7 @@ fn describe_arg(arg: &Arg) -> Map<String, Value> {
                 .iter()
                 .map(|name| Value::from(name.to_string()))
                 .collect();
-            out.insert("value_names".to_owned(), Value::from(names));
+            out.insert(field::VALUE_NAMES.to_owned(), Value::from(names));
         }
 
         let possible: Vec<Value> = arg
@@ -156,15 +193,15 @@ fn describe_arg(arg: &Arg) -> Map<String, Value> {
             .filter(|value| !value.is_hide_set())
             .map(|value| {
                 let mut entry = Map::new();
-                entry.insert("name".to_owned(), Value::from(value.get_name()));
+                entry.insert(field::NAME.to_owned(), Value::from(value.get_name()));
                 if let Some(help) = value.get_help() {
-                    entry.insert("help".to_owned(), Value::from(help.to_string()));
+                    entry.insert(field::HELP.to_owned(), Value::from(help.to_string()));
                 }
                 Value::Object(entry)
             })
             .collect();
         if !possible.is_empty() {
-            out.insert("possible_values".to_owned(), Value::from(possible));
+            out.insert(field::POSSIBLE_VALUES.to_owned(), Value::from(possible));
         }
     }
 
@@ -177,16 +214,16 @@ fn describe_arg(arg: &Arg) -> Map<String, Value> {
         .map(|value| Value::from(value.to_string_lossy().into_owned()))
         .collect();
     if !defaults.is_empty() {
-        out.insert("default_values".to_owned(), Value::from(defaults));
+        out.insert(field::DEFAULT_VALUES.to_owned(), Value::from(defaults));
     }
 
     if let Some(help) = arg.get_help() {
-        out.insert("help".to_owned(), Value::from(help.to_string()));
+        out.insert(field::HELP.to_owned(), Value::from(help.to_string()));
     }
     if let Some(long_help) = arg.get_long_help() {
         let long_help = long_help.to_string();
         if Some(long_help.as_str()) != arg.get_help().map(ToString::to_string).as_deref() {
-            out.insert("long_help".to_owned(), Value::from(long_help));
+            out.insert(field::LONG_HELP.to_owned(), Value::from(long_help));
         }
     }
 
@@ -205,6 +242,10 @@ fn takes_value(arg: &Arg) -> bool {
 }
 
 /// Whether the argument may be given more than once (`--pick <ID> --pick <ID>`).
+///
+/// `Count` is unreachable on today's surface — no argument in this CLI is a `-vvv`-style
+/// counter — and is matched anyway because it is the other action that means "give this
+/// again", and omitting it would make the first counting flag document itself as single-use.
 fn is_repeatable(arg: &Arg) -> bool {
     matches!(arg.get_action(), ArgAction::Append | ArgAction::Count)
         || arg
@@ -365,6 +406,78 @@ mod tests {
             .filter_map(|entry| entry.get("name").and_then(Value::as_str))
             .collect();
         assert_eq!(flags, vec!["pick", "neutral", "reject"]);
+    }
+
+    /// The property the drift gate rests on that no other test reaches: the artifact is
+    /// byte-compared, so if any string in it were negotiated from the environment,
+    /// `cli-surface-check` would pass or fail according to the developer's `LANG`.
+    ///
+    /// `LC_ALL` is what `crate::i18n::cli_bundle` reads first, and `tr-TR` is the locale
+    /// that breaks case-folding implementations, so between them they exercise both the
+    /// negotiation path and the classic locale-sensitivity trap. `nextest` runs each test in
+    /// its own process, which is what makes mutating the environment here safe.
+    #[test]
+    fn the_tree_is_identical_under_two_different_locales() {
+        let render = |locale: &str| {
+            // SAFETY: single-threaded test body in a process nextest gives this test alone.
+            unsafe {
+                std::env::set_var("LC_ALL", locale);
+                std::env::set_var("LANG", locale);
+            }
+            serde_json::to_string_pretty(&command_tree()).expect("the tree serializes")
+        };
+        let english = render("en_US.UTF-8");
+        let turkish = render("tr_TR.UTF-8");
+        let japanese = render("ja_JP.UTF-8");
+        assert_eq!(english, turkish);
+        assert_eq!(english, japanese);
+        // Guards against the whole comparison passing because every render was empty.
+        assert!(english.contains("\"name\": \"capsule\""));
+    }
+
+    /// Both branches of the `long_about`/`long_help` dedup: a distinct long form is carried,
+    /// an identical one is dropped rather than stored twice.
+    #[test]
+    fn a_long_form_is_carried_only_when_it_differs_from_the_short_one() {
+        let distinct = Command::new("x")
+            .about("Short.")
+            .long_about("Short.\n\nAnd more.")
+            .arg(
+                clap::Arg::new("a")
+                    .long("a")
+                    .help("Short help.")
+                    .long_help("Short help.\n\nAnd more."),
+            );
+        let described = describe_command(&distinct);
+        assert_eq!(
+            described.get(field::LONG_ABOUT).and_then(Value::as_str),
+            Some("Short.\n\nAnd more.")
+        );
+        let arg_entry = &described
+            .get(field::ARGS)
+            .and_then(Value::as_array)
+            .expect("the command has arguments")[0];
+        assert_eq!(
+            arg_entry.get(field::LONG_HELP).and_then(Value::as_str),
+            Some("Short help.\n\nAnd more.")
+        );
+
+        let same = Command::new("x").about("Short.").long_about("Short.").arg(
+            clap::Arg::new("a")
+                .long("a")
+                .help("Short help.")
+                .long_help("Short help."),
+        );
+        let described = describe_command(&same);
+        assert!(described.get(field::LONG_ABOUT).is_none());
+        assert!(
+            described
+                .get(field::ARGS)
+                .and_then(Value::as_array)
+                .expect("the command has arguments")[0]
+                .get(field::LONG_HELP)
+                .is_none()
+        );
     }
 
     /// `Command::build` is deliberately not called, so the artifact describes only what
