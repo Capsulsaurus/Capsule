@@ -25,7 +25,19 @@
  *   2. an artifact's `schema` is one this script was not written against — exit rather than
  *      render a half-understood document;
  *   3. an operation matches no group in `reference-groups.mjs` — exit naming it, so a new
- *      endpoint family cannot publish unlisted.
+ *      endpoint family cannot publish unlisted;
+ *   4. a request or response carrier offers **more than one media type** — this renderer
+ *      shows one body per carrier, so a second would be dropped silently and the page would
+ *      claim an endpoint accepts only JSON when it also accepts CBOR;
+ *   5. a schema composes with **`oneOf`, `allOf`, or `anyOf`** — this renderer flattens a
+ *      schema to a property table, which cannot express a union or an intersection, and
+ *      would render one as an empty or a half-true model;
+ *   6. artifact prose carries a **setext heading** — see [`demoteHeadings`].
+ *
+ * The last three are unreachable on the committed document today. They are fatal rather
+ * than deferred because each is a case where the renderer's *silent* answer is a confident
+ * lie, and a build failure naming the operation is how the first one to appear gets
+ * handled instead of shipped.
  *
  * Usage: `bun capsule-docs/scripts/gen-reference.mjs` from anywhere; `package.json` runs it
  * before `astro dev` and `astro build`.
@@ -72,8 +84,21 @@ const METHODS = [
     'trace',
 ];
 
-/** How deep a `$ref` chain is followed before deeper types become anchor links only. */
-const MAX_SCHEMA_DEPTH = 2;
+/**
+ * How deep a `$ref` chain is followed before deeper models are named but not expanded.
+ *
+ * Set above the committed document's needs, not at them. The deepest chain any group
+ * reaches is 3 — `SyncPageResponse` → `SyncEntry` → `SyncBlobRef` → `WireBlobRole`, on
+ * `/reference/api/sync/` — so at the previous value of 2 that enum was named on the page
+ * and defined nowhere. Four documents the complete closure of every group today with a
+ * level of headroom; the measured cost of the whole closure over the bounded walk is one
+ * additional schema across all eleven pages.
+ *
+ * A model reachable only deeper than this is still *named* on the page, as bare code rather
+ * than a link, so the bound degrades to "less detail" and never to a link that goes nowhere.
+ * That is why exceeding it is not fatal, unlike the cases in the module header.
+ */
+const MAX_SCHEMA_DEPTH = 4;
 
 /** The banner every generated page carries, as an HTML comment and as prose. */
 const GENERATED_BY = 'capsule-docs/scripts/gen-reference.mjs';
@@ -83,6 +108,9 @@ const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
 
 /** A line that *closes* one: the same run with nothing after it but whitespace. */
 const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
+
+/** A setext underline: a run of `=` or `-` alone on its line. */
+const SETEXT_UNDERLINE = /^\s{0,3}(={2,}|-{2,})\s*$/;
 
 /**
  * Shift every ATX heading in `markdown` down by `offset` levels, clamped at h6.
@@ -95,12 +123,15 @@ const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
  * Fenced blocks are skipped: a `#` on the first column of a shell example is a comment, not
  * a heading, and demoting it would corrupt the example.
  *
- * **ATX only.** A setext heading (`Title` over `=====`) is left alone. Neither committed
- * artifact uses one — verified across all 971 descriptions in the OpenAPI document — and
- * rewriting a line based on the line below it is a different and more fragile
- * transformation than prefixing hashes: a `---` under a paragraph is a thematic break, and
- * over one it is frontmatter. The limitation is tested, so it fails visibly if it stops
- * being acceptable.
+ * **ATX only, and a setext heading is fatal.** Rewriting a line based on the line below it
+ * is a different and more fragile transformation than prefixing hashes — a `---` under a
+ * paragraph is a thematic break, and over one it is frontmatter — so this function does not
+ * attempt it. Silently leaving one alone is worse than not supporting it: an `=====`
+ * underline in an operation description would put an undemoted h1 in the page body, which
+ * is the exact defect demotion exists to prevent, and it would publish looking fine.
+ * Neither committed artifact uses one today (verified across all 971 descriptions in the
+ * OpenAPI document), so the first one to appear stops the build and gets ATX in its doc
+ * comment.
  *
  * @param {string} markdown Prose that may contain headings.
  * @param {number} offset Levels to add.
@@ -108,39 +139,68 @@ const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
  */
 export function demoteHeadings(markdown, offset) {
     let fence = null;
-    return markdown
-        .split('\n')
-        .map((line) => {
-            const fenceMatch = FENCE_OPEN.exec(line);
-            if (fence === null) {
-                if (fenceMatch) {
-                    fence = {
-                        char: fenceMatch[1][0],
-                        length: fenceMatch[1].length,
-                    };
-                    return line;
-                }
-            } else {
-                // A *closing* fence carries no info string. Without that anchor a
-                // ```` ```js ```` line nested inside a ```` ```sh ```` example closes the
-                // block early, which both demotes the `#` comments inside the example and
-                // leaves every real heading after it untouched.
-                const closer = FENCE_CLOSE.exec(line);
-                if (
-                    closer &&
-                    closer[1][0] === fence.char &&
-                    closer[1].length >= fence.length
-                ) {
-                    fence = null;
-                }
-                return line;
+    /** @type {string[]} */
+    const lines = [];
+    /** Indices of lines that sat inside a fenced block, which is code, not prose. */
+    const fenced = new Set();
+    markdown.split('\n').forEach((line) => {
+        const fenceMatch = FENCE_OPEN.exec(line);
+        if (fence === null) {
+            if (fenceMatch) {
+                fence = {
+                    char: fenceMatch[1][0],
+                    length: fenceMatch[1].length,
+                };
+                lines.push(line);
+                fenced.add(lines.length - 1);
+                return;
             }
-            const heading = /^(#{1,6})(\s)/.exec(line);
-            if (!heading) return line;
-            const level = Math.min(6, heading[1].length + offset);
-            return '#'.repeat(level) + line.slice(heading[1].length);
-        })
-        .join('\n');
+        } else {
+            // A *closing* fence carries no info string. Without that anchor a
+            // ```` ```js ```` line nested inside a ```` ```sh ```` example closes the
+            // block early, which both demotes the `#` comments inside the example and
+            // leaves every real heading after it untouched.
+            const closer = FENCE_CLOSE.exec(line);
+            if (
+                closer &&
+                closer[1][0] === fence.char &&
+                closer[1].length >= fence.length
+            ) {
+                fence = null;
+            }
+            // Inside a fence, and pushed with a marker the setext scan below reads as
+            // "not prose": an `=====` in a code example is code.
+            lines.push(line);
+            fenced.add(lines.length - 1);
+            return;
+        }
+        const heading = /^(#{1,6})(\s)/.exec(line);
+        if (!heading) {
+            lines.push(line);
+            return;
+        }
+        const level = Math.min(6, heading[1].length + offset);
+        lines.push('#'.repeat(level) + line.slice(heading[1].length));
+    });
+
+    // Checked after the pass so the fence state above decides what is prose. A setext
+    // underline is a run of `=` or `-` alone on a line, directly under a non-blank one that
+    // is not itself a heading, a list item, or a table row.
+    for (let i = 1; i < lines.length; i += 1) {
+        if (fenced.has(i) || fenced.has(i - 1)) continue;
+        if (!SETEXT_UNDERLINE.test(lines[i])) continue;
+        const above = lines[i - 1];
+        if (above.trim() === '') continue;
+        if (/^\s*(#{1,6}\s|[-*+>|]|\d+[.)]\s)/.test(above)) continue;
+        throw new Error(
+            `artifact prose carries a setext heading ("${above.trim()}" underlined with ` +
+                `"${lines[i].trim()}"). This generator demotes ATX headings only, and an ` +
+                'undemoted heading in a page body is the defect demotion exists to prevent. ' +
+                'Rewrite it as an ATX heading (`## Title`) in the doc comment it comes from.',
+        );
+    }
+
+    return lines.join('\n');
 }
 
 /** Where the site's content lives, for turning a repo path into a route. */
@@ -193,24 +253,62 @@ function rewriteLinks(markdown) {
 }
 
 /**
- * Escape a string for a Markdown table cell: a literal `|` would otherwise open a new
- * column, and a newline would end the row.
+ * Prepare artifact prose for a one-line context: rewrite its links, flatten it to a single
+ * line. Deliberately does **not** escape — see [`escapeCell`].
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function prose(text) {
+    return rewriteLinks(text)
+        .replace(/\s*\n\s*/g, ' ')
+        .trim();
+}
+
+/**
+ * Escape one **finished** table cell — after every fragment that composes it has been
+ * assembled, never fragment by fragment.
+ *
+ * That ordering is the whole point. A cell is built from several sources — the help text,
+ * then `Values: …`, `Default: …`, `Example: …` appended after it — and escaping only the
+ * first leaves the others raw. A default of `a|b` then opens a column of its own and shifts
+ * every cell to its right, which is exactly the defect this function exists to prevent and
+ * exactly the one a per-fragment escape reintroduces.
+ *
+ * Two characters are escaped, and only these two:
+ *
+ * - `|`, which opens a column. GFM requires the escape inside a code span too, and renders
+ *   it as a bare pipe, so `` `a\|b` `` shows the pipe the artifact meant.
+ * - `<`, because Markdown passes raw HTML through. `<PATH>` — the most likely idiom in help
+ *   text for a command line — parses as a tag and vanishes, taking everything up to the
+ *   next `>` with it if it never closes.
+ *
+ * **Artifact prose is trusted Markdown.** It comes from Rust doc comments and `clap`
+ * annotations in this repository, reviewed like any other source, so emphasis, links, and
+ * inline code in it are the author's intent and are passed through rather than sanitized.
+ * These two escapes are not a security boundary; they repair characters whose meaning
+ * *changes* when prose written for a doc comment is republished inside a table. An unclosed
+ * `<` outside a code span in a doc comment is the author's bug, and it is fixed in the doc
+ * comment.
+ *
+ * Never apply this to generator-authored markup: the `<br />` in a response body cell is
+ * markup this file wrote and means to keep.
+ *
+ * @param {string} text A fully assembled cell.
+ * @returns {string}
+ */
+function escapeCell(text) {
+    return text.replace(/\|/g, '\\|').replace(/</g, '&lt;').trim();
+}
+
+/**
+ * Artifact prose, flattened and escaped, for a cell that carries nothing else.
  *
  * @param {string} text
  * @returns {string}
  */
 function cell(text) {
-    return (
-        rewriteLinks(text)
-            .replace(/\s*\n\s*/g, ' ')
-            .replace(/\|/g, '\\|')
-            // Markdown passes raw HTML through, so an angle-bracketed placeholder — the most
-            // likely idiom there is in help text for a command line — parses as a tag and
-            // disappears from the rendered page, taking everything up to the next `>` with
-            // it if it never closes.
-            .replace(/</g, '&lt;')
-            .trim()
-    );
+    return escapeCell(prose(text));
 }
 
 /**
@@ -338,7 +436,7 @@ function describeArg(arg) {
     const parts = [];
     if (arg.required) parts.push('**Required.**');
     const help = arg.long_help ?? arg.help;
-    if (help) parts.push(sentence(cell(help)));
+    if (help) parts.push(sentence(prose(help)));
     // Not appended when the help already says it, or `capsule cull --pick` reads
     // "Flag an asset as a keeper (repeatable). Repeatable."
     if (arg.repeatable && !/repeatable/i.test(help ?? '')) {
@@ -354,7 +452,9 @@ function describeArg(arg) {
             `Default: ${arg.default_values.map((value) => `\`${value}\``).join(', ')}.`,
         );
     }
-    return parts.join(' ') || '—';
+    // One pass, over the assembled cell: a `|` in a default or an enumerated value is as
+    // capable of opening a column as one in the help text.
+    return escapeCell(parts.join(' ')) || '—';
 }
 
 /**
@@ -456,9 +556,9 @@ function renderCommand(command, path, level) {
 
     // Demoted relative to this command's own heading, so a doc comment that opens at `#`
     // nests under the command it describes instead of outranking it.
-    const prose = command.long_about ?? command.about;
-    if (prose) {
-        sections.push(demoteHeadings(rewriteLinks(prose), level), '');
+    const about = command.long_about ?? command.about;
+    if (about) {
+        sections.push(demoteHeadings(rewriteLinks(about), level), '');
     }
 
     const positionalTable = table(
@@ -542,7 +642,63 @@ export function readOpenApiDocument(root) {
     if (!document.paths || typeof document.paths !== 'object') {
         throw new Error(`${OPENAPI_DOCUMENT} declares no paths.`);
     }
+    assertRenderable(document);
     return document;
+}
+
+/** Schema keywords this renderer cannot express. */
+const COMPOSITION_KEYWORDS = ['oneOf', 'allOf', 'anyOf'];
+
+/**
+ * Fail on anything in the document this renderer would answer wrongly rather than not at
+ * all. See the fatal list in the module header for why each is fatal.
+ *
+ * @param {Record<string, any>} document
+ * @throws {Error} naming the operation or the schema.
+ */
+function assertRenderable(document) {
+    for (const [path, item] of Object.entries(document.paths)) {
+        for (const method of METHODS) {
+            const operation = item?.[method];
+            if (!operation) continue;
+            const at = `${method.toUpperCase()} ${path}`;
+
+            const carriers = [
+                ['request body', operation.requestBody],
+                ...Object.entries(operation.responses ?? {}).map(
+                    ([status, response]) => [`response ${status}`, response],
+                ),
+            ];
+            for (const [which, carrier] of carriers) {
+                const media = Object.keys(carrier?.content ?? {});
+                if (media.length > 1) {
+                    throw new Error(
+                        `${at}: its ${which} offers ${media.length} media types ` +
+                            `(${media.sort().join(', ')}), and this generator renders one body ` +
+                            'per carrier. Rendering it would document the endpoint as ' +
+                            'accepting only the first. Teach ' +
+                            `${GENERATED_BY} to render every media type before the server ` +
+                            'starts offering a choice.',
+                    );
+                }
+            }
+        }
+    }
+
+    for (const [name, schema] of Object.entries(
+        document.components?.schemas ?? {},
+    )) {
+        const composed = COMPOSITION_KEYWORDS.filter((word) => schema?.[word]);
+        if (composed.length > 0) {
+            throw new Error(
+                `schema ${name} composes with ${composed.join(' and ')}, which this ` +
+                    'generator cannot express: it flattens a schema to a property table, ' +
+                    'and a union or an intersection is not a property table. It would ' +
+                    `render as an empty or a half-true model. Teach ${GENERATED_BY} to ` +
+                    'render composition before the server starts emitting it.',
+            );
+        }
+    }
 }
 
 /**
@@ -625,16 +781,22 @@ function refName(ref) {
  * The set of schema names a page must document, walked from its operations to
  * `MAX_SCHEMA_DEPTH`.
  *
- * Depth-bounded rather than exhaustive, and visited-set guarded, so a self-referential or
- * mutually-referential schema cannot spin: the current document has no cycle, but a renderer
- * that would hang on one is a renderer that fails the day someone adds a tree.
+ * Depth-bounded rather than exhaustive so a self-referential or mutually-referential schema
+ * cannot spin: the current document has no cycle, but a renderer that would hang on one is
+ * a renderer that fails the day someone adds a tree.
+ *
+ * The bound and the cycle guard interact, which is the subtle part — see the comment on
+ * `seen` below. The rule the page states, and the one implemented here, is: a schema is
+ * documented when some path reaches it within the bound, whichever path the walk takes
+ * first.
  *
  * @param {Record<string, any>} document
  * @param {Array<{ operation: Record<string, any> }>} operations
  * @returns {string[]} Schema names, sorted.
  */
 function schemasUsedBy(document, operations) {
-    const seen = new Set();
+    /** @type {Map<string, number>} Schema name -> shallowest depth it was reached at. */
+    const seen = new Map();
 
     const visit = (schema, depth) => {
         if (!schema || typeof schema !== 'object' || depth > MAX_SCHEMA_DEPTH)
@@ -645,8 +807,17 @@ function schemasUsedBy(document, operations) {
         }
         if (schema.$ref) {
             const name = refName(schema.$ref);
-            if (seen.has(name)) return;
-            seen.add(name);
+            // Keyed on the *shallowest* depth this name has been reached at, not on having
+            // been seen at all. A plain visited set makes the answer depend on traversal
+            // order: reach `SyncEntry` at depth 2 first and its children are cut by the
+            // bound, and the later path that reaches it at depth 1 — where its children are
+            // in range — is then refused as already-seen. `WireBlobRole` on
+            // `/reference/api/sync/` was documented or not according to which operation the
+            // walk happened to read first. Re-expanding on a shallower arrival still
+            // terminates: a name can only improve `MAX_SCHEMA_DEPTH + 1` times, and a cycle
+            // never arrives shallower twice.
+            if (seen.has(name) && seen.get(name) <= depth) return;
+            seen.set(name, depth);
             visit(document.components?.schemas?.[name], depth + 1);
             return;
         }
@@ -658,7 +829,7 @@ function schemasUsedBy(document, operations) {
         visit(operation.responses ?? {}, 0);
         visit(operation.parameters ?? [], 0);
     }
-    return [...seen].sort();
+    return [...seen.keys()].sort();
 }
 
 /**
@@ -670,6 +841,8 @@ function schemasUsedBy(document, operations) {
 function bodyOf(carrier) {
     const content = carrier?.content;
     if (!content) return null;
+    // Exactly one, or none: `assertRenderable` has already refused a carrier offering a
+    // choice, so `sort()[0]` is the only entry rather than an arbitrary pick.
     const mediaType = Object.keys(content).sort()[0];
     if (!mediaType) return null;
     return { mediaType, schema: content[mediaType]?.schema ?? {} };
@@ -741,17 +914,19 @@ function renderOperation({ path, method, operation }, documented) {
                         `\`${parameter.name}\``,
                         `\`${parameter.in}\``,
                         schemaLink(documented, parameter.schema ?? {}),
-                        [
-                            parameter.required ? '**Required.**' : '',
-                            parameter.description
-                                ? sentence(cell(parameter.description))
-                                : '',
-                            parameter.example === undefined
-                                ? ''
-                                : `Example: \`${parameter.example}\`.`,
-                        ]
-                            .filter(Boolean)
-                            .join(' ') || '—',
+                        escapeCell(
+                            [
+                                parameter.required ? '**Required.**' : '',
+                                parameter.description
+                                    ? sentence(prose(parameter.description))
+                                    : '',
+                                parameter.example === undefined
+                                    ? ''
+                                    : `Example: \`${parameter.example}\`.`,
+                            ]
+                                .filter(Boolean)
+                                .join(' '),
+                        ) || '—',
                     ]),
             ),
         );
@@ -780,16 +955,18 @@ function renderOperation({ path, method, operation }, documented) {
                         body
                             ? `${schemaLink(documented, body.schema)} <br /> \`${body.mediaType}\``
                             : '—',
-                        [
-                            response.description
-                                ? sentence(cell(response.description))
-                                : '',
-                            headers.length > 0
-                                ? `Headers: ${headers.map((header) => `\`${header}\``).join(', ')}.`
-                                : '',
-                        ]
-                            .filter(Boolean)
-                            .join(' ') || '—',
+                        escapeCell(
+                            [
+                                response.description
+                                    ? sentence(prose(response.description))
+                                    : '',
+                                headers.length > 0
+                                    ? `Headers: ${headers.map((header) => `\`${header}\``).join(', ')}.`
+                                    : '',
+                            ]
+                                .filter(Boolean)
+                                .join(' '),
+                        ) || '—',
                     ];
                 }),
             ),
@@ -811,8 +988,12 @@ function renderSchema(name, document, documented) {
     const schema = document.components?.schemas?.[name] ?? {};
     const sections = [`### ${name}`];
 
-    if (schema.description)
-        sections.push(demoteHeadings(schema.description, 3));
+    // Through `rewriteLinks` like every other prose site: a model's own doc comment is as
+    // free to cite a design document by repo path, or an item by its rustdoc path, as a
+    // handler's is. `TokenResponse` is one of several that do.
+    if (schema.description) {
+        sections.push(demoteHeadings(rewriteLinks(schema.description), 3));
+    }
 
     if (schema.enum) {
         sections.push(
@@ -834,14 +1015,16 @@ function renderSchema(name, document, documented) {
             properties.map(([field, property]) => [
                 `\`${field}\``,
                 schemaLink(documented, property),
-                [
-                    required.has(field) ? '**Required.**' : '',
-                    property.description
-                        ? sentence(cell(property.description))
-                        : '',
-                ]
-                    .filter(Boolean)
-                    .join(' ') || '—',
+                escapeCell(
+                    [
+                        required.has(field) ? '**Required.**' : '',
+                        property.description
+                            ? sentence(prose(property.description))
+                            : '',
+                    ]
+                        .filter(Boolean)
+                        .join(' '),
+                ) || '—',
             ]),
         ),
     );
@@ -886,8 +1069,9 @@ export function renderApiPage(group, operations, document) {
                   '## Schemas',
                   '',
                   'The models these endpoints carry. A field whose type names another model links',
-                  'to it; a model reached more than two references deep is named without being',
-                  'expanded here.',
+                  'to it when this page documents that model, which it does when some path from',
+                  `an operation reaches it within ${MAX_SCHEMA_DEPTH} references. A model only`,
+                  'ever reached deeper than that is named without being expanded.',
                   '',
                   documented
                       .map((name) => renderSchema(name, document, documented))
