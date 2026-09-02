@@ -44,6 +44,14 @@ use capsule_server::store::SystemClock;
 /// sides can name.
 const EXAMPLE_DER: &str = "MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF";
 
+/// A 64-byte attestation seed, base64.
+///
+/// A durable deployment has to supply its own — it is deliberately not derived from
+/// `JWT_ED25519_DER`, because a receipt that verified under the operational key would let
+/// anything holding that key manufacture custody evidence.
+const EXAMPLE_SEED: &str =
+    "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ==";
+
 /// The address the operating system will pick a port under.
 const EPHEMERAL: &str = "127.0.0.1:0";
 
@@ -292,9 +300,51 @@ fn a_durable_backend_refuses_with_the_issue_that_will_honour_it() {
         &root.path().display().to_string(),
     ])
     .env("JWT_ED25519_DER", EXAMPLE_DER)
+    .env("ATTESTATION_KEY_SEED", EXAMPLE_SEED)
     .env("VALKEY_URL", "redis://127.0.0.1:6379"));
     assert_ne!(code, Some(0), "{stderr}");
     assert!(stderr.contains("#403"), "{stderr}");
+}
+
+#[test]
+fn a_durable_serve_is_refused_without_an_attestation_seed_of_its_own() {
+    // The attestation key must be distinct from the token signer — `attestation/mod.rs` requires
+    // it so that holding the operational key does not let anything manufacture custody evidence.
+    // Deriving the seed from `JWT_ED25519_DER` under a different HKDF label is not a separation:
+    // anyone with the token key recomputes it. So a real deployment is made to say what its
+    // attestation identity is, and only `--memory` keeps the derivation.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) = run(server(&[
+        "serve",
+        "--listen",
+        EPHEMERAL,
+        "--blob-root",
+        &root.path().display().to_string(),
+    ])
+    .env("JWT_ED25519_DER", EXAMPLE_DER)
+    .env("VALKEY_URL", "redis://127.0.0.1:6379"));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("ATTESTATION_KEY_SEED"), "{stderr}");
+}
+
+#[test]
+fn the_memory_profile_still_needs_only_one_key() {
+    // The other side of the same decision: a development server derives its attestation seed, so
+    // `serve --memory` comes up on one variable rather than two. Asserted through `gc`'s sibling
+    // path — a full `serve` is covered by the socket case above — by checking that the config
+    // layer raises no seed fault for `--memory`.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let (code, _, stderr) =
+        run(server(&["serve", "--memory", "--listen", EPHEMERAL])
+            .env("JWT_ED25519_DER", EXAMPLE_DER));
+    assert_eq!(code, Some(2), "{stderr}");
+    assert!(stderr.contains("BLOB_ROOT"), "{stderr}");
+    assert!(
+        !stderr.contains("ATTESTATION_KEY_SEED"),
+        "the development profile derives it, so naming it would send a developer looking for a \
+         variable it does not want: {stderr}"
+    );
+    let _ = root;
 }
 
 #[test]
@@ -486,6 +536,100 @@ fn the_operator_commands_need_no_key_material() {
             "{subcommand}: {stderr}"
         );
     }
+}
+
+#[test]
+fn an_operator_command_without_memory_is_told_that_and_not_about_valkey() {
+    // An operator running `capsule-server scrub` has typically set no backend variable at all.
+    // Naming `VALKEY_URL` — which these commands never demand — would send them to configure
+    // something that would not have helped; what is missing is the durable index they read.
+    let root = tempfile::tempdir().expect("a scratch directory");
+    for subcommand in ["gc", "purge", "scrub"] {
+        let (code, _, stderr) = run(&mut server(&[
+            subcommand,
+            "--blob-root",
+            &root.path().display().to_string(),
+        ]));
+        assert_ne!(code, Some(0), "{subcommand}: {stderr}");
+        assert!(stderr.contains("--memory"), "{subcommand}: {stderr}");
+        assert!(!stderr.contains("VALKEY_URL"), "{subcommand}: {stderr}");
+    }
+}
+
+/// The settings `capsule-server/.env.example` ships **uncommented**, as an env-file reader sees
+/// them.
+///
+/// Parsed rather than duplicated, so the assertions below are about the file an operator
+/// actually copies. Comments and blank lines are dropped and the rest is split on the first `=`
+/// — which is all `podman --env-file`, compose's `env_file:` and systemd's `EnvironmentFile=`
+/// do. None of them expands anything.
+fn shipped_template() -> Vec<(String, String)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".env.example");
+    let text = std::fs::read_to_string(&path).expect("the template ships with the crate");
+    let settings: Vec<(String, String)> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_owned(), value.trim().to_owned()))
+        .collect();
+    assert!(
+        !settings.is_empty(),
+        "the template has no uncommented settings at all, so the parse below proves nothing"
+    );
+    settings
+}
+
+#[test]
+fn the_template_ships_no_value_a_literal_env_file_reader_would_store_verbatim() {
+    // The defect this guards, in its general form. A placeholder shaped like a shell expression
+    // — `$(CHANGE_ME)`, `${FOO}`, a backtick — is replaced by nothing when the file is read by
+    // anything that is not a shell: the *literal characters* become the value. Sourced by bash it
+    // is worse than useless in the other direction, because it executes.
+    //
+    // Every secret in the template is therefore commented out, and every uncommented value is
+    // plain text.
+    for (key, value) in shipped_template() {
+        assert!(
+            !value.contains('$') && !value.contains('`'),
+            "{key} ships uncommented with a shell expression as its value ({value}): an env-file \
+             reader stores it verbatim, and bash executes it"
+        );
+    }
+}
+
+#[test]
+fn a_maintenance_command_runs_on_the_template_as_shipped() {
+    // `Demands::Maintenance` promises `gc`/`purge`/`scrub` need no key material. That promise is
+    // only worth anything if the file an operator copies does not hand them a broken one: an
+    // uncommented `ATTESTATION_KEY_SEED` placeholder is *present but malformed*, which is a
+    // `ConfigFault::Invalid` rather than an absence, and no `Demands` arm can excuse it.
+    let template = shipped_template();
+    assert!(
+        !template
+            .iter()
+            .any(|(key, _)| key == "ATTESTATION_KEY_SEED" || key == "JWT_ED25519_DER"),
+        "both secrets must ship commented out: {template:?}"
+    );
+
+    let root = tempfile::tempdir().expect("a scratch directory");
+    let mut command = server(&[
+        "scrub",
+        "--memory",
+        // The one thing not taken from the template: a test must not write into the tree the
+        // template's own `BLOB_ROOT` points at. The flag outranks the environment either way.
+        "--blob-root",
+        &root.path().display().to_string(),
+    ]);
+    for (key, value) in template {
+        command.env(key, value);
+    }
+    let (code, stdout, stderr) = run(&mut command);
+    assert_eq!(code, Some(0), "stdout: {stdout}\nstderr: {stderr}");
+    assert!(
+        !stderr.contains("ATTESTATION_KEY_SEED"),
+        "a maintenance command must not be stopped by key material: {stderr}"
+    );
 }
 
 #[test]

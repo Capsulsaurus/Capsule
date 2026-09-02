@@ -374,6 +374,8 @@ pub fn drop_passphrase_proof(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     /// The full variant set, written out so the exhaustive match below is meaningful.
@@ -462,9 +464,10 @@ mod tests {
         }
 
         // `every_sharing_error` is hand-written, so guard it against silently listing the same
-        // variant twice and thereby covering one fewer than the array length claims.
-        let mut kinds: Vec<_> = all.iter().map(std::mem::discriminant).collect();
-        kinds.dedup();
+        // variant twice and thereby covering one fewer than the array length claims. A set, not
+        // `Vec::dedup`: that collapses only *consecutive* duplicates, so `[A, B, A]` would slip
+        // through with its length unchanged.
+        let kinds: HashSet<_> = all.iter().map(std::mem::discriminant).collect();
         assert_eq!(
             kinds.len(),
             all.len(),
