@@ -54,6 +54,13 @@ pub struct NotifyInput {
     /// snooze ends, and that end is a deadline the device can compute. Cancelling instead would
     /// leave the alert reachable only in-app, which for `sync_stale` defeats the entire pre-arm
     /// rule the class exists under.
+    ///
+    /// **This map is for the other five classes.** Recovery snoozing is owned by
+    /// [`RecoveryFacts::snoozed_until`], because the cadence scheduler already tracks it against
+    /// a bounded budget and this map has no budget to spend. An entry here for
+    /// [`AlertClass::RecoveryCheckDue`] is honoured as a fallback — the armed instant becomes
+    /// the later of the two, and either suppresses the report — but it is not the canonical
+    /// channel, and a client that writes both is expressing one snooze twice.
     pub suppressed: BTreeMap<AlertClass, Timestamp>,
     /// Per-class **disable**: the user turned this alert off. Emits nothing and arms nothing, at
     /// any instant.
@@ -108,6 +115,11 @@ pub struct RecoveryFacts {
     /// When the next verification prompt becomes due.
     pub next_due: Timestamp,
     /// When an active snooze expires, if one is active.
+    ///
+    /// **This is where recovery snoozing lives**, rather than
+    /// [`NotifyInput::suppressed`](super::NotifyInput::suppressed): the cadence scheduler owns
+    /// the bounded-snooze-then-badge budget, so the snooze and the budget that bounds it stay
+    /// in one place. The generic map is for the other five classes.
     ///
     /// A snooze set *before* the due date does not make the check due earlier: the class is due
     /// at the later of this and [`next_due`](Self::next_due).

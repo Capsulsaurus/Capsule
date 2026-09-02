@@ -40,6 +40,11 @@ done
 #   S-P1 — the capsule_sdk workspace verbs the whole iOS lane is blocked on:
 #          enroll (incl. hardware-signer parity), album, seal+import, the
 #          seal→upload bridge, verify, sync-apply, escrow, device directory.
+#   S-D29 — the local alert surface: the shared predicate plus the per-class
+#          pre-arm deadlines a client actually schedules its alarms from. The
+#          arm call is the one that must not go missing: without it a client
+#          can only ask "what is true now?", which is the question pre-arming
+#          exists to stop it having to ask.
 require() {  # $1=file  $2..=symbols
     local file="$1"; shift
     for sym in "$@"; do
@@ -50,7 +55,11 @@ require() {  # $1=file  $2..=symbols
 for f in "$sdk_kt" "$sdk_swift"; do
     require "$f" FfiCapsuleClient FfiSession
     require "$f" FfiWorkspace FfiHardwareSigner FfiSyncEntry FfiAssetFacts FfiUploadBlob
+    require "$f" FfiAlert FfiClassDeadline FfiNotifyInput
 done
+# Both languages lower these free functions to the same camelCase spelling.
+require "$sdk_swift" evaluateAlerts preArmDeadlines nextAlertDeadline
+require "$sdk_kt" evaluateAlerts preArmDeadlines nextAlertDeadline
 # Swift and Kotlin lower method names differently (camelCase vs camelCase on the
 # object); assert the verbs per-language rather than assuming one spelling.
 require "$sdk_swift" sealAsset uploadBlobs applySyncEntry escrowBlob \
@@ -65,4 +74,4 @@ require "$core_swift" FfiWorkspace HardwareSigner
 require "$core_kt" FfiWorkspace HardwareSigner
 
 echo "uniffi bindings written to $out (capsule_core + capsule_sdk, kotlin + swift)"
-echo "surface check passed: S-D9 client/session + S-P1 workspace verbs present in both languages"
+echo "surface check passed: S-D9 client/session + S-P1 workspace verbs + S-D29 alert surface present in both languages"

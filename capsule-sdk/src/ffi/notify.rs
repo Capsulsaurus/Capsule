@@ -126,7 +126,9 @@ pub struct FfiAlert {
     /// The instant whose passing made this alert true (RFC 3339), for the two pre-armable
     /// classes; `None` for the three whose condition is server-held.
     pub deadline: Option<String>,
-    /// Catalog parameters — `count`, `days_behind`, `grace`, `snooze_budget`.
+    /// Catalog parameters — `count`, `days_behind`, `grace`, and the pair
+    /// `recovery_check_due` always carries: `snooze_budget` (`available` / `spent`) and
+    /// `recovery` (`check` / `rewrap`).
     pub params: HashMap<String, String>,
 }
 
@@ -173,12 +175,14 @@ pub struct FfiNotifyInput {
     /// When the next recovery-verification prompt becomes due (RFC 3339). Project it from the
     /// scheduler with
     /// [`RecoveryCadence::notify_facts`](crate::recovery::RecoveryCadence::notify_facts) rather
-    /// than computing it here. `None` before recovery is set up, which ignores the other two
+    /// than computing it here. `None` before recovery is set up, which ignores the other three
     /// `recovery_*` fields.
     #[uniffi(default = None)]
     pub recovery_next_due: Option<String>,
     /// When an active snooze on the recovery prompt expires (RFC 3339), if one is active. A
-    /// snooze ending *before* `recovery_next_due` does not make the check due earlier.
+    /// snooze ending *before* `recovery_next_due` does not make the check due earlier. This is
+    /// the canonical place to snooze the recovery check — not
+    /// [`suppressed_until`](Self::suppressed_until), which is for the other five classes.
     #[uniffi(default = None)]
     pub recovery_snoozed_until: Option<String>,
     /// Whether the consecutive-snooze budget is spent — the class has degraded to a persistent,
@@ -206,10 +210,17 @@ pub struct FfiNotifyInput {
     /// must fire again when the snooze expires. Use [`disabled`](Self::disabled) to turn a class
     /// off; do not encode that as a far-future instant here. An unrecognized class name is an
     /// [`FfiError::InvalidArgument`].
+    ///
+    /// **This map is for the other five classes.** Recovery snoozing belongs in
+    /// [`recovery_snoozed_until`](Self::recovery_snoozed_until), which the cadence scheduler
+    /// owns together with the budget that bounds it. An entry here for `recovery_check_due` is
+    /// honoured as a fallback (the later of the two wins) but is not the canonical channel.
+    #[uniffi(default)]
     pub suppressed_until: HashMap<String, String>,
     /// Per-class **disable**: the wire names of the classes the user turned off. They report
     /// nothing and hold no alarm, at any instant. Disabling suppresses the warning and never
     /// the behavior. An unrecognized class name is an [`FfiError::InvalidArgument`].
+    #[uniffi(default)]
     pub disabled: Vec<String>,
 }
 
