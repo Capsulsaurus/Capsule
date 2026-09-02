@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import uniffi.capsule_core.DeviceTier
+import uniffi.capsule_core.FfiClientBuild
 import uniffi.capsule_core.FfiWorkspace
 import uniffi.capsule_core.HardwareSignerException
 import java.nio.file.Files
@@ -19,6 +20,8 @@ import java.nio.file.Files
  * first. The StrongBox path is on-device only (see androidInstrumentedTest).
  */
 class SoftwareSignerSmokeTest {
+    private val client = FfiClientBuild("capsule-core-kotlin", "0.0.0")
+
     private fun freshRoot(): String = Files.createTempDirectory("capsule-kotlin-smoke").toString()
 
     @Test
@@ -46,7 +49,7 @@ class SoftwareSignerSmokeTest {
 
     @Test
     fun softwarePathCreatesWorkspace() {
-        val ws = FfiWorkspace.create(freshRoot(), "correct horse".toByteArray(), DeviceTier.NORMAL)
+        val ws = FfiWorkspace.create(freshRoot(), "correct horse".toByteArray(), DeviceTier.NORMAL, client)
         assertFalse(ws.userId().isEmpty())
         assertFalse(ws.defaultAlbumId().isEmpty())
     }
@@ -64,6 +67,7 @@ class SoftwareSignerSmokeTest {
                 signer,
                 "device-dsk",
                 ByteArray(32) { 9 },
+                client,
             )
         assertFalse(ws.userId().isEmpty())
     }
