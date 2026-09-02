@@ -13,7 +13,7 @@ use crate::db::DatabaseDriver;
 use crate::metadata::crdt::AddId;
 use crate::ml::orchestrator::{AiTagSink, AssetSource};
 use crate::ml::{ModelId, Registry};
-use crate::sidecar::sidecar_v1::AiTag;
+use crate::sidecar::AiTag;
 
 impl Workspace {
     /// Add a user tag (OR-set) and emit a `metadata-update` provenance record.

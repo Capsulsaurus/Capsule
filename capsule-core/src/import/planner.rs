@@ -71,7 +71,7 @@ pub struct ImportActionPlan {
     /// [`attach_streaming_recommendation`](Self::attach_streaming_recommendation) — never by the
     /// pure planner (the probe is I/O). `None` until attached; `Some(true)` means the library
     /// volume is near/over full for this plan's `total_size` and the user should confirm a
-    /// [streaming import](crate::import::streaming). Recording it on the plan (like the resolved
+    /// [streaming import](crate::import::execute_streaming). Recording it on the plan (like the resolved
     /// destination `album_id`) keeps the planner deterministic.
     pub streaming_recommended: Option<bool>,
     /// The destination album and **which resolution rule chose it** (SSoT: organization
@@ -141,7 +141,7 @@ impl ImportActionPlan {
     /// `policy` and whether a streaming import was chosen (`use_streaming`); a
     /// conflicting combination returns [`StagedStreamingConflict`] instead of ever
     /// entering the executor. Delegates to the pure
-    /// [`ensure_streaming_compatible`](crate::import::upload::ensure_streaming_compatible)
+    /// [`ensure_streaming_compatible`](crate::import::ensure_streaming_compatible)
     /// invariant so the rule lives in one place.
     pub fn confirm_upload_policy(
         &self,

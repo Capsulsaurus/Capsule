@@ -19,7 +19,7 @@
 ///     only through the gated Hidden view (SSoT: design/organization § Hidden Assets).
 ///     Distinct from `is_stack_hidden`, which suppresses non-primary stack members.
 ///
-/// **Bumping this constant requires appending a step to [`crate::db::migrate::STEPS`]** —
+/// **Bumping this constant requires appending a step to `db::migrate::STEPS`** —
 /// `steps_form_a_contiguous_chain` fails otherwise. Never edit a step that has shipped.
 pub(crate) const SCHEMA_VERSION: u32 = 4;
 

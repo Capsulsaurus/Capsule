@@ -2,7 +2,7 @@
 //! `S-B3` in the repo-root `SLICES.md`; SSoT:
 //! [Import — Pipeline: Import-Upload Streaming Mode](https://docs/design/import/pipeline/#import-upload-streaming-mode)).
 //!
-//! The default [`execute`](crate::import::executor::execute) imports every file into the local
+//! The default [`execute`](crate::import::execute) imports every file into the local
 //! library *before* upload, so the device temporarily holds the whole import on disk — impossible
 //! on a storage-constrained device. Streaming mode removes that requirement by running a bounded
 //! **sliding window** of one asset at a time:
@@ -97,7 +97,7 @@ pub enum StreamingError {
     #[error("free-space probe: {0}")]
     Probe(#[from] crate::library::LibraryError),
 
-    /// The run was configured with a [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy)
+    /// The run was configured with a [`UploadPolicy::Staged`](crate::import::UploadPolicy)
     /// policy, which is mutually exclusive with streaming import (staged uploads,
     /// slice `S-B4`). Streaming releases local bytes quickly; staged defers exactly
     /// the T2 upload release depends on — so a staged policy can never enter the
@@ -261,7 +261,7 @@ pub struct StreamingOptions<'a, U: AssetUploader, V: StorageVerifier> {
 /// the exporter's capture time, GPS, caption, favorite, and album membership exactly as an
 /// unconstrained one does (slice `S-B11`, closing the gap `S-B10` left open). This is the
 /// streaming twin of
-/// [`execute_with_source_metadata`](crate::import::executor::execute_with_source_metadata).
+/// [`execute_with_source_metadata`](crate::import::execute_with_source_metadata).
 ///
 /// Returns a [`StreamingReport`]; a hard failure to *start* (insufficient headroom, a failed
 /// probe) is a [`StreamingError`]. Per-asset upload pauses and gate retentions are outcomes, not
@@ -301,7 +301,7 @@ where
     // rejects the combination at confirmation; this is the by-construction backstop
     // so a staged policy cannot reach `execute_streaming` even if a caller skips
     // confirmation. Surfaces before any file is imported (staged uploads, S-B4).
-    crate::import::upload::ensure_streaming_compatible(config.upload_policy, true)?;
+    crate::import::ensure_streaming_compatible(config.upload_policy, true)?;
 
     // Same single resolution the executor runs: bind the library's derived de facto album
     // (rule 3), then apply the order (SSoT: organization § The Default Album).
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     /// **Staged × streaming exclusion (by construction).** A run configured with the
-    /// [`UploadPolicy::Staged`](crate::import::upload::UploadPolicy) policy can never
+    /// [`UploadPolicy::Staged`](crate::import::UploadPolicy) policy can never
     /// enter the streaming window: `execute_streaming` refuses it *before* any file
     /// is imported, mirroring the planner's confirmation-time rejection. (SSoT:
     /// download-sync doc — staged uploads are mutually exclusive with streaming.)

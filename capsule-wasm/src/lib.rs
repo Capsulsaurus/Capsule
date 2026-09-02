@@ -40,8 +40,8 @@
 //! [Web Upload]: https://docs/design/web-upload/
 //!
 //! Errors cross the boundary as a **stable machine code string** (`Error.message`), never a
-//! localized sentence — the web viewer maps the code to an i18n catalog key. Codes: see
-//! [`err`].
+//! localized sentence — the web viewer maps the code to an i18n catalog key. The codes are
+//! defined in this crate's private `err` module.
 //!
 //! [Share Links]: https://docs/design/share-links/
 

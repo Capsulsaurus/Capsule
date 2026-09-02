@@ -193,7 +193,7 @@ const STEP_1_TO_2: Step = Step {
 ///
 /// The `vec0` partition tables are *not* created here: their vector dimension is declared by
 /// the model registry, so they are created at runtime by their writer (see
-/// [`crate::db::vector::VectorTableSpec`]).
+/// [`crate::db::VectorTableSpec`]).
 ///
 /// The first two statements re-assert the v2 shape. That is not redundancy: two branches
 /// stamped 2 for different additions, so a v2-stamped catalog is missing one of the two tables
@@ -294,7 +294,7 @@ const STEP_FINGERPRINTS: &[&str] = &[
 
 // ── Errors ──────────────────────────────────────────────────────────────────
 
-/// Why a catalog could not be brought to [`SCHEMA_VERSION`].
+/// Why a catalog could not be brought to `SCHEMA_VERSION`.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrationError {
     /// The catalog was written by a newer build than this one.
@@ -354,7 +354,7 @@ impl From<MigrationError> for rusqlite::Error {
 
 // ── Outcome ─────────────────────────────────────────────────────────────────
 
-/// One applied step, as reported by [`migrate`].
+/// One applied step, as reported by `migrate`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Applied {
     pub from: u32,
@@ -362,13 +362,13 @@ pub struct Applied {
     pub name: &'static str,
 }
 
-/// What [`migrate`] did. Recorded so the CLI, the FFI host, and a support bundle can all say
+/// What `migrate` did. Recorded so the CLI, the FFI host, and a support bundle can all say
 /// exactly what ran against a user's library.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Outcome {
     /// The version the catalog reported on open (`0` for a catalog this call created).
     pub from: u32,
-    /// The version it is stamped at now — always [`SCHEMA_VERSION`] on success.
+    /// The version it is stamped at now — always `SCHEMA_VERSION` on success.
     pub to: u32,
     /// True when the catalog was empty and the current schema was created outright.
     pub created: bool,

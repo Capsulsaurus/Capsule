@@ -14,7 +14,7 @@
 //! the same [`ScanResult`] on every run.
 //!
 //! The folded record is not planner input only. The
-//! [executor](crate::import::executor::execute_with_source_metadata) writes it into the **signed
+//! [executor](crate::import::execute_with_source_metadata) writes it into the **signed
 //! sidecar** at import through [`enrichment`](crate::import::enrichment) (`S-B10`) — capture time
 //! and GPS as fallbacks behind the file's own EXIF, and the exporter-authoritative constructs
 //! (description, favorites, album membership) unconditionally — so a migrated library keeps what
@@ -89,7 +89,7 @@ pub struct GeoPoint {
 
 /// The out-of-band metadata an adapter folds for one media entry, with the precedence already
 /// resolved. This is the artifact the [Takeout mapping table] validates, one field per rule, and
-/// what [`sidecar_enrichment`](crate::import::enrichment::sidecar_enrichment) maps onto the
+/// what [`sidecar_enrichment`](crate::import::sidecar_enrichment) maps onto the
 /// signed sidecar's fields at import.
 ///
 /// [Takeout mapping table]: https://docs/design/import/pipeline/#validation
@@ -130,7 +130,7 @@ impl Default for ExtractedMetadata {
 /// exporter [`ExtractedMetadata`] for its primary media file.
 #[derive(Debug, Clone)]
 pub struct SourceEntry {
-    /// The candidate fed verbatim to [`plan`](crate::import::planner::plan).
+    /// The candidate fed verbatim to [`plan`](crate::import::plan).
     pub candidate: ImportCandidate,
     /// The folded out-of-band metadata for this entry's primary media file.
     pub metadata: ExtractedMetadata,
@@ -152,7 +152,7 @@ pub struct ExtractedImport {
 }
 
 impl ExtractedImport {
-    /// Build the [`ScanResult`] the pure [`planner`](crate::import::planner) consumes. This is the
+    /// Build the [`ScanResult`] the pure [planner](crate::import::plan) consumes. This is the
     /// only handoff into the pipeline — the adapter **feeds** the planner and never modifies it.
     pub fn to_scan_result(&self) -> ScanResult {
         ScanResult {

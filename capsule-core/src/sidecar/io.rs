@@ -18,7 +18,7 @@ pub fn read_sidecar(path: &Path) -> Result<AssetSidecar, Box<dyn std::error::Err
 /// path via [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with)
 /// (`S-B2`), and soft-delete/retention ride the signed lifecycle. This writer survives only to
 /// build on-disk fixtures for the retained *read* path — the recovery-first index rebuild
-/// ([`rebuild_index`](crate::library::rebuild::rebuild_index)) that still ingests unsigned
+/// ([`rebuild_index`](crate::library::rebuild_index)) that still ingests unsigned
 /// `.cbor` sidecars from pre-signed-path libraries — so it is compiled under `cfg(test)` only.
 #[cfg(test)]
 pub fn write_sidecar(

@@ -303,9 +303,9 @@ impl Workspace {
     /// As [`import_asset`](Self::import_asset) but with executor-supplied [`SignedImportOptions`]
     /// (Move-mode source release + stack placement). This is the single signed write path the
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
-    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — behind
-    /// the `media` feature, when a [`StillEncoder`](crate::media::image::derivative::StillEncoder)
-    /// is attached — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+    /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when a
+    /// still encoder is attached — with signed thumbnail/preview derivatives + an LQIP in the
+    /// sidecar. No still encoder exists in this build; the media stack is retired (`S-B1`).
     ///
     /// Returns a [`SignedImport`]: the asset id, plus the [`DerivativeStatus`](super::DerivativeStatus)
     /// saying whether derivatives were generated and, if not, why. A format this build has no
@@ -531,10 +531,10 @@ impl Workspace {
 
     /// Import a file on the signed path for a **streaming** import: identical to
     /// [`import_asset_with`](Self::import_asset_with) but with `defer_source_release` forced on,
-    /// and returning the [`StreamedImport`] descriptor the streaming window drives its
-    /// per-asset upload → verify → release step from. The local original (and any Move-mode
-    /// source) is left in place — the [streaming executor](crate::import::streaming) releases it
-    /// only after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
+    /// and returning the [`StreamedImport`] descriptor the streaming window drives its per-asset
+    /// upload → verify → release step from. The local original (and any Move-mode source) is left
+    /// in place — the [streaming executor](crate::import::execute_streaming) releases it only
+    /// after the server's `durable` verdict + custody receipt clear the `S-D4` gate.
     ///
     /// `enrichment` carries the folded third-party exporter metadata for this file exactly as
     /// [`import_asset_with`](Self::import_asset_with) takes it (`S-B11`). It is a parameter and

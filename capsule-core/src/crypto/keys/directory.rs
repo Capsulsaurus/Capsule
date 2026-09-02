@@ -46,7 +46,7 @@ use crate::crypto::CryptoError;
 /// - the software **X-Wing** DEK, `pk_M ‖ pk_X` — [`DEK_PUBLIC_LEN`] (1216) bytes;
 /// - the hardware-bound **P-256 hybrid** DEK, `ek_M ‖ pk_P` — [`DEK_P256_PUBLIC_LEN`] (1249).
 ///
-/// They are **length-disjoint by construction** (see [`kem_p256`](super::kem_p256)), so the
+/// They are **length-disjoint by construction** (see [`P256HybridDek`](super::P256HybridDek)), so the
 /// composition is recovered from the bytes themselves and needs no tag — the same way a
 /// [`HybridVerifyingKey`] recovers its Ed25519-vs-P-256 classical half from the wire length, and
 /// the same way [`DeviceDek::public_bytes`](super::keystore::DeviceDek::public_bytes) already

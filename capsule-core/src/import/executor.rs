@@ -2,16 +2,17 @@
 //!
 //! Each `ImportDecision::Import` candidate is imported through
 //! [`Workspace::import_asset_with`](crate::lifecycle::Workspace::import_asset_with): every member
-//! becomes a signed [`SidecarV1`](crate::sidecar::sidecar_v1::SidecarV1) + signed manifest +
+//! becomes a signed [`SidecarV1`](crate::sidecar::SidecarV1) + signed manifest +
 //! append-only provenance, self-verified through
-//! [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — behind the `media` feature,
-//! when a [`StillEncoder`](crate::media::image::derivative::StillEncoder) is attached to the
-//! workspace — with signed thumbnail/preview derivatives + an LQIP in the sidecar.
+//! [`verify_asset`](crate::crypto::verify_asset::verify_asset), and — when a still encoder is
+//! attached to the workspace — with signed thumbnail/preview derivatives + an LQIP in the
+//! sidecar. No still encoder exists in this build: the media stack is retired to
+//! `legacy-review/` and restoring it is `S-B1`.
 //!
 //! This retired the legacy unsigned `AssetSidecar` write path from the executor; the production
 //! write path itself is now gone (`S-G4`) — no code writes unsigned sidecars anymore. Only the
 //! *read* path survives, for the recovery-first index rebuild
-//! ([`rebuild_index`](crate::library::rebuild::rebuild_index)) that still ingests unsigned `.cbor`
+//! ([`rebuild_index`](crate::library::rebuild_index)) that still ingests unsigned `.cbor`
 //! sidecars left by pre-signed-path libraries. The pure planner (`import::planner`) is unchanged:
 //! it still decides *what* to import; the executor decides *how* to commit it.
 
@@ -68,7 +69,7 @@ pub fn execute(
 /// discarded once the plan was built. A file the index does not cover imports exactly as it
 /// does through [`execute`].
 ///
-/// [source adapter]: crate::import::importers
+/// [source adapter]: crate::import::SourceAdapter
 /// [precedence rule]: https://docs/design/import/pipeline/#third-party-importers
 #[tracing::instrument(
     skip_all,
