@@ -56,6 +56,10 @@ mod detect;
 mod error;
 mod resize;
 
+// `native`-gated because `lifecycle` is its only caller and `lifecycle` is `native`-gated: a
+// `--features media` build without `native` (which the aarch64 cross-check uses, to isolate the
+// codecs from SQLite's C build) would otherwise carry an unused re-export.
+#[cfg(feature = "native")]
 pub(crate) use self::decode::guarded;
 pub use self::decode::{DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded};
 pub use self::derivative::{
