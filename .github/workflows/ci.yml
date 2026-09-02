@@ -93,6 +93,19 @@ jobs:
               - '**/*.mdx'
               - 'LICENSE'
               - 'NOTICE'
+              # The `roadmap` check resolves ROADMAP.md's rows against the
+              # manifests that declare what exists, so a pull request that adds
+              # or removes a package without touching Markdown must still run
+              # it — otherwise the gate is advisory for exactly the change it
+              # exists to catch.
+              - 'Cargo.toml'
+              - 'settings.gradle.kts'
+              - 'capsule-swift/Project.swift'
+              - '**/Package.swift'
+              - '**/package.json'
+              - '**/pyproject.toml'
+              - '.gitmodules'
+              - 'legacy-review/**'
               - 'mise.toml'
               - '.github/workflows/ci.yml'
             vision:
