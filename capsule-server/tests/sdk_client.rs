@@ -295,6 +295,12 @@ async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
 /// answered whatever path it was handed, so every escrow test passed while no real server had
 /// that route. Only a client pointed at the router can tell the difference, and the bytes are
 /// the ones a KDF runs against: a wrap that comes back re-encoded is a lost master key.
+///
+/// **The route is asserted, not inferred.** Both halves are cross-checked against
+/// `/v1/auth/escrow` through the fixture's own in-process client: what the SDK stored is read
+/// back at that path, and what was seeded at that path is what the SDK fetches. A client
+/// talking to some other path could satisfy neither, so this does not depend on how the
+/// router happens to render a `404` for a path it does not serve.
 #[tokio::test]
 async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
     use capsule_core::crypto::primitives::Argon2Params;
@@ -308,14 +314,15 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
         t_cost: 1,
         p_cost: 1,
     };
+    const SECRET: &[u8] = b"correct horse battery staple";
 
     let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
     let base_url = serve(&fixture).await;
     let client =
         RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
 
-    // Nothing stored yet: the typed refusal a cadence reads as "enroll first", carrying the
-    // code a client localizes.
+    // Nothing stored yet: the typed refusal a cadence reads as "enroll first".
     let missing = client
         .fetch_escrow()
         .await
@@ -324,13 +331,29 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
         matches!(missing, RecoveryError::NotEnrolled),
         "got {missing:?}"
     );
-    assert_eq!(missing.error_code(), Some("error.escrow.not_stored"));
 
+    // ── The SDK writes; the contract's route is where it landed ───────────────────────────
     let master = [0x5Au8; 32];
-    let blob = pwkdf::wrap_with(&master, b"correct horse battery staple", params)
-        .expect("the master key wraps");
+    let blob = pwkdf::wrap_with(&master, SECRET, params).expect("the master key wraps");
     client.store_escrow(&blob).await.expect("the escrow stores");
 
+    let response = fixture
+        .client
+        .get("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    let seen = response.assert_status(kynos::http::StatusCode::OK).bytes();
+    assert_eq!(
+        seen.as_ref(),
+        capsule_core::cbor::to_canonical_vec(&blob)
+            .expect("the wrap encodes")
+            .as_slice(),
+        "the bytes the SDK stored must be readable at `/v1/auth/escrow` — the path the \
+         committed document declares, which is the assertion the old tests could not make"
+    );
+
+    // ── The SDK reads back what that route holds, byte for byte ───────────────────────────
     let cache = client.fetch_escrow().await.expect("and comes back");
     assert_eq!(
         cache.blob(),
@@ -338,8 +361,35 @@ async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
         "the escrow is ciphertext served verbatim; a re-encoded wrap no longer opens"
     );
     assert_eq!(
-        capsule_core::backup::recover_master_key(cache.blob(), b"correct horse battery staple")
+        capsule_core::backup::recover_master_key(cache.blob(), SECRET)
             .expect("the fetched wrap opens"),
         master,
+    );
+
+    // A rotation seeded at the contract's route is the one the SDK sees next — the read half
+    // pinned to the same path, without relying on a refusal to prove it.
+    let rotated = pwkdf::wrap_with(&master, b"a different secret entirely", params)
+        .expect("the master key re-wraps");
+    fixture
+        .client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body(
+            "application/octet-stream",
+            capsule_core::cbor::to_canonical_vec(&rotated).expect("the wrap encodes"),
+        )
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    assert_eq!(
+        client
+            .fetch_escrow()
+            .await
+            .expect("the rotated escrow comes back")
+            .blob(),
+        &rotated,
+        "the SDK reads the resource `/v1/auth/escrow` addresses, not some other path that \
+         happens to answer"
     );
 }

@@ -74,28 +74,54 @@ pub enum RecoveryError {
         /// Why the generated client rejected it.
         reason: String,
     },
-    /// The call did not complete: DNS, TLS, timeout, a malformed response, or the store
-    /// answering `500`. Transient — the cadence's next tick tries again.
+    /// The call never reached a server answer: DNS, connection refused, a TLS handshake, a
+    /// timeout, a reset mid-body, or a refusal this client could not parse. Transient — the
+    /// cadence's next tick tries again.
+    ///
+    /// Note that reqwest classifies *every* failure of the request it executes as a request
+    /// error, so the generated taxonomy's `RequestConstruction` class carries connection
+    /// failures as well as genuine pre-flight ones; both land here.
     #[error("the escrow endpoint could not be reached: {0}")]
     Transport(String),
-    /// The credential was refused (`401`/`403`) and a refresh did not recover it. The stable
-    /// code distinguishes an expired session from the outage the revocation ledger also
-    /// renders as `401`, so a client can tell "sign in again" from "try later".
+    /// The credential was refused (`401`/`403`) and a refresh did not recover it — the user
+    /// must re-authenticate.
+    ///
+    /// `code` is whatever the server stamped on the problem body. Today Capsule stamps one
+    /// code (`error.request.unauthenticated`) on every `401` it renders, so this does not yet
+    /// separate an expired token from an unreadable revocation ledger; the field carries the
+    /// code so that it will the moment the server distinguishes them.
     #[error("the escrow endpoint refused the credential: {detail}")]
     Unauthorized {
-        /// The stable `error.*` catalog code the problem body carried, when it had one.
+        /// The stable `error.*` catalog code from the problem body, when the failure came
+        /// with one. `None` when the credential could not be produced at all — there was no
+        /// server answer to carry a code.
         code: Option<String>,
         /// English detail from the problem body.
         detail: String,
     },
-    /// The caller has no escrow stored yet (server returned `404`). Enroll one first.
+    /// The caller has no escrow stored yet (server returned a coded `404`). Enroll one first.
     #[error("no escrow stored for this account")]
     NotEnrolled,
-    /// The server refused the blob as one that cannot be an escrow at any version — empty,
-    /// past the coarse ceiling (`400`), or not the declared media type (`415`). Retrying the
-    /// same bytes changes nothing.
-    #[error("the server rejected the escrow blob as malformed: {0}")]
-    Malformed(String),
+    /// The server refused the blob as one that cannot be an escrow at any version — empty or
+    /// past the coarse ceiling (`400`), not the declared media type (`415`), or past the
+    /// transport's body limit (`413`). Retrying the same bytes changes nothing.
+    #[error("the server rejected the escrow blob: {detail}")]
+    Malformed {
+        /// The stable `error.*` catalog code the refusal carried.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
+    /// The escrow store could not answer (`500`). Transient, and coded
+    /// `error.escrow.unavailable` — which is why it is not folded into
+    /// [`Transport`](RecoveryError::Transport): a caller that localizes codes has one to show.
+    #[error("the escrow store could not answer: {detail}")]
+    Unavailable {
+        /// The stable `error.*` catalog code the refusal carried.
+        code: Option<String>,
+        /// English detail from the problem body.
+        detail: String,
+    },
     /// The escrow bytes could not be (de)serialized as the canonical `WrappedSecret`.
     #[error("escrow blob codec error: {0}")]
     Codec(String),
@@ -116,9 +142,13 @@ impl RecoveryError {
     #[must_use]
     pub fn error_code(&self) -> Option<&str> {
         match self {
-            Self::Unauthorized { code, .. } => code.as_deref(),
+            Self::Unauthorized { code, .. }
+            | Self::Malformed { code, .. }
+            | Self::Unavailable { code, .. } => code.as_deref(),
+            // The one code this module states rather than reads. `NotEnrolled` is a *state*
+            // ("this account has escrowed nothing"), not a message, and the server's own code
+            // for that state is this constant — see `capsule-server/src/routes/escrow.rs`.
             Self::NotEnrolled => Some(error_codes::ESCROW_NOT_STORED),
-            Self::Malformed(_) => Some(error_codes::ESCROW_MALFORMED),
             _ => None,
         }
     }
@@ -270,7 +300,10 @@ pub struct GuidedRewrap {
 /// It holds one [`AuthenticatedClient`], so every call rides the generated operation paths
 /// and the SDK's bearer/refresh machinery, and this module states no route of its own. The
 /// client is behind an [`Arc`] only so [`RecoveryClient`] stays [`Clone`] — the cadence hands
-/// one client to several prompts.
+/// one client to several prompts. There is deliberately no repoint/session-swap accessor:
+/// `AuthenticatedClient`'s own take `&mut self` and are unreachable through the `Arc`, and an
+/// escrow client that changed origin mid-cadence would be a way to pull one account's escrow
+/// into another's cache. Build a new one instead.
 #[derive(Clone)]
 pub struct RecoveryClient {
     client: Arc<AuthenticatedClient>,
@@ -433,16 +466,17 @@ impl RecoveryClient {
 
 /// Map a `GET /v1/auth/escrow` refusal onto its typed variant.
 ///
-/// Kept as one readable status table rather than a match buried in the request path, and kept
-/// exhaustive over the generated enum so a status the document gains cannot be silently
-/// swallowed — adding one stops the build here.
+/// One readable status table rather than a match buried in the request path. The *inner*
+/// match is exhaustive over the generated enum, so a status the document adds to this
+/// operation stops the build here; a new `rest::Error` **class** still falls through to
+/// [`wire_error`]'s catch-all.
 fn fetch_escrow_error(error: rest::Error<rest::FetchEscrowError>) -> RecoveryError {
     match error {
         rest::Error::Api(response) => match response.into_inner() {
             rest::FetchEscrowError::Status404(_) => RecoveryError::NotEnrolled,
             rest::FetchEscrowError::Status401(problem)
             | rest::FetchEscrowError::Status403(problem) => refused(&problem),
-            rest::FetchEscrowError::Status500(problem) => transport(&problem),
+            rest::FetchEscrowError::Status500(problem) => unavailable(&problem),
             // Declared by the transport backstop and unreachable on a body-less `GET`; kept
             // honest rather than folded into a class it does not belong to.
             rest::FetchEscrowError::Status413 => RecoveryError::Unexpected { status: 413 },
@@ -458,22 +492,28 @@ fn store_escrow_error(error: rest::Error<rest::StoreEscrowError>) -> RecoveryErr
             // `400` and `415` are the same answer to the caller: these bytes are not an
             // escrow, and sending them again will not help.
             rest::StoreEscrowError::Status400(problem)
-            | rest::StoreEscrowError::Status415(problem) => {
-                RecoveryError::Malformed(detail(&problem))
-            }
+            | rest::StoreEscrowError::Status415(problem) => RecoveryError::Malformed {
+                code: Some(problem.code.clone()),
+                detail: detail(&problem),
+            },
             rest::StoreEscrowError::Status401(problem)
             | rest::StoreEscrowError::Status403(problem) => refused(&problem),
-            rest::StoreEscrowError::Status500(problem) => transport(&problem),
-            // The body-size backstop carries no problem body at all, so the message is ours.
-            rest::StoreEscrowError::Status413 => RecoveryError::Malformed(
-                "the escrow blob exceeds the server's request-body limit".to_owned(),
-            ),
+            rest::StoreEscrowError::Status500(problem) => unavailable(&problem),
+            // The body-size backstop carries no problem body at all, so both the code and the
+            // message are ours. It is `error.request.too_large` and not
+            // `error.escrow.malformed`: a client localizing the latter would tell the user
+            // their recovery blob is corrupt when it is merely too big.
+            rest::StoreEscrowError::Status413 => RecoveryError::Malformed {
+                code: Some(error_codes::REQUEST_TOO_LARGE.to_owned()),
+                detail: "the escrow blob exceeds the server's request-body limit".to_owned(),
+            },
         },
         other => wire_error(&other),
     }
 }
 
-/// A refused credential, carrying the problem body's stable code.
+/// A refused credential, carrying the problem body's stable code. `CodedProblem.code` is a
+/// required member, so a refusal that parsed always has one.
 fn refused(problem: &rest::types::CodedProblem) -> RecoveryError {
     RecoveryError::Unauthorized {
         code: Some(problem.code.clone()),
@@ -482,8 +522,11 @@ fn refused(problem: &rest::types::CodedProblem) -> RecoveryError {
 }
 
 /// The store could not answer — transient, and the caller's cadence retries.
-fn transport(problem: &rest::types::CodedProblem) -> RecoveryError {
-    RecoveryError::Transport(detail(problem))
+fn unavailable(problem: &rest::types::CodedProblem) -> RecoveryError {
+    RecoveryError::Unavailable {
+        code: Some(problem.code.clone()),
+        detail: detail(problem),
+    }
 }
 
 /// The problem body's English detail, or its code when the server sent no detail.
@@ -504,24 +547,47 @@ where
         rest::Error::UnexpectedStatus { status, .. } => RecoveryError::Unexpected {
             status: status.as_u16(),
         },
-        // Both escrow operations take no path parameter, no query parameter and (for the
-        // store) a body that cannot fail to serialize, and the base URL was parsed when the
-        // client was built. So the *only* way either can fail before a byte leaves is the
-        // bearer credential's async provider — a session that cannot produce a token. That is
-        // the same event the server answers `401` for, and it must reach a caller as one:
-        // reporting a dead session as a transport blip would tell a client to retry where it
-        // needs to re-authenticate.
-        rest::Error::RequestConstruction(_) => RecoveryError::Unauthorized {
-            code: None,
-            detail: describe(error),
-        },
+        // `RequestConstruction` is **not** a pre-flight-only class. reqwest builds every
+        // failure of the request it executes with `error::request(..)`, so `is_request()` is
+        // true for connection-refused, DNS and TLS failures too, and the generated taxonomy
+        // routes all of them here alongside the genuine pre-flight ones. Splitting them by
+        // class alone would report an unreachable server as "sign in again", which on an
+        // offline device is the one remedy that cannot work.
+        //
+        // The *source* discriminates them: a bearer provider that could not produce a token is
+        // boxed as the generated runtime's own `AuthError`, and nothing else on this path is.
+        // A dead session must reach a caller as an auth failure rather than as a transport
+        // blip, because the two have opposite remedies.
+        rest::Error::RequestConstruction(inner) => {
+            if std::error::Error::source(inner)
+                .and_then(|source| source.downcast_ref::<rest::AuthError>())
+                .is_some()
+            {
+                RecoveryError::Unauthorized {
+                    code: None,
+                    detail: describe(error),
+                }
+            } else {
+                RecoveryError::Transport(describe(error))
+            }
+        }
+        // A *declared* refusal whose body was not the coded problem the document promises.
+        // Deliberately a wire failure and not [`RecoveryError::NotEnrolled`], even though an
+        // uncoded `404` is its commonest shape: reading any `404` as "this account has
+        // escrowed nothing" is exactly what let a wrong route look like an empty escrow for a
+        // whole slice. An intermediary answering `404 text/html` is a broken path, not an
+        // enrollment state.
+        rest::Error::Decode { path, .. } => RecoveryError::Transport(format!(
+            "the escrow endpoint answered a refusal this client could not parse ({path})"
+        )),
         other => RecoveryError::Transport(describe(other)),
     }
 }
 
 /// Render a generated-client failure together with its source chain. The taxonomy's own
-/// `Display` is a one-word class name (`"transport failed"`), which on its own tells a log
-/// reader nothing about *what* failed.
+/// `Display` names the class and, for the wire classes, little else (`"transport failed"`,
+/// `"request construction failed"`) — the source chain is where the reqwest/hyper reason a log
+/// reader needs actually lives.
 fn describe<E>(error: &rest::Error<E>) -> String
 where
     E: std::error::Error + 'static,
@@ -703,7 +769,11 @@ mod tests {
         let response = if authorized {
             handler(MockRequest { method, path, body }).await
         } else {
-            MockResponse::problem(401, "error.auth.unauthorized", "no bearer credential")
+            MockResponse::problem(
+                401,
+                error_codes::REQUEST_UNAUTHENTICATED,
+                "no bearer credential",
+            )
         };
 
         let payload = format!(
@@ -753,7 +823,7 @@ mod tests {
                     },
                     _ => MockResponse::problem(
                         405,
-                        error_codes::ESCROW_MALFORMED,
+                        error_codes::REQUEST_METHOD_NOT_ALLOWED,
                         "the escrow surface serves GET and PUT",
                     ),
                 }
@@ -998,10 +1068,11 @@ mod tests {
         );
     }
 
-    /// A `400` refusal becomes the typed `Malformed` and carries the code a client localizes
-    /// — not the `Unexpected { status }` the hand-written path used to collapse it into.
+    /// A `400` refusal becomes the typed `Malformed` and carries **the server's own** code —
+    /// not the `Unexpected { status }` the hand-written path used to collapse it into, and not
+    /// a constant this module guessed.
     #[tokio::test]
-    async fn a_refused_blob_is_malformed_with_its_catalog_code() {
+    async fn a_refused_blob_is_malformed_with_the_servers_code() {
         let handler: Handler = Arc::new(|_req| {
             Box::pin(async move {
                 MockResponse::problem(
@@ -1018,20 +1089,101 @@ mod tests {
             .await
             .expect_err("the server refused the blob");
         assert!(
-            matches!(error, RecoveryError::Malformed(_)),
+            matches!(error, RecoveryError::Malformed { .. }),
             "got {error:?}"
         );
         assert_eq!(error.error_code(), Some(error_codes::ESCROW_MALFORMED));
     }
 
-    /// A refused credential keeps the problem body's `error.auth.*` code, so a client can
-    /// tell an expired session from the outage the revocation ledger also renders as `401`.
+    /// The store answering `500` is its own variant carrying `error.escrow.unavailable`, not a
+    /// bare transport failure: a client that localizes codes has one to show, and the cadence
+    /// can tell "the server is unwell" from "the network is gone".
+    #[tokio::test]
+    async fn an_unavailable_store_keeps_its_catalog_code() {
+        let handler: Handler = Arc::new(|_req| {
+            Box::pin(async move {
+                MockResponse::problem(
+                    500,
+                    error_codes::ESCROW_UNAVAILABLE,
+                    "the escrow could not be read",
+                )
+            })
+        });
+        let base = start_mock(handler).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let error = client.fetch_escrow().await.expect_err("the store is down");
+        assert!(
+            matches!(error, RecoveryError::Unavailable { .. }),
+            "got {error:?}"
+        );
+        assert_eq!(error.error_code(), Some(error_codes::ESCROW_UNAVAILABLE));
+    }
+
+    /// **An unreachable server is not an expired session.** reqwest reports a refused
+    /// connection as a *request* error, which the generated taxonomy files under
+    /// `RequestConstruction` next to the genuine pre-flight failures — so classifying that
+    /// whole class as an auth failure would tell an offline device to sign in again, the one
+    /// remedy that cannot work without a network.
+    #[tokio::test]
+    async fn an_unreachable_endpoint_is_a_transport_failure_not_an_auth_one() {
+        // Bind, read the port, then drop the listener: the address is now certain to refuse.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+
+        // The session is built against a live mock, so the session itself is healthy and the
+        // only thing wrong is the escrow origin.
+        let live = start_mock(escrow_handler(EscrowStore::default())).await;
+        let client = RecoveryClient::new(session_for(&live), &format!("http://{addr}")).unwrap();
+
+        let error = client
+            .fetch_escrow()
+            .await
+            .expect_err("nothing is listening there");
+        assert!(
+            matches!(error, RecoveryError::Transport(_)),
+            "an unreachable endpoint must be transport, got {error:?}"
+        );
+        assert_eq!(error.error_code(), None);
+    }
+
+    /// A refusal whose body is not the coded problem the document promises — an intermediary
+    /// answering a bare `404`, say — is a broken path, not an empty escrow.
+    ///
+    /// This is the deliberate class change the route fix rests on: the hand-written client
+    /// read *any* `404` as `NotEnrolled`, which is exactly why a wrong route looked like an
+    /// account that had escrowed nothing.
+    #[tokio::test]
+    async fn an_uncoded_404_is_not_read_as_an_empty_escrow() {
+        let handler: Handler = Arc::new(|_req| {
+            Box::pin(async move { MockResponse::bytes(404, b"<html>not found</html>".to_vec()) })
+        });
+        let base = start_mock(handler).await;
+        let client = RecoveryClient::new(session_for(&base), &base).unwrap();
+        let error = client
+            .fetch_escrow()
+            .await
+            .expect_err("an unparseable refusal is not an enrollment state");
+        assert!(
+            matches!(error, RecoveryError::Transport(_)),
+            "got {error:?}"
+        );
+    }
+
+    /// A refused credential carries the problem body's code straight through, so a client
+    /// localizes what the *server* said rather than what this module assumed.
     #[tokio::test]
     async fn a_refused_credential_keeps_the_problem_code() {
         // No bearer reaches the mock's handler at all: it answers `401` at the door, which is
         // precisely the shape a revoked token produces.
         let handler: Handler = Arc::new(|_req| {
-            Box::pin(async move { MockResponse::problem(401, "error.auth.expired", "expired") })
+            Box::pin(async move {
+                MockResponse::problem(
+                    401,
+                    error_codes::REQUEST_UNAUTHENTICATED,
+                    "the access token was refused",
+                )
+            })
         });
         let base = start_mock(handler).await;
         let client = RecoveryClient::new(session_for(&base), &base).unwrap();
@@ -1043,7 +1195,10 @@ mod tests {
             matches!(error, RecoveryError::Unauthorized { .. }),
             "got {error:?}"
         );
-        assert_eq!(error.error_code(), Some("error.auth.expired"));
+        assert_eq!(
+            error.error_code(),
+            Some(error_codes::REQUEST_UNAUTHENTICATED)
+        );
     }
 
     /// The minted secret clears the ≥128-bit entropy floor (256-bit) and never prints
