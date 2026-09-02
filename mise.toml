@@ -232,6 +232,41 @@ run = "cargo run -q -p capsule-server -- gen-openapi"
 description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
 run = "cargo run -q -p capsule-server -- gen-openapi --check"
 
+# ── Running a server locally ─────────────────────────────────────────────────
+#
+# `serve-deps` and `serve` are deliberately separate: a task that silently starts containers is
+# a task that leaks them. Bring the services down with
+# `podman compose -f capsule-server/compose.yaml down`.
+
+[tasks.serve-deps]
+description = "Start Postgres 18 + Valkey 9 for the server (podman compose)"
+# `podman compose` shells out to the compose provider; `docker compose -f …` accepts the same
+# file. Nothing reads these services yet — the adapters are issues #402 and #403 — so this is
+# for the adapters' own development and for dependabot to have a live file to track.
+run = "podman compose -f capsule-server/compose.yaml up -d"
+
+[tasks.serve]
+description = "Run the Kynos server (needs the capsule-server/.env.example environment)"
+# No environment is supplied on purpose. `serve` without `VALKEY_URL` and without `--memory`
+# refuses to boot and names the variable — the refusal `capsule-server/src/store/mod.rs` has
+# documented since `S-C29` — and with `VALKEY_URL` set it refuses and names #403. Copy
+# `capsule-server/.env.example` and export it, or use `serve-memory` below.
+run = "cargo run -p capsule-server -- serve"
+
+[tasks.serve-memory]
+description = "Run the server on the in-memory adapters (development only)"
+# A server you can point a client at: register, sign in, upload, sync. The blob store is real
+# and lives under `target/`; everything else is lost when the process exits.
+#
+# The fallback key is the **published** example from capsule-server/.env.example. Every token
+# this mints is forgeable by anyone who has read this repository, which is exactly why this task
+# is `serve-memory` and not `serve` — set `JWT_ED25519_DER` yourself and it is used instead.
+run = """
+JWT_ED25519_DER=${JWT_ED25519_DER:-MC4CAQAwBQYDK2VwBCIEIN6eTvXEL7xMZWHY8rTk7VbQSGSuRkle5MVfiiYUStLF} \
+BLOB_ROOT=${BLOB_ROOT:-./target/capsule-server-blobs} \
+cargo run -p capsule-server -- serve --memory
+"""
+
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.
 [tasks.translate-readme]
