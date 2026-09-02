@@ -124,6 +124,16 @@ subtle = { workspace = true }
 # parameter set rather than the escrow KDF's tiered one — see `auth::credential` for why those
 # are unrelated numbers. The Postgres adapter (#402) uses the same helper.
 argon2 = { workspace = true }
+# The Valkey adapters behind the state ports and the counter port (`store::valkey`,
+# `counter::valkey`; slice `S-C29`'s owed half, #403). `redis-rs` is the crate the Rust
+# Architecture Decisions name for exactly this; the workspace pin carries `tokio-comp` and
+# `connection-manager`, and two features are added here: `tokio-rustls-comp`, so a `rediss://`
+# URL terminates TLS in rustls and never in native-tls, and `script`, because every multi-key
+# mutation is one Lua script rather than a `WATCH`/`MULTI` round trip a multiplexed connection
+# could not hold. No `bb8`: one `ConnectionManager` is a self-reconnecting multiplexed
+# connection, which is the whole of what a server talking to one Valkey needs. See the Volatile
+# state row in design/dependencies.md.
+redis = { workspace = true, features = ["tokio-rustls-comp", "script"] }
 # The `capsule-server` binary: subcommand parsing, and the error report a startup failure prints.
 # `clap` and `color-eyre` were already here for the `gen_openapi` binary this replaces; the
 # binary is now one `capsule-server` with `serve | gc | purge | scrub | gen-openapi`
@@ -175,3 +185,12 @@ totp-rs = { workspace = true }
 # rather than reading a checked-in PEM, because a private key in the repository is a private
 # key somebody eventually reuses. `ring` is a normal dependency since `S-C2` (the cursor MAC);
 # it stays listed here only so the intent of the test usage is recorded.
+
+# One Valkey container for `tests/valkey.rs`, which runs the `store::conformance` and
+# `counter::conformance` suites — the same cases the in-memory doubles pass — against a live
+# server. Env-gated (`CAPSULE_TEST_VALKEY=1`, or `CAPSULE_TEST_VALKEY_URL` for a server already
+# running) so `mise run test-rust` still needs no podman; `.config/nextest.toml` puts the file
+# in the one-thread `containers` group. Both crates are workspace pins already in the Test
+# runner row of design/dependencies.md; the `valkey` module is the image the deployment runs.
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true, features = ["valkey"] }
