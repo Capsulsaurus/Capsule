@@ -17,7 +17,7 @@
 //! [`Backends::Durable`] arm, and nothing else here moves.
 //!
 //! The Valkey half is filled: [`valkey`] connects to `VALKEY_URL` and proves it answers `PING`
-//! before anything else is assembled, and a server that cannot be reached is
+//! before any module is assembled, and a server that cannot be reached is
 //! [`BootError::Valkey`] — the refusal `store/mod.rs` has said since `S-C29` a required service
 //! earns: *"Valkey is required; the server refuses to boot without `VALKEY_URL`"*. The Postgres
 //! half is not, so [`durable`] then refuses as [`BootError::AdapterUnavailable`] naming
@@ -258,12 +258,12 @@ pub async fn assemble_maintenance(config: &Config) -> Result<Maintenance, BootEr
     }
 }
 
-/// Connect to `VALKEY_URL` and prove it answers, before anything else is assembled.
+/// Connect to `VALKEY_URL` and prove it answers, before any module is assembled.
 ///
-/// First, deliberately: the blob root is the only other side effect on this path, and a Valkey
-/// that cannot be reached is the fault an operator most needs named before a socket is bound.
-/// Every Valkey store — sessions, upload sessions, the three ceremonies, the cohort map, and
-/// the counters — comes back on one connection and the real clock.
+/// Right after the blob root, which is the only other side effect on this path: a Valkey that
+/// cannot be reached is the fault an operator most needs named before a socket is bound. Every
+/// Valkey store — sessions, upload sessions, the three ceremonies and the cohort map — comes
+/// back on one connection and the real clock; the counter adapter shares that connection.
 async fn valkey(config: &Config) -> Result<ValkeyStores, BootError> {
     let url = config
         .valkey_url

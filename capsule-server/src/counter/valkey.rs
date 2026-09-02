@@ -20,30 +20,11 @@
 use jiff::Timestamp;
 
 use super::{Budget, CounterKey, CounterStore, Verdict};
-use crate::store::valkey::{Valkey, from_micros, micros};
+use crate::store::valkey::{Lua, Valkey, from_micros, micros};
 use crate::store::{StoreError, StoreFuture};
 
 /// The port name, for the log line and the error.
 const COUNTERS: &str = "counters";
-
-/// One Lua script, built on first use. Private to this module; `store::valkey` has its own.
-struct Lua {
-    source: &'static str,
-    script: std::sync::OnceLock<redis::Script>,
-}
-
-impl Lua {
-    const fn new(source: &'static str) -> Self {
-        Self {
-            source,
-            script: std::sync::OnceLock::new(),
-        }
-    }
-
-    fn script(&self) -> &redis::Script {
-        self.script.get_or_init(|| redis::Script::new(self.source))
-    }
-}
 
 // KEYS: counter. ARGV: at (µs), window (µs), limit, window (ms, for the collector).
 // Returns {hits after this call, or -1 when refused; the instant the window ends (µs)}.
@@ -161,6 +142,11 @@ impl CounterStore for ValkeyCounters {
             let (hits, ends) = self
                 .run(&PEEK, key, &[micros(at).to_string(), window_micros])
                 .await?;
+            // No open window is a fresh budget, whatever the limit — including zero, which the
+            // double answers `Admitted { remaining: 0 }` rather than `Limited`.
+            if ends == 0 {
+                return Ok(admitted(budget.limit, 0));
+            }
             if hits >= i64::from(budget.limit) {
                 return Ok(Verdict::Limited {
                     retry_after: from_micros(COUNTERS, "Window", ends)?,

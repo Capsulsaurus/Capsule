@@ -157,9 +157,14 @@ impl Valkey {
             .set_max_delay(Duration::from_secs(2))
             .set_connection_timeout(Some(CONNECTION_TIMEOUT))
             .set_response_timeout(Some(RESPONSE_TIMEOUT));
+        // Nothing was sent yet, whatever the driver says went wrong, so this is the one place
+        // every failure is `Unavailable`.
         let manager = ConnectionManager::new_with_config(client, config)
             .await
-            .map_err(|error| classify(STORE, "connection", error))?;
+            .map_err(|error| StoreError::Unavailable {
+                store: STORE,
+                detail: error.to_string(),
+            })?;
         let valkey = Self { manager };
         let pong: String = valkey.command(STORE, redis::cmd("PING")).await?;
         if pong != "PONG" {
@@ -219,12 +224,19 @@ impl Valkey {
 /// Sort a driver error into the port's three failure modes.
 ///
 /// The line that matters is between *the operation certainly did not happen* and *the server
-/// was reached and refused*: a caller that gets [`StoreError::Unavailable`] may retry, one that
-/// gets [`StoreError::Rejected`] must not assume anything about state.
+/// was reached and refused, or may have run it*: a caller that gets [`StoreError::Unavailable`]
+/// may retry, one that gets [`StoreError::Rejected`] must not assume anything about state. So
+/// only a failure the driver can place **before** the command was sent — a connection it could
+/// not open, a server that answered `LOADING`/`TRYAGAIN`/`MASTERDOWN`/`CLUSTERDOWN` without
+/// executing — is `Unavailable`. A response timeout or a connection dropped mid-flight means
+/// the script may already have burned the challenge or won the claim, and that is `Rejected`.
+///
+/// A reply of the wrong shape is [`StoreError::Corrupt`]. Its detail carries the driver's
+/// *kind* and never its text: redis-rs quotes the offending value in a type error, and for the
+/// ceremony stores that value is the record, which carries the bearer secret the typed ids
+/// redact from every other log line.
 fn classify(store: &'static str, what: &'static str, error: RedisError) -> StoreError {
-    let unavailable = error.is_io_error()
-        || error.is_timeout()
-        || error.is_connection_dropped()
+    let never_sent = error.is_connection_refusal()
         || matches!(
             error.kind(),
             ErrorKind::Server(
@@ -234,7 +246,7 @@ fn classify(store: &'static str, what: &'static str, error: RedisError) -> Store
                     | ServerErrorKind::ClusterDown
             ) | ErrorKind::ClusterConnectionNotFound
         );
-    if unavailable {
+    if never_sent {
         tracing::warn!(store, what, %error, "the Valkey store is unavailable");
         return StoreError::Unavailable {
             store,
@@ -245,17 +257,45 @@ fn classify(store: &'static str, what: &'static str, error: RedisError) -> Store
         error.kind(),
         ErrorKind::Parse | ErrorKind::UnexpectedReturnType
     ) {
-        tracing::error!(store, what, %error, "the Valkey store answered a shape it should not");
+        let kind = format!("{:?}", error.kind());
+        tracing::error!(
+            store,
+            what,
+            kind,
+            "the Valkey store answered a shape it should not"
+        );
         return StoreError::Corrupt {
             store,
             record: what,
-            detail: error.to_string(),
+            detail: format!("the reply could not be decoded ({kind})"),
         };
     }
-    tracing::error!(store, what, %error, "the Valkey store rejected an operation");
+    if error.is_io_error() || error.is_timeout() || error.is_connection_dropped() {
+        tracing::warn!(store, what, %error, "the Valkey connection failed mid-operation");
+    } else {
+        tracing::error!(store, what, %error, "the Valkey store rejected an operation");
+    }
     StoreError::Rejected {
         store,
         detail: error.to_string(),
+    }
+}
+
+/// Log a listing's self-heal. A member whose record is simply gone is the routine consequence of
+/// an index outliving its expired members and is `debug`; one whose record is present but names
+/// a different owner is drift between record and index, which is the `warn` the module doc
+/// promises.
+fn healed(store: &'static str, scope: &str, gone: u64, mismatched: u64) {
+    if gone > 0 {
+        tracing::debug!(store, scope, gone, "expired index entries were reclaimed");
+    }
+    if mismatched > 0 {
+        tracing::warn!(
+            store,
+            scope,
+            mismatched,
+            "stale index entries were reclaimed"
+        );
     }
 }
 
@@ -317,7 +357,7 @@ impl Fields {
         record: &'static str,
         flat: Vec<String>,
     ) -> Result<Self, StoreError> {
-        if flat.len() % 2 != 0 {
+        if !flat.len().is_multiple_of(2) {
             return Err(StoreError::Corrupt {
                 store,
                 record,
@@ -607,20 +647,20 @@ fn cohorts_key(user: &UserId) -> String {
 ///
 /// The source is kept beside the script so a unit test can assert that every key a script
 /// derives from a record it read spells the same prefix the Rust key functions write.
-struct Lua {
+pub(crate) struct Lua {
     source: &'static str,
     script: OnceLock<Script>,
 }
 
 impl Lua {
-    const fn new(source: &'static str) -> Self {
+    pub(crate) const fn new(source: &'static str) -> Self {
         Self {
             source,
             script: OnceLock::new(),
         }
     }
 
-    fn script(&self) -> &Script {
+    pub(crate) fn script(&self) -> &Script {
         self.script.get_or_init(|| Script::new(self.source))
     }
 }
@@ -631,6 +671,8 @@ impl Lua {
 /// `expires_at` (microseconds) as of `now`; an expired one is deleted along with every extra key
 /// named, so the injected clock is the eviction authority and `PEXPIRE` only the collector.
 /// `expired(flat, now)` asks the same of a record already read back with `HGETALL`.
+/// `extend(key, ttl)` raises a derived key's lifetime to `ttl` and never lowers it — an index
+/// set is shared by every member, so one member's remaining life must not shorten another's.
 macro_rules! script {
     ($name:ident, $body:literal) => {
         static $name: Lua = Lua::new(concat!(
@@ -649,6 +691,9 @@ macro_rules! script {
             "    if flat[i] == 'expires_at' then return tonumber(flat[i + 1]) <= tonumber(now) end\n",
             "  end\n",
             "  return true\n",
+            "end\n",
+            "local function extend(key, ttl)\n",
+            "  if ttl > 0 and redis.call('PTTL', key) < ttl then redis.call('PEXPIRE', key, ttl) end\n",
             "end\n",
             $body
         ));
@@ -702,32 +747,48 @@ return record"
 );
 
 // KEYS: user index. ARGV: now, user_id, close ('1' removes what it lists). Returns
-// {healed, {record…}}.
+// {gone, mismatched, {record…}}.
 script!(
     SESSIONS_FOR_USER,
-    "local healed = 0
+    "local gone = 0
+local mismatched = 0
 local found = {}
 for _, sid in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   local key = 'capsule:session:' .. sid
-  if live(key, ARGV[1]) and redis.call('HGET', key, 'user_id') == ARGV[2] then
+  if not live(key, ARGV[1]) then
+    redis.call('SREM', KEYS[1], sid)
+    gone = gone + 1
+  elseif redis.call('HGET', key, 'user_id') ~= ARGV[2] then
+    redis.call('SREM', KEYS[1], sid)
+    mismatched = mismatched + 1
+  else
     found[#found + 1] = redis.call('HGETALL', key)
     if ARGV[3] == '1' then redis.call('DEL', key) end
-  else
-    redis.call('SREM', KEYS[1], sid)
-    healed = healed + 1
   end
 end
 if ARGV[3] == '1' then redis.call('DEL', KEYS[1]) end
-return {healed, found}"
+return {gone, mismatched, found}"
 );
 
 // ---- uploads ------------------------------------------------------------------------------
 
 // KEYS: record, chunks, uploader index, pending set, progress zset, [album set].
-// ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields…
+// ARGV: ttl_ms, upload_id, in_flight, evictable, score, fields… Re-opening an id under a
+// different uploader, owner, hash or album unindexes the previous record first, as
+// `OPEN_SESSION` does for a previous user.
 script!(
     OPEN_UPLOAD,
-    "redis.call('DEL', KEYS[1], KEYS[2])
+    "local previous = redis.call('HMGET', KEYS[1], 'upload_user_id', 'owner_id', 'expected_hash', 'album_id')
+if previous[1] then
+  local uploader = 'capsule:upload:uploader:' .. previous[1]
+  if uploader ~= KEYS[3] then redis.call('SREM', uploader, ARGV[2]) end
+  local pending = 'capsule:upload:pending:' .. previous[2] .. ':' .. previous[3]
+  if pending ~= KEYS[4] then redis.call('SREM', pending, ARGV[2]) end
+  if previous[4] and ('capsule:upload:album:' .. previous[4]) ~= KEYS[6] then
+    redis.call('SREM', 'capsule:upload:album:' .. previous[4], ARGV[2])
+  end
+end
+redis.call('DEL', KEYS[1], KEYS[2])
 redis.call('HSET', KEYS[1], unpack(ARGV, 6))
 redis.call('PEXPIRE', KEYS[1], ARGV[1])
 redis.call('SADD', KEYS[3], ARGV[2])
@@ -758,22 +819,25 @@ script!(
 return redis.call('HGETALL', KEYS[1])"
 );
 
-// KEYS: uploader index. ARGV: now, uploader. Returns {healed, {record…}}.
+// KEYS: uploader index. ARGV: now, uploader. Returns {gone, mismatched, {record…}}.
 script!(
     UPLOADS_FOR_UPLOADER,
-    "local healed = 0
+    "local gone = 0
+local mismatched = 0
 local found = {}
 for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   local key = 'capsule:upload:session:' .. id
-  if live(key, ARGV[1], 'capsule:upload:chunks:' .. id)
-     and redis.call('HGET', key, 'upload_user_id') == ARGV[2] then
-    found[#found + 1] = redis.call('HGETALL', key)
-  else
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
     redis.call('SREM', KEYS[1], id)
-    healed = healed + 1
+    gone = gone + 1
+  elseif redis.call('HGET', key, 'upload_user_id') ~= ARGV[2] then
+    redis.call('SREM', KEYS[1], id)
+    mismatched = mismatched + 1
+  else
+    found[#found + 1] = redis.call('HGETALL', key)
   end
 end
-return {healed, found}"
+return {gone, mismatched, found}"
 );
 
 // KEYS: record, chunks, progress zset. ARGV: now, offset, packed chunk, next_offset,
@@ -822,10 +886,10 @@ local ttl = redis.call('PTTL', KEYS[1])
 local pending = 'capsule:upload:pending:' .. owner .. ':' .. hash
 if ARGV[4] == '1' then
   redis.call('SADD', pending, ARGV[3])
-  if ttl > 0 then redis.call('PEXPIRE', pending, ttl) end
+  extend(pending, ttl)
   if album then
     redis.call('SADD', 'capsule:upload:album:' .. album, ARGV[3])
-    if ttl > 0 then redis.call('PEXPIRE', 'capsule:upload:album:' .. album, ttl) end
+    extend('capsule:upload:album:' .. album, ttl)
   end
 else
   redis.call('SREM', pending, ARGV[3])
@@ -871,57 +935,67 @@ if expired(record, ARGV[1]) then return nil end
 return record"
 );
 
-// KEYS: pending set. ARGV: now, owner, expected_hash. Returns {healed, {upload_id…}}.
+// KEYS: pending set. ARGV: now, owner, expected_hash. Returns {gone, mismatched, {upload_id…}}.
+// A terminal session counts as gone: its promise ended, and the set is derived.
 script!(
     PENDING_FOR_ADDRESS,
-    "local healed = 0
+    "local gone = 0
+local mismatched = 0
 local found = {}
 for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   local key = 'capsule:upload:session:' .. id
-  local keep = false
-  if live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
-    local r = redis.call('HMGET', key, 'owner_id', 'expected_hash', 'status')
-    keep = r[1] == ARGV[2] and r[2] == ARGV[3]
-      and r[3] ~= 'completed' and r[3] ~= 'failed_processing'
-  end
-  if keep then
-    found[#found + 1] = id
-  else
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
     redis.call('SREM', KEYS[1], id)
-    healed = healed + 1
+    gone = gone + 1
+  else
+    local r = redis.call('HMGET', key, 'owner_id', 'expected_hash', 'status')
+    if r[1] ~= ARGV[2] or r[2] ~= ARGV[3] then
+      redis.call('SREM', KEYS[1], id)
+      mismatched = mismatched + 1
+    elseif r[3] == 'completed' or r[3] == 'failed_processing' then
+      redis.call('SREM', KEYS[1], id)
+      gone = gone + 1
+    else
+      found[#found + 1] = id
+    end
   end
 end
-return {healed, found}"
+return {gone, mismatched, found}"
 );
 
-// KEYS: album set. ARGV: now, album_id. Returns {healed, count}.
+// KEYS: album set. ARGV: now, album_id. Returns {gone, mismatched, count}.
 script!(
     IN_FLIGHT_FOR_ALBUM,
-    "local healed = 0
+    "local gone = 0
+local mismatched = 0
 local count = 0
 for _, id in ipairs(redis.call('SMEMBERS', KEYS[1])) do
   local key = 'capsule:upload:session:' .. id
-  local keep = false
-  if live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
-    local r = redis.call('HMGET', key, 'album_id', 'status')
-    keep = r[1] == ARGV[2] and r[2] ~= 'completed' and r[2] ~= 'failed_processing'
-  end
-  if keep then
-    count = count + 1
-  else
+  if not live(key, ARGV[1], 'capsule:upload:chunks:' .. id) then
     redis.call('SREM', KEYS[1], id)
-    healed = healed + 1
+    gone = gone + 1
+  else
+    local r = redis.call('HMGET', key, 'album_id', 'status')
+    if r[1] ~= ARGV[2] then
+      redis.call('SREM', KEYS[1], id)
+      mismatched = mismatched + 1
+    elseif r[2] == 'completed' or r[2] == 'failed_processing' then
+      redis.call('SREM', KEYS[1], id)
+      gone = gone + 1
+    else
+      count = count + 1
+    end
   end
 end
-return {healed, count}"
+return {gone, mismatched, count}"
 );
 
 // KEYS: progress zset. ARGV: now, inclusive score bound, limit. Returns
-// {healed, {{upload_id, last_progress_at}…}}, least recently progressed first; a member whose
+// {gone, {{upload_id, last_progress_at}…}}, least recently progressed first; a member whose
 // record is gone or no longer evictable is dropped from the view here.
 script!(
     LEAST_RECENTLY_PROGRESSED,
-    "local healed = 0
+    "local gone = 0
 local found = {}
 local offset = 0
 local limit = tonumber(ARGV[3])
@@ -942,13 +1016,13 @@ while #found < limit do
       found[#found + 1] = {id, r[2]}
     else
       redis.call('ZREM', KEYS[1], id)
-      healed = healed + 1
+      gone = gone + 1
     end
   end
   offset = offset + kept
   if #page < 32 then break end
 end
-return {healed, found}"
+return {gone, found}"
 );
 
 // ---- ceremonies ---------------------------------------------------------------------------
@@ -1098,7 +1172,7 @@ impl ValkeyAuthState {
     }
 
     async fn list(&self, user: &UserId, close: bool) -> Result<Vec<SessionRecord>, StoreError> {
-        let (healed, records): (u64, Vec<Vec<String>>) = self
+        let (gone, mismatched, records): (u64, u64, Vec<Vec<String>>) = self
             .valkey
             .eval(
                 AUTH,
@@ -1111,9 +1185,7 @@ impl ValkeyAuthState {
                 ],
             )
             .await?;
-        if healed > 0 {
-            tracing::warn!(%user, healed, "stale session index entries were reclaimed");
-        }
+        healed(AUTH, user.as_str(), gone, mismatched);
         let mut found = records
             .into_iter()
             .map(decode_session)
@@ -1216,11 +1288,10 @@ impl AuthStateStore for ValkeyAuthState {
                 )
                 .await?;
             let removed = flat.map(decode_session).transpose()?;
-            match &removed {
-                Some(record) => {
-                    tracing::info!(%session, user_id = %record.user_id, "closed session");
-                }
-                None => tracing::debug!(%session, "close found no live session"),
+            if let Some(record) = &removed {
+                tracing::info!(%session, user_id = %record.user_id, "closed session");
+            } else {
+                tracing::debug!(%session, "close found no live session");
             }
             Ok(removed)
         })
@@ -1360,7 +1431,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
         uploader: &'a UserId,
     ) -> StoreFuture<'a, Vec<UploadSessionRecord>> {
         Box::pin(async move {
-            let (healed, records): (u64, Vec<Vec<String>>) = self
+            let (gone, mismatched, records): (u64, u64, Vec<Vec<String>>) = self
                 .valkey
                 .eval(
                     UPLOADS,
@@ -1369,9 +1440,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     &[self.now(), uploader.to_string()],
                 )
                 .await?;
-            if healed > 0 {
-                tracing::warn!(%uploader, healed, "stale uploader index entries were reclaimed");
-            }
+            healed(UPLOADS, uploader.as_str(), gone, mismatched);
             let mut found = records
                 .into_iter()
                 .map(decode_upload)
@@ -1407,13 +1476,14 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     ],
                 )
                 .await?;
-            match &updated {
-                Some(record) => tracing::debug!(
+            if let Some(record) = &updated {
+                tracing::debug!(
                     %upload,
                     received_bytes = record.received_bytes,
                     "accepted chunk"
-                ),
-                None => tracing::debug!(%upload, "progress found no active session"),
+                );
+            } else {
+                tracing::debug!(%upload, "progress found no active session");
             }
             Ok(updated)
         })
@@ -1476,7 +1546,12 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     ],
                 )
                 .await?;
-            tracing::debug!(%upload, status = status.as_str(), hit = updated.is_some(), "set upload status");
+            tracing::debug!(
+                %upload,
+                status = status.as_str(),
+                hit = updated.is_some(),
+                "set upload status"
+            );
             Ok(updated)
         })
     }
@@ -1502,13 +1577,13 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     Ok(FinalizeClaim::AlreadyClaimed)
                 }
                 record => {
-                    let flat = Vec::<String>::from_redis_value(record).map_err(|error| {
+                    let flat = Vec::<String>::from_redis_value(record).map_err(|_| {
+                        tracing::error!(%upload, "the claim script answered a shape it should not");
                         StoreError::Corrupt {
                             store: UPLOADS,
                             record: "UploadSessionRecord",
-                            detail: format!(
-                                "the claim script answered a shape it should not: {error}"
-                            ),
+                            detail: "the claim script answered neither a verdict nor a record"
+                                .to_owned(),
                         }
                     })?;
                     let claimed = decode_upload(flat)?;
@@ -1535,7 +1610,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
         expected_hash: &'a str,
     ) -> StoreFuture<'a, Option<UploadId>> {
         Box::pin(async move {
-            let (healed, mut ids): (u64, Vec<String>) = self
+            let (gone, mismatched, mut ids): (u64, u64, Vec<String>) = self
                 .valkey
                 .eval(
                     UPLOADS,
@@ -1544,9 +1619,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     &[self.now(), owner.to_string(), expected_hash.to_owned()],
                 )
                 .await?;
-            if healed > 0 {
-                tracing::warn!(%owner, healed, "stale pending-address entries were reclaimed");
-            }
+            healed(UPLOADS, owner.as_str(), gone, mismatched);
             // Smallest id first, so two sessions declaring the same bytes give a deterministic
             // answer — the same rule the in-memory double applies.
             ids.sort();
@@ -1556,7 +1629,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
 
     fn in_flight_for_album<'a>(&'a self, album: &'a AlbumId) -> StoreFuture<'a, u64> {
         Box::pin(async move {
-            let (healed, count): (u64, u64) = self
+            let (gone, mismatched, count): (u64, u64, u64) = self
                 .valkey
                 .eval(
                     UPLOADS,
@@ -1565,9 +1638,7 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     &[self.now(), album.to_string()],
                 )
                 .await?;
-            if healed > 0 {
-                tracing::warn!(%album, healed, "stale album index entries were reclaimed");
-            }
+            healed(UPLOADS, album.as_str(), gone, mismatched);
             Ok(count)
         })
     }
@@ -1582,8 +1653,10 @@ impl UploadSessionStore for ValkeyUploadSessions {
                 return Ok(Vec::new());
             }
             // The score is microseconds, the record nanoseconds: fetch up to the truncated
-            // horizon inclusive and apply the exact `<` against each record's own timestamp.
-            let (healed, candidates): (u64, Vec<(String, String)>) = self
+            // horizon inclusive — one page beyond `limit`, so the members sharing the horizon's
+            // microsecond do not cost a candidate — and apply the exact `<` against each
+            // record's own timestamp.
+            let (gone, candidates): (u64, Vec<(String, String)>) = self
                 .valkey
                 .eval(
                     UPLOADS,
@@ -1592,23 +1665,21 @@ impl UploadSessionStore for ValkeyUploadSessions {
                     &[
                         self.now(),
                         micros(not_progressed_since).to_string(),
-                        limit.to_string(),
+                        limit.saturating_add(32).to_string(),
                     ],
                 )
                 .await?;
-            if healed > 0 {
-                tracing::warn!(healed, "stale eviction-view entries were reclaimed");
-            }
+            healed(UPLOADS, PROGRESS_KEY, gone, 0);
             let mut picked = Vec::with_capacity(candidates.len());
             for (id, last_progress_at) in candidates {
-                let at: Timestamp =
-                    last_progress_at
-                        .parse()
-                        .map_err(|error| StoreError::Corrupt {
-                            store: UPLOADS,
-                            record: "UploadSessionRecord",
-                            detail: format!("last_progress_at is not a timestamp: {error}"),
-                        })?;
+                let at: Timestamp = last_progress_at.parse().map_err(|error| {
+                    tracing::error!(%id, "an eviction candidate's last_progress_at will not parse");
+                    StoreError::Corrupt {
+                        store: UPLOADS,
+                        record: "UploadSessionRecord",
+                        detail: format!("last_progress_at is not a timestamp: {error}"),
+                    }
+                })?;
                 if at < not_progressed_since {
                     picked.push((at, UploadId::new(id)));
                 }
@@ -1883,11 +1954,10 @@ impl EnrollmentStore for ValkeyEnrollments {
                 )
                 .await?;
             let redeemed = flat.map(decode_enrollment).transpose()?;
-            match &redeemed {
-                Some(record) => {
-                    tracing::info!(user_id = %record.user_id, "redeemed enrollment code");
-                }
-                None => tracing::debug!("enrollment code unknown, expired or already redeemed"),
+            if let Some(record) = &redeemed {
+                tracing::info!(user_id = %record.user_id, "redeemed enrollment code");
+            } else {
+                tracing::debug!("enrollment code unknown, expired or already redeemed");
             }
             Ok(redeemed)
         })
@@ -2009,24 +2079,20 @@ impl ChannelStore for ValkeyChannels {
                     &[self.now(), payload.as_str().to_owned()],
                 )
                 .await?;
-            match depth {
-                Some(depth) => {
-                    tracing::debug!(
-                        %channel,
-                        direction = direction.as_str(),
-                        payload_len,
-                        depth,
-                        "relayed opaque enrollment payload"
-                    );
-                    Ok(RelayOutcome::Enqueued {
-                        depth: usize::try_from(depth).unwrap_or(usize::MAX),
-                    })
-                }
-                None => {
-                    tracing::debug!(%channel, "relay send found no live channel");
-                    Ok(RelayOutcome::NoChannel)
-                }
-            }
+            let Some(depth) = depth else {
+                tracing::debug!(%channel, "relay send found no live channel");
+                return Ok(RelayOutcome::NoChannel);
+            };
+            tracing::debug!(
+                %channel,
+                direction = direction.as_str(),
+                payload_len,
+                depth,
+                "relayed opaque enrollment payload"
+            );
+            Ok(RelayOutcome::Enqueued {
+                depth: usize::try_from(depth).unwrap_or(usize::MAX),
+            })
         })
     }
 
@@ -2045,23 +2111,19 @@ impl ChannelStore for ValkeyChannels {
                     &[self.now()],
                 )
                 .await?;
-            match items {
-                Some(items) => {
-                    tracing::debug!(
-                        %channel,
-                        direction = direction.as_str(),
-                        drained = items.len(),
-                        "drained enrollment relay mailbox"
-                    );
-                    Ok(DrainOutcome::Drained(
-                        items.into_iter().map(RelayPayload::new).collect(),
-                    ))
-                }
-                None => {
-                    tracing::debug!(%channel, "relay drain found no live channel");
-                    Ok(DrainOutcome::NoChannel)
-                }
-            }
+            let Some(items) = items else {
+                tracing::debug!(%channel, "relay drain found no live channel");
+                return Ok(DrainOutcome::NoChannel);
+            };
+            tracing::debug!(
+                %channel,
+                direction = direction.as_str(),
+                drained = items.len(),
+                "drained enrollment relay mailbox"
+            );
+            Ok(DrainOutcome::Drained(
+                items.into_iter().map(RelayPayload::new).collect(),
+            ))
         })
     }
 
@@ -2220,6 +2282,9 @@ mod tests {
             (&OPEN_SESSION, strip(user_sessions_key(&uid))),
             (&CLOSE_SESSION, strip(user_sessions_key(&uid))),
             (&SESSIONS_FOR_USER, strip(session_key(&sid))),
+            (&OPEN_UPLOAD, strip(uploader_key(&uid))),
+            (&OPEN_UPLOAD, "capsule:upload:pending:".to_owned()),
+            (&OPEN_UPLOAD, strip(album_key(&AlbumId::new("x")))),
             (&UPLOADS_FOR_UPLOADER, strip(upload_key(&up))),
             (&UPLOADS_FOR_UPLOADER, strip(chunks_key(&up))),
             (&DISCARD_UPLOAD, strip(uploader_key(&uid))),
