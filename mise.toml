@@ -86,6 +86,7 @@ description = "Rust CI gate"
 run = [
   "mise run format-check-rust",
   "mise run lint-check-rust",
+  "mise run doc-check-rust",
   "mise run i18n-check",
   "mise run i18n-guard",
   "mise run openapi-check-kynos",
@@ -133,6 +134,16 @@ run = "cargo clippy --workspace --fix --allow-dirty -- $CLIPPY_FLAGS"
 
 [tasks.lint-check-rust]
 run = "cargo clippy --workspace -- $CLIPPY_FLAGS"
+
+# The rustdoc gate for the frozen crates (issue #399): a broken intra-doc link, an ambiguous
+# one, or public documentation pointing at a private item is an error, not a warning. Scoped
+# to the four crates whose public API is frozen; the rest of the workspace still carries 23
+# such spans and is widened in a follow-up. `--no-deps` so a dependency's own doc warnings
+# cannot fail our build.
+[tasks.doc-check-rust]
+description = "Rustdoc gate for the frozen crates (intra-doc links, private-item leaks)"
+env = { RUSTDOCFLAGS = "-D warnings" }
+run = "cargo doc --no-deps -p capsule-core -p capsule-core-ffi -p capsule-wasm -p capsule-i18n"
 
 # nextest: cross-binary parallel scheduling + process-per-test isolation. Two
 # invocations — the workspace (default features), then capsule-core's FFI surface.
