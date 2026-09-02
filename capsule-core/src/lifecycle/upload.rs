@@ -198,14 +198,21 @@ impl Workspace {
     /// name is now true of it. A thumbnail is a recognisable low-resolution copy of a private
     /// photo; the encryption doc admits no exception for it.
     ///
-    /// Four reasons a manifest is skipped rather than shipped, and only one of them is quiet:
+    /// **Still roles only.** An embedding-role manifest is skipped at `debug!` and named as out
+    /// of scope: its `embedding/{model_id}` grammar is not in the still format set, and
+    /// `crate::ml` produces no derivative manifest for this reader to have an opinion about.
+    ///
+    /// Five reasons a manifest is skipped rather than shipped, and two of them are quiet:
     ///
     /// - the `original` sentinel, which references the original blob and has no bytes of its
     ///   own — an **expected** absence, logged at `debug!`;
+    /// - an embedding-role manifest, out of scope as above — also `debug!`;
     /// - a still-role `format` outside the closed set, which is the structural rejection the
     ///   tier table specifies;
-    /// - bytes missing on disk for a manifest that should have them;
-    /// - bytes whose re-derived ciphertext does not match the signed content address.
+    /// - an `amk_version` naming an epoch this album does not hold, which would otherwise panic
+    ///   on the key lookup;
+    /// - bytes missing on disk, or bytes whose re-derived ciphertext does not match the signed
+    ///   content address.
     ///
     /// None of them fails the bundle: the original and its metadata are what a backup must not
     /// lose, and a stale thumbnail is regenerable.
@@ -253,7 +260,21 @@ impl Workspace {
                     );
                     continue;
                 }
-                Ok(_) => {}
+                Ok(None) => {
+                    // An embedding-role manifest. Its `embedding/{model_id}` grammar is not in
+                    // the still format set, and nothing produces one yet: `crate::ml` writes no
+                    // derivative manifest at all. Rather than invent a reader for an artefact
+                    // with no writer, this reader says plainly that embeddings are out of its
+                    // scope — at `debug!`, because encountering one is not a fault.
+                    tracing::debug!(
+                        asset_id = %asset.asset_id,
+                        role = role_name,
+                        "upload bundle: embedding-role derivatives are outside this reader's \
+                         scope until `crate::ml` produces manifests for them; skipping"
+                    );
+                    continue;
+                }
+                Ok(Some(_)) => {}
                 Err(format) => {
                     tracing::warn!(
                         asset_id = %asset.asset_id,
@@ -280,7 +301,23 @@ impl Workspace {
             // Re-derive the ciphertext from the prefix the manifest signed. The prefix is
             // folded into the file-key salt, so it selects the key as well as the nonces —
             // there is exactly one ciphertext this manifest can be describing.
+            //
+            // The epoch is **checked**, not indexed. It comes off an unverified `.cbor` on
+            // disk, and `file_key` reaches `album.amks[&epoch]`, which panics on a missing key
+            // — inside a function whose whole contract is that it never fails the bundle. An
+            // album recovered from a backup holds only the epochs it escrowed, so a manifest
+            // naming one it does not hold is reachable without any tampering at all.
             let key_epoch = core.amk_version.map_or(epoch, |v| v.0);
+            if !album.amks.contains_key(&key_epoch) {
+                tracing::warn!(
+                    asset_id = %asset.asset_id,
+                    role = role_name,
+                    epoch = key_epoch,
+                    "upload bundle: derivative manifest names an AMK epoch this album does not \
+                     hold; skipping"
+                );
+                continue;
+            }
             let file_key = self.file_key(album, key_epoch, &asset.asset_id, &core.nonce_prefix);
             let (_, ciphertext) =
                 stream::encrypt_asset_vec_with_prefix(&file_key, core.nonce_prefix, &plaintext);
@@ -323,8 +360,10 @@ fn derivative_role_name(role: DerivativeRole) -> &'static str {
 /// content-address it against the *other* manifest, so both would be skipped as mismatched.
 /// `#437` lands exactly that pair, so this is a latent break rather than a hypothetical one.
 ///
-/// A format outside the closed set has no extension to look for and returns `None`; the caller
-/// has already rejected that manifest, so this is belt and braces. A stale file left by a
+/// Returns `None` for any `format` outside the closed set — including the embedding-role
+/// grammar, which has no still extension. The caller has already skipped both cases, so reaching
+/// this with one is not expected; it answers `None` rather than asserting, because a reader that
+/// panics on a manifest it merely does not understand is worse than one that ships nothing. A stale file left by a
 /// retired format is simply never read — nothing enumerates the directory any more, so an
 /// orphan is inert rather than a candidate, and it is regenerable by design.
 fn read_derivative_bytes(

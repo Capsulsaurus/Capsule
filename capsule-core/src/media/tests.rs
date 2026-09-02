@@ -1125,10 +1125,10 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
 /// signatures included — the same append-only link the asset provenance chain uses.
 ///
 /// Exercised through [`sign_derivative`](super::derivative::sign_derivative) rather than
-/// through [`generate_still_derivatives`], and deliberately: only WebP is encodable today, so a
+/// through [`generate_still_derivatives`], and deliberately: only JXL is encodable today, so a
 /// single call produces one manifest per role and the multi-link case — the half that can
 /// actually be wrong — is unreachable from the public entry point until a second encoder lands
-/// (the filed `S-B1` remainder).
+/// (the filed `S-B1` remainder, #437).
 #[test]
 fn manifests_of_one_role_form_an_append_only_chain() {
     let (device, write_tier) = signers();
@@ -1234,7 +1234,7 @@ fn each_tier_starts_its_own_role_chain() {
         .find(|d| d.tier == DerivativeTier::Preview)
         .expect("a preview was generated");
     let back = RawshiftDecoder
-        .decode(&previewed.bytes, "webp")
+        .decode(&previewed.bytes, "jxl")
         .expect("the preview decodes");
     assert_eq!((back.width(), back.height()), (512, 384));
 }

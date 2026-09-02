@@ -86,9 +86,9 @@ impl DerivativeTier {
         }
     }
 
-    /// The role's on-disk name — mirrors
-    /// [`derivative_role_name`](crate::lifecycle) in the upload bundle reader, which finds a
-    /// derivative's bytes by this prefix.
+    /// The role's on-disk name — mirrors `derivative_role_name` in the upload bundle reader,
+    /// which composes a derivative's exact path from this **and** the manifest's format, so two
+    /// formats of one role stay distinguishable.
     pub const fn role_name(self) -> &'static str {
         match self {
             Self::Thumbnail => "thumbnail",

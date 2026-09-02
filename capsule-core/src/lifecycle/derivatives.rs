@@ -19,7 +19,8 @@
 //! that mean the *workspace* is broken — a missing album, a signer that refused — not the ones
 //! that mean the pixels were unreadable.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -27,12 +28,13 @@ use uuid::Uuid;
 
 use super::{AssetState, DerivativeStatus, LifecycleError, Result, Workspace, media_dir};
 use crate::cbor;
-use crate::crypto::encryption::encrypt_asset_rekey;
-use crate::crypto::encryption::stream::AssetEncryption;
+use crate::crypto::encryption::rekey::encrypt_asset_rekey_with_prefix;
+use crate::crypto::encryption::stream::{AssetEncryption, NONCE_PREFIX_LEN};
 use crate::crypto::hash::{self, Hash32};
 use crate::crypto::keys::{Amk, AmkVersion};
 use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
 use crate::crypto::provenance::{DerivativeManifest, DerivativeRole};
+use crate::crypto::rng;
 use crate::exif::extract::ExifExtract;
 use crate::lqip::Lqip;
 use crate::media::{
@@ -177,31 +179,57 @@ fn lqip_from(decoded: &DecodedImage, src: &Path) -> Option<SidecarLqip> {
     }
 }
 
-/// The current head of each derivative role's chain for `asset_id`, read off the persisted
-/// bundle.
+/// What an asset's existing derivative bundle constrains about the next generation.
 ///
-/// Empty when the asset has no bundle yet, which is every import: a create starts each role's
-/// chain. It is a **regeneration** — the `#437` backfill that adds a second format to an asset
-/// that already has one — that needs this, and it needs it to be right the first time, because a
-/// forked chain is not something a later run can repair.
+/// One read, two facts, because both come off the same file and both are needed together.
+pub(super) struct ExistingDerivatives {
+    /// The current head of each role's chain. Empty when the asset has no bundle yet, which is
+    /// every import: a create starts each role's chain. It is a **regeneration** — the `#437`
+    /// backfill that adds a second format to an asset that already has one — that needs this,
+    /// and it needs it to be right the first time, because a forked chain is not something a
+    /// later run can repair.
+    ///
+    /// The link is SHA-256 over the manifest's canonical CBOR, signatures included: the same
+    /// content-hash link the asset provenance chain uses.
+    pub(super) heads: HashMap<DerivativeRole, Hash32>,
+    /// Every `nonce_prefix` already used for this `file_id` by a derivative.
+    ///
+    /// The encryption doc makes the refusal normative: "the writer additionally refuses to emit
+    /// a `nonce_prefix` it has already used for that `file_id` … the same rule governs
+    /// derivative re-encryption". A prefix is folded into the file-key salt, so reusing one
+    /// reuses the *key* as well as the nonce — the keystream separation the whole construction
+    /// rests on.
+    pub(super) used_prefixes: HashSet<[u8; NONCE_PREFIX_LEN]>,
+}
+
+/// Read `asset_id`'s persisted derivative bundle, if it has one.
 ///
-/// The link is SHA-256 over the manifest's canonical CBOR, signatures included: the same
-/// content-hash link the asset provenance chain uses.
-pub(super) fn chain_heads(dir: &Path, asset_id: Uuid) -> HashMap<DerivativeRole, Hash32> {
+/// A bundle that does not decode yields the empty answer *and a warning*: treating an
+/// unreadable bundle as "no constraints" is the safe direction for the chain (a role restarts)
+/// but the unsafe one for prefixes, so the warning says which risk is being taken.
+pub(super) fn existing_derivatives(dir: &Path, asset_id: Uuid) -> ExistingDerivatives {
+    let empty = ExistingDerivatives {
+        heads: HashMap::new(),
+        used_prefixes: HashSet::new(),
+    };
     let path = dir.join(format!("{}.derivatives.cbor", asset_id.simple()));
     let Ok(bytes) = fs::read(&path) else {
-        return HashMap::new();
+        return empty;
     };
     let Ok(manifests) = cbor::from_slice::<Vec<DerivativeManifest>>(&bytes) else {
         tracing::warn!(
             path = %path.display(),
-            "derivatives: undecodable bundle; treating every role's chain as unstarted"
+            "derivatives: undecodable bundle; every role's chain restarts and no previously used \
+             nonce prefix can be excluded from the next draw"
         );
-        return HashMap::new();
+        return empty;
     };
+
     // Generation order is the chain order, so the last manifest of a role is that role's head.
     let mut heads = HashMap::new();
+    let mut used_prefixes = HashSet::new();
     for manifest in &manifests {
+        used_prefixes.insert(manifest.core.nonce_prefix);
         match cbor::to_canonical_vec(manifest) {
             Ok(canonical) => {
                 heads.insert(manifest.core.role, hash::hash_bytes(&canonical));
@@ -213,33 +241,129 @@ pub(super) fn chain_heads(dir: &Path, asset_id: Uuid) -> HashMap<DerivativeRole,
             ),
         }
     }
-    heads
+    ExistingDerivatives {
+        heads,
+        used_prefixes,
+    }
 }
 
 /// The album-key half of derivative generation: `media` produces the bytes, this encrypts them.
 ///
-/// One `encrypt_asset_rekey` per derivative under the **source asset's** `file_id` and the
-/// album's current AMK, with a fresh CSPRNG nonce prefix each time — so every derivative of an
-/// asset gets its own file key, per the encryption doc's per-file key derivation. The ciphertext
-/// is deliberately dropped: the client keeps the plaintext derivative on disk (the local gallery
-/// paints it) and re-derives the ciphertext at push time from the recorded prefix, exactly as it
-/// already does for the original.
+/// One `encrypt_asset_rekey_with_prefix` per derivative under the **source asset's** `file_id`
+/// and the album's current AMK, so every derivative gets its own file key per the encryption
+/// doc's per-file derivation. The ciphertext is deliberately dropped: the client keeps the
+/// plaintext derivative on disk (the local gallery paints it) and re-derives the ciphertext at
+/// push time from the recorded prefix, exactly as it already does for the original.
+///
+/// # The reuse refusal
+///
+/// A CSPRNG draw is not on its own what the design asks for. The encryption doc requires that
+/// the writer *refuse* a `nonce_prefix` it has already used for that `file_id`, "defense in
+/// depth on top of the CSPRNG draw", and says the same rule governs derivative re-encryption.
+/// So [`used`](Self::used) starts as the original's prefix plus every prefix in the existing
+/// bundle, each newly sealed prefix joins it, and a collision is redrawn.
+///
+/// A prefix is folded into the file-key salt, so a reused one reuses the **key** as well as the
+/// nonce — two blobs under one keystream, which is the failure the whole construction exists to
+/// prevent.
 struct AlbumSealer<'a> {
     amk: &'a Amk,
     asset_id: Uuid,
+    /// Prefixes already spoken for on this `file_id`. `RefCell` because [`DerivativeSealer`]
+    /// takes `&self` — the seam is shared, and each seal has to see what the last one used.
+    used: RefCell<HashSet<[u8; NONCE_PREFIX_LEN]>>,
+    /// Where a candidate prefix comes from: the OS CSPRNG in production, forced in the test
+    /// that proves the refusal fires.
+    draw: &'a dyn Fn() -> [u8; NONCE_PREFIX_LEN],
+}
+
+/// How many times a collision is redrawn before the draw itself is called broken.
+///
+/// A 7-byte prefix collides by chance at about 1 in 2^56, so a run of eight is not bad luck —
+/// it is a CSPRNG returning something it should not, which is a **workspace** fault and not
+/// this asset's. Hence `MediaError::Sign`, which decision 22 routes to a propagated error
+/// rather than to a missing thumbnail: an import that cannot draw a safe nonce must stop, not
+/// quietly write one derivative fewer.
+const MAX_PREFIX_DRAWS: usize = 8;
+
+/// Test-only fault injection for the sealer.
+///
+/// The two failure paths decision 22 and decision 23 turn on — a codec refusing a frame the
+/// decoder accepted, and a codec *panicking* on one — cannot be produced from real bytes on
+/// demand, and testing them anywhere but through `import_asset_with` proves nothing about the
+/// property that matters: that **the asset still commits**. So the fault is injected at the one
+/// point inside the real import path where a codec failure originates.
+///
+/// `#[cfg(test)]`, so it does not exist in a release build at all — not a disabled branch, not a
+/// dead field, absent. A thread-local rather than a parameter because threading an `Option<&dyn
+/// DerivativeSealer>` through `prepare_still` would put a test seam in a production signature;
+/// nextest runs each test in its own process, so there is nothing for it to leak into.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug)]
+pub(super) enum SealerFault {
+    /// A codec refuses the frame — an `Encode`-class error, which decision 22 degrades.
+    Refuse,
+    /// A pre-1.0 codec panics — which decision 23's guard has to catch.
+    Panic,
+}
+
+#[cfg(test)]
+thread_local! {
+    static SEALER_FAULT: RefCell<Option<SealerFault>> = const { RefCell::new(None) };
+}
+
+/// Run `body` with `fault` injected into every seal, restoring the previous state after.
+#[cfg(test)]
+pub(super) fn with_sealer_fault<T>(fault: SealerFault, body: impl FnOnce() -> T) -> T {
+    SEALER_FAULT.with(|slot| *slot.borrow_mut() = Some(fault));
+    let out = body();
+    SEALER_FAULT.with(|slot| *slot.borrow_mut() = None);
+    out
 }
 
 impl DerivativeSealer for AlbumSealer<'_> {
     fn seal(&self, plaintext: &[u8]) -> std::result::Result<SealedDerivative, MediaError> {
-        let (enc, _ciphertext, _file_key) =
-            encrypt_asset_rekey(self.amk, &self.asset_id, plaintext, None).map_err(|e| {
-                MediaError::Sign {
-                    detail: format!("sealing the derivative: {e}"),
+        #[cfg(test)]
+        if let Some(fault) = SEALER_FAULT.with(|slot| *slot.borrow()) {
+            match fault {
+                // Deliberately **not** `Sign`: this stands in for a codec refusing pixels, which
+                // decision 22 degrades to `DecodeFailed` rather than propagating.
+                SealerFault::Refuse => {
+                    return Err(MediaError::Encode {
+                        format: crate::media::DerivativeFormat::Jxl,
+                        detail: "injected codec refusal".into(),
+                    });
                 }
-            })?;
-        Ok(SealedDerivative {
-            ciphertext_hash: enc.ciphertext_hash,
-            nonce_prefix: enc.nonce_prefix,
+                SealerFault::Panic => panic!("injected codec panic on an accepted frame"),
+            }
+        }
+
+        for attempt in 0..MAX_PREFIX_DRAWS {
+            let prefix = (self.draw)();
+            if self.used.borrow().contains(&prefix) {
+                tracing::warn!(
+                    asset_id = %self.asset_id,
+                    attempt,
+                    "derivatives: drew a nonce prefix already used for this file_id; redrawing"
+                );
+                continue;
+            }
+            let (enc, _ciphertext, _file_key) =
+                encrypt_asset_rekey_with_prefix(self.amk, &self.asset_id, plaintext, prefix, None)
+                    .map_err(|e| MediaError::Sign {
+                        detail: format!("sealing the derivative: {e}"),
+                    })?;
+            self.used.borrow_mut().insert(enc.nonce_prefix);
+            return Ok(SealedDerivative {
+                ciphertext_hash: enc.ciphertext_hash,
+                nonce_prefix: enc.nonce_prefix,
+            });
+        }
+        Err(MediaError::Sign {
+            detail: format!(
+                "could not draw an unused nonce prefix for {} in {MAX_PREFIX_DRAWS} attempts",
+                self.asset_id
+            ),
         })
     }
 }
@@ -313,6 +437,16 @@ impl Workspace {
         let lqip = lqip_from(&decoded, src);
 
         let album = self.album(&album_id)?;
+        let ExistingDerivatives {
+            heads,
+            mut used_prefixes,
+        } = existing_derivatives(
+            &media_dir(&self.root, capture_utc).join("derivatives"),
+            asset_id,
+        );
+        // The original's prefix is spoken for too: it is a prefix used for this `file_id`.
+        used_prefixes.insert(original.nonce_prefix);
+
         let ctx = DerivativeContext {
             source_asset_id: asset_id,
             crypto_suite_id: CRYPTO_SUITE_ID,
@@ -323,12 +457,16 @@ impl Workspace {
             generated_at: super::now_rfc3339(),
             device_signer: self.device_signer.as_ref(),
             write_tier_signer: album.write_tier_signer()?,
-            sealer: &AlbumSealer { amk, asset_id },
-            // Empty on a create; a regeneration continues each role's chain from here.
-            prior_heads: &chain_heads(
-                &media_dir(&self.root, capture_utc).join("derivatives"),
+            sealer: &AlbumSealer {
+                amk,
                 asset_id,
-            ),
+                // Seeded with the original's own prefix and every prefix the existing bundle
+                // already spent on this `file_id`.
+                used: RefCell::new(used_prefixes),
+                draw: &rng::random_array::<NONCE_PREFIX_LEN>,
+            },
+            // Empty on a create; a regeneration continues each role's chain from here.
+            prior_heads: &heads,
             // The `original` sentinel references the original blob rather than encrypting
             // anything, so it signs what the original's own manifest signs.
             original: SealedDerivative {
@@ -402,9 +540,10 @@ impl Workspace {
     /// Write the generated derivative bytes plus their signed manifest bundle under the asset's
     /// media directory: `derivatives/{uuid}.{role}.{ext}` and `{uuid}.derivatives.cbor`.
     ///
-    /// The layout is the one the upload bundle reader already looks for
-    /// ([`Workspace::upload_bundle`](Workspace::upload_bundle) finds a derivative's bytes by the
-    /// `{uuid}.{role}.` prefix), so persisting here needs no change on the read side.
+    /// The layout is the one the upload bundle reader already looks for: since `F5` it composes
+    /// a derivative's exact path from the manifest's `(role, format)` pair rather than scanning
+    /// for a `{uuid}.{role}.` prefix, so two formats of one role cannot be mistaken for each
+    /// other.
     ///
     /// Called **after** the asset's own files are durable: a derivative is regenerable and must
     /// never be able to fail an import that has already committed. A write error is therefore
@@ -828,6 +967,87 @@ mod tests {
         );
     }
 
+    /// **Decision 22's degradation path, through the real import.** A codec that refuses a frame
+    /// the decoder accepted costs this asset its thumbnail and **nothing else**: the original
+    /// commits, signed and self-verifying, with real pixel dimensions and a real placeholder,
+    /// and the run reports `DecodeFailed` so somebody can look at it.
+    ///
+    /// Reverting `prepare_still`'s match arm to a bare `?` must fail this test — that is what it
+    /// is for. Before the review round the code did exactly that, and because the failure
+    /// happened *before* `write_asset_files`, an encoder refusal lost the original from the
+    /// backup outright.
+    #[test]
+    fn a_codec_refusal_costs_the_thumbnail_and_not_the_backup() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+        let path = src.path().join("photo.png");
+        fs::write(&path, png(512, 384)).unwrap();
+
+        let receipt = super::with_sealer_fault(super::SealerFault::Refuse, || {
+            ws.import_asset_with(album, &path, &SignedImportOptions::default())
+                .expect("a codec refusal must never fail the import")
+        });
+
+        assert_eq!(
+            receipt.derivatives,
+            DerivativeStatus::DecodeFailed,
+            "reported as a real problem rather than an expected gap"
+        );
+        assert_eq!(receipt.deferred_formats, 0);
+
+        // The half that must not be lost: a signed, encrypted, self-verifying original.
+        assert_eq!(
+            ws.verify(&receipt.asset_id).unwrap(),
+            crate::crypto::verify_asset::VerifyOutcome::Accept
+        );
+        let sidecar = sidecar_of(lib.path(), receipt.asset_id);
+        let dimensions = sidecar.dimensions.as_ref().expect("real pixel dimensions");
+        assert_eq!((dimensions.width, dimensions.height), (512, 384));
+        assert_eq!(
+            sidecar.lqip.as_ref().map(|l| l.chromahash.len()),
+            Some(32),
+            "the placeholder came from the decode, which succeeded"
+        );
+        assert!(
+            !derivatives_dir(lib.path(), receipt.asset_id).exists(),
+            "and no derivative was written"
+        );
+    }
+
+    /// **Decision 23's guard, through the real import.** A codec that *panics* on a frame the
+    /// decoder accepted is caught, and the import still commits.
+    ///
+    /// Driven through `import_asset_with` rather than by calling `guarded` directly: a test that
+    /// calls the guard itself stays green even if every production call site is deleted, which
+    /// is precisely the hole this replaces. Deleting the guard around generation makes this test
+    /// abort the process rather than fail — which is the failure mode it exists to prevent.
+    #[test]
+    fn a_codec_panic_is_caught_and_the_import_still_commits() {
+        let lib = TempDir::new().unwrap();
+        let src = TempDir::new().unwrap();
+        let (mut ws, album) = workspace(lib.path());
+        let path = src.path().join("photo.png");
+        fs::write(&path, png(512, 384)).unwrap();
+
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let receipt = super::with_sealer_fault(super::SealerFault::Panic, || {
+            ws.import_asset_with(album, &path, &SignedImportOptions::default())
+                .expect("a codec panic must never fail the import")
+        });
+        std::panic::set_hook(previous);
+
+        assert_eq!(receipt.derivatives, DerivativeStatus::DecodeFailed);
+        assert_eq!(
+            ws.verify(&receipt.asset_id).unwrap(),
+            crate::crypto::verify_asset::VerifyOutcome::Accept,
+            "one panicking photo does not cost the asset, let alone the rest of the run"
+        );
+        let sidecar = sidecar_of(lib.path(), receipt.asset_id);
+        assert!(sidecar.lqip.is_some(), "the placeholder still landed");
+    }
+
     /// A format with no codec here, and bytes that are no still at all: both import as signed,
     /// verifiable originals, with EXIF-or-nothing dimensions, no placeholder, no derivative
     /// files, and the reason recorded (slice `S-B13`).
@@ -882,5 +1102,166 @@ mod tests {
                 crate::crypto::verify_asset::VerifyOutcome::Accept
             );
         }
+    }
+}
+
+// ── The nonce-prefix reuse refusal (encryption.md, "Re-keying on Rewrite") ───
+
+#[cfg(test)]
+mod sealer_tests {
+    use super::*;
+
+    /// A draw that hands back a fixed sequence, so a collision can be *forced* rather than
+    /// waited for — a real 7-byte collision is a 1-in-2^56 event.
+    struct ScriptedDraw {
+        prefixes: RefCell<Vec<[u8; NONCE_PREFIX_LEN]>>,
+    }
+
+    impl ScriptedDraw {
+        fn next(&self) -> [u8; NONCE_PREFIX_LEN] {
+            let mut queue = self.prefixes.borrow_mut();
+            if queue.len() == 1 {
+                queue[0]
+            } else {
+                queue.remove(0)
+            }
+        }
+    }
+
+    fn sealer<'a>(
+        amk: &'a Amk,
+        used: HashSet<[u8; NONCE_PREFIX_LEN]>,
+        draw: &'a dyn Fn() -> [u8; NONCE_PREFIX_LEN],
+    ) -> AlbumSealer<'a> {
+        AlbumSealer {
+            amk,
+            asset_id: Uuid::from_u128(0xDEF),
+            used: RefCell::new(used),
+            draw,
+        }
+    }
+
+    /// **The normative refusal.** A draw that keeps returning a prefix already used for this
+    /// `file_id` is refused rather than accepted, and the refusal is a `Sign`-class fault so
+    /// decision 22 propagates it instead of silently writing one derivative fewer.
+    ///
+    /// A prefix is folded into the file-key salt, so reusing one reuses the **key**: two blobs
+    /// under one keystream, which is exactly what the encryption doc's "defense in depth on top
+    /// of the CSPRNG draw" exists to prevent.
+    #[test]
+    fn a_prefix_already_used_for_this_file_id_is_refused() {
+        let amk = Amk::from_bytes([0x11; 32]);
+        let original = [1, 2, 3, 4, 5, 6, 7];
+        let mut used = HashSet::new();
+        used.insert(original);
+
+        // The RNG is forced to keep offering the original's prefix.
+        let scripted = ScriptedDraw {
+            prefixes: RefCell::new(vec![original]),
+        };
+        let draw = || scripted.next();
+        let error = sealer(&amk, used, &draw)
+            .seal(b"derivative plaintext")
+            .expect_err("a reused prefix is refused");
+        assert!(
+            matches!(error, MediaError::Sign { .. }),
+            "an exhausted draw is a workspace fault, not a missing thumbnail: {error:?}"
+        );
+    }
+
+    /// A collision is **redrawn**, not fatal: the first candidate is taken, the second is used.
+    #[test]
+    fn a_collision_is_redrawn_and_the_next_candidate_is_accepted() {
+        let amk = Amk::from_bytes([0x22; 32]);
+        let taken = [9, 9, 9, 9, 9, 9, 9];
+        let fresh = [8, 7, 6, 5, 4, 3, 2];
+        let mut used = HashSet::new();
+        used.insert(taken);
+
+        let scripted = ScriptedDraw {
+            prefixes: RefCell::new(vec![taken, fresh]),
+        };
+        let draw = || scripted.next();
+        let sealed = sealer(&amk, used, &draw)
+            .seal(b"derivative plaintext")
+            .expect("the redraw succeeds");
+        assert_eq!(
+            sealed.nonce_prefix, fresh,
+            "the colliding candidate is skipped and the next one is used"
+        );
+    }
+
+    /// Each sealed prefix **joins** the set, so two derivatives of one asset cannot collide with
+    /// each other either — not only with what was already on disk.
+    #[test]
+    fn a_freshly_sealed_prefix_is_spoken_for_by_the_next_seal() {
+        let amk = Amk::from_bytes([0x33; 32]);
+        let first = [1, 1, 1, 1, 1, 1, 1];
+        let second = [2, 2, 2, 2, 2, 2, 2];
+
+        // The draw offers `first`, then `first` again (a collision with what was just sealed),
+        // then `second`.
+        let scripted = ScriptedDraw {
+            prefixes: RefCell::new(vec![first, first, second]),
+        };
+        let draw = || scripted.next();
+        let sealer = sealer(&amk, HashSet::new(), &draw);
+
+        assert_eq!(sealer.seal(b"one").expect("first seal").nonce_prefix, first);
+        assert_eq!(
+            sealer.seal(b"two").expect("second seal").nonce_prefix,
+            second,
+            "the prefix the first seal used is refused for the second"
+        );
+    }
+
+    /// The bundle reader hands the sealer every prefix already spent on this `file_id`.
+    #[test]
+    fn existing_derivatives_reports_every_persisted_prefix() {
+        use crate::crypto::keys::HybridSigningKey;
+        use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
+
+        let dir = tempfile::tempdir().expect("scratch");
+        let asset_id = Uuid::from_u128(0xFEED);
+        let device = HybridSigningKey::from_seed_bytes(&[31; 32], &[32; 32]);
+        let write = HybridSigningKey::from_seed_bytes(&[33; 32], &[34; 32]);
+
+        let manifest = |role, prefix: [u8; NONCE_PREFIX_LEN]| {
+            DerivativeCore {
+                version: DERIVATIVE_MANIFEST_VERSION.into(),
+                crypto_suite_id: CRYPTO_SUITE_ID,
+                protocol_version: Some(PROTOCOL_VERSION.into()),
+                amk_version: Some(AmkVersion(1)),
+                source_asset_id: asset_id,
+                role,
+                format: "image/jxl".into(),
+                ciphertext_hash: hash::hash_bytes(b"bytes"),
+                nonce_prefix: prefix,
+                generated_by_device: Uuid::from_u128(0xD1),
+                generated_by_client: "capsule-core/test".into(),
+                model_id: None,
+                model_version: None,
+                generated_at: "2026-09-02T00:00:00Z".into(),
+                prior_provenance_hash: None,
+            }
+            .sign(&device, &write)
+            .expect("signing")
+        };
+        let manifests = vec![
+            manifest(DerivativeRole::Thumbnail, [1, 1, 1, 1, 1, 1, 1]),
+            manifest(DerivativeRole::Preview, [2, 2, 2, 2, 2, 2, 2]),
+        ];
+        fs::write(
+            dir.path()
+                .join(format!("{}.derivatives.cbor", asset_id.simple())),
+            cbor::to_canonical_vec(&manifests).unwrap(),
+        )
+        .unwrap();
+
+        let existing = existing_derivatives(dir.path(), asset_id);
+        assert!(existing.used_prefixes.contains(&[1, 1, 1, 1, 1, 1, 1]));
+        assert!(existing.used_prefixes.contains(&[2, 2, 2, 2, 2, 2, 2]));
+        assert_eq!(existing.used_prefixes.len(), 2);
+        assert_eq!(existing.heads.len(), 2, "and both roles have a chain head");
     }
 }

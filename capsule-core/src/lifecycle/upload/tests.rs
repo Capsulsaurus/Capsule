@@ -356,6 +356,18 @@ fn signed_derivative(
     format: &str,
     ciphertext_hash: crate::crypto::hash::Hash32,
 ) -> DerivativeManifest {
+    signed_derivative_at_epoch(asset_id, role, format, ciphertext_hash, 1)
+}
+
+/// As [`signed_derivative`], with an explicit `amk_version` — so a manifest can name an epoch
+/// the album does not hold.
+fn signed_derivative_at_epoch(
+    asset_id: Uuid,
+    role: DerivativeRole,
+    format: &str,
+    ciphertext_hash: crate::crypto::hash::Hash32,
+    epoch: u32,
+) -> DerivativeManifest {
     use crate::crypto::keys::{AmkVersion, HybridSigningKey};
     use crate::crypto::primitives::{CRYPTO_SUITE_ID, PROTOCOL_VERSION};
     use crate::crypto::provenance::manifest::{DERIVATIVE_MANIFEST_VERSION, DerivativeCore};
@@ -366,7 +378,7 @@ fn signed_derivative(
         version: DERIVATIVE_MANIFEST_VERSION.into(),
         crypto_suite_id: CRYPTO_SUITE_ID,
         protocol_version: Some(PROTOCOL_VERSION.into()),
-        amk_version: Some(AmkVersion(1)),
+        amk_version: Some(AmkVersion(epoch)),
         source_asset_id: asset_id,
         role,
         format: format.into(),
@@ -528,7 +540,11 @@ fn a_derivative_survives_a_reopen_and_still_reaches_the_bundle() {
     // A second `Workspace::open` — the S-A10 shape: nothing shared but the directory.
     let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
     let bundle = ws.upload_bundle(&asset_id).unwrap();
-    assert_eq!(bundle.derivatives.len(), 1, "the derivative survives a reopen");
+    assert_eq!(
+        bundle.derivatives.len(),
+        1,
+        "the derivative survives a reopen"
+    );
     let blob = &bundle.derivatives[0];
     assert_eq!(
         hash::hash_bytes(&blob.bytes),
@@ -598,4 +614,86 @@ fn two_formats_for_one_role_are_addressed_by_format_not_by_filename_order() {
         .map(|d| d.format.as_str())
         .collect();
     assert_eq!(formats, vec!["image/jxl", "image/avif"]);
+}
+
+/// **A manifest naming an epoch the album does not hold is skipped, not a panic.**
+///
+/// `file_key` reaches `album.amks[&epoch]`, which panics on a missing key — and the epoch comes
+/// off an unverified `.cbor` on disk, inside a function whose whole contract is that it never
+/// fails the bundle. This is reachable without any tampering at all: an album recovered from a
+/// backup holds only the epochs it escrowed.
+#[test]
+fn a_derivative_naming_an_unheld_epoch_is_skipped_rather_than_panicking() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[signed_derivative_at_epoch(
+            asset_id,
+            DerivativeRole::Thumbnail,
+            "image/jxl",
+            hash::hash_bytes(b"whatever"),
+            9_999,
+        )],
+    );
+
+    // The assertion is as much that this returns at all as that it returns nothing.
+    let bundle = ws
+        .upload_bundle(&asset_id)
+        .expect("an unheld epoch must not fail the bundle");
+    assert!(
+        bundle.derivatives.is_empty(),
+        "a derivative whose key epoch is absent is skipped"
+    );
+    assert!(
+        !bundle.ciphertext.is_empty(),
+        "and the original is still shipped"
+    );
+}
+
+/// An embedding-role manifest is **out of this reader's scope**, and says so quietly.
+///
+/// Its `embedding/{model_id}` grammar is not in the still format set and `crate::ml` produces no
+/// derivative manifest at all, so the reader neither ships it nor complains about it — the
+/// previous behaviour logged "no bytes on disk" for a manifest it had already decided not to
+/// handle, which is a misleading warning for an artefact with no writer.
+#[test]
+fn an_embedding_role_manifest_is_out_of_scope_and_skipped() {
+    let lib = TempDir::new().unwrap();
+    let src = TempDir::new().unwrap();
+    let (_album, asset_id) = library_with_a_thumbnailed_asset(&lib, &src);
+    let ws = Workspace::open(lib.path(), b"passphrase", FAST).unwrap();
+
+    rewrite_bundle(
+        &lib,
+        &ws,
+        asset_id,
+        &[signed_derivative(
+            asset_id,
+            DerivativeRole::Embedding,
+            "embedding/mobileclip-b",
+            hash::hash_bytes(b"an embedding"),
+        )],
+    );
+
+    let bundle = ws.upload_bundle(&asset_id).unwrap();
+    assert!(
+        bundle.derivatives.is_empty(),
+        "embeddings are not this reader's business until something produces them"
+    );
+    assert_eq!(
+        verify_still_format(&signed_derivative(
+            asset_id,
+            DerivativeRole::Embedding,
+            "embedding/mobileclip-b",
+            hash::hash_bytes(b"an embedding"),
+        )),
+        Ok(None),
+        "and the closed-set check reports them as out of scope rather than rejecting them"
+    );
 }
