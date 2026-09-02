@@ -7131,6 +7131,22 @@
     "message": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
     "context": "clap --help: the long description of `capsule`, shown at the top of `capsule --help` instead of the one-line form. Keep the Markdown list markers: the documentation site renders this text as prose."
   },
+  "cli.help.show.about": {
+    "message": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",
+    "context": "clap --help: the one-line description of `capsule show`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.show.arg.asset": {
+    "message": "The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file",
+    "context": "clap --help: help for the `<ASSET>` positional of `capsule show`."
+  },
+  "cli.help.show.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule show`."
+  },
+  "cli.help.show.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule show`."
+  },
   "cli.help.status.about": {
     "message": "Show current status",
     "context": "clap --help: the one-line description of `capsule status`. Shown in the parent's command list and at the top of its own --help."
@@ -7262,6 +7278,158 @@
   "cli.push.up_to_date": {
     "message": "Everything in this library is already on the server.",
     "context": "CLI line when `capsule push` finds every blob already held server-side."
+  },
+  "cli.show.album": {
+    "message": "  Album:           {value}",
+    "context": "CLI field row of `capsule show`: the owning album's UUID. Keep the label padded so values align in a monospace terminal."
+  },
+  "cli.show.ambiguous": {
+    "message": "{selector} matches {count} assets; give more of the hash, or the full asset id.",
+    "context": "CLI failure detail when a `capsule show` hash prefix matches several assets. {count} is the number of matches."
+  },
+  "cli.show.caption": {
+    "message": "  Caption:         {value}",
+    "context": "CLI field row of `capsule show`: the caption text, or the unset marker."
+  },
+  "cli.show.captured": {
+    "message": "  Captured:        {value}",
+    "context": "CLI field row of `capsule show`: the signed capture timestamp (RFC 3339, UTC)."
+  },
+  "cli.show.content_type": {
+    "message": "  Content type:    {value}",
+    "context": "CLI field row of `capsule show`: the asset's content type, e.g. image/jpeg."
+  },
+  "cli.show.cull": {
+    "message": "  Cull flag:       {value}",
+    "context": "CLI field row of `capsule show`: the culling flag (a localized pick/neutral/reject name)."
+  },
+  "cli.show.dimensions": {
+    "message": "  Dimensions:      {value}",
+    "context": "CLI field row of `capsule show`: pixel dimensions, or the unset marker."
+  },
+  "cli.show.failed": {
+    "message": "Show failed: {reason}",
+    "context": "CLI failure line for `capsule show`. {reason} is a localized or English error detail."
+  },
+  "cli.show.gps": {
+    "message": "  GPS:             {value}",
+    "context": "CLI field row of `capsule show`: the location fix with its source, or the unset marker."
+  },
+  "cli.show.gps_datum.gcj02": {
+    "message": "GCJ-02",
+    "context": "GPS datum name in `capsule show`: China's obfuscated datum, stored verbatim and never converted. A standard's name, shown verbatim."
+  },
+  "cli.show.gps_datum.wgs84": {
+    "message": "WGS-84",
+    "context": "GPS datum name in `capsule show`: the near-universal camera datum. A standard's name, shown verbatim."
+  },
+  "cli.show.gps_source.derived": {
+    "message": "derived",
+    "context": "GPS fix source name in `capsule show`: inferred, e.g. from a nearby asset."
+  },
+  "cli.show.gps_source.exif": {
+    "message": "EXIF",
+    "context": "GPS fix source name in `capsule show`: read from the file's own EXIF. EXIF is a standard's name, shown verbatim."
+  },
+  "cli.show.gps_source.manual": {
+    "message": "manual",
+    "context": "GPS fix source name in `capsule show`: entered by a user or supplied by an exporter's record rather than the file's EXIF."
+  },
+  "cli.show.hash": {
+    "message": "  SHA-256:         {value}",
+    "context": "CLI field row of `capsule show`: the original file's SHA-256 content hash in hex. SHA-256 is an algorithm name, shown verbatim."
+  },
+  "cli.show.header": {
+    "message": "Asset {asset_id}",
+    "context": "CLI heading line of `capsule show`, above the field rows. {asset_id} is the asset's UUID."
+  },
+  "cli.show.hidden": {
+    "message": "  Hidden:          {value}",
+    "context": "CLI field row of `capsule show`: whether the asset is hidden from default views (a localized yes/no)."
+  },
+  "cli.show.imported": {
+    "message": "  Imported:        {value}",
+    "context": "CLI field row of `capsule show`: the signed import timestamp (RFC 3339, UTC)."
+  },
+  "cli.show.invalid_selector": {
+    "message": "{selector} is neither an asset id nor a hex prefix of at least {min} characters of a content hash.",
+    "context": "CLI failure detail when the `capsule show` selector is malformed. {min} is the minimum prefix length."
+  },
+  "cli.show.lqip": {
+    "message": "  Placeholder:     {value}",
+    "context": "CLI field row of `capsule show`: whether a low-quality display placeholder (LQIP) is stored — a localized present marker, or the unset marker."
+  },
+  "cli.show.provenance_records": {
+    "message": "  Provenance:      {value} signed record(s)",
+    "context": "CLI field row of `capsule show`: how many signed records the asset's provenance chain holds — the create plus every lifecycle write since (metadata edits, repairs, derivative writes, trash moves)."
+  },
+  "cli.show.rating": {
+    "message": "  Rating:          {value}",
+    "context": "CLI field row of `capsule show`: the star rating, or the unset marker."
+  },
+  "cli.show.stack": {
+    "message": "  Stack:           {value}",
+    "context": "CLI field row of `capsule show`: the asset's stack placement (RAW+JPEG, Live Photo, edited pair), or the unset marker."
+  },
+  "cli.show.stack_role.member": {
+    "message": "member",
+    "context": "Stack role name in `capsule show`: an ordinary stack member."
+  },
+  "cli.show.stack_role.primary": {
+    "message": "primary",
+    "context": "Stack role name in `capsule show`: the stack's representative asset."
+  },
+  "cli.show.stack_role.proxy": {
+    "message": "proxy",
+    "context": "Stack role name in `capsule show`: a proxy or optimized variant."
+  },
+  "cli.show.tags_ai": {
+    "message": "  AI tags:         {value}",
+    "context": "CLI field row of `capsule show`: the AI-suggested tags, comma-separated, or the unset marker."
+  },
+  "cli.show.tags_user": {
+    "message": "  User tags:       {value}",
+    "context": "CLI field row of `capsule show`: the user-authored tags, comma-separated, or the unset marker."
+  },
+  "cli.show.unknown_asset": {
+    "message": "No asset in this library matches {selector}.",
+    "context": "CLI failure detail when the `capsule show` selector (an asset id or a content-hash prefix) matches nothing."
+  },
+  "cli.show.value.dimensions": {
+    "message": "{width}×{height}",
+    "context": "CLI value in the `capsule show` dimensions row. {width} and {height} are pixel counts."
+  },
+  "cli.show.value.gps": {
+    "message": "{lat}, {lon} ({datum}, {source})",
+    "context": "CLI value in the `capsule show` GPS row. {lat}/{lon} are decimal degrees in {datum}, a localized datum name (WGS-84/GCJ-02); {source} is a localized fix source (EXIF/manual/derived)."
+  },
+  "cli.show.value.list_separator": {
+    "message": ", ",
+    "context": "CLI separator `capsule show` puts between list items (tags). Locales with their own enumeration comma (e.g. CJK 、) translate it."
+  },
+  "cli.show.value.no": {
+    "message": "no",
+    "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
+  },
+  "cli.show.value.present": {
+    "message": "present",
+    "context": "CLI value in the `capsule show` placeholder row when a display placeholder is stored."
+  },
+  "cli.show.value.rating": {
+    "message": "{stars}/5",
+    "context": "CLI value in the `capsule show` rating row. {stars} is 0–5."
+  },
+  "cli.show.value.stack": {
+    "message": "{stack_id} ({role})",
+    "context": "CLI value in the `capsule show` stack row. {stack_id} is the stack's UUID; {role} is a localized role name (primary/member/proxy)."
+  },
+  "cli.show.value.unset": {
+    "message": "(unset)",
+    "context": "CLI marker `capsule show` prints in place of a value the sidecar does not carry."
+  },
+  "cli.show.value.yes": {
+    "message": "yes",
+    "context": "CLI boolean value in `capsule show` rows (hidden, in trash)."
   },
   "cli.sync.complete": {
     "message": "Sync complete: applied {applied} change(s) across {albums} album(s) in {pages} page(s).",

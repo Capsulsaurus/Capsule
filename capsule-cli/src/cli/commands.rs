@@ -127,6 +127,20 @@ pub(crate) enum Commands {
         #[arg(long, value_name = "DAYS", default_value_t = crate::cull::DEFAULT_RETAIN_DAYS)]
         retain_days: i64,
     },
+    /// Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps
+    Show {
+        /// The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256
+        /// content hash — the same digest `shasum -a 256` prints for the source file
+        #[arg(value_name = "ASSET")]
+        asset: String,
+        /// Path to the Capsule library
+        #[arg(long, value_name = "PATH")]
+        library: PathBuf,
+        /// Read the library passphrase from stdin instead of prompting, so the command
+        /// works in scripts and CI where there is no terminal.
+        #[arg(long)]
+        passphrase_stdin: bool,
+    },
     /// Manage the local library
     Library {
         #[command(subcommand)]

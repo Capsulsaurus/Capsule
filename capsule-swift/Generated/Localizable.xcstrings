@@ -30651,6 +30651,46 @@
         }
       }
     },
+    "cli.help.show.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.show.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
     "cli.help.status.about": {
       "localizations": {
         "en": {
@@ -31409,6 +31449,386 @@
           "stringUnit": {
             "state": "translated",
             "value": "Everything in this library is already on the server."
+          }
+        }
+      }
+    },
+    "cli.show.album": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Album:           %@"
+          }
+        }
+      }
+    },
+    "cli.show.ambiguous": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ matches %2$@ assets; give more of the hash, or the full asset id."
+          }
+        }
+      }
+    },
+    "cli.show.caption": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Caption:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.captured": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Captured:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.content_type": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Content type:    %@"
+          }
+        }
+      }
+    },
+    "cli.show.cull": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Cull flag:       %@"
+          }
+        }
+      }
+    },
+    "cli.show.dimensions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Dimensions:      %@"
+          }
+        }
+      }
+    },
+    "cli.show.failed": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show failed: %@"
+          }
+        }
+      }
+    },
+    "cli.show.gps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  GPS:             %@"
+          }
+        }
+      }
+    },
+    "cli.show.gps_datum.gcj02": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "GCJ-02"
+          }
+        }
+      }
+    },
+    "cli.show.gps_datum.wgs84": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "WGS-84"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.derived": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "derived"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.exif": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "EXIF"
+          }
+        }
+      }
+    },
+    "cli.show.gps_source.manual": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "manual"
+          }
+        }
+      }
+    },
+    "cli.show.hash": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  SHA-256:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.header": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asset %@"
+          }
+        }
+      }
+    },
+    "cli.show.hidden": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Hidden:          %@"
+          }
+        }
+      }
+    },
+    "cli.show.imported": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Imported:        %@"
+          }
+        }
+      }
+    },
+    "cli.show.invalid_selector": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ is neither an asset id nor a hex prefix of at least %2$@ characters of a content hash."
+          }
+        }
+      }
+    },
+    "cli.show.lqip": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Placeholder:     %@"
+          }
+        }
+      }
+    },
+    "cli.show.provenance_records": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Provenance:      %@ signed record(s)"
+          }
+        }
+      }
+    },
+    "cli.show.rating": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Rating:          %@"
+          }
+        }
+      }
+    },
+    "cli.show.stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  Stack:           %@"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.member": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "member"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.primary": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "primary"
+          }
+        }
+      }
+    },
+    "cli.show.stack_role.proxy": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "proxy"
+          }
+        }
+      }
+    },
+    "cli.show.tags_ai": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  AI tags:         %@"
+          }
+        }
+      }
+    },
+    "cli.show.tags_user": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "  User tags:       %@"
+          }
+        }
+      }
+    },
+    "cli.show.unknown_asset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No asset in this library matches %@."
+          }
+        }
+      }
+    },
+    "cli.show.value.dimensions": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@×%2$@"
+          }
+        }
+      }
+    },
+    "cli.show.value.gps": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@, %2$@ (%3$@, %4$@)"
+          }
+        }
+      }
+    },
+    "cli.show.value.list_separator": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ", "
+          }
+        }
+      }
+    },
+    "cli.show.value.no": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "no"
+          }
+        }
+      }
+    },
+    "cli.show.value.present": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "present"
+          }
+        }
+      }
+    },
+    "cli.show.value.rating": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@/5"
+          }
+        }
+      }
+    },
+    "cli.show.value.stack": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ (%2$@)"
+          }
+        }
+      }
+    },
+    "cli.show.value.unset": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "(unset)"
+          }
+        }
+      }
+    },
+    "cli.show.value.yes": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "yes"
           }
         }
       }

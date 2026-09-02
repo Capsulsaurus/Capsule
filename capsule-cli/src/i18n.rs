@@ -104,4 +104,45 @@ pub mod keys {
     pub const CULL_FLAG_PICK: &str = "cli.cull.flag.pick";
     pub const CULL_FLAG_NEUTRAL: &str = "cli.cull.flag.neutral";
     pub const CULL_FLAG_REJECT: &str = "cli.cull.flag.reject";
+    // `capsule show` — the signed-sidecar read surface (slice `S-B18`). One row key per
+    // field, each taking the rendered `{value}`; the `value.*` keys spell the composite and
+    // absent values that go into a row.
+    pub const SHOW_HEADER: &str = "cli.show.header";
+    pub const SHOW_ALBUM: &str = "cli.show.album";
+    pub const SHOW_CONTENT_TYPE: &str = "cli.show.content_type";
+    pub const SHOW_HASH: &str = "cli.show.hash";
+    pub const SHOW_DIMENSIONS: &str = "cli.show.dimensions";
+    pub const SHOW_CAPTURED: &str = "cli.show.captured";
+    pub const SHOW_IMPORTED: &str = "cli.show.imported";
+    pub const SHOW_CAPTION: &str = "cli.show.caption";
+    pub const SHOW_RATING: &str = "cli.show.rating";
+    pub const SHOW_TAGS_USER: &str = "cli.show.tags_user";
+    pub const SHOW_TAGS_AI: &str = "cli.show.tags_ai";
+    pub const SHOW_GPS: &str = "cli.show.gps";
+    pub const SHOW_CULL: &str = "cli.show.cull";
+    pub const SHOW_HIDDEN: &str = "cli.show.hidden";
+    pub const SHOW_STACK: &str = "cli.show.stack";
+    pub const SHOW_LQIP: &str = "cli.show.lqip";
+    pub const SHOW_PROVENANCE_RECORDS: &str = "cli.show.provenance_records";
+    pub const SHOW_VALUE_UNSET: &str = "cli.show.value.unset";
+    pub const SHOW_VALUE_YES: &str = "cli.show.value.yes";
+    pub const SHOW_VALUE_NO: &str = "cli.show.value.no";
+    pub const SHOW_VALUE_PRESENT: &str = "cli.show.value.present";
+    pub const SHOW_VALUE_LIST_SEPARATOR: &str = "cli.show.value.list_separator";
+    pub const SHOW_GPS_DATUM_WGS84: &str = "cli.show.gps_datum.wgs84";
+    pub const SHOW_GPS_DATUM_GCJ02: &str = "cli.show.gps_datum.gcj02";
+    pub const SHOW_VALUE_DIMENSIONS: &str = "cli.show.value.dimensions";
+    pub const SHOW_VALUE_RATING: &str = "cli.show.value.rating";
+    pub const SHOW_VALUE_GPS: &str = "cli.show.value.gps";
+    pub const SHOW_VALUE_STACK: &str = "cli.show.value.stack";
+    pub const SHOW_GPS_SOURCE_EXIF: &str = "cli.show.gps_source.exif";
+    pub const SHOW_GPS_SOURCE_MANUAL: &str = "cli.show.gps_source.manual";
+    pub const SHOW_GPS_SOURCE_DERIVED: &str = "cli.show.gps_source.derived";
+    pub const SHOW_STACK_ROLE_PRIMARY: &str = "cli.show.stack_role.primary";
+    pub const SHOW_STACK_ROLE_MEMBER: &str = "cli.show.stack_role.member";
+    pub const SHOW_STACK_ROLE_PROXY: &str = "cli.show.stack_role.proxy";
+    pub const SHOW_UNKNOWN_ASSET: &str = "cli.show.unknown_asset";
+    pub const SHOW_AMBIGUOUS: &str = "cli.show.ambiguous";
+    pub const SHOW_INVALID_SELECTOR: &str = "cli.show.invalid_selector";
+    pub const SHOW_FAILED: &str = "cli.show.failed";
 }

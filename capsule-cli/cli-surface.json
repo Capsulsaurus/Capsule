@@ -508,6 +508,44 @@
       "name": "reset"
     },
     {
+      "about": "Show what an imported asset's signed sidecar records: caption, rating, tags, GPS, timestamps",
+      "args": [
+        {
+          "help": "The asset to show: its id, or a prefix of at least 8 hex characters of its SHA-256 content hash — the same digest `shasum -a 256` prints for the source file",
+          "id": "asset",
+          "positional": true,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "ASSET"
+          ]
+        },
+        {
+          "help": "Path to the Capsule library",
+          "id": "library",
+          "long": "library",
+          "positional": false,
+          "repeatable": false,
+          "required": true,
+          "takes_value": true,
+          "value_names": [
+            "PATH"
+          ]
+        },
+        {
+          "help": "Read the library passphrase from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+          "id": "passphrase_stdin",
+          "long": "passphrase-stdin",
+          "positional": false,
+          "repeatable": false,
+          "required": false,
+          "takes_value": false
+        }
+      ],
+      "name": "show"
+    },
+    {
       "about": "Show current status",
       "name": "status"
     },

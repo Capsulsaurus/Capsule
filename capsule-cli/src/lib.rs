@@ -38,6 +38,7 @@ pub mod demo;
 pub mod i18n;
 pub mod remote;
 pub mod session;
+pub mod show;
 pub mod status;
 pub mod syncstore;
 pub mod utils;
@@ -502,6 +503,30 @@ async fn dispatch(cli: Cli) -> Result<()> {
                     return Err(eyre!(
                         "{}",
                         bundle.format(keys::CULL_FAILED, &[("reason", Value::Str(&reason))])
+                    ));
+                }
+            }
+        }
+
+        // ── Show ──────────────────────────────────────────────────────────
+        Commands::Show {
+            asset,
+            library,
+            passphrase_stdin,
+        } => {
+            let bundle = i18n::cli_bundle();
+            let ws = open_workspace(&library, passphrase_stdin)?;
+            let state = show::resolve(&ws, &asset).and_then(|id| {
+                ws.asset(&id)
+                    .ok_or_else(|| show::ShowError::UnknownAsset(id.to_string()))
+            });
+            match state {
+                Ok(state) => print!("{}", show::render(&bundle, &show::collect(state))),
+                Err(error) => {
+                    let reason = show::describe_error(&bundle, &error);
+                    return Err(eyre!(
+                        "{}",
+                        bundle.format(keys::SHOW_FAILED, &[("reason", Value::Str(&reason))])
                     ));
                 }
             }
