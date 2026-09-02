@@ -327,24 +327,25 @@ fn an_import_is_reconstructed_by_a_later_process_from_disk_alone() {
     // ── The signed derivatives, in `media/{YYYY}/{YYYY-MM}/derivatives/`. ──
     //
     // The fixture is 8×8, well inside the thumbnail tier's 256 px cap, so the tier is satisfied
-    // by the signed `format = "original"` sentinel over the source bytes — the contract's
-    // redundant-derivative rule — under the source's own extension.
+    // by the signed `format = "original"` sentinel — the contract's redundant-derivative rule.
+    // A sentinel *references* the original, so what lands is its signed manifest and no bytes:
+    // copying them would put this fixture's EXIF, GPS fix included, into a derivative blob.
     let derivatives = bucket.join("derivatives");
-    let sentinel = derivatives.join(format!("{simple}.thumbnail.jpg"));
-    assert!(
-        sentinel.is_file(),
-        "a thumbnail-tier derivative must exist in {}",
-        derivatives.display()
-    );
-    assert_eq!(
-        std::fs::read(&sentinel).expect("read the thumbnail-tier derivative"),
-        fx.image,
-        "the `original` sentinel references the source bytes rather than re-encoding them"
-    );
     let bundle = derivatives.join(format!("{simple}.derivatives.cbor"));
     assert!(
         bundle.is_file(),
-        "the derivative bytes are unusable without their signed manifest bundle"
+        "a signed derivative-manifest bundle must exist in {}",
+        derivatives.display()
+    );
+    let derivative_files: Vec<String> = std::fs::read_dir(&derivatives)
+        .expect("read the derivatives directory")
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        derivative_files,
+        vec![format!("{simple}.derivatives.cbor")],
+        "the sentinel writes its manifest and no derivative bytes"
     );
 
     // ── The signed sidecar, decoded from disk. ──

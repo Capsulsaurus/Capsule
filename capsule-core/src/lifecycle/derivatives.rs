@@ -263,21 +263,32 @@ impl Workspace {
 
         let mut manifests = Vec::with_capacity(derivatives.len());
         for derivative in derivatives {
-            // The `original` sentinel references the source asset, so its bytes carry the
-            // source's own extension.
-            let format_ext = derivative.format.extension().unwrap_or(asset.ext.as_str());
-            let path = dir.join(format!(
-                "{stem}.{}.{format_ext}",
-                derivative.tier.role_name()
-            ));
-            if let Err(error) = fs::write(&path, &derivative.bytes) {
-                tracing::warn!(
-                    asset_id = %asset.asset_id,
-                    path = %path.display(),
-                    %error,
-                    "derivatives: could not write a derivative; skipping it"
+            // The `original` sentinel has no bytes of its own: its manifest *references* the
+            // original, whose content address it signs. Writing a byte-for-byte copy under a
+            // thumbnail's name would duplicate a file two directories up and re-expose the
+            // original's EXIF — GPS included — as a derivative, where a re-encoded thumbnail is
+            // metadata-free by construction. Its manifest still goes into the bundle: that
+            // signed marker is the difference between "the original *is* the thumbnail" and
+            // "the thumbnail is missing, rebuild it".
+            if let Some(format_ext) = derivative.format.extension() {
+                let path = dir.join(format!(
+                    "{stem}.{}.{format_ext}",
+                    derivative.tier.role_name()
+                ));
+                if let Err(error) = fs::write(&path, &derivative.bytes) {
+                    tracing::warn!(
+                        asset_id = %asset.asset_id,
+                        path = %path.display(),
+                        %error,
+                        "derivatives: could not write a derivative; skipping it"
+                    );
+                    continue;
+                }
+            } else {
+                debug_assert!(
+                    derivative.bytes.is_empty(),
+                    "only the byte-free `original` sentinel has no extension"
                 );
-                continue;
             }
             manifests.push(derivative.manifest.clone());
         }
@@ -543,7 +554,7 @@ mod tests {
 
         let dir = derivatives_dir(lib.path(), receipt.asset_id);
         let stem = receipt.asset_id.simple().to_string();
-        let thumb = dir.join(format!("{stem}.thumbnail.webp"));
+        let thumb = dir.join(format!("{stem}.thumbnail.jxl"));
         let bundle_path = dir.join(format!("{stem}.derivatives.cbor"));
         assert!(thumb.is_file(), "thumbnail bytes at {}", thumb.display());
         assert!(bundle_path.is_file(), "a manifest bundle beside them");
@@ -561,22 +572,28 @@ mod tests {
         assert_eq!(core.source_asset_id, receipt.asset_id);
         assert_eq!(
             verify_still_format(&manifests[0]),
-            Ok(Some(DerivativeFormat::WebP)),
+            Ok(Some(DerivativeFormat::Jxl)),
             "the persisted format is inside the closed set"
         );
 
-        // The bytes really are a 256 px WebP.
+        // The bytes really are a 256 px JXL.
         let decoded = crate::media::RawshiftDecoder
-            .decode(&bytes, "webp")
+            .decode(&bytes, "jxl")
             .expect("the persisted thumbnail decodes");
         assert_eq!((decoded.width(), decoded.height()), (256, 192));
     }
 
-    /// A still already inside the tier cap gets the signed `original` sentinel: the manifest
-    /// says `original` and the persisted bytes are the source's own, under the source's
-    /// extension. Distinct from an absent derivative, which means "rebuild me".
+    /// A still already inside the tier cap gets the signed `original` sentinel: a manifest that
+    /// says `original` and content-addresses the source, and **no derivative bytes on disk**.
+    ///
+    /// The absent bytes are the point, and they are what "the tier *references* the original"
+    /// means. Writing a copy would put the original — EXIF and GPS intact — in
+    /// `derivatives/{uuid}.thumbnail.{ext}` and therefore into the derivative blob of the upload
+    /// bundle, which is the one place a re-encoded thumbnail is metadata-free by construction.
+    /// The signed marker is still there, so this stays distinct from an absent derivative, which
+    /// means "rebuild me".
     #[test]
-    fn a_small_still_persists_the_original_sentinel() {
+    fn a_small_still_persists_the_original_sentinel_without_copying_it() {
         let lib = TempDir::new().unwrap();
         let src = TempDir::new().unwrap();
         let (mut ws, album) = workspace(lib.path());
@@ -591,17 +608,33 @@ mod tests {
 
         let dir = derivatives_dir(lib.path(), receipt.asset_id);
         let stem = receipt.asset_id.simple().to_string();
-        let sentinel = dir.join(format!("{stem}.thumbnail.png"));
-        assert!(
-            sentinel.is_file(),
-            "the sentinel reuses the source extension"
+
+        let files: Vec<String> = fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            files,
+            vec![format!("{stem}.derivatives.cbor")],
+            "the sentinel writes its manifest and no derivative bytes"
         );
-        assert_eq!(fs::read(&sentinel).unwrap(), original);
 
         let manifests: Vec<DerivativeManifest> =
             cbor::from_slice(&fs::read(dir.join(format!("{stem}.derivatives.cbor"))).unwrap())
                 .expect("the bundle decodes");
+        assert_eq!(manifests.len(), 1);
         assert_eq!(manifests[0].core.format, "original");
+        assert_eq!(
+            manifests[0].core.ciphertext_hash,
+            hash::hash_bytes(&original),
+            "the manifest content-addresses the original it references"
+        );
+        assert_eq!(
+            verify_still_format(&manifests[0]),
+            Ok(Some(DerivativeFormat::Original)),
+            "the sentinel is inside the closed set"
+        );
     }
 
     /// A format with no codec here, and bytes that are no still at all: both import as signed,

@@ -3384,17 +3384,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libwebp-sys"
-version = "0.14.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b3a87b44e34d17161e4f17d92a463d596cb13825dcd1758ed18fd3a721e189c"
-dependencies = [
- "cc",
- "glob",
- "pkg-config",
-]
-
-[[package]]
 name = "linux-raw-sys"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4661,7 +4650,6 @@ dependencies = [
  "img-parts",
  "jpeg-encoder",
  "jxl-oxide",
- "libwebp-sys",
  "little_exif",
  "rawshift-core",
  "rayon",
@@ -4670,6 +4658,7 @@ dependencies = [
  "tracing",
  "zune-core",
  "zune-jpeg",
+ "zune-jpegxl",
  "zune-png",
 ]
 
@@ -7807,6 +7796,15 @@ name = "zune-jpeg"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27bc9d5b815bc103f142aa054f561d9187d191692ec7c2d1e2b4737f8dbd7296"
+dependencies = [
+ "zune-core",
+]
+
+[[package]]
+name = "zune-jpegxl"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cba11ecd07cc23351500e840ae03841b7e4997923ec8e4832ee3ae199ea0b6b4"
 dependencies = [
  "zune-core",
 ]

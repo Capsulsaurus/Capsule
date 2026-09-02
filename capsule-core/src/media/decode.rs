@@ -69,7 +69,18 @@ pub struct MediaMetadata {
     pub orientation: Option<u16>,
     /// Bits per channel, where the header exposes it cheaply.
     pub bit_depth: Option<u8>,
-    /// The source colour space, mapped onto the gamut [`crate::lqip::Lqip::encode`] takes.
+    /// The gamut [`crate::lqip::Lqip::encode`] is told to interpret the samples in.
+    ///
+    /// **Always [`Gamut::Srgb`] in this build, and that is upstream's doing rather than a
+    /// choice made here.** `probe_standard_image` hard-codes `ColorSpace::Srgb` into every
+    /// `ImageProbe` it returns, and `decode_standard_image` likewise tags every decoded frame
+    /// sRGB without converting — so `rawshift-image` 0.1.1 reports no source gamut for a
+    /// standard format at all, whatever the file's ICC profile says. The consequence is a
+    /// fidelity limitation, not a correctness bug: a Display P3 source gets a placeholder
+    /// interpreted as sRGB, i.e. slightly under-saturated, which is the direction slice `S-B14`
+    /// chose when it had to pick one. This module's private `gamut_of` is kept as the single
+    /// mapping point for when
+    /// the crate does start reporting it.
     pub gamut: Gamut,
 }
 
@@ -237,13 +248,29 @@ pub fn decode_guarded(
     bytes: &[u8],
     ext: &str,
 ) -> Result<DecodedImage, MediaError> {
-    if let Ok(result) = catch_unwind(AssertUnwindSafe(|| decoder.decode(bytes, ext))) {
+    guarded("decode", || decoder.decode(bytes, ext))
+}
+
+/// Run any fallible step of the still pipeline behind the same unwind boundary.
+///
+/// Exported because `decode` is not the only third-party code the import path runs over pixels:
+/// the placeholder goes through `chromahash` (also pre-1.0) and the derivative through
+/// `libwebp`, and the module's promise is that *none* of them can abort an import — not that the
+/// decoder specifically cannot. `stage` names the step in the warning so a caught panic is
+/// attributable.
+///
+/// `AssertUnwindSafe` is sound for the callers here: each closure borrows shared slices and
+/// stateless values, so a caught unwind cannot leave a Capsule-owned invariant torn.
+pub fn guarded<T>(
+    stage: &'static str,
+    step: impl FnOnce() -> Result<T, MediaError>,
+) -> Result<T, MediaError> {
+    if let Ok(result) = catch_unwind(AssertUnwindSafe(step)) {
         return result;
     }
     tracing::warn!(
-        bytes = bytes.len(),
-        ext,
-        "media: a decoder panicked; the original is imported without a derivative"
+        stage,
+        "media: a third-party codec panicked; the original is imported without a derivative"
     );
     Err(MediaError::DecoderPanic)
 }
@@ -259,10 +286,14 @@ fn gate(bytes: &[u8], ext: &str, op: FormatOp) -> Result<StillFormat, MediaError
     Ok(format)
 }
 
-/// Map Capsule's format onto the crate's. Total by construction over the decodable set, which
-/// is the only set that reaches here — [`gate`] rejects the rest, and every non-decodable
-/// variant is a format the crate either cannot name without a feature (HEIC) or cannot decode
-/// as a standard image at all (the RAW families).
+/// Map Capsule's format onto the crate's.
+///
+/// Only the decodable set reaches here through [`gate`], which refuses the rest first — of the
+/// grouped arms below, `Tiff` is the sole reachable one. The unreachable variants are still
+/// mapped to the container the crate would actually see (a TIFF-based RAW *is* a TIFF to it, and
+/// a CR3 is an ISO-BMFF file it can only reach through its HEIC arm) rather than panicking, so a
+/// future `is_decodable` widening that forgets this table degrades to a decode error instead of
+/// aborting an import.
 fn standard_format(format: StillFormat) -> StandardFormat {
     match format {
         StillFormat::Jpeg => StandardFormat::Jpeg,
@@ -272,12 +303,8 @@ fn standard_format(format: StillFormat) -> StandardFormat {
         StillFormat::Gif => StandardFormat::Gif,
         StillFormat::Ppm => StandardFormat::Ppm,
         StillFormat::Avif => StandardFormat::Avif,
-        // The container, for the formats whose container is all `rawshift-image` models: the
-        // TIFF-based RAW families are a TIFF to it, and Canon's CR3 is an ISO-BMFF file it can
-        // only reach through its HEIC arm. Every one of these is unreachable through `gate`,
-        // which refuses a non-decodable format before this runs. Mapped to the truth rather
-        // than panicking so a future `is_decodable` widening that forgets this table degrades
-        // to a decode error instead of aborting an import.
+        // `Tiff` is reachable and is the reason this arm exists; the RAW families ride along
+        // because a TIFF-based RAW is a TIFF to the crate.
         StillFormat::Tiff
         | StillFormat::Arw
         | StillFormat::Cr2
@@ -304,6 +331,11 @@ fn orientation_of(bytes: &[u8], format: StillFormat) -> Option<u16> {
 /// `LinearSrgb` and `Unknown` both become [`Gamut::Srgb`]: `Linear` names a transfer function
 /// rather than a gamut, and sRGB primaries are the only safe assumption for an untagged source
 /// (over-saturating is worse than under-saturating — the resolution slice `S-B14` recorded).
+///
+/// **The wide-gamut arms are unreachable today**, because `probe_standard_image` hard-codes
+/// `ColorSpace::Srgb` for every format (see [`MediaMetadata::gamut`]). They are here as the one
+/// place that has to change when the crate starts reporting a source gamut, rather than as a
+/// claim that it already does.
 fn gamut_of(color_space: ColorSpace) -> Gamut {
     match color_space {
         ColorSpace::DisplayP3 => Gamut::DisplayP3,

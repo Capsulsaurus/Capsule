@@ -312,7 +312,7 @@ impl Workspace {
     /// import executor drives (S-B2): every imported member lands as a signed `SidecarV1` +
     /// manifest + append-only provenance, self-verified through [`verify_asset`], and — when the
     /// still decodes — with a chromahash `lqip` in the sidecar and signed thumbnail derivatives
-    /// on disk ([`prepare_still`](Self::prepare_still), slices `S-B1`/`S-B14`).
+    /// on disk (the private `prepare_still`, slices `S-B1`/`S-B14`).
     ///
     /// Returns a [`SignedImport`]: the asset id, the
     /// [`DerivativeStatus`](super::DerivativeStatus) saying whether derivatives were generated

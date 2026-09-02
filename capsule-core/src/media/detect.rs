@@ -3,12 +3,17 @@
 //! # Why Capsule sniffs rather than delegating
 //!
 //! `rawshift-image` ships `detect_standard_format`, and Capsule deliberately does not use it as
-//! the primary table: its HEIC arm is `#[cfg(feature = "heic-decode")]`, so a build without the
-//! HEIC codec cannot *recognise* HEIC either. That would make the typed refusal for exactly the
-//! formats this build cannot decode depend on whether it can decode them — a HEIC would arrive
-//! as "not a still image" instead of "a still image with no codec here", which is the difference
-//! between a reportable, backfillable gap and an apparent non-image. Capsule's reference library
-//! is HEIC end to end, so that distinction is the whole point of slice `S-B13`.
+//! the primary table. Its `heic | heis | hevc | hevx` arm is `#[cfg(feature = "heic-decode")]`,
+//! so a build without the HEIC codec cannot *recognise* an Apple HEIC either — its major brand
+//! is `heic`. That would make the typed refusal for exactly the formats this build cannot decode
+//! depend on whether it can decode them: a HEIC would arrive as "not a still image" instead of
+//! "a still image with no codec here", which is the difference between a reportable,
+//! backfillable gap and an apparent non-image. Capsule's reference library is HEIC end to end,
+//! so that distinction is the whole point of slice `S-B13`.
+//!
+//! Two smaller reasons ride along, both about the brand table rather than a feature: the crate
+//! reads the generic HEIF brand `mif1` as **AVIF**, and it does not recognise `heix` or `msf1`
+//! under any configuration.
 //!
 //! The two tables are held together by a test rather than by hope:
 //! `capsule-core`'s `still_format_agrees_with_rawshift_detection` asserts that for every format
@@ -31,10 +36,18 @@ use std::fmt;
 
 /// The decode budget in pixels, refused **before** the decoder allocates.
 ///
-/// 256 Mpx sits well above a 100 Mpx medium-format frame and well below an allocation bomb:
-/// `rawshift-image` decodes to interleaved RGB `u16`, so this ceiling caps the decoder's own
-/// buffer at ~1.5 GB and Capsule's RGBA8 copy at ~1 GB.
-pub const MAX_DECODE_PIXELS: u64 = 256_000_000;
+/// **128 Mpx**, which admits every real camera — a 102 Mpx medium-format frame has ~25%
+/// headroom — while bounding what one still can ask the process for.
+///
+/// The bound is worth stating honestly, because the naive figure is a large understatement. A
+/// frame at this ceiling costs, in sequence and with overlap: 0.77 GB for `zune-png`'s `u16`
+/// samples, another 0.77 GB when `decode_png` reallocates to drop the alpha channel, 0.51 GB for
+/// Capsule's RGBA8 copy, and 0.77 GB again when the encode path widens a tier-sized frame back
+/// to RGB `u16`. Peak is on the order of **2.5 GB**, not the ~1 GB a single buffer suggests.
+/// Since `media` is implied by `native`, that peak happens on a phone as well as a workstation,
+/// where it is an OOM kill rather than an error — which is the reason this is not simply set as
+/// high as an allocation bomb would require.
+pub const MAX_DECODE_PIXELS: u64 = 128_000_000;
 
 /// The closed set of still-image formats Capsule models.
 ///
@@ -49,7 +62,13 @@ pub enum StillFormat {
     Jpeg,
     /// PNG. Decoded by `zune-png`; alpha is flattened at the decode boundary.
     Png,
-    /// WebP. Decoded and encoded by `libwebp`; the derivative format this build produces.
+    /// WebP. **Recognised, not decoded**, and unusually the codec exists — it just does not
+    /// compile. `rawshift-image`'s WebP module passes `*const i8` where `libwebp-sys` 0.14.4
+    /// declares `*const c_char`, and `c_char` is `u8` on aarch64, so the crate's `webp` feature
+    /// is an E0308 on every 64-bit ARM target — which is every mobile target Capsule ships. The
+    /// module is compiled by decode *or* encode, so there is no decode-only escape. Enabling it
+    /// would mean thumbnails on desktop and none on a phone; recognising and deferring it is the
+    /// honest outcome until upstream fixes the cast.
     WebP,
     /// JPEG XL. Decoded by `jxl-oxide`. No lossy encoder without C libjxl.
     Jxl,
@@ -88,7 +107,6 @@ pub enum StillFormat {
 pub const SUPPORTED_STILL_FORMATS: &[StillFormat] = &[
     StillFormat::Jpeg,
     StillFormat::Png,
-    StillFormat::WebP,
     StillFormat::Jxl,
     StillFormat::Tiff,
     StillFormat::Gif,

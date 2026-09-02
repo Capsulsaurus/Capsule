@@ -24,9 +24,9 @@
 //!
 //! # What this build can and cannot do
 //!
-//! Every gap is a typed [`MediaError::UnsupportedFormat`] or a recorded per-format deferral,
-//! never a silent absence and never a panic (slice `S-B13`). Decode covers JPEG, PNG, JXL,
-//! TIFF, GIF and WebP; encode covers WebP alone. HEIC, AVIF and the RAW families sniff
+//! Every gap is a typed [`UnsupportedFormat`](MediaError::UnsupportedFormat) or a recorded
+//! per-format deferral — never a silent absence, and never a panic (slice `S-B13`). Decode
+//! covers JPEG, PNG, JXL, TIFF, GIF and WebP; encode covers WebP alone. HEIC, AVIF and the RAW families sniff
 //! correctly and refuse to decode, because their backends need system libraries (libheif,
 //! libdav1d) or an assembler (nasm) that the cross and cargo-ndk builds do not have.
 //!
@@ -38,7 +38,9 @@ mod detect;
 mod error;
 mod resize;
 
-pub use self::decode::{DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded};
+pub use self::decode::{
+    DecodedImage, Decoder, MediaMetadata, RawshiftDecoder, decode_guarded, guarded,
+};
 pub use self::derivative::{
     DerivativeContext, DerivativeFormat, DerivativeTier, GeneratedDerivative, StillDerivatives,
     generate_still_derivatives, verify_still_format,

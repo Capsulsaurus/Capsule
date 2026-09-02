@@ -9,9 +9,20 @@
 //! over the same source must produce the same bytes. That rules out floating-point accumulation
 //! whose order or width could differ between builds and targets, and it rules out any resampler
 //! with platform-tuned SIMD paths that are not required to be bit-identical. What is left is a
-//! box filter accumulated in `u32` and divided by an exact sample count: deterministic on every
-//! target, and the right filter for a large downscale anyway (a box average over the full source
-//! rect is alias-free, where a bilinear tap would ignore most of the source pixels).
+//! box filter accumulated in integers and divided by an exact sample count: deterministic on
+//! every target, and the right filter for a large downscale anyway (a box average over the full
+//! source rect is alias-free, where a bilinear tap would ignore most of the source pixels).
+//!
+//! Every product here is computed in `u64`, never in `usize`, because two of the CI-gated
+//! targets (`armv7-linux-androideabi`, `i686-linux-android`) are 32-bit and both the
+//! destination-to-source boundary and the channel accumulator reach past `u32` for shapes this
+//! function accepts.
+//!
+//! Determinism here is **necessary, not sufficient**, and the distinction matters: the bytes a
+//! manifest actually signs come out of libwebp, and a libwebp version bump can change them for
+//! the same input. That is fine — each generation signs the bytes it produced and manifests of a
+//! role chain in order — but it means "the resample is deterministic" buys reproducibility of
+//! *this* step, not a stable content address across toolchains.
 //!
 //! Upscaling is not a thing this performs: a tier only ever caps a long edge, and a source
 //! already inside the cap takes the `format = "original"` sentinel path instead
@@ -20,10 +31,16 @@
 use crate::lqip::RgbaImage;
 
 /// The dimensions a `width` x `height` frame takes when its long edge is capped at
-/// `max_long_edge`, preserving aspect ratio and never returning a zero dimension.
+/// `max_long_edge`, preserving aspect ratio.
 ///
-/// Returns the input unchanged when it already fits, so a caller can compare and skip.
+/// Returns the input unchanged when it already fits, so a caller can compare and skip — and
+/// unchanged for an empty frame, which is the one case where "never zero" cannot hold: there is
+/// no non-degenerate size for a frame with no pixels, and inventing one would have
+/// [`downscale_rgba8`] read a buffer that has nothing in it.
 pub fn capped_dimensions(width: u32, height: u32, max_long_edge: u32) -> (u32, u32) {
+    if width == 0 || height == 0 {
+        return (width, height);
+    }
     let cap = max_long_edge.max(1);
     let long_edge = width.max(height);
     if long_edge <= cap {
@@ -42,9 +59,9 @@ pub fn capped_dimensions(width: u32, height: u32, max_long_edge: u32) -> (u32, u
 
 /// Downscale packed RGBA8 so its long edge is at most `max_long_edge`.
 ///
-/// A frame already within the cap is returned unchanged (cloned), which is what makes this safe
-/// to call unconditionally. Deterministic: identical input yields byte-identical output on every
-/// target.
+/// A frame already within the cap — or an empty one — is returned unchanged (cloned), which is
+/// what makes this safe to call unconditionally. Deterministic: identical input yields
+/// byte-identical output on every target.
 pub fn downscale_rgba8(source: &RgbaImage, max_long_edge: u32) -> RgbaImage {
     let (dst_w, dst_h) = capped_dimensions(source.width, source.height, max_long_edge);
     if (dst_w, dst_h) == (source.width, source.height) {
@@ -52,7 +69,9 @@ pub fn downscale_rgba8(source: &RgbaImage, max_long_edge: u32) -> RgbaImage {
     }
 
     let (src_w, src_h) = (source.width as usize, source.height as usize);
-    if source.rgba.len() != src_w * src_h * 4 {
+    // `u64`, not `usize`: on a 32-bit target `w * h * 4` overflows above ~1 Gpx, and the whole
+    // point of this branch is to be reached rather than to panic on its own arithmetic.
+    if source.rgba.len() as u64 != u64::from(source.width) * u64::from(source.height) * 4 {
         // Defensive: this is a `pub` entry point and the very next thing it does is index the
         // buffer by those dimensions. Every in-tree caller passes a `DecodedImage`, whose
         // invariant this is, so a mismatch is a bug in a *new* caller — reported and returned

@@ -21,7 +21,7 @@ use rawshift_image::core::metadata::{ImageInfo, ImageMetadata, URational};
 use rawshift_image::core::{BitDepth, MetadataEmbedOptions};
 use rawshift_image::formats::encode_rgb_image_to_vec;
 use rawshift_image::formats::export::{
-    CommonEncodeOptions, EncodeOptions, JpegEncEncodeConfig, LibwebpEncodeConfig, WebPMode,
+    CommonEncodeOptions, EncodeOptions, JpegEncEncodeConfig, ZuneJxlEncodeConfig,
     ZunePngEncodeConfig,
 };
 use uuid::Uuid;
@@ -174,17 +174,35 @@ fn png_bytes(frame: &RgbaImage) -> Vec<u8> {
         .expect("the fixture PNG encodes")
 }
 
-/// Encode a frame as a lossless WebP with no metadata.
-fn webp_bytes(frame: &RgbaImage) -> Vec<u8> {
-    let options = EncodeOptions::WebpLibwebp(LibwebpEncodeConfig {
-        common: common(MetadataEmbedOptions::none()),
-        mode: WebPMode::Lossless,
-        quality: 100.0,
-        method: 4,
-        near_lossless: 100,
+/// A bare 12-byte RIFF/WEBP header.
+///
+/// A *header*, not an encode, because this build has no WebP codec at all: `rawshift-image`'s
+/// WebP module does not compile for aarch64 (`*const i8` against `libwebp-sys`'s `*const
+/// c_char`), so the crate's `webp` feature is off in both directions. Twelve bytes is all a
+/// detection case needs, and there is nothing to decode.
+fn webp_header() -> Vec<u8> {
+    let mut bytes = b"RIFF".to_vec();
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(b"WEBP");
+    bytes
+}
+
+/// Encode a frame as JXL through the same backend the derivative path uses, optionally
+/// embedding `metadata`.
+fn jxl_bytes(frame: &RgbaImage, metadata: Option<&ImageMetadata>) -> Vec<u8> {
+    let embed = if metadata.is_some() {
+        MetadataEmbedOptions::all()
+    } else {
+        MetadataEmbedOptions::none()
+    };
+    let options = EncodeOptions::JxlZune(ZuneJxlEncodeConfig {
+        common: common(embed),
+        quality: 50.0,
+        effort: 7,
     });
-    encode_rgb_image_to_vec(&to_rgb_u16(frame), &ImageMetadata::default(), &options)
-        .expect("the fixture WebP encodes")
+    let empty = ImageMetadata::default();
+    encode_rgb_image_to_vec(&to_rgb_u16(frame), metadata.unwrap_or(&empty), &options)
+        .expect("the fixture JXL encodes")
 }
 
 /// An `ImageMetadata` carrying only an EXIF orientation tag.
@@ -310,7 +328,7 @@ fn every_still_format_is_reachable_from_its_header() {
     let cases: &[(Vec<u8>, &str, StillFormat)] = &[
         (jpeg_bytes(&frame, None), "jpg", StillFormat::Jpeg),
         (png_bytes(&frame), "png", StillFormat::Png),
-        (webp_bytes(&frame), "webp", StillFormat::WebP),
+        (webp_header(), "webp", StillFormat::WebP),
         (hand_written_png(), "png", StillFormat::Png),
         (
             b"GIF89a\x08\x00\x08\x00\x00\x00".to_vec(),
@@ -334,6 +352,7 @@ fn every_still_format_is_reachable_from_its_header() {
         ),
         (b"P6\n8 8\n255\n".to_vec(), "ppm", StillFormat::Ppm),
         (isobmff(b"avif"), "avif", StillFormat::Avif),
+        (webp_header(), "webp", StillFormat::WebP),
         (isobmff(b"heic"), "heic", StillFormat::Heic),
         (isobmff(b"mif1"), "heic", StillFormat::Heic),
         (isobmff(b"crx "), "cr3", StillFormat::Cr3),
@@ -437,7 +456,7 @@ fn still_format_agrees_with_rawshift_detection() {
             StillFormat::Jpeg,
         ),
         (png_bytes(&frame), StandardFormat::Png, StillFormat::Png),
-        (webp_bytes(&frame), StandardFormat::WebP, StillFormat::WebP),
+        (webp_header(), StandardFormat::WebP, StillFormat::WebP),
         (hand_written_png(), StandardFormat::Png, StillFormat::Png),
         (
             b"GIF89a\x08\x00\x08\x00\x00\x00".to_vec(),
@@ -479,6 +498,7 @@ fn is_decodable_matches_the_supported_table() {
     }
     for format in [
         StillFormat::Ppm,
+        StillFormat::WebP,
         StillFormat::Avif,
         StillFormat::Heic,
         StillFormat::Arw,
@@ -509,7 +529,7 @@ fn decodes_every_supported_container_to_opaque_rgba8() {
     let cases: &[(Vec<u8>, &str, StillFormat, u32, u32)] = &[
         (jpeg_bytes(&frame, None), "jpg", StillFormat::Jpeg, 6, 4),
         (png_bytes(&frame), "png", StillFormat::Png, 6, 4),
-        (webp_bytes(&frame), "webp", StillFormat::WebP, 6, 4),
+        (jxl_bytes(&frame, None), "jxl", StillFormat::Jxl, 6, 4),
         (hand_written_png(), "png", StillFormat::Png, 2, 2),
     ];
     for (bytes, ext, format, width, height) in cases {
@@ -907,11 +927,11 @@ fn generate(frame: &RgbaImage, original: &[u8]) -> StillDerivatives {
         .expect("generation succeeds")
 }
 
-/// The thumbnail tier over a source larger than the cap: real WebP bytes, a signed manifest
-/// binding their hash, and the two formats this build cannot encode recorded as deferrals
-/// rather than silently omitted.
+/// The thumbnail tier over a source larger than the cap: real JXL bytes, a signed manifest
+/// binding their hash, and the two formats this build cannot encode recorded as deferrals rather
+/// than silently omitted.
 #[test]
-fn the_thumbnail_tier_encodes_webp_and_defers_the_rest() {
+fn the_thumbnail_tier_encodes_jxl_and_defers_the_rest() {
     let frame = gradient(512, 384);
     let original = png_bytes(&frame);
     let result = generate(&frame, &original);
@@ -919,8 +939,8 @@ fn the_thumbnail_tier_encodes_webp_and_defers_the_rest() {
     assert_eq!(result.generated.len(), 1, "one encodable format today");
     let thumb = &result.generated[0];
     assert_eq!(thumb.tier, DerivativeTier::Thumbnail);
-    assert_eq!(thumb.format, DerivativeFormat::WebP);
-    assert_eq!(thumb.manifest.core.format, "image/webp");
+    assert_eq!(thumb.format, DerivativeFormat::Jxl);
+    assert_eq!(thumb.manifest.core.format, "image/jxl");
     assert_eq!(thumb.manifest.core.role, DerivativeRole::Thumbnail);
     assert_eq!(
         thumb.manifest.core.ciphertext_hash,
@@ -933,26 +953,24 @@ fn the_thumbnail_tier_encodes_webp_and_defers_the_rest() {
         "first of its role"
     );
 
-    // The bytes are a real WebP of the tier's size.
+    // The bytes are a real JXL of the tier's size.
     assert_eq!(
         StillFormat::from_bytes(&thumb.bytes),
-        Some(StillFormat::WebP)
+        Some(StillFormat::Jxl)
     );
     let back = RawshiftDecoder
-        .decode(&thumb.bytes, "webp")
+        .decode(&thumb.bytes, "jxl")
         .expect("the thumbnail decodes");
     assert_eq!((back.width(), back.height()), (256, 192));
-    assert!(
-        thumb.bytes.len() < original.len(),
-        "a 256 px q=50 thumbnail is smaller than a 512 px lossless original"
-    );
 
-    // The gap is per (tier, format), recorded rather than collapsed.
+    // The gap is per (tier, format), recorded rather than collapsed. WebP is here for a
+    // different reason from AVIF: not a missing toolchain but a codec that does not compile for
+    // aarch64, so it is deferred on every target rather than only where nasm is absent.
     assert_eq!(
         result.deferred,
         vec![
-            (DerivativeTier::Thumbnail, DerivativeFormat::Jxl),
             (DerivativeTier::Thumbnail, DerivativeFormat::Avif),
+            (DerivativeTier::Thumbnail, DerivativeFormat::WebP),
         ]
     );
 
@@ -971,6 +989,29 @@ fn the_thumbnail_tier_encodes_webp_and_defers_the_rest() {
     );
 }
 
+/// The tier's declared `q=50` is **advisory today**: `zune-jpegxl`'s `JxlSimpleEncoder` is
+/// lossless, so the thumbnail round-trips its downscaled pixels exactly and costs what a
+/// lossless encode costs.
+///
+/// Asserted rather than left as a comment, because it is the one place this build visibly
+/// departs from the tier table and the departure disappears the moment a lossy backend lands.
+#[test]
+fn the_jxl_thumbnail_is_lossless_today() {
+    let frame = gradient(512, 384);
+    let original = png_bytes(&frame);
+    let result = generate(&frame, &original);
+    let thumb = &result.generated[0];
+
+    let back = RawshiftDecoder
+        .decode(&thumb.bytes, "jxl")
+        .expect("the thumbnail decodes");
+    let expected = downscale_rgba8(&gradient(512, 384), 256);
+    assert_eq!(
+        back.image, expected,
+        "a lossless encode reproduces the downscaled frame exactly"
+    );
+}
+
 /// A source no larger than the tier's cap takes the signed `original` sentinel — an explicit
 /// marker, distinct from an absent derivative, and never a redundant re-encode.
 #[test]
@@ -983,13 +1024,15 @@ fn a_source_within_the_cap_signs_the_original_sentinel() {
     let only = &result.generated[0];
     assert_eq!(only.format, DerivativeFormat::Original);
     assert_eq!(only.manifest.core.format, "original");
-    assert_eq!(
-        only.bytes, original,
-        "the sentinel references the original bytes"
+    assert!(
+        only.bytes.is_empty(),
+        "the sentinel *references* the original rather than copying it: a copy would put the \
+         source's EXIF, GPS included, into a derivative blob"
     );
     assert_eq!(
         only.manifest.core.ciphertext_hash,
-        crate::crypto::hash::hash_bytes(&original)
+        crate::crypto::hash::hash_bytes(&original),
+        "the reference is the content address the manifest signs"
     );
     assert!(
         result.deferred.is_empty(),
@@ -1128,24 +1171,12 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
         "the fixture JPEG must carry the GPS rationals"
     );
 
-    // The control: encoding a WebP the way the crate's own default would.
-    let leaky = encode_rgb_image_to_vec(
-        &to_rgb_u16(&frame),
-        &located_metadata,
-        &EncodeOptions::WebpLibwebp(LibwebpEncodeConfig {
-            common: CommonEncodeOptions {
-                metadata: MetadataEmbedOptions::all(),
-                bit_depth: BitDepth::Eight,
-            },
-            mode: WebPMode::Lossy,
-            quality: 50.0,
-            method: 4,
-            near_lossless: 100,
-        }),
-    )
-    .expect("the control WebP encodes");
+    // The control: the same frame through the same JXL backend, configured the way the crate's
+    // own `MetadataEmbedOptions::default()` would configure it. It leaks — which is what makes
+    // the assertion below a test of Capsule's strip rather than of a codec that never embeds.
+    let leaky = jxl_bytes(&frame, Some(&located_metadata));
     assert!(
-        contains(&leaky, b"EXIF") && gps_rationals_present(&leaky),
+        gps_rationals_present(&leaky),
         "the control must leak, or this test is not testing the strip"
     );
 
@@ -1161,10 +1192,9 @@ fn a_thumbnail_carries_no_exif_and_no_gps() {
     .expect("generation");
     let thumb = &result.generated[0].bytes;
     assert!(!thumb.is_empty(), "the thumbnail has bytes to inspect");
-    assert!(!contains(thumb, b"EXIF"), "no EXIF chunk in the thumbnail");
-    assert!(!contains(thumb, b"Exif\0\0"), "no APP1 EXIF payload either");
-    assert!(!contains(thumb, b"XMP "), "no XMP chunk");
-    assert!(!contains(thumb, b"ICCP"), "no ICC profile");
+    assert!(!contains(thumb, b"Exif"), "no EXIF box in the thumbnail");
+    assert!(!contains(thumb, b"xml "), "no XMP box");
+    assert!(!contains(thumb, b"jumb"), "no metadata container box");
     assert!(
         !gps_rationals_present(thumb),
         "the GPS rationals must not survive into a thumbnail"
@@ -1220,12 +1250,13 @@ fn the_closed_format_set_round_trips_and_admits_nothing_else() {
             "{rejected:?} is outside the closed set"
         );
     }
-    // Only WebP and the sentinel can be produced here; the master and delivery formats are
-    // committed but blocked on a toolchain.
-    assert!(DerivativeFormat::WebP.is_encodable());
+    // Only JXL — the table's committed *master* format — and the sentinel can be produced here.
+    // AVIF is blocked on a build-host assembler; WebP is blocked on an upstream defect, its
+    // codec not compiling for aarch64 at all.
+    assert!(DerivativeFormat::Jxl.is_encodable());
     assert!(DerivativeFormat::Original.is_encodable());
-    assert!(!DerivativeFormat::Jxl.is_encodable());
     assert!(!DerivativeFormat::Avif.is_encodable());
+    assert!(!DerivativeFormat::WebP.is_encodable());
 }
 
 /// A signed still-role manifest whose `format` is outside the closed set is rejected at

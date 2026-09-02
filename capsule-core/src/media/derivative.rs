@@ -22,12 +22,19 @@
 //!
 //! # What this build encodes
 //!
-//! WebP only. [`DerivativeFormat::STILL_DELIVERY_ORDER`] still lists JXL and AVIF because they
-//! are the committed master and delivery formats; each is recorded as a per-`(tier, format)`
-//! deferral on [`StillDerivatives::deferred`] and warned once, so the gap is countable rather
-//! than invisible. JXL needs C libjxl for a lossy encode (the pure-Rust backend is
-//! `zune-jpegxl`'s lossless simple encoder) and AVIF needs `nasm` on every x86_64 build host;
-//! neither is a decision this module can take on its own.
+//! **JXL only, and losslessly.** `image/jxl` is the tier table's committed *master* format, so
+//! the format that ships first is the one the table already puts first — but the pure-Rust
+//! backend is `zune-jpegxl`'s `JxlSimpleEncoder`, which is lossless, so the tier's `q=50` is
+//! passed through and ignored and a thumbnail costs more bytes than the table intends. A lossy
+//! JXL needs C libjxl (`bindgen` + `pkg-config`).
+//!
+//! WebP — the table's last-resort delivery variant, and the obvious cheap lossy encoder — is
+//! **not available at all**: `rawshift-image` 0.1.1's WebP module does not compile for aarch64
+//! (it passes `*const i8` where `libwebp-sys` declares `*const c_char`, and `c_char` is `u8`
+//! there), and every mobile target Capsule ships is aarch64. AVIF needs `nasm` on every x86_64
+//! build host. Each is recorded as a per-`(tier, format)` deferral on
+//! [`StillDerivatives::deferred`] and warned once, so the gap is countable rather than
+//! invisible.
 //!
 //! [`DerivativeManifest`]: crate::crypto::provenance::DerivativeManifest
 //! [`DerivativeCore::sign`]: crate::crypto::provenance::manifest::DerivativeCore::sign
@@ -38,13 +45,11 @@ use rawshift_image::core::image::RgbImage;
 use rawshift_image::core::metadata::ImageMetadata;
 use rawshift_image::core::{BitDepth, ColorSpace, MetadataEmbedOptions};
 use rawshift_image::formats::encode_rgb_image_to_vec;
-use rawshift_image::formats::export::{
-    CommonEncodeOptions, EncodeOptions, LibwebpEncodeConfig, WebPMode,
-};
+use rawshift_image::formats::export::{CommonEncodeOptions, EncodeOptions, ZuneJxlEncodeConfig};
 use uuid::Uuid;
 
 use super::decode::DecodedImage;
-use super::error::{FormatOp, MediaError};
+use super::error::MediaError;
 use super::resize::downscale_rgba8;
 use crate::cbor;
 use crate::crypto::CryptoError;
@@ -60,17 +65,26 @@ use crate::lqip::RgbaImage;
 /// outside this set is a structural rejection, never a "future format to ignore".
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DerivativeFormat {
-    /// **JPEG XL** — the committed primary/master still codec. Not encodable in this build.
+    /// **JPEG XL** — the committed primary/master still codec, and the one format this build
+    /// encodes. Losslessly: the pure-Rust backend is `zune-jpegxl`'s `JxlSimpleEncoder`.
     Jxl,
     /// **AVIF** — the universal delivery format for clients without a JXL decoder. Not
     /// encodable in this build.
     Avif,
-    /// **WebP** — the last-resort delivery fallback, and the one format this build encodes.
+    /// **WebP** — the last-resort delivery fallback. Not encodable in this build: the crate's
+    /// WebP codec does not compile for aarch64 (see [`super::StillFormat::WebP`]).
     WebP,
-    /// The recognised `format = "original"` sentinel: the tier references the original asset
+    /// The recognised `format = "original"` sentinel: the tier **references** the original asset
     /// rather than generating a redundant derivative, because the source is not larger than the
     /// tier's cap. **Distinct from an absent derivative** — this is an explicit, signed marker,
     /// where absence means "rebuildable from the original".
+    ///
+    /// A sentinel derivative carries **no bytes of its own** ([`GeneratedDerivative::bytes`] is
+    /// empty). "References" is the operative word in the contract: the signed manifest's
+    /// `ciphertext_hash` content-addresses the original, which the holder already has, so
+    /// copying the bytes under a thumbnail's name would duplicate a file sitting two directories
+    /// up *and* re-expose the original's EXIF — GPS included — as a derivative blob, where a
+    /// re-encoded thumbnail is metadata-free by construction.
     Original,
 }
 
@@ -120,7 +134,7 @@ impl DerivativeFormat {
 
     /// Whether this build can produce bytes in this format.
     pub const fn is_encodable(self) -> bool {
-        matches!(self, Self::WebP | Self::Original)
+        matches!(self, Self::Jxl | Self::Original)
     }
 }
 
@@ -219,7 +233,9 @@ pub struct GeneratedDerivative {
     pub tier: DerivativeTier,
     /// Which committed format, or the `Original` sentinel.
     pub format: DerivativeFormat,
-    /// The derivative bytes — the encoder output, or the original for `Original`.
+    /// The derivative bytes — the encoder output, and **empty** for
+    /// [`DerivativeFormat::Original`], whose manifest is a reference to the original rather than
+    /// a copy of it.
     pub bytes: Vec<u8>,
     /// The signed manifest binding `hash(bytes)`, the role and the format.
     pub manifest: DerivativeManifest,
@@ -291,13 +307,17 @@ pub fn generate_still_derivatives(
                 cap,
                 "media: source is within the tier cap; signing the `original` sentinel"
             );
-            out.generated.push(sign_derivative(
+            // Signed **over** the original's bytes — that is what makes the manifest a
+            // reference to them — but carrying none of its own. See `DerivativeFormat::Original`.
+            let mut sentinel = sign_derivative(
                 ctx,
                 tier,
                 DerivativeFormat::Original,
                 original_bytes,
                 &mut prior,
-            )?);
+            )?;
+            sentinel.bytes.clear();
+            out.generated.push(sentinel);
             continue;
         }
 
@@ -360,37 +380,45 @@ pub fn verify_still_format(
 
 /// Encode a tier-sized RGBA8 frame to `format`.
 ///
-/// **Every encode passes [`MetadataEmbedOptions::none`]**, and that is load-bearing rather than
-/// tidy: the crate's own default is `all()`, so a default-configured encode copies the source's
-/// EXIF — GPS fix included — into the derivative bytes. A thumbnail is the derivative most
-/// likely to be served widest, so leaking a home address into it would be the worst possible
-/// place for that default to win. A test asserts the absence rather than trusting this comment.
+/// **Every encode passes [`MetadataEmbedOptions::none`] and an empty [`ImageMetadata`]**, and
+/// both are load-bearing rather than tidy: the crate's own default is `all()`, so a
+/// default-configured encode copies the source's EXIF — GPS fix included — into the derivative
+/// bytes, and the JXL backend has a working `append_to_jxl` that would do exactly that. A
+/// thumbnail is the derivative most likely to be served widest, so leaking a home address into
+/// it would be the worst possible place for that default to win. Passing empty metadata means
+/// the source's block is never even read. A test asserts the absence rather than trusting this
+/// comment.
 fn encode(
     frame: &RgbaImage,
     format: DerivativeFormat,
     tier: DerivativeTier,
 ) -> Result<Vec<u8>, MediaError> {
     let options = match format {
-        DerivativeFormat::WebP => EncodeOptions::WebpLibwebp(LibwebpEncodeConfig {
+        DerivativeFormat::Jxl => EncodeOptions::JxlZune(ZuneJxlEncodeConfig {
             common: CommonEncodeOptions {
                 metadata: MetadataEmbedOptions::none(),
                 bit_depth: BitDepth::Eight,
             },
-            mode: WebPMode::Lossy,
+            // The tier table's number, passed through as declared even though the backend
+            // ignores it: `JxlSimpleEncoder` is lossless, so today this is advisory. Keeping the
+            // contract's value here rather than hard-coding `0.0` (the crate's explicit
+            // "lossless" request) makes the eventual libjxl swap a backend change and not a
+            // quality decision taken again from scratch.
             quality: tier.quality(),
-            // The libwebp compression method, 0 (fast) to 6 (slowest, best). 4 is the crate's
-            // own default and the usual trade; a thumbnail is small enough that the slower
-            // methods buy little.
-            method: 4,
-            // Lossless-only knob; 100 means off.
-            near_lossless: 100,
+            // Encoder effort, 1..=9; the simple encoder may ignore this too. 7 is the crate's
+            // own default and there is no reason to differ.
+            effort: 7,
         }),
-        // Unreachable: `is_encodable` gates the call. Kept as a typed refusal rather than a
-        // panic so a future widening that forgets an arm degrades to a deferral.
-        DerivativeFormat::Jxl | DerivativeFormat::Avif | DerivativeFormat::Original => {
-            return Err(MediaError::UnsupportedFormat {
-                format: super::StillFormat::WebP,
-                op: FormatOp::Encode,
+        // Unreachable: `is_encodable` gates the call, and `Original` never routes here at all
+        // (it carries no bytes). Kept as a typed refusal rather than a panic so a future
+        // widening that forgets an arm degrades to a reported failure. Reported as
+        // `Encode { format }` and not `UnsupportedFormat`, because the latter names a
+        // `StillFormat` and there is no still format at fault here — the caller asked for a
+        // *derivative* format this build cannot write, and the message has to say which.
+        DerivativeFormat::WebP | DerivativeFormat::Avif | DerivativeFormat::Original => {
+            return Err(MediaError::Encode {
+                format,
+                detail: "this build links no encoder for this derivative format".to_string(),
             });
         }
     };
