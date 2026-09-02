@@ -1,5 +1,13 @@
 # build output
 dist/
+# generated reference pages (capsule-docs/scripts/gen-reference.mjs)
+#
+# Rule 2 of design/developer-docs.md: reference pages are generated, never written. A
+# committed copy is a second source of truth that can disagree with the artifact it came
+# from, and the whole point is that it cannot. The hand-written overview for each surface
+# is its sibling file (reference/cli.md), not a file inside these directories.
+src/content/docs/reference/cli/
+src/content/docs/reference/api/
 # generated types
 .astro/
 

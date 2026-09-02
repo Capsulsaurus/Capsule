@@ -4,17 +4,39 @@ description: Generated reference for Capsule's developer surfaces
 status: draft
 ---
 
-This section will hold generated reference for every Capsule developer surface — the REST contract,
-the command line, the Rust SDK, the Swift and Kotlin bindings, and the browser surface.
+Reference for every Capsule developer surface. Each section is generated from a **description
+artifact**: a small, committed, machine-readable file that the surface's own toolchain emits and
+its own gate keeps current. The documentation build reads those files and never invokes cargo,
+uniffi, or wasm-bindgen — which is what keeps a reference page from disagreeing with the code it
+describes. [Developer Documentation](/design/developer-docs/) is the contract; this page is the
+index to it.
 
-**Nothing is published here yet.** The pipeline that emits these pages is specified in
-[Developer Documentation](/design/developer-docs/), which names each surface, the artifact it is
-generated from, and the gate that proves that artifact current. Until a surface's emitter and drift
-gate exist, its page is deliberately absent rather than hand-written and stale.
+Reference pages are generated, never written. Every section's hand-written prose is confined to
+its overview page — what the surface is for, how to reach it, where its contract lives. If a
+generated page is wrong, the annotation in the source is wrong.
 
-In the meantime:
+## Published
 
-- The REST surface-to-transport map is [API Surfaces](/design/api-surfaces/), and the contract rules
-  server code follows are [API Practices](/development/api-practices/).
+| Surface | Overview | Generated from | Kept current by |
+| --- | --- | --- | --- |
+| Command line | [CLI](/reference/cli/) | `capsule-cli/cli-surface.json` | `mise run cli-surface-check` |
+
+## Not published yet
+
+These surfaces are named here rather than given an empty route, because a dead link is worse
+than an honest absence.
+
+- **Rust SDK** and **workspace rustdoc.** The workspace is `publish = false`, so docs.rs will
+  never build it; rustdoc is built by the Rust gate and deployed beside this site rather than
+  committed. Planned as `/reference/sdk/rust/` and `/reference/crates/`.
+- **Swift and Kotlin bindings.** The generated bindings are gitignored build output, so the
+  bun-only documentation build cannot read them; each needs a committed surface dump alongside
+  its existing generation step first.
+- **Browser surface.** The same problem for `capsule_wasm.d.ts`, with the additional constraint
+  that its drift gate cannot run where the other Rust gates do.
+
+Until then:
+
+- The REST surface-to-transport map is [API Surfaces](/design/api-surfaces/), and the contract
+  rules server code follows are [API Practices](/development/api-practices/).
 - Code module to owning design doc is the [Module Map](/design/module-map/).
-- `capsule --help` is the current source of truth for the command line.
