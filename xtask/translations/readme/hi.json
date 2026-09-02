@@ -16,8 +16,8 @@
     "target": "## विशेषताएं"
   },
   {
-    "source": "- **Native and cross-platform**: Capsule is available on all common desktop and mobile platforms. They are fast and native on all.",
-    "target": "- **नेटिव और क्रॉस-प्लेटफ़ॉर्म**: Capsule सभी सामान्य डेस्कटॉप और मोबाइल प्लेटफ़ॉर्म पर उपलब्ध है। यह सभी पर तेज़ और नेटिव है।"
+    "source": "- **Native and cross-platform**: Capsule is built as a real native app per platform rather than one web app in several wrappers, so each one is fast and idiomatic where it runs. Every native client is intended to be fully featured and platform-integrated; the table below says what exists today.",
+    "target": "- **नेटिव और क्रॉस-प्लेटफ़ॉर्म**: Capsule को कई आवरणों में लिपटे एक ही वेब ऐप के बजाय हर प्लेटफ़ॉर्म के लिए सच्चे नेटिव ऐप के रूप में बनाया गया है, इसलिए हर ऐप जहाँ चलता है वहाँ तेज़ और उस प्लेटफ़ॉर्म के अनुरूप है। हर नेटिव क्लाइंट अंततः पूर्ण-सुविधायुक्त और प्लेटफ़ॉर्म-एकीकृत होना चाहिए; आज क्या मौजूद है, यह नीचे दी गई तालिका बताती है।"
   },
   {
     "source": "- **Broadest format support**: Capsule supports the majority of image and video formats from ones in common smartphones to professional RAW formats. View any content on any device just like your smartphone photos and videos!",
@@ -42,6 +42,18 @@
   {
     "source": "- **Open-source**: Capsule is open-source forever and you can host your own server.",
     "target": "- **ओपन-सोर्स**: Capsule हमेशा के लिए ओपन-सोर्स है और आप अपना खुद का सर्वर होस्ट कर सकते हैं।"
+  },
+  {
+    "source": "## Clients",
+    "target": "## क्लाइंट"
+  },
+  {
+    "source": "Each row gives the client's **intended scope** and its **status today** — the two are deliberately separate, because the scope is a commitment and the status is a snapshot. Every native client is meant to end up fully featured and platform-integrated; the order they get there in is recorded in the [client design doc](https://capsule.justinchung.net/design/clients/). The web client is the one deliberate exception and is permanently read-only.",
+    "target": "हर पंक्ति क्लाइंट का **इच्छित दायरा** और उसकी **आज की स्थिति** बताती है — दोनों जानबूझकर अलग रखे गए हैं, क्योंकि दायरा एक वचन है और स्थिति एक झलक। हर नेटिव क्लाइंट अंततः पूर्ण-सुविधायुक्त और प्लेटफ़ॉर्म-एकीकृत होना चाहिए; वे वहाँ किस क्रम में पहुँचेंगे, यह [क्लाइंट डिज़ाइन दस्तावेज़](https://capsule.justinchung.net/design/clients/) में दर्ज है। वेब क्लाइंट एकमात्र जानबूझकर रखा गया अपवाद है और स्थायी रूप से केवल-पठनीय है।"
+  },
+  {
+    "source": "| Client | Intended scope | Status today |\n| --- | --- | --- |\n| iOS | Fully featured, platform-integrated | Every major screen built, running against in-memory data; not yet talking to a server |\n| Android (phone) | Fully featured, platform-integrated | Early scaffold |\n| iPadOS | Fully featured; shares its views with macOS | Ships with the iOS app |\n| macOS | Fully featured, desktop-idiomatic | Ships with the iOS app |\n| Android tablet | Fully featured; shares its layouts with the phone | Not started |\n| Windows, Linux | Fully featured, platform-integrated | Not started |\n| Web | **Read-only, permanently.** Viewing your own library, plus public share and guest-upload links. Never writes, never enrolls a device. Served and versioned by your server rather than installed by you. | Usable; being re-pointed at the new server API |",
+    "target": "| क्लाइंट | इच्छित दायरा | आज की स्थिति |\n| --- | --- | --- |\n| iOS | पूर्ण-सुविधायुक्त, प्लेटफ़ॉर्म-एकीकृत | सभी प्रमुख स्क्रीन बन चुकी हैं और इन-मेमोरी डेटा पर चल रही हैं; सर्वर से बात अभी नहीं |\n| Android (फ़ोन) | पूर्ण-सुविधायुक्त, प्लेटफ़ॉर्म-एकीकृत | प्रारंभिक ढाँचा |\n| iPadOS | पूर्ण-सुविधायुक्त; अपने व्यू macOS के साथ साझा करता है | iOS ऐप के साथ आता है |\n| macOS | पूर्ण-सुविधायुक्त, डेस्कटॉप के अनुरूप | iOS ऐप के साथ आता है |\n| Android टैबलेट | पूर्ण-सुविधायुक्त; अपने लेआउट फ़ोन के साथ साझा करता है | शुरू नहीं हुआ |\n| Windows, Linux | पूर्ण-सुविधायुक्त, प्लेटफ़ॉर्म-एकीकृत | शुरू नहीं हुआ |\n| Web | **स्थायी रूप से केवल-पठनीय।** अपनी लाइब्रेरी देखना, साथ ही सार्वजनिक साझा लिंक और अतिथि-अपलोड लिंक। कभी लिखता नहीं, कभी डिवाइस पंजीकृत नहीं करता। इसे आप इंस्टॉल नहीं करते, बल्कि आपका सर्वर इसे परोसता और इसका संस्करण तय करता है। | उपयोग योग्य; नए सर्वर API पर लाया जा रहा है |"
   },
   {
     "source": "## Is Capsule for you?",

@@ -1,4 +1,5 @@
 import AssetKit
+import CapsuleUI
 import SwiftUI
 
 /// Recently Deleted — Capsule-managed soft-deleted assets, with swipe-to-recover
@@ -15,13 +16,22 @@ import SwiftUI
 /// window, so returning to the screen shortly after is silent. That gate is
 /// view-time UX protection against a borrowed-unlocked-phone snoop — it is not a
 /// cryptographic boundary and does not protect the files themselves.
-struct RecentlyDeletedView: View {
+///
+/// The grant is the *provider's* to hold, not this view's: in the FFI lane it
+/// lives in the Rust core, so the window survives this screen being torn down.
+/// ``HiddenView`` runs its own challenge instead because its hidden set is a
+/// Swift-side overlay with no core grant behind it.
+public struct RecentlyDeletedView: View {
     @State private var unlocked = false
     @State private var assets: [Asset] = []
     @State private var isLoading = false
     let trashProvider: any TrashProvider
 
-    var body: some View {
+    public init(trashProvider: any TrashProvider) {
+        self.trashProvider = trashProvider
+    }
+
+    public var body: some View {
         Group {
             if !unlocked {
                 lockedView
@@ -29,26 +39,26 @@ struct RecentlyDeletedView: View {
                 ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if assets.isEmpty {
                 ContentUnavailableView(
-                    "ios.recently_deleted.empty.title",
+                    "app.recently_deleted.empty.title",
                     systemImage: "trash",
-                    description: Text("ios.recently_deleted.empty.description")
+                    description: Text("app.recently_deleted.empty.description")
                 )
             } else {
                 list
             }
         }
-        .navigationTitle("ios.recently_deleted.title")
-        .navigationBarTitleDisplayMode(.inline)
+        .navigationTitle("app.recently_deleted.title")
+        .capsuleNavigationBarInline()
         .task { await authenticate() }
     }
 
     private var lockedView: some View {
         ContentUnavailableView {
-            Label("ios.recently_deleted.title", systemImage: "lock.fill")
+            Label("app.recently_deleted.title", systemImage: "lock.fill")
         } description: {
-            Text("ios.recently_deleted.locked.description")
+            Text("app.recently_deleted.locked.description")
         } actions: {
-            Button("ios.recently_deleted.unlock") { Task { await authenticate() } }
+            Button("app.recently_deleted.unlock") { Task { await authenticate() } }
         }
     }
 
@@ -82,10 +92,10 @@ struct RecentlyDeletedView: View {
                     Spacer()
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                    Button("ios.common.delete", role: .destructive) {
+                    Button("app.common.delete", role: .destructive) {
                         Task { await purge(asset) }
                     }
-                    Button("ios.recently_deleted.recover") {
+                    Button("app.recently_deleted.recover") {
                         Task { await restore(asset) }
                     }
                     .tint(.blue)
@@ -95,8 +105,7 @@ struct RecentlyDeletedView: View {
     }
 
     private func reload() async {
-        isLoading = true
-        assets = (try? await trashProvider.trashedAssets()) ?? []
+        assets = await (try? trashProvider.trashedAssets()) ?? []
         isLoading = false
     }
 

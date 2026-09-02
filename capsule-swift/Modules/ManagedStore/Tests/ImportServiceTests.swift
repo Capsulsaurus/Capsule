@@ -1,3 +1,4 @@
+import CapsuleCatalog
 import Foundation
 import Testing
 
@@ -14,7 +15,8 @@ struct ImportServiceTests {
             library: ManagedLibrary(layout: layout, fileStore: fileStore, catalog: catalog),
             fileStore: fileStore,
             hasher: MockContentHasher(),
-            metadataExtractor: MockMetadataExtractor()
+            metadataExtractor: MockMetadataExtractor(),
+            sidecarCoder: JSONSidecarCoder()
         )
     }
 
@@ -106,7 +108,7 @@ struct ImportServiceTests {
 struct MetadataExtractorTests {
     @Test("parses an EXIF capture date into a Unix epoch")
     func parsesExifDate() {
-        #expect(ImageIOMetadataExtractor.parseExifDate("2024:07:03 12:26:40") == 1_720_009_600)
+        #expect(ImageIOMetadataExtractor.parseExifDate("2024:07:03 12:26:40") == 1720009600)
     }
 
     @Test("rejects a malformed EXIF date")

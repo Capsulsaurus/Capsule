@@ -1,28 +1,34 @@
 ---
 title: Module Map
-description: Current Rust modules, planned boundaries, and validation ownership
+description: Code module to owning design doc to validation tier, and the boundaries between crates
 status: draft
 ---
 
-This map distinguishes code that is active today from contracts that are planned or preserved only
-for review. A name in the design does not imply that a deployable implementation exists.
+This map answers one question: for a given piece of code, which design doc owns its contract and
+what tier validates it. It says nothing about whether a surface is built — that is the slice
+tracker's job, and keeping the answer in one place is what stops this map going stale. To learn
+whether something exists today, find its slice: `rg 'S-C16' SLICES.md`.
 
-## Current Status
+## Crates and What They Own
 
-| Area | Status | Ownership |
-| --- | --- | --- |
-| `capsule-core` | Active | Cryptography (including the live MLS album authority), canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite and vector index, import scan/plan, culling, share and drop crypto, aggregated federation views, ML orchestration |
-| `capsule-wasm` | Active | The browser sealing surface `capsule-web` loads — share-link open and guest drop sealing over `capsule-core` with default features off. Built by `mise run build-wasm`; never committed |
-| `capsule-i18n` + `xtask::i18n` | Active | Canonical ICU catalogs, runtime localization, generated platform catalogs |
-| `capsule-core-ffi` | Active | UniFFI bindings for native Swift/Kotlin consumers, consolidated on one UniFFI version across both surfaces |
-| `capsule-cli` + CLI entity/migration crates | Active | Local CLI behavior and its SQLite persistence. Its network commands (`auth`, `sync`, `list`, `push`) ride the Rust SDK and pause while that is rebuilt |
-| Client import execution | Quarantined | Rebuild over Rawshift plus direct Chromahash v1; scan, grouping, and planning remain active. The signed-path executor is a partial replacement — it already applies privacy and sidecar policy before encrypting, signing, and committing, but still consumes in-repository media rather than normalized Rawshift results |
-| Server | Quarantined | Rebuild with Kynos as REST/OpenAPI-only `capsule-server` modules |
-| Rust SDK | Quarantined | Regenerate with Spargen from the canonical Kynos OpenAPI document. Orchestration (auth/session refresh, upload, sync, recovery, protocol-version negotiation) is Capsule-owned and stays outside generated code |
-| Media pipeline | Quarantined | Rawshift replaces in-repository codecs and metadata extraction |
-| GraphQL and gRPC transports | Deleted | Rejected; no compatibility surface will be restored |
+| Crate | Ownership |
+| --- | --- |
+| `capsule-core` | Cryptography (including the MLS album authority), canonical CBOR, validation, CRDTs, sidecars, backup, lifecycle, client filesystem, local SQLite and vector index, import scan/plan/execute, culling, LQIP, share and drop crypto, aggregated federation views, ML orchestration |
+| `capsule-server` | The Kynos REST/OpenAPI application — see [Server Modules](#server-modules) |
+| `capsule-sdk` | The Spargen-generated REST client plus the orchestration over it Capsule owns: auth and session refresh, the resumable upload state machine, sync, recovery, protocol-version negotiation, LAN peering |
+| `capsule-wire` | The response taxonomy shared by server and SDK. Framework-free by construction: `serde` is its only dependency, so neither side's transport choices reach the other |
+| `capsule-wasm` | The browser sealing surface `capsule-web` loads — share-link open and guest-drop sealing over `capsule-core` with default features off. Built by `mise run build-wasm`; never committed |
+| `capsule-i18n` + `xtask::i18n` | Canonical ICU catalogs, runtime localization, generated platform catalogs |
+| `capsule-core-ffi` | UniFFI bindings for native Swift and Kotlin consumers, on one UniFFI version across both surfaces |
+| `capsule-core-swift`, `capsule-core-kotlin` | Per-platform harnesses that link the compiled core over those bindings, and the `HardwareSigner` implementations (Secure Enclave, StrongBox) |
+| `capsule-cli` + its entity/migration crates | Local CLI behavior and its SQLite persistence; network commands ride the SDK |
+| `capsule-web` | The browser client: the guest-drop and share-link viewer surfaces, over `capsule-wasm` |
+| `capsule-swift`, `capsule-android` | The native applications |
+| `capsule-vision` | Model-evaluation notebooks; no shipped source |
 
-Review-only sources live under `legacy-review/`. They are not Cargo packages and have no validation
+GraphQL and gRPC are retired transports and no compatibility surface will be restored
+([ADR-0001](https://github.com/Capsulsaurus/Capsule/blob/master/adr/0001-the-public-server-surface-is-kynos-rest-only.md)).
+Review-only sources live under `legacy-review/`: they are not Cargo packages and have no validation
 status until rewritten against their owning contracts.
 
 ## Active `capsule-core` Ownership
@@ -36,9 +42,9 @@ status until rewritten against their owning contracts.
 | `validation` | [Validation](/design/threat-model/validation/) | Pure invariant unit tests |
 | `backup` | [Backup and Recovery](/design/backup-recovery/) | Unit and smoke |
 | `lifecycle` | [Organization](/design/organization/) and [Provenance](/design/cryptography/provenance/) | Unit and smoke; signed write path |
-| `library::{init,open,rebuild,scrub,trash,cache,lock,receipts,auth_gate}` | [Client Filesystem](/design/filesystem/client/) and [Maintenance](/design/filesystem/maintenance/) | Unit and smoke |
+| `library::{init,open,rebuild,scrub,cache,lock,paths,receipts,auth_gate}` | [Client Filesystem](/design/filesystem/client/) and [Maintenance](/design/filesystem/maintenance/) | Unit and smoke |
 | `library::{space,storage_verify}` | [Import Pipeline](/design/import/pipeline/) and [Storage Verification](/design/import/storage-verification/) | Unit boundary and release-gate tests |
-| `import::{scanner,planner,group,special,plan,importers,streaming,upload}` | [Import Pipeline](/design/import/pipeline/) | Unit; executor smoke is blocked on Rawshift |
+| `import::{scan,scanner,planner,group,special,scope,default_album,importers,streaming,upload,executor,progress}` | [Import Pipeline](/design/import/pipeline/) | Unit; the executor's media half waits on `capsule-core::media` |
 | `drop`, `sharing` | [Web Upload](/design/web-upload/) and [Share Links](/design/share-links/) | Unit and KAT; sealing round trips cross-language against `capsule-wasm` |
 | `culling` | [Organization — Culling](/design/organization/) | Unit; filtered views and reject sweep |
 | `federation` | [Federation](/design/federation/) | Unit; aggregated album view over authority fixtures |
@@ -49,38 +55,46 @@ status until rewritten against their owning contracts.
 | `domain`, `models` | [Organization](/design/organization/), [Metadata](/design/metadata/) | Closed-enum and model unit tests |
 
 OpenMLS and the inference engines are implementation dependencies; Capsule retains the application
-protocols, schemas, provenance, and policy. Peering lives in the SDK and is quarantined with it.
+protocols, schemas, provenance, and policy. Peering is the SDK's, not the core's — it is a transport
+between two clients, and the artifact it moves is the backup container.
 
-## Planned Server Modules
+## Server Modules
 
-The future `capsule-server` is one Kynos REST/OpenAPI application composed from cohesive internal
-modules, not separate public transports or microservices.
+`capsule-server` is one Kynos REST/OpenAPI application composed from cohesive internal modules, not
+separate public transports or microservices. Route modules under `routes/` carry the HTTP surface;
+the modules below carry the behavior behind it.
 
 | Module | Contract owner | Required validation |
 | --- | --- | --- |
-| `auth` | [Authentication](/design/authentication/) and [Device Enrollment](/design/device-enrollment/) | Unit plus Postgres/Valkey adapter parity |
+| `auth`, `enrollment`, `directory` | [Authentication](/design/authentication/) and [Device Enrollment](/design/device-enrollment/) | Unit plus Postgres/Valkey adapter parity |
 | `upload` | [Upload Protocol](/design/import/upload-protocol/) | State-machine property tests, adapter parity, smoke and E2E |
-| `blob` | [Server Filesystem](/design/filesystem/server/) and [Storage Verification](/design/import/storage-verification/) | [Sharded-layout](/design/filesystem/server/#blob-store-layout) round-trip and full-store enumeration, range, corruption, crash, quarantine and GC tests |
+| `blob`, `serve` | [Server Filesystem](/design/filesystem/server/) | [Sharded-layout](/design/filesystem/server/#blob-store-layout) round-trip and full-store enumeration, range, corruption, crash, quarantine tests |
+| `verify`, `attestation` | [Storage Verification](/design/import/storage-verification/) | Receipt chain continuity, nonce echo, verdict-over-the-same-read tests |
+| `gc`, `scrub` | [Filesystem — Maintenance](/design/filesystem/maintenance/) | Refcount mark-and-sweep, retention purge, read-only integrity scrub |
 | `sync` | [Download and Sync](/design/import/download-sync/) | Cursor, monotonicity, pagination and range-resume tests |
-| `shares` | [Share Links](/design/share-links/) | Capability and expiry tests |
+| `album` | [Authorization](/design/authorization/) and [Versioning](/design/versioning/) | Lifecycle-write authorization, chain advance, upgrade ceremony |
+| `share` | [Share Links](/design/share-links/) | Capability and expiry tests |
+| `drop`, `escrow` | [Web Upload](/design/web-upload/) and [Backup and Recovery](/design/backup-recovery/) | Drop-session validation, adoption, escrow store/replace |
 | `federation` | [Federation](/design/federation/) | Capability, compartmentalization and pull-path tests |
 | `quota`, `moderation` | [Quota](/design/quota/) and [Moderation](/design/moderation/) | Unit plus policy smoke tests |
+| `store` | [Server Filesystem — Required Services](/design/filesystem/server/#required-services) | One conformance suite every adapter runs, which is what lets the in-memory double be trusted |
+| `problem`, `limits`, `body` | [API Surfaces — Rejection Mapping](/design/api-surfaces/#rejection-mapping) | Coded-problem bodies, body-size limits, header census on every route |
 
 The server owns its content-addressed blob implementation behind a Capsule-defined backend trait.
 The E2EE-aware resumable protocol also stays in Capsule. Authentication state and upload state use
-separate typed ports; no generic CAS, transfer, or TTL library is planned.
+separate typed ports; no generic CAS, transfer, or TTL library is introduced.
 
-## Planned Client Boundaries
+## Client Boundaries
 
 | Boundary | Decision |
 | --- | --- |
 | REST client | Spargen-generated Rust from a checked-in OpenAPI 3.2 document |
 | SDK workflows | Capsule-owned authentication, upload, sync, recovery, and protocol-version orchestration |
 | Workspace verbs over FFI | The `capsule_sdk` UniFFI namespace exposes the workspace surface apps need — enroll/open (including a hardware-signer constructor), albums, seal and import, verify, sync-apply, master-key escrow, and device-directory publish. Orchestration and shape only: each verb is one call into `capsule-core`, which keeps every cryptographic step, and the `capsule_core` namespace never shares a binary with it |
-| Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work |
-| LQIP | Capsule imports Chromahash directly after v1; Rawshift has no Chromahash responsibility |
+| Media | Rawshift performs detection, decode/encode, metadata normalization, derivatives, previews, and video work, consumed through `capsule-core::media` |
+| LQIP | Capsule imports Chromahash **0.7.1** directly; Rawshift has no Chromahash responsibility |
 | Import commit | Capsule applies privacy policy, creates sidecars/provenance, encrypts, signs, and commits normalized media results |
-| Alerts | Alert classes and trigger predicates live in `capsule-core::notify` (planned) so every platform evaluates one decision function; scheduling and presentation are native per client. See [Notifications](/design/notifications/) |
+| Alerts | Alert classes and trigger predicates live in `capsule-core::notify` so every platform evaluates one decision function; scheduling and presentation are native per client. See [Notifications](/design/notifications/) |
 
 ## External Dependency Register
 
@@ -92,7 +106,7 @@ the named acceptance gaps are verified with contract fixtures or a minimal spike
 | Kynos | HTTP runtime, REST routing, middleware composition, OpenAPI 3.1 and 3.2 emission, limits, shutdown, observability | Streaming request/response bodies, cancellation and backpressure; deterministic schema output; custom protocol/error headers on every response; middleware ordering; test harnesses without live infrastructure |
 | Spargen | Rust client generation from the checked-in Kynos OpenAPI contract | OpenAPI 3.1 and 3.2 compatibility; streaming upload/range download; opaque binary bodies; stable error-code mapping; auth and protocol headers; supported Rust targets; deterministic generation and version-compatibility checks |
 | Rawshift | Media detection, decoding/encoding, metadata normalization, derivatives, previews, and video processing | Required format/codec matrix; bounded memory and concurrency; cancellation/progress; malformed-input isolation; deterministic orientation/color/HDR behavior; normalized metadata provenance; mobile/desktop targets; no Chromahash API |
-| Chromahash v1 | LQIP encode/decode only, imported directly by Capsule | Stable v1 wire format and versioning; deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. It remains absent from Cargo until v1 is released |
+| Chromahash **0.7.1** | LQIP encode/decode only, imported directly by Capsule | Deterministic output; wide-gamut/HDR fixtures; decoder fallback behavior; supported FFI targets. The pin and the retired ThumbHash decision are [Dependencies](/design/dependencies/#rust) |
 | OpenMLS | MLS protocol and cryptographic state transitions | Required cipher suites and credential model; deterministic persistence/restore; external signer integration; epoch/exporter behavior; cross-platform size/performance; Capsule-owned album policy and provenance stay outside it |
 | PostgreSQL driver/ORM | Durable server index and default implementations of the two typed state ports | Transactions needed for finalization, row locking, migration strategy, cancellation, typed error mapping, tracing, and adapter conformance. Select the narrowest mature stack after Kynos integration is proven |
 | `redis-rs` | Required Valkey adapters for `AuthStateStore` and `UploadSessionStore` | Atomic compare/update and expiry primitives required by each port; cluster behavior; cancellation/timeouts; tracing; behavioural parity with the PostgreSQL and in-memory adapters under one conformance suite — parity is what lets the in-memory double be trusted in tests, not a claim that Valkey is [substitutable](/design/filesystem/server/#required-services) |
@@ -108,11 +122,6 @@ The E2E surface is **bounded**: adding a test here means adding it to the releva
 section and justifying why the cross-module surface is irreducible. Each case must remain backed
 primarily by unit and adapter-contract tests. Cases are numbered so that code can name the case it
 covers (`rg "E2E case N"`), and slices in the repo-root `SLICES.md` reference these numbers.
-
-**Status.** Every case with a server or SDK leg is **suspended** until the Kynos rebuild and the
-regenerated Rust SDK land — the implementations that previously satisfied them are review-only
-material under `legacy-review/`. Their `capsule-core` halves continue to ship and stay covered by
-unit and smoke tests. Cases whose surface is entirely inside `capsule-core` are unaffected.
 
 1. **Auth → sync → client-side library query.** Sign in → access token → the sync feed returns the
    account's album entries → the client applies them and a local `library.sqlite` query lists the

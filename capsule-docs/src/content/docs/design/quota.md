@@ -32,7 +32,7 @@ A user account exists in one of these quota states:
 | State             | Threshold                                                         | Behavior                                                                                                                                                             |
 | ----------------- | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **OK**            | quota_used < soft_limit                                           | All uploads succeed normally.                                                                                                                                        |
-| **Soft warning**  | soft_limit ≤ quota_used < hard_limit                              | Uploads succeed, but the client warns — the `quota_soft` [alert class](/design/notifications/#alert-classes). Quota state is server-held, so the warning is only as current as the last `GET /quota`.                        |
+| **Soft warning**  | soft_limit ≤ quota_used < hard_limit                              | Uploads succeed, but the client warns — the `quota_soft` [alert class](/design/notifications/#alert-classes). Quota state is server-held, so the warning is only as current as the last `GET /v1/quota`.                        |
 | **Hard exceeded** | quota_used ≥ hard_limit                                           | New uploads rejected at session creation with a structured error. Metadata edits and every other write still work; existing assets remain accessible.               |
 | **Grace expired** | quota_used ≥ hard_limit for > `grace_window` (default 14 days)    | Entering the grace window raises `quota_grace_expiring` ([alert class](/design/notifications/#alert-classes)). Adds to Hard-exceeded: **all other metadata-growth writes** (caption/tag edits, new share or upload links) are now refused too. Reads, deletes, and restore-from-trash still work — the provenance/metadata writes a `delete`, `trash-restore`, or trash-empty itself produces are **always admitted** (a user must be able to delete their way back under quota). Freeing space lifts it. |
 | **Suspended**     | (admin or billing action — see [Moderation](/design/moderation/)) | Server-defined; possibly upload refusal, possibly full lockout.                                                                                                      |
@@ -43,7 +43,7 @@ Defaults for `soft_limit`, `hard_limit`, and `grace_window` are deployment-confi
 
 Where the quota check actually runs:
 
-- **At [`POST /upload`](/design/import/upload-protocol/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
+- **At [`POST /v1/upload`](/design/import/upload-protocol/#endpoints) session creation.** The server computes `quota_used(upload_user_id) + declared_size` and rejects with `403 Quota Exceeded` (or similar structural code) if it crosses the hard limit. This is the *only* hard enforcement point — once a session is open, the declared size is the cap, and the session is allowed to complete.
 - **At session cancellation.** When a session is cancelled or expires, the reserved-but-uncommitted bytes are released; the next quota check sees the new (lower) usage.
 - **At [finalization](/design/import/upload-protocol/#finalization-and-integrity).** Cumulative size is bounded by the declared size at chunk acceptance; no separate quota check at finalization is needed because the declared size was already approved at session creation.
 - **[Staged uploads](/design/import/download-sync/#upload-tiering-staged-uploads) need no special case.** Each tier's session is charged at its own creation — the same single enforcement point, just later in time for the original's session.
@@ -73,7 +73,7 @@ fn check_quota(user: UserId, additional_bytes: u64) -> Result<(), QuotaError>;
 fn current_status(user: UserId) -> QuotaStatus;
 ```
 
-Concrete error types, the `GET /quota` response shape, and admin controls are an implementation detail; the accounting model and enforcement points above are the contract.
+Concrete error types, the `GET /v1/quota` response shape, and admin controls are an implementation detail; the accounting model and enforcement points above are the contract.
 
 ## Validation
 
@@ -83,4 +83,4 @@ Concrete error types, the `GET /quota` response shape, and admin controls are an
 - **Federated-receive accounting (unit).** Cache a federated blob for a receiving user; assert it debits the receiver, deduped (a blob the server already holds is not double-counted); exhaust a `(receiving_user, source_peer)` caching budget; assert further pulls from that peer are refused.
 - **Derivative reclaim on purge (unit).** Hard-purge an asset; assert its derivative + metadata blob references drop and any zero-reference blob is GC'd, with bytes credited back — no orphaned derivative left counting.
 - **Grace expiry (smoke).** Mock the grace window past; assert read-only mode behavior.
-- **Quota status reporting (unit).** `GET /quota` returns accurate `used` + `state` for a fixture user.
+- **Quota status reporting (unit).** `GET /v1/quota` returns accurate `used` + `state` for a fixture user.

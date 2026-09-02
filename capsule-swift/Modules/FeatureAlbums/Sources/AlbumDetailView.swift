@@ -14,13 +14,17 @@ public struct AlbumDetailView: View {
     private let assetProvider: any AssetProvider
     private let thumbnails: any ThumbnailProvider
     private let mediaLoader: ViewerMediaLoader
+    private let captionStore: (any CaptionStore)?
+    private let placeNames: any PlaceNameResolver
 
     public init(
         album: AlbumSummary,
         albumProvider: any AlbumProvider,
         assetProvider: any AssetProvider,
         thumbnails: any ThumbnailProvider,
-        mediaLoader: ViewerMediaLoader
+        mediaLoader: ViewerMediaLoader,
+        captionStore: (any CaptionStore)? = nil,
+        placeNames: any PlaceNameResolver = NoPlaceNameResolver()
     ) {
         _model = State(wrappedValue: AlbumDetailViewModel(album: album, albumProvider: albumProvider))
         self.album = album
@@ -28,20 +32,24 @@ public struct AlbumDetailView: View {
         self.assetProvider = assetProvider
         self.thumbnails = thumbnails
         self.mediaLoader = mediaLoader
+        self.captionStore = captionStore
+        self.placeNames = placeNames
     }
 
     public var body: some View {
         content
             .navigationTitle(album.title)
-            .navigationBarTitleDisplayMode(.inline)
+            .capsuleNavigationBarInline()
             .task { await model.load() }
-            .fullScreenCover(item: $viewerSelection) { selection in
+            .capsuleFullScreenCover(item: $viewerSelection) { selection in
                 AssetViewerView(
                     assets: selection.assets,
                     startIndex: selection.startIndex,
                     provider: assetProvider,
                     mediaLoader: mediaLoader,
-                    albumProvider: albumProvider
+                    albumProvider: albumProvider,
+                    captionStore: captionStore,
+                    placeNames: placeNames
                 )
             }
     }
@@ -52,9 +60,9 @@ public struct AlbumDetailView: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.assets.isEmpty {
             ContentUnavailableView(
-                "ios.albums.detail.empty.title",
+                "app.albums.detail.empty.title",
                 systemImage: "photo.on.rectangle",
-                description: Text("ios.albums.detail.empty.description")
+                description: Text("app.albums.detail.empty.description")
             )
         } else {
             PhotoGridView(

@@ -122,6 +122,12 @@ pub mod error_codes {
     /// `error.blob.unavailable`
     pub const BLOB_UNAVAILABLE: &str = "error.blob.unavailable";
 
+    /// `error.client.unclassified`
+    pub const CLIENT_UNCLASSIFIED: &str = "error.client.unclassified";
+
+    /// `error.client.unexpected`
+    pub const CLIENT_UNEXPECTED: &str = "error.client.unexpected";
+
     /// `error.directory.identity_mismatch`
     pub const DIRECTORY_IDENTITY_MISMATCH: &str = "error.directory.identity_mismatch";
 
@@ -310,6 +316,9 @@ pub mod error_codes {
 
     /// `error.sync.unavailable`
     pub const SYNC_UNAVAILABLE: &str = "error.sync.unavailable";
+
+    /// `error.unexpected`
+    pub const UNEXPECTED: &str = "error.unexpected";
 
     /// `error.upload.album_access_denied`
     pub const UPLOAD_ALBUM_ACCESS_DENIED: &str = "error.upload.album_access_denied";

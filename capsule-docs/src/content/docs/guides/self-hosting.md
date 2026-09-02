@@ -1,6 +1,7 @@
 ---
 title: Self Hosting
 description: Current self-hosting status and planned deployment dependencies
+status: draft
 ---
 
 The previous server has been removed from the active workspace while its Kynos replacement is being

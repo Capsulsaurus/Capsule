@@ -18,17 +18,23 @@ public actor ImportService {
     private let fileStore: any FileStore
     private let hasher: any ContentHasher
     private let metadataExtractor: any MediaMetadataExtracting
+    private let sidecarCoder: any SidecarCoding
 
+    /// - Parameter sidecarCoder: the sidecar wire format. Pass
+    ///   `FFISidecarCoder` (canonical CBOR, from `CapsuleCatalogFFI`) in a build
+    ///   that links the Rust core; `JSONSidecarCoder` otherwise.
     public init(
         library: ManagedLibrary,
         fileStore: any FileStore,
         hasher: any ContentHasher,
-        metadataExtractor: any MediaMetadataExtracting
+        metadataExtractor: any MediaMetadataExtracting,
+        sidecarCoder: any SidecarCoding
     ) {
         self.library = library
         self.fileStore = fileStore
         self.hasher = hasher
         self.metadataExtractor = metadataExtractor
+        self.sidecarCoder = sidecarCoder
     }
 
     /// Import every source, returning a per-file account of the outcome.
@@ -108,7 +114,7 @@ public actor ImportService {
                 source: source,
                 captureTimestamp: captureTimestamp
             )
-            try await fileStore.write(SidecarCodec.encode(sidecar), to: sidecarURL)
+            try await fileStore.write(sidecarCoder.encode(sidecar), to: sidecarURL)
             try await catalog.insertAsset(makeCatalogAsset(
                 uuid: uuid,
                 hash: hash,

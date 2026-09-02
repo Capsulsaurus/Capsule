@@ -53,8 +53,8 @@ struct CapsuleFoundationTests {
 
     @Test("UUIDv7 is well-formed, version 7, and time-ordered")
     func uuidVersion7() {
-        let early = UUIDv7.string(date: Date(timeIntervalSince1970: 1_000_000))
-        let late = UUIDv7.string(date: Date(timeIntervalSince1970: 2_000_000))
+        let early = UUIDv7.string(date: Date(timeIntervalSince1970: 1000000))
+        let late = UUIDv7.string(date: Date(timeIntervalSince1970: 2000000))
         #expect(early.count == 36)
         #expect(early == early.lowercased())
         // The version nibble — the first character of the third group.

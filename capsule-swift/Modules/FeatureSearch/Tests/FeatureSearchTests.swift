@@ -31,10 +31,10 @@ struct SearchFilterTests {
     @Test("a date facet excludes assets outside the window")
     func dateFacet() {
         // 2024-07-03 UTC.
-        let reference = Date(timeIntervalSince1970: 1_720_000_000)
+        let reference = Date(timeIntervalSince1970: 1720000000)
         let filter = SearchFilter(dateRange: .thisYear)
         let thisYear = Fixtures.asset(captureDate: reference)
-        let lastYear = Fixtures.asset(captureDate: reference.addingTimeInterval(-400 * 86_400))
+        let lastYear = Fixtures.asset(captureDate: reference.addingTimeInterval(-400 * 86400))
 
         #expect(filter.matches(thisYear, referenceDate: reference, calendar: utcCalendar))
         #expect(filter.matches(lastYear, referenceDate: reference, calendar: utcCalendar) == false)

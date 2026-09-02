@@ -14,8 +14,8 @@ A client never polls assets individually. It holds a single opaque **sync cursor
 
 | Surface                                       | Transport                                | Purpose                                                                                                                                         |
 | --------------------------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /sync?cursor=…&page_size=…`          | Kynos REST                              | Returns a page of asset changes (created, metadata-updated, deleted) after `cursor`, with a `next_cursor`. The feed is monotonic and resumable. |
-| `GET /blob/{hash}`                            | REST (HTTP `Range`)                      | Fetch a ciphertext blob by its content address; ranged for resumable and partial reads.                                                         |
+| `GET /v1/sync?cursor=…&page_size=…`          | Kynos REST                              | Returns a page of asset changes (created, metadata-updated, deleted) after `cursor`, with a `next_cursor`. The feed is monotonic and resumable. |
+| `GET /v1/blob/{hash}`                            | REST (HTTP `Range`)                      | Fetch a ciphertext blob by its content address; ranged for resumable and partial reads.                                                         |
 
 Each sync entry carries the asset's signed manifest as **the exact bytes the client uploaded** in its [provenance blob](/design/cryptography/provenance/#asset-manifest), the small encrypted **metadata blob**, and the asset's **blob manifest** — the content hashes of its original and derivative blobs — never original or derivative bytes. The manifest is passed through, not rebuilt: the server also holds an envelope projection of those same fields for its own key-free checks, but re-serializing *that* would hand the client a manifest detached from its signatures, which is a manifest no one can verify. Discovering a thousand new assets costs a few hundred kilobytes. The client decrypts each metadata blob, learns the asset's dimensions, capture date, and LQIP, and only *then* decides what else, if anything, to fetch. A deleted or modified asset arrives as a tombstone or an updated metadata reference; the client reconciles local state against it (see [Synchronization Scope](#synchronization-scope)).
 
@@ -49,7 +49,7 @@ Because every blob is content-addressed, a fetch is skipped entirely when the bl
 
 **What the home server can actually decide, as of `S-C39`.** `GET /v1/blob/{hash}` is **owner-scoped**: an account fetches the blobs of assets filed under it, and every other caller receives `404` — byte-identical to the answer for an address the server never heard of. That closes a real hole (previously any authenticated account could fetch any live ciphertext whose address it could name) and it fixes the `403`/`404` boundary at the only place that does not leak: a `403` confirms the address is referenced by *somebody*, so it is reserved for a caller the server can see once **had** access, and everyone else is told what an unknown address is told.
 
-The `403` itself is therefore **not yet rendered on this path**, and the reason is a missing fact rather than missing code. Album sharing between accounts is an MLS group whose roster the server cannot read by design, and the surfaces that do let a non-owner reach ciphertext — `/s/{id}/blob/{hash}` and the drop paths — serve from their own capabilities and answer `404` when those are withdrawn. Server-side album membership is owed as `S-C51`, and it is the same fact that keeps album *write* access pinned to the owner. Until it lands, a client written against this contract sees the `403` arm only from surfaces that have a capability to revoke.
+The `403` itself is therefore **not yet rendered on this path**, and the reason is a missing fact rather than missing code. Album sharing between accounts is an MLS group whose roster the server cannot read by design, and the surfaces that do let a non-owner reach ciphertext — `/s/{opaque_id}/blob/{hash}` and the drop paths — serve from their own capabilities and answer `404` when those are withdrawn. Server-side album membership is owed as `S-C51`, and it is the same fact that keeps album *write* access pinned to the owner. Until it lands, a client written against this contract sees the `403` arm only from surfaces that have a capability to revoke.
 
 ## Resumption and Verification
 
@@ -121,7 +121,7 @@ The **upload tier ladder** mirrors the download ladder and maps directly onto ex
 | **T1 — preview** | thumbnail + preview derivative blobs | any non-metered connection (small-reconciliation rule) |
 | **T2 — original** | original blob | unmetered Wi-Fi (large-reconciliation rule) or explicit force-sync |
 
-**The policy is client-side session ordering only.** The server has zero mode branches: the same `POST /upload` sessions, the same bundle mechanics, the same finalization — under `staged` the client simply hasn't opened the T2 session yet. This is what keeps the two policies on one code path: the scheduler takes the tier ladder as an ordering input; nothing else in the pipeline knows the policy exists.
+**The policy is client-side session ordering only.** The server has zero mode branches: the same `POST /v1/upload` sessions, the same bundle mechanics, the same finalization — under `staged` the client simply hasn't opened the T2 session yet. This is what keeps the two policies on one code path: the scheduler takes the tier ladder as an ordering input; nothing else in the pipeline knows the policy exists.
 
 **The `awaiting-original` state.** Visibility already flips on manifest + metadata finalization ([upload protocol](/design/import/upload-protocol/#what-gets-uploaded)); whether the original has landed travels as the derived per-asset fact `original_held` on each sync feed entry. An asset with `original_held = false` is in the derived state **awaiting-original**:
 
@@ -138,7 +138,7 @@ The **upload tier ladder** mirrors the download ladder and maps directly onto ex
 - **Staged and [streaming import](/design/import/pipeline/#import-upload-streaming-mode) are mutually exclusive per import.** Streaming exists to release local bytes quickly; staged defers exactly the upload that release depends on. The planner rejects the combination outright.
 - **Quota** charges each tier's session at its own creation — the existing enforcement point, just later in time for T2. Deleting an `awaiting-original` asset cancels its pending tiers and tombstones normally.
 
-Resume needs no new client state: the tier queue is re-derived from server truth (held roles on the feed entry + `GET /upload/sessions` for in-flight tiers); `library.sqlite`'s work queue stays a rebuildable cache.
+Resume needs no new client state: the tier queue is re-derived from server truth (held roles on the feed entry + `GET /v1/upload/sessions` for in-flight tiers); `library.sqlite`'s work queue stays a rebuildable cache.
 
 ## Validation
 
