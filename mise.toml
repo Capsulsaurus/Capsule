@@ -145,6 +145,24 @@ run = [
   "cargo nextest run -p capsule-sdk --features ffi",
 ]
 
+# Nothing else in this file or in ci.yml builds tests under the release profile, so every
+# `#[cfg(not(debug_assertions))]` test is dead code that no gate ever compiles, let alone runs
+# (`#428`). capsule-i18n is the only crate carrying one today
+# (capsule-i18n/src/format.rs:157, pinning that a release build passes an unrenderable ICU
+# construct through instead of tripping the `debug_assert!` a debug build trips); widen the
+# `-p` list when a second crate adds one. Narrow on purpose: building the whole workspace
+# twice would double the test job for a handful of tests.
+#
+# NOT yet wired into `test-rust`, and that is a defect this task exists to expose rather than
+# an oversight. `format.rs:144` — `an_unrenderable_icu_construct_is_refused_in_debug_builds`,
+# `#[should_panic]`, named for debug builds but missing `#[cfg(debug_assertions)]` — cannot
+# pass under release, because `debug_assert!` compiles out and the panic it expects never
+# happens. Adding the attribute is a one-line change in a file this lane does not own; until
+# it lands, run this task directly. See `#429`.
+[tasks.test-rust-release]
+description = "Run the tests that only exist in release builds (cfg(not(debug_assertions)))"
+run = "cargo nextest run -p capsule-i18n --cargo-profile release"
+
 [tasks.test-coverage-rust]
 run = "cargo llvm-cov nextest --workspace --fail-under-lines 0"
 
