@@ -400,9 +400,9 @@ row's remainder now lives.
 | S-Z5 | Dead-code removal (exports stub, CLI import planner) | design/docs | — | S | MIXED | done | |
 | S-Z6 | Developer-docs parity pass | design/docs | — | M | MIXED | done | |
 | S-Z7 | Developer reference architecture (design) | design/docs | — | S | ACTIVE | done | |
-| S-Z8 | Reference shell + CLI reference | design/docs | S-Z7 | M | ACTIVE | ready | |
-| S-Z9 | REST reference from the Kynos document | design/docs | S-Z8, S-D8 | M | ACTIVE | blocked | Kynos document → `S-C27`/`S-D8` |
-| S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | |
+| S-Z8 | Reference shell + CLI reference | design/docs | S-Z7 | M | ACTIVE | done | man pages/completions scoped out |
+| S-Z9 | REST reference from the Kynos document | design/docs | S-Z8, S-D8 | M | ACTIVE | done | |
+| S-Z10 | SDK / FFI / WASM reference | design/docs | S-Z8 | M | ACTIVE | ready | uniffi has no stable dump — own issue |
 | S-Z11 | Notification architecture (design) | design/docs | — | S | ACTIVE | done | |
 
 **Row counts.** 205 rows — the 129 from the v1 campaign and wave 2, the 51 the
@@ -413,12 +413,11 @@ area: **87 ACTIVE / 80 RETIRED / 38 MIXED**. By status:
 and `part 1 done`; they are counted together).
 
 Lanes are independent by construction; within a lane, "Depends on" is the only
-ordering. Seven rows read `blocked`, and only two of them are waiting on code:
+ordering. Six rows read `blocked`, and only two of them are waiting on code:
 `S-N2` behind `S-N1`, and `S-P4` behind `S-P2`/`S-P3`. The rest are waiting on a
 decision rather than on an implementation — `S-C47` is a legal question, `S-C49`
-and `S-C51` each need a fact the slice that found them could not settle, `S-D24`
-needs a design decision, and `S-Z9` needs the Kynos document
-(`S-C27`/`S-D8`). `S-P1` landing freed the rest of lane P and `S-U19` with it;
+and `S-C51` each need a fact the slice that found them could not settle, and
+`S-D24` needs a design decision. `S-P1` landing freed the rest of lane P and `S-U19` with it;
 lane U was built so the other twenty-two Apple-client slices never waited on that
 chain in the first place. Everything else that once read `blocked`
 is startable: `S-A10` and `S-P7` are done (freeing `S-B10`, `S-D16`, `S-P1`, `S-Q5` — of
@@ -5631,17 +5630,26 @@ and all three slices are `done` in `capsule-core`.
 ### S-Z8 — Reference shell + CLI reference
 
 - **Gap:** `/reference/` has an index and nothing under it, and `capsule-cli/README.md`
-  still defers entirely to `capsule --help`. No `clap_mangen` or `clap_complete` exists
-  anywhere in the workspace, so there is no man page and no shell completion either.
+  still defers entirely to `capsule --help`.
 - **Deliverable:** the reference shell (overview page per section) plus the first real
-  generated surface. `capsule-cli` gains a command-tree dump with a `--check` mode and
-  `clap_mangen`/`clap_complete` output; the docs build renders the committed dump into
-  `/reference/cli/`. The CI `docs` path filter widens to name every artifact the docs
-  build now reads — without that, a CLI change publishes a stale page without failing
-  anything.
+  generated surface. `capsule-cli` gains a command-tree dump with a `--check` mode; the
+  docs build renders the committed dump into `/reference/cli/`. The CI `docs` path filter
+  widens to name every artifact the docs build now reads — without that, a CLI change
+  publishes a stale page without failing anything.
+- **Scoped out: man pages and shell completions.** The slice originally named
+  `clap_mangen` and `clap_complete`. Neither crate appears anywhere in `Cargo.lock`, so
+  both would owe a row in `design/dependencies.md`, and neither produces the description
+  artifact the docs build reads — they are *install* artifacts, emitted for a packager,
+  not a description of the surface. They are a packaging slice, not this one.
 - **Done when:** `/reference/cli/` renders the full command tree from the committed dump,
   the `--check` mode fails on a hand-edited dump, and the `docs` path filter names the
   dump. **Tier:** docs build + the new drift gate. **Depends on:** S-Z7.
+- **Landed — verified 2026-09-02.** `capsule_cli::cli::command_tree()` emits the tree,
+  `capsule-cli/src/bin/gen_cli_surface.rs` writes and `--check`s
+  `capsule-cli/cli-surface.json`, and `cli-surface-check` runs in `check-rust` beside
+  `openapi-check-kynos`. `capsule-docs/scripts/gen-reference.mjs` renders it into
+  `/reference/cli/commands/` as gitignored build output, with the hand-written overview
+  at `/reference/cli/`. The `docs` filter names both committed artifacts.
 
 ### S-Z9 — REST reference from the Kynos document
 
@@ -5654,8 +5662,16 @@ and all three slices are `done` in `capsule-core`.
   forfeit the search index, the link validator, and the site palette.
 - **Done when:** the committed contract is Kynos-emitted, `openapi-check` gates it, and
   `/reference/api/` renders every path in it as Starlight pages that Pagefind indexes.
-  **Tier:** docs build + `openapi-check`. **Depends on:** S-Z8, S-D8 (**live block** —
-  the schema must come from Kynos, which needs `S-C27`).
+  **Tier:** docs build + `openapi-check`. **Depends on:** S-Z8, S-D8 (the block cleared
+  when `S-C34` landed the Kynos emitter and `openapi-check-kynos`).
+- **Landed — verified 2026-09-02.** All 51 paths and 59 operations of
+  `capsule-server/openapi.json` render across eleven group pages under `/reference/api/`,
+  from the ordered table in `capsule-docs/scripts/reference-groups.mjs` that
+  `astro.config.mjs` also builds the sidebar from. The document carries no `tags` on any
+  operation, so the grouping is hand-curated by path prefix and the generator **fails on
+  an operation no group claims** — a new endpoint family cannot publish under a heading
+  nobody chose, and cannot silently fail to publish. A test asserts the bucketed count
+  equals the declared one.
 
 ### S-Z10 — SDK / FFI / WASM reference
 
@@ -5672,6 +5688,24 @@ and all three slices are `done` in `capsule-core`.
 - **Done when:** each dump has a `--check` in the Rust gate, the three binding pages render
   from committed dumps, and `/reference/crates/` resolves. **Tier:** docs build + the new
   drift gates. **Depends on:** S-Z8.
+- **Still `ready`, and split out of the S-Z8/S-Z9 delivery.** Neither of its two artifacts
+  can be produced the way the slice assumes, and the evidence is recorded here so the next
+  attempt starts from it:
+  - **uniffi exposes no stable machine-readable dump.** `uniffi_bindgen 0.31.1` — the
+    pinned version — offers only `generate`, `scaffolding`, and `pipeline`, and `pipeline`
+    documents itself as inspecting the render pipeline. The one thing resembling a dump,
+    `print_repr`, prints Rust `{:#?}` `Debug` of `uniffi_meta::Metadata`, which carries no
+    `serde` derive and no `serde` dependency. A committed artifact today is therefore
+    either a `Debug` blob with no compatibility promise that churns on every uniffi bump,
+    or a hand-written mapper over a private IR — the second parser `AGENTS.md` forbids.
+    The symbol-presence assertions already in `mise-tasks/gen-bindings` enumerate the verbs
+    and are the honest seed: they assert, they do not emit.
+  - **The wasm `.d.ts` gate cannot live in `check-rust`.** That gate runs
+    `build-check-wasm`, two `cargo check`s; the artifact comes from `build-wasm`, which
+    needs `wasm-bindgen-cli`, installed only by the `web` CI job. Gating it is a
+    `check-web` change and a web-side artifact, not a fourth entry in the Rust gate.
+  Filed as its own issue with this evidence. The extension point is the group table in
+  `capsule-docs/scripts/reference-groups.mjs`: adding a surface is a group plus a renderer.
 
 ## Deferred Migrations Register
 

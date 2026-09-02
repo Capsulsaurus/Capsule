@@ -90,6 +90,7 @@ run = [
   "mise run i18n-check",
   "mise run i18n-guard",
   "mise run openapi-check-kynos",
+  "mise run cli-surface-check",
   "mise run architecture-check",
   "mise run license-check",
   "mise run translate-readme-check",
@@ -238,6 +239,20 @@ run = "cargo run -q -p capsule-server --bin gen_openapi"
 [tasks.openapi-check-kynos]
 description = "Verify the committed Kynos OpenAPI 3.2 document matches the server"
 run = "cargo run -q -p capsule-server --bin gen_openapi -- --check"
+
+# Dump the `capsule` command tree to the committed capsule-cli/cli-surface.json that the
+# documentation build renders into `/reference/cli/` (slice `S-Z8`). The same shape as the
+# OpenAPI pair above, and for the same reason: the docs job installs bun and nothing else, so
+# it reads a committed artifact rather than asking cargo what the CLI looks like. State-free
+# and deterministic — `command_tree()` walks compile-time clap attributes. Re-run and commit
+# after any change to the argument surface.
+[tasks.cli-surface]
+description = "Dump the capsule command tree to capsule-cli/cli-surface.json"
+run = "cargo run -q -p capsule-cli --bin gen_cli_surface"
+
+[tasks.cli-surface-check]
+description = "Verify the committed capsule command tree matches the CLI"
+run = "cargo run -q -p capsule-cli --bin gen_cli_surface -- --check"
 
 # Regenerate the translated README.<lang>.md files from README.md and the committed
 # per-locale translation data (xtask/translations/readme/). See xtask/src/translate_readme.rs.

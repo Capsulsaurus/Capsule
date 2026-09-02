@@ -11,9 +11,10 @@ resulting page lands. It does not decide which surfaces exist: that is the
 obeys are [API Practices](/development/api-practices/).
 
 Implemented in `capsule-docs/` (Astro + Starlight) plus one description emitter per surface, living
-in the crate that owns the surface and driven by its `mise` task. Every surface named below is
-**Planned** or **Blocked** — `capsule-docs/src/content/docs/reference/` holds no generated content
-today.
+in the crate that owns the surface and driven by its `mise` task. Two surfaces have landed: the REST
+contract at `/reference/api/` and the command line at `/reference/cli/`, each generated from a
+committed description artifact by `capsule-docs/scripts/gen-reference.mjs` and each drift-gated in
+the Rust gate. The rest are **Planned**.
 
 ## The Problem
 
@@ -83,8 +84,8 @@ in the docs gate, which cannot run it.
 
 | Surface | Description artifact | Emitted by | Drift gate | Page | Status |
 | --- | --- | --- | --- | --- | --- |
-| REST | Kynos OpenAPI 3.2 document | `capsule-server::openapi()` via an emitter binary | `openapi-check-kynos` | `/reference/api/` | **Emitter and gate landed; rendering blocked** |
-| CLI | command-tree JSON, man pages, shell completions | `capsule-cli` (clap) | new `--check` on the dump | `/reference/cli/` | Planned |
+| REST | Kynos OpenAPI 3.2 document | `capsule-server::openapi()` via `gen_openapi` | `openapi-check-kynos` | `/reference/api/` | **Landed** |
+| CLI | command-tree JSON | `capsule_cli::cli::command_tree()` via `gen_cli_surface` | `cli-surface-check` | `/reference/cli/` | **Landed** |
 | Rust SDK | rustdoc HTML (uncommitted) | `cargo doc -p capsule-sdk` | broken intra-doc links denied | `/reference/sdk/rust/` → `/reference/crates/` | Planned |
 | Swift bindings | uniffi surface JSON, dumped from the compiled cdylib | a dump step on `mise-tasks/gen-bindings` | new `--check` on the dump | `/reference/sdk/swift/` | Planned |
 | Kotlin bindings | as above | as above | as above | `/reference/sdk/kotlin/` | Planned |
@@ -96,10 +97,12 @@ Each therefore needs a small committed dump alongside its existing generation st
 symbol-presence assertions already in `mise-tasks/gen-bindings` are the seed of that dump — they
 already enumerate the verbs each binding must export — but they assert, they do not yet emit.
 
-**Why REST is blocked.** The committed `capsule-sdk/openapi.json` is emitted from the retired Salvo
-server. Its Kynos replacement exposes `openapi() -> Document` but has a single route ported and no
-emitter binary, so no Kynos document exists yet. The REST reference is generated from the Kynos
-document when there is one; publishing the Salvo-derived file would document a server nothing runs.
+**How REST got unblocked.** It was blocked on there being no Kynos document to publish: the
+committed contract was emitted from the retired Salvo server, and publishing that would have
+documented a server nothing runs. `capsule-server/openapi.json` is now the Kynos document — emitted
+by `gen_openapi` from the route types, gated by `openapi-check-kynos` — and `/reference/api/`
+renders it. The CLI followed the same shape rather than a second mechanism: a `command_tree()` dump,
+a `gen_cli_surface` emitter, and `cli-surface-check` in the same gate.
 
 **What is deliberately not a reference surface:**
 

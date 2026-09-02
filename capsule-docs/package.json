@@ -4,12 +4,12 @@
     "version": "0.1.0",
     "license": "AGPL-3.0-only",
     "scripts": {
-        "dev": "astro dev",
-        "start": "astro dev",
-        "build": "astro build",
-        "preview": "wrangler pages dev ./dist",
+        "dev": "bun scripts/gen-reference.mjs && astro dev",
+        "start": "bun scripts/gen-reference.mjs && astro dev",
+        "build": "bun scripts/gen-reference.mjs && astro build",
+        "preview": "bun run build && wrangler pages dev ./dist",
         "astro": "astro",
-        "deploy": "wrangler pages deploy ./dist",
+        "deploy": "bun run build && wrangler pages deploy ./dist",
         "test": "vitest run"
     },
     "dependencies": {
