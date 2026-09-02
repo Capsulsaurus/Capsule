@@ -287,3 +287,277 @@ async fn the_sdk_completes_a_real_second_factor_over_a_socket() {
         .expect("the code completes the sign-in");
     assert!(session.is_authenticated().await);
 }
+
+/// The escrow round trip, over a socket, against the router that actually serves it.
+///
+/// This is the case the slice was missing. `capsule_sdk::recovery` used to build
+/// `{api_root}/backup/escrow` by hand — the Salvo document's path — and its own in-module mock
+/// answered whatever path it was handed, so every escrow test passed while no real server had
+/// that route. Only a client pointed at the router can tell the difference, and the bytes are
+/// the ones a KDF runs against: a wrap that comes back re-encoded is a lost master key.
+///
+/// **The route is asserted, not inferred.** Both halves are cross-checked against
+/// `/v1/auth/escrow` through the fixture's own in-process client: what the SDK stored is read
+/// back at that path, and what was seeded at that path is what the SDK fetches. A client
+/// talking to some other path could satisfy neither, so this does not depend on how the
+/// router happens to render a `404` for a path it does not serve.
+#[tokio::test]
+async fn the_sdk_stores_and_fetches_an_escrow_over_a_socket() {
+    use capsule_core::crypto::primitives::Argon2Params;
+    use capsule_core::crypto::pwkdf;
+    use capsule_sdk::recovery::{RecoveryClient, RecoveryError};
+
+    // Fast Argon2id params: the crypto is `capsule-core`'s and proven there; what is under test
+    // is the wire.
+    let params = Argon2Params {
+        mem_kib: 64,
+        t_cost: 1,
+        p_cost: 1,
+    };
+    const SECRET: &[u8] = b"correct horse battery staple";
+
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let base_url = serve(&fixture).await;
+    let client =
+        RecoveryClient::new(session(&base_url).await, &base_url).expect("an API root parses");
+
+    // Nothing stored yet: the typed refusal a cadence reads as "enroll first".
+    let missing = client
+        .fetch_escrow()
+        .await
+        .expect_err("a fresh account has escrowed nothing");
+    assert!(
+        matches!(missing, RecoveryError::NotEnrolled),
+        "got {missing:?}"
+    );
+
+    // ── The SDK writes; the contract's route is where it landed ───────────────────────────
+    let master = [0x5Au8; 32];
+    let blob = pwkdf::wrap_with(&master, SECRET, params).expect("the master key wraps");
+    client.store_escrow(&blob).await.expect("the escrow stores");
+
+    let response = fixture
+        .client
+        .get("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .send()
+        .await;
+    let seen = response.assert_status(kynos::http::StatusCode::OK).bytes();
+    assert_eq!(
+        seen.as_ref(),
+        capsule_core::cbor::to_canonical_vec(&blob)
+            .expect("the wrap encodes")
+            .as_slice(),
+        "the bytes the SDK stored must be readable at `/v1/auth/escrow` — the path the \
+         committed document declares, which is the assertion the old tests could not make"
+    );
+
+    // ── The SDK reads back what that route holds, byte for byte ───────────────────────────
+    let cache = client.fetch_escrow().await.expect("and comes back");
+    assert_eq!(
+        cache.blob(),
+        &blob,
+        "the escrow is ciphertext served verbatim; a re-encoded wrap no longer opens"
+    );
+    assert_eq!(
+        capsule_core::backup::recover_master_key(cache.blob(), SECRET)
+            .expect("the fetched wrap opens"),
+        master,
+    );
+
+    // A rotation seeded at the contract's route is the one the SDK sees next — the read half
+    // pinned to the same path, without relying on a refusal to prove it.
+    let rotated = pwkdf::wrap_with(&master, b"a different secret entirely", params)
+        .expect("the master key re-wraps");
+    fixture
+        .client
+        .put("/v1/auth/escrow")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .body(
+            "application/octet-stream",
+            capsule_core::cbor::to_canonical_vec(&rotated).expect("the wrap encodes"),
+        )
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    assert_eq!(
+        client
+            .fetch_escrow()
+            .await
+            .expect("the rotated escrow comes back")
+            .blob(),
+        &rotated,
+        "the SDK reads the resource `/v1/auth/escrow` addresses, not some other path that \
+         happens to answer"
+    );
+}
+
+/// **`S-D17`'s Done-when, against the server that decides.** A token the client still believes
+/// in and the server has stopped honouring is refreshed once and the call replayed once.
+///
+/// The unit tests cover the layer against a mock; this covers the one thing a mock cannot rule
+/// out — that the two ends disagree about when an access token dies. The server validates `exp`
+/// against its **injected** clock (`capsule_server::auth::tokens`, deliberately, so a test can
+/// walk over an expiry), so advancing the fixture's clock past `ACCESS_TOKEN_TTL` revokes the
+/// access token for real while the session and its refresh token remain live.
+///
+/// The client is then handed the same token pair with a far-future expiry, which is exactly the
+/// state a client is in whenever it trusted a server-supplied deadline and the server changed
+/// its mind first — a revocation, a clock skew, a rotated signing key. Because the client sees
+/// no reason to refresh, the pre-flight half cannot fire, so a call that succeeds here succeeded
+/// through the reactive layer and nothing else.
+#[tokio::test]
+async fn a_token_the_server_stopped_honouring_is_refreshed_and_the_call_replayed() {
+    use capsule_sdk::auth::PersistedSession;
+    use capsule_sdk::client::AuthenticatedClient;
+    use secrecy::ExposeSecret as _;
+
+    let fixture = Fixture::working();
+    let base_url = serve(&fixture).await;
+    let signed_in = session(&base_url).await;
+    let pair = signed_in.export().await.expect("a live session exports");
+    let stale_access = pair.access_token.expose_secret().to_owned();
+
+    // Past the access token's life, well inside the session's. The refresh token still works;
+    // the access token does not.
+    fixture.clock.advance(
+        capsule_server::auth::ACCESS_TOKEN_TTL
+            .checked_add(jiff::SignedDuration::from_secs(60))
+            .expect("a representable instant"),
+    );
+
+    // The same pair, with a deadline the client has no reason to doubt.
+    let session = AuthClient::new(&format!("{base_url}/v1/auth"))
+        .expect("a base url")
+        .resume(PersistedSession {
+            access_token: stale_access.clone().into(),
+            refresh_token: pair.refresh_token,
+            access_expires_at_unix: Timestamp::now().as_second() + 3600,
+        })
+        .expect("a session resumes from any pair");
+    let client = AuthenticatedClient::new(&base_url, session).expect("an API root parses");
+
+    // A generated operation, called straight through the Deref — nothing about this call site
+    // knows a retry layer exists, which is the point of putting it at the transport seam.
+    let quota = client
+        .get_quota()
+        .await
+        .expect("the 401 is recovered and the call replayed")
+        .into_inner();
+    assert_eq!(quota.state.as_str(), "ok");
+
+    let after = client
+        .session()
+        .export()
+        .await
+        .expect("the session is still live");
+    assert_ne!(
+        after.access_token.expose_secret(),
+        stale_access.as_str(),
+        "the replay must have ridden a rotated token; an unchanged one would mean the server \
+         accepted a token it had already stopped honouring"
+    );
+}
+
+/// The album-upgrade proposal, over a socket, against the server that verifies the signature.
+///
+/// This one cannot be proven against a mock at all. The intent is signed with the proposing
+/// device's DSK and verified against the account's **published** device directory, so a mock
+/// that answered `200` would prove only that the client can post bytes. Here the directory is
+/// anchored, the album provisioned, and the intent signed by `capsule-core` with the *same*
+/// types the server verifies with — so what is asserted is that the bytes the SDK put on the
+/// wire are the bytes that verify.
+///
+/// The `409` half matters as much: only one ceremony may hold an album, and a client that read
+/// that refusal as "malformed, re-sign" would have an admin re-signing intents forever.
+#[tokio::test]
+async fn the_sdk_proposes_an_album_upgrade_over_a_socket() {
+    use capsule_sdk::upgrade::{UpgradeClient, UpgradeError};
+    use support::{
+        device, identity_header, identity_key, signed_directory_with_device, signed_upgrade_intent,
+    };
+    use uuid::Uuid;
+
+    let intent_id = Uuid::parse_str("019a0000-0000-7000-8000-00000000cafe").expect("a uuid");
+    let fixture = Fixture::working();
+    let bearer = fixture.bearer().await;
+    let identity = identity_key();
+    let device_key = identity_key();
+
+    // Anchor the directory holding the proposing device, then provision the album. Without the
+    // first, every proposal is `403` however well signed — the directory *is* the trust anchor.
+    fixture
+        .client
+        .post("/v1/auth/devices/directory")
+        .header("authorization", &bearer)
+        .header("x-capsule-identity-key", &identity_header(&identity))
+        .body(
+            "application/cbor",
+            signed_directory_with_device(
+                &identity,
+                1,
+                device(),
+                &device_key,
+                "1970-01-01T00:00:00Z",
+            ),
+        )
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::OK);
+    fixture
+        .client
+        .post("/v1/albums")
+        .header("authorization", &bearer)
+        .header("accept", "application/json")
+        .json(&serde_json::json!({ "album_id": album().as_str() }))
+        .send()
+        .await
+        .assert_status(kynos::http::StatusCode::CREATED);
+
+    let base_url = serve(&fixture).await;
+    let client = UpgradeClient::new(session(&base_url).await, &base_url);
+    let album_id = Uuid::parse_str(album().as_str()).expect("the seeded album id is a uuid");
+    let intent = signed_upgrade_intent(&device_key, device(), intent_id, "2030-01-01", 300);
+
+    let phase = client
+        .begin(album_id, &intent)
+        .await
+        .expect("a signed proposal from an anchored device is accepted");
+    assert_eq!(phase.album_id, album_id);
+    assert_eq!(
+        phase.intent_id,
+        Some(intent_id),
+        "the ceremony the server now holds is the one the client proposed"
+    );
+    assert_eq!(phase.to_protocol_version.as_deref(), Some("2030-01-01"));
+    assert_eq!(phase.in_flight, 0, "nothing is draining on a fresh album");
+    assert!(
+        phase.expires_at.is_some(),
+        "the deadline is the server's to set, and it must reach the client as an instant"
+    );
+
+    // A second ceremony under a different id is refused with the live one — and with the code
+    // a client localizes, parsed out of a problem body that crossed a socket.
+    let second = Uuid::parse_str("019a0000-0000-7000-8000-00000000beef").expect("a uuid");
+    let error = client
+        .begin(
+            album_id,
+            &signed_upgrade_intent(&device_key, device(), second, "2030-01-01", 300),
+        )
+        .await
+        .expect_err("only one ceremony may hold an album");
+    let UpgradeError::InFlight {
+        intent_id: live, ..
+    } = &error
+    else {
+        panic!("expected an in-flight refusal, got {error:?}");
+    };
+    assert_eq!(live.as_deref(), Some(intent_id.to_string().as_str()));
+    assert_eq!(
+        error.error_code(),
+        Some("error.album.upgrade_in_flight"),
+        "got {error:?}"
+    );
+}
