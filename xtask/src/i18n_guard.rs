@@ -63,10 +63,16 @@
 //! literal in the ICU **argument-name** position (`("email", Value::Str(&email))`) names a
 //! placeholder rather than displaying it.
 //!
-//! **Known blind spot:** clap's `--help` output. Usage text comes from doc comments and
-//! `#[arg(...)]` attributes that clap renders itself, with no catalog mechanism to render
-//! a key through; localizing it is a separate slice, not something an allowlist entry per
-//! flag would express honestly. It is recorded here rather than silently omitted.
+//! **clap's `--help` output is outside this scanner, and covered elsewhere.** Usage text
+//! comes from doc comments and `#[arg(...)]` attributes that clap renders itself, so no
+//! `println!` carries it and nothing here can see it. Since slice `S-I8` the CLI rewrites
+//! every `about`/`help` from the `cli.help.*` catalog keys at parser construction
+//! (`capsule_cli::cli::help`), and the gate for that surface is the invariant test in that
+//! module: every help string must have an `en` entry equal to its doc comment, so a doc
+//! comment added without a key fails `cargo test -p capsule-cli` rather than this guard.
+//! What remains unlocalized is a `ValueEnum` variant's help (`--filter pick` → "A keeper."),
+//! which clap 4 cannot re-word without discarding the typed parser; the i18n design doc
+//! records it as the residual gap.
 //!
 //! The Swift/Compose surfaces are anchored to the catalog: a captured string passes
 //! only if it exactly matches a key in `locales/en.json`. The web surface has no

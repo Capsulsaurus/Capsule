@@ -166,8 +166,21 @@ fn read_import_source(
 }
 
 /// Parse the CLI arguments and dispatch the matching command.
+///
+/// The parser is built from the derive and then localized (`S-I8`): every `--help` string is
+/// resolved through the bundle negotiated from the process locale before a single argument is
+/// read, so usage errors and help pages speak the user's language. A locale with no catalog
+/// entry for a string falls back to the derive's English rather than printing a key.
 pub async fn run() -> Result<()> {
-    let cli = <Cli as clap::Parser>::parse();
+    let command = cli::help::localize(
+        <Cli as clap::CommandFactory>::command(),
+        &i18n::cli_bundle(),
+    );
+    let mut matches = command.get_matches();
+    let cli = match <Cli as clap::FromArgMatches>::from_arg_matches_mut(&mut matches) {
+        Ok(cli) => cli,
+        Err(error) => error.exit(),
+    };
     tracing::trace!("Parsed CLI arguments: {:#?}", cli);
     dispatch(cli).await
 }

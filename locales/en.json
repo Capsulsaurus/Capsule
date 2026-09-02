@@ -6911,6 +6911,242 @@
     "message": "Cull view: {pick} pick, {neutral} neutral, {reject} reject.",
     "context": "CLI summary line from `capsule cull` counting the live (non-trashed) assets carrying each culling flag."
   },
+  "cli.help.auth.about": {
+    "message": "Authentication commands",
+    "context": "clap --help: the one-line description of `capsule auth`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.login.about": {
+    "message": "Login to Capsule",
+    "context": "clap --help: the one-line description of `capsule auth login`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.login.arg.email": {
+    "message": "Account email (prompted when omitted)",
+    "context": "clap --help: help for the `--email` option of `capsule auth login`."
+  },
+  "cli.help.auth.login.arg.password_stdin": {
+    "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--password-stdin` flag of `capsule auth login`."
+  },
+  "cli.help.auth.logout.about": {
+    "message": "Logout from Capsule",
+    "context": "clap --help: the one-line description of `capsule auth logout`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.register.about": {
+    "message": "Create a Capsule account and sign in",
+    "context": "clap --help: the one-line description of `capsule auth register`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.auth.register.arg.email": {
+    "message": "Account email (prompted when omitted)",
+    "context": "clap --help: help for the `--email` option of `capsule auth register`."
+  },
+  "cli.help.auth.register.arg.password_stdin": {
+    "message": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--password-stdin` flag of `capsule auth register`."
+  },
+  "cli.help.auth.status.about": {
+    "message": "Show authentication status",
+    "context": "clap --help: the one-line description of `capsule auth status`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.cull.about": {
+    "message": "Review a local library: flag assets, filter by flag, sweep rejects to trash",
+    "context": "clap --help: the one-line description of `capsule cull`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.cull.arg.filter": {
+    "message": "List the assets carrying one flag instead of only counting them",
+    "context": "clap --help: help for the `--filter` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.neutral": {
+    "message": "Clear an asset's flag back to the never-flagged default (repeatable)",
+    "context": "clap --help: help for the `--neutral` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so culling works in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule cull`."
+  },
+  "cli.help.cull.arg.pick": {
+    "message": "Flag an asset as a keeper (repeatable)",
+    "context": "clap --help: help for the `--pick` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.reject": {
+    "message": "Flag an asset for rejection (repeatable)",
+    "context": "clap --help: help for the `--reject` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.retain_days": {
+    "message": "Retention window, in days, the sweep's soft delete stamps",
+    "context": "clap --help: help for the `--retain-days` option of `capsule cull`."
+  },
+  "cli.help.cull.arg.sweep": {
+    "message": "Move every rejected asset to trash. The only destructive step, and soft per retention — swept assets stay restorable until the window elapses",
+    "context": "clap --help: help for the `--sweep` flag of `capsule cull`."
+  },
+  "cli.help.demo.about": {
+    "message": "Run the offline end-to-end data-plane showcase (real cryptography, no network)",
+    "context": "clap --help: the one-line description of `capsule demo`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.demo.arg.image": {
+    "message": "A real image/file to import (a small synthetic file is used if omitted)",
+    "context": "clap --help: help for the `--image` option of `capsule demo`."
+  },
+  "cli.help.demo.arg.workdir": {
+    "message": "Working directory for the demo libraries (a temp dir is used if omitted)",
+    "context": "clap --help: help for the `--workdir` option of `capsule demo`."
+  },
+  "cli.help.import.about": {
+    "message": "Import files into a local Capsule library",
+    "context": "clap --help: the one-line description of `capsule import`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.import.arg.force": {
+    "message": "Re-import files even if they already exist (duplicate override)",
+    "context": "clap --help: help for the `--force` flag of `capsule import`."
+  },
+  "cli.help.import.arg.library": {
+    "message": "Path to the Capsule library",
+    "context": "clap --help: help for the `--library` option of `capsule import`."
+  },
+  "cli.help.import.arg.move": {
+    "message": "Move files instead of copying them",
+    "context": "clap --help: help for the `--move` flag of `capsule import`."
+  },
+  "cli.help.import.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule import`."
+  },
+  "cli.help.import.arg.paths": {
+    "message": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule import`."
+  },
+  "cli.help.import.arg.provider": {
+    "message": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets",
+    "context": "clap --help: help for the `--provider` option of `capsule import`."
+  },
+  "cli.help.import.arg.push": {
+    "message": "Push the library to the server after importing — sugar for a `capsule push` run over the same library. The import itself stays offline",
+    "context": "clap --help: help for the `--push` flag of `capsule import`."
+  },
+  "cli.help.import.arg.staged": {
+    "message": "Stage the follow-on push (`--push`) in tier order, gating the preview and original tiers on the connection class",
+    "context": "clap --help: help for the `--staged` flag of `capsule import`."
+  },
+  "cli.help.library.about": {
+    "message": "Manage the local library",
+    "context": "clap --help: the one-line description of `capsule library`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.info.about": {
+    "message": "Show library information",
+    "context": "clap --help: the one-line description of `capsule library info`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.info.arg.path": {
+    "message": "Path to the library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library info`."
+  },
+  "cli.help.library.init.about": {
+    "message": "Create a new Capsule library",
+    "context": "clap --help: the one-line description of `capsule library init`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.init.arg.name": {
+    "message": "Human-readable library name",
+    "context": "clap --help: help for the `--name` option of `capsule library init`."
+  },
+  "cli.help.library.init.arg.path": {
+    "message": "Directory for the new library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library init`."
+  },
+  "cli.help.library.rebuild.about": {
+    "message": "Rebuild the SQLite index from sidecar files",
+    "context": "clap --help: the one-line description of `capsule library rebuild`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.library.rebuild.arg.path": {
+    "message": "Path to the library",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule library rebuild`."
+  },
+  "cli.help.list.about": {
+    "message": "List the assets the sync feed has delivered",
+    "context": "clap --help: the one-line description of `capsule list`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.list.arg.include_deleted": {
+    "message": "Include assets the server has tombstoned (deleted) as well as live ones",
+    "context": "clap --help: help for the `--include-deleted` flag of `capsule list`."
+  },
+  "cli.help.match.about": {
+    "message": "Match metadata for current file",
+    "context": "clap --help: the one-line description of `capsule match`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.match.arg.path": {
+    "message": "Path to the file to match metadata for",
+    "context": "clap --help: help for the `<PATH>` positional of `capsule match`."
+  },
+  "cli.help.push.about": {
+    "message": "Upload a local Capsule library to the server",
+    "context": "clap --help: the one-line description of `capsule push`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.push.arg.dry_run": {
+    "message": "Report what would be uploaded without opening a single upload session",
+    "context": "clap --help: help for the `--dry-run` flag of `capsule push`."
+  },
+  "cli.help.push.arg.force": {
+    "message": "Re-drive every blob regardless of what the server already holds",
+    "context": "clap --help: help for the `--force` flag of `capsule push`."
+  },
+  "cli.help.push.arg.library": {
+    "message": "Path to the Capsule library to push",
+    "context": "clap --help: help for the `--library` option of `capsule push`."
+  },
+  "cli.help.push.arg.passphrase_stdin": {
+    "message": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal",
+    "context": "clap --help: help for the `--passphrase-stdin` flag of `capsule push`."
+  },
+  "cli.help.push.arg.staged": {
+    "message": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly",
+    "context": "clap --help: help for the `--staged` flag of `capsule push`."
+  },
+  "cli.help.reset.about": {
+    "message": "Reset all local CLI data",
+    "context": "clap --help: the one-line description of `capsule reset`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.reset.arg.all": {
+    "message": "Reset all data",
+    "context": "clap --help: help for the `--all` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.cache": {
+    "message": "Reset cache directory",
+    "context": "clap --help: help for the `--cache` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.config": {
+    "message": "Reset configuration",
+    "context": "clap --help: help for the `--config` flag of `capsule reset`."
+  },
+  "cli.help.reset.arg.data": {
+    "message": "Reset data directory",
+    "context": "clap --help: help for the `--data` flag of `capsule reset`."
+  },
+  "cli.help.root.about": {
+    "message": "A command line interface for Capsule - the photo management platform",
+    "context": "clap --help: the one-line description of `capsule` (the root command). Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.root.long_about": {
+    "message": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections",
+    "context": "clap --help: the long description of `capsule`, shown at the top of `capsule --help` instead of the one-line form. Keep the Markdown list markers: the documentation site renders this text as prose."
+  },
+  "cli.help.status.about": {
+    "message": "Show current status",
+    "context": "clap --help: the one-line description of `capsule status`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.sync.about": {
+    "message": "Sync local and remote data",
+    "context": "clap --help: the one-line description of `capsule sync`. Shown in the parent's command list and at the top of its own --help."
+  },
+  "cli.help.sync.arg.dry_run": {
+    "message": "Perform a dry run without making changes",
+    "context": "clap --help: help for the `--dry-run` flag of `capsule sync`."
+  },
+  "cli.help.sync.arg.force": {
+    "message": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries",
+    "context": "clap --help: help for the `--force` flag of `capsule sync`."
+  },
   "cli.import.candidates_found": {
     "message": "Found {candidates} candidate(s) ({files} file(s) total).",
     "context": "CLI summary after `capsule import` finishes scanning. {candidates} is the number of importable items found; {files} is the total number of files seen, including sidecars and non-media files. Both are counts."

@@ -10,9 +10,17 @@
 //! operator telemetry and stays English. Commands migrated so far: the networked ones
 //! (`auth`, `sync`, `list`, `push` — `S-D5`), `cull` (`S-D16`), and `import` (`S-I5`);
 //! the rest are carried as visible debt in `locales/i18n-guard-allowlist.txt`.
+//!
+//! `--help` is user-facing too, and is rendered from the [`HELP_NAMESPACE`] keys by
+//! [`crate::cli::help`] (`S-I8`) rather than from a key constant per string: its keys are
+//! derived from the command tree, so a new subcommand's help is a catalog entry the
+//! invariant test in that module demands, not a constant somebody has to remember to add.
 
 pub use capsule_i18n::{Bundle, Value, error_codes};
 use capsule_i18n::{negotiate, supported_locales};
+
+/// The namespace `--help` text lives under; the key grammar is [`crate::cli::help`]'s.
+pub const HELP_NAMESPACE: &str = "cli.help";
 
 /// Build the CLI's message bundle from the POSIX locale environment, falling back
 /// to the source locale. `LC_ALL` wins, then `LC_MESSAGES`, then `LANG`.

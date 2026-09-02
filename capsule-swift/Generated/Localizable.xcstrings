@@ -30101,6 +30101,596 @@
         }
       }
     },
+    "cli.help.auth.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Authentication commands"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Login to Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.email": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.login.arg.password_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.auth.logout.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logout from Capsule"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a Capsule account and sign in"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.arg.email": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Account email (prompted when omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.auth.register.arg.password_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the password from stdin instead of prompting, so the command works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.auth.status.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show authentication status"
+          }
+        }
+      }
+    },
+    "cli.help.cull.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Review a local library: flag assets, filter by flag, sweep rejects to trash"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.filter": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List the assets carrying one flag instead of only counting them"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.neutral": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clear an asset's flag back to the never-flagged default (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so culling works in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.pick": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flag an asset as a keeper (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.reject": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Flag an asset for rejection (repeatable)"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.retain_days": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Retention window, in days, the sweep's soft delete stamps"
+          }
+        }
+      }
+    },
+    "cli.help.cull.arg.sweep": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move every rejected asset to trash. The only destructive step, and soft per retention — swept assets stay restorable until the window elapses"
+          }
+        }
+      }
+    },
+    "cli.help.demo.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Run the offline end-to-end data-plane showcase (real cryptography, no network)"
+          }
+        }
+      }
+    },
+    "cli.help.demo.arg.image": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A real image/file to import (a small synthetic file is used if omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.demo.arg.workdir": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Working directory for the demo libraries (a temp dir is used if omitted)"
+          }
+        }
+      }
+    },
+    "cli.help.import.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Import files into a local Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-import files even if they already exist (duplicate override)"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.move": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move files instead of copying them"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so imports work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.paths": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source file or directory to import. Repeatable: a split Takeout export extracted into several folders is imported by naming every part in one run, so a media file and a sidecar that landed in different parts are still paired"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.provider": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the source as an export from this service instead of as a plain directory tree, so its out-of-band metadata (capture time, GPS, captions, favorites, album membership) is folded into the imported assets"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.push": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Push the library to the server after importing — sugar for a `capsule push` run over the same library. The import itself stays offline"
+          }
+        }
+      }
+    },
+    "cli.help.import.arg.staged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stage the follow-on push (`--push`) in tier order, gating the preview and original tiers on the connection class"
+          }
+        }
+      }
+    },
+    "cli.help.library.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Manage the local library"
+          }
+        }
+      }
+    },
+    "cli.help.library.info.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show library information"
+          }
+        }
+      }
+    },
+    "cli.help.library.info.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the library"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Create a new Capsule library"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.arg.name": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Human-readable library name"
+          }
+        }
+      }
+    },
+    "cli.help.library.init.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Directory for the new library"
+          }
+        }
+      }
+    },
+    "cli.help.library.rebuild.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rebuild the SQLite index from sidecar files"
+          }
+        }
+      }
+    },
+    "cli.help.library.rebuild.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the library"
+          }
+        }
+      }
+    },
+    "cli.help.list.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "List the assets the sync feed has delivered"
+          }
+        }
+      }
+    },
+    "cli.help.list.arg.include_deleted": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Include assets the server has tombstoned (deleted) as well as live ones"
+          }
+        }
+      }
+    },
+    "cli.help.match.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Match metadata for current file"
+          }
+        }
+      }
+    },
+    "cli.help.match.arg.path": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the file to match metadata for"
+          }
+        }
+      }
+    },
+    "cli.help.push.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload a local Capsule library to the server"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.dry_run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Report what would be uploaded without opening a single upload session"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Re-drive every blob regardless of what the server already holds"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.library": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Path to the Capsule library to push"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.passphrase_stdin": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Read the library passphrase from stdin instead of prompting, so pushes work in scripts and CI where there is no terminal"
+          }
+        }
+      }
+    },
+    "cli.help.push.arg.staged": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open the tier sessions in ladder order (index → preview → original), gating the above-index tiers on the connection class, instead of opening all eagerly"
+          }
+        }
+      }
+    },
+    "cli.help.reset.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset all local CLI data"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.all": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset all data"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.cache": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset cache directory"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.config": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset configuration"
+          }
+        }
+      }
+    },
+    "cli.help.reset.arg.data": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reset data directory"
+          }
+        }
+      }
+    },
+    "cli.help.root.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A command line interface for Capsule - the photo management platform"
+          }
+        }
+      }
+    },
+    "cli.help.root.long_about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Capsule CLI provides tools for managing your photos and albums:\n\n- Authentication management\n- Sync local and remote data\n- Check status and list files\n- Manage albums and collections"
+          }
+        }
+      }
+    },
+    "cli.help.status.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show current status"
+          }
+        }
+      }
+    },
+    "cli.help.sync.about": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sync local and remote data"
+          }
+        }
+      }
+    },
+    "cli.help.sync.arg.dry_run": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perform a dry run without making changes"
+          }
+        }
+      }
+    },
+    "cli.help.sync.arg.force": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Discard the saved cursor and re-drain the feed from the start. The per-album anti-rewind floor still applies, so this cannot resurrect stale entries"
+          }
+        }
+      }
+    },
     "cli.import.candidates_found": {
       "localizations": {
         "en": {

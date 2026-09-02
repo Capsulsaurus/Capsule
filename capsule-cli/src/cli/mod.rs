@@ -6,10 +6,13 @@
 //! `/reference/cli/` (slice `S-Z8`).
 
 pub(crate) mod commands;
+pub mod help;
 
 use clap::{Arg, ArgAction, Command, CommandFactory, Parser};
 pub(crate) use commands::*;
 use serde_json::{Map, Value};
+
+use crate::i18n::Bundle;
 
 /// Every field name the command-tree document uses, named once.
 ///
@@ -78,27 +81,29 @@ pub(crate) struct Cli {
 ///   Object keys come out sorted because `serde_json::Map` is a `BTreeMap` here
 ///   (`preserve_order` is off). Nothing is read from the clock, the filesystem, or the
 ///   environment.
-/// - **Locale-independent.** Every string below comes from a `clap` attribute or a doc
-///   comment — compile-time English `&'static str` — and `StyledStr`'s `Display` is
-///   documented as colour-unaware, so no ANSI escape can leak in from a terminal that
-///   supports colour. The process locale is never consulted: this function does **not**
-///   call [`crate::i18n::cli_bundle`], which negotiates `LC_ALL`/`LC_MESSAGES`/`LANG`.
+/// - **Locale-independent.** Help text is localized (slice `S-I8`, [`help::localize`]), and
+///   this function resolves it through an explicitly pinned **`en`** bundle —
+///   `Bundle::for_locale("en")`, never [`crate::i18n::cli_bundle`], which negotiates
+///   `LC_ALL`/`LC_MESSAGES`/`LANG`. The artifact describes one surface in one language; a
+///   bundle negotiated from the environment would make `cli-surface-check` pass or fail
+///   according to the developer's `LANG`, and the drift gate would stop meaning anything.
+///   `help`'s invariant test additionally proves the `en` entries equal the derive text, so
+///   pinning `en` yields the same tree the un-localized derive did. `StyledStr`'s `Display`
+///   is documented as colour-unaware, so no ANSI escape can leak in from a terminal that
+///   supports colour.
 ///
-/// **If help text is ever localized, it must be resolved here through
-/// `Bundle::for_locale("en")`, never through `cli_bundle()`.** The artifact describes one
-/// surface in one language; a bundle negotiated from the environment would make
-/// `cli-surface-check` pass or fail according to the developer's `LANG`, and the drift
-/// gate would stop meaning anything. Localizing the *rendered* help a user sees is a
-/// separate concern from describing the surface.
+/// Localizing the *rendered* help a user sees is a separate concern from describing the
+/// surface: the binary's [`crate::run`] applies the same rewriter under the negotiated
+/// bundle, and this function does not.
 ///
 /// The tree describes the surface this crate *declares*. `clap`'s generated `--help` (and
 /// `--version`, were one configured) is deliberately absent: [`Command::build`] is not
 /// called, so no synthesized argument is described, and the reference page does not repeat
-/// `--help` under all sixteen commands. Hidden commands and arguments are skipped for the
-/// same reason they are hidden.
+/// `--help` under every command. Hidden commands and arguments are skipped for the same
+/// reason they are hidden.
 #[must_use]
 pub fn command_tree() -> Value {
-    let mut root = describe_command(&Cli::command());
+    let mut root = describe_command(&help::localize(Cli::command(), &Bundle::for_locale("en")));
     root.insert(
         field::SCHEMA.to_owned(),
         Value::from(u64::from(COMMAND_TREE_SCHEMA)),
