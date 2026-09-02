@@ -83,7 +83,6 @@ A closed set. A row's state is a claim about the package, not about the programm
 | `legacy-review/server-salvo` | review-bucket | The retired Salvo server, kept as the contract the Kynos rebuild must reproduce | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once `capsule-server` reaches parity | Non-buildable reference material; nothing in the workspace links it |
 | `legacy-review/sdk-progenitor` | review-bucket | The retired Progenitor SDK | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once the spargen client covers it | Non-buildable reference material |
 | `legacy-review/media-pipeline` | review-bucket | The retired `capsule_core::media` decode and derivative stack | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deleted once `capsule-core::media` lands on Rawshift (#410) | Non-buildable reference material; taking the decoder with it is why every still import is a `DeferredNoCodec` today |
-| `legacy-review/core-import-media` | review-bucket | The quarantined twin of `capsule_core::exif` and the import executor's cancellation and progress halves | review-only | — | [legacy-review/README](legacy-review/README.md) | — | Deletion, which `S-C59` recorded and did not perform | All three modules are live, tested and newer in `capsule-core` than this snapshot, so the bucket is a stale twin rather than a quarantine |
 
 ## Deferred register
 
