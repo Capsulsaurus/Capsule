@@ -9,11 +9,14 @@
 //! server that withholds receipts never becomes the sole holder of an only-copy.
 //!
 //! This module is the client's **persistence** path, and only that. The receipt type, its
-//! verification and [`BlobRole`] moved to [`crate::crypto::receipts`] (`S-C46`) so the server
-//! that *issues* receipts shares one definition instead of mirroring it — a signed structure
-//! defined twice is a signature that eventually stops verifying, and the failure would look
-//! like the server withholding receipts. They are re-exported here, so every path a client
-//! already uses keeps working.
+//! verification and the blob-role enum moved to [`crate::crypto::receipts`] (`S-C46`) so the
+//! server that *issues* receipts shares one definition instead of mirroring it — a signed
+//! structure defined twice is a signature that eventually stops verifying, and the failure would
+//! look like the server withholding receipts. The receipt type and its verification are
+//! re-exported here and through [`crate::library`], so every path a client already uses keeps
+//! working. The role enum is not: it is reached as
+//! [`crypto::receipts::BlobRole`](crate::crypto::receipts::BlobRole), and as
+//! [`library::BlobRole`](crate::library::BlobRole) through the storage-verify barrel.
 //!
 //! Persistence is first-class, not a cache: the log is appended to
 //! `media/{YYYY}/{YYYY-MM}/{uuid}.receipts.cbor` and included verbatim in the backup artifact —

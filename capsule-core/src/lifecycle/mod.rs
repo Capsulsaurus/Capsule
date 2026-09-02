@@ -381,7 +381,8 @@ pub struct Workspace {
     albums: HashMap<Uuid, AlbumKeys>,
     /// Per-album write authority behind the [`AlbumAuthority`](crate::crypto::authority::AlbumAuthority)
     /// seam (`&Authority` coerces to `&dyn AlbumAuthority` at every `verify_asset` call site). The
-    /// offline [`ReferenceAuthority`] is the shipped default; the enum lets the live
+    /// offline [`ReferenceAuthority`](crate::crypto::authority::ReferenceAuthority) is the shipped
+    /// default; the enum lets the live
     /// [`OpenMlsAuthority`](crate::crypto::authority::OpenMlsAuthority) drop in without the
     /// lifecycle naming a concrete backend. **Persisted** alongside the album keys in
     /// [`AlbumStore`](crate::crypto::keys::AlbumStore) and restored on open (`S-A10`) — without
