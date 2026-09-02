@@ -151,8 +151,17 @@ pub trait DerivativeSealer {
     /// exactly as they do for the original.
     ///
     /// # Errors
-    /// [`MediaError::Encode`] when the encryption refuses (a drawn prefix that collides with
-    /// the one being replaced).
+    /// [`MediaError::Sign`], and only that variant. Two things can go wrong: the underlying
+    /// encryption refuses, or no unused nonce prefix can be drawn for this `file_id` inside the
+    /// implementation's retry budget. Both are **workspace** faults rather than pixel ones — a
+    /// broken signer or a broken CSPRNG, not a photo this build cannot render — so the import
+    /// path propagates them instead of degrading to a missing thumbnail. An implementation must
+    /// therefore not report either as [`MediaError::Encode`], which means a codec refused a
+    /// frame and nothing else.
+    ///
+    /// `replaces` plays no part here: a derivative supersedes nothing, so the production
+    /// implementation passes `None` and enforces non-reuse against the set of prefixes already
+    /// spent on this `file_id` instead.
     fn seal(&self, plaintext: &[u8]) -> Result<SealedDerivative, MediaError>;
 }
 
@@ -246,9 +255,17 @@ pub struct StillDerivatives {
 /// provenance is append-only exactly like the asset's.
 ///
 /// # Errors
-/// [`MediaError::Encode`] when a codec refuses the frame, and [`MediaError::ZeroDimension`] for
-/// an empty source. A signing failure (a hardware device signer refusing) and a sealing failure
-/// both surface as [`MediaError::Encode`] too, carrying the crypto error's message.
+/// - [`MediaError::Encode`] — a codec refused the frame. That is the **only** thing this variant
+///   means here.
+/// - [`MediaError::ZeroDimension`] — the source frame has a zero dimension.
+/// - [`MediaError::Sign`] — the device signer or the epoch write-tier signer refused, or
+///   [`DerivativeContext::sealer`] failed (an encryption refusal, or an exhausted nonce-prefix
+///   draw).
+///
+/// The split is the contract rather than bookkeeping. The import path degrades the first two to
+/// "this asset has no thumbnail" and commits the original anyway; it **propagates** `Sign`,
+/// because a workspace that cannot author a signed record is broken in a way a missing
+/// derivative is not — the same fault would stop the asset's own manifest.
 #[tracing::instrument(
     level = "debug",
     skip_all,
